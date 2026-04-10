@@ -4,8 +4,8 @@ import (
 	"regexp"
 	"testing"
 
-	"hookguard/internal/config"
-	"hookguard/internal/rules"
+	"github.com/agoodkind/agent-gate/internal/config"
+	"github.com/agoodkind/agent-gate/internal/rules"
 )
 
 // makeRule constructs a config.Rule with a compiled regex for testing.

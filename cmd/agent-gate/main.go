@@ -6,9 +6,9 @@ import (
 	"io"
 	"os"
 
-	"hookguard/internal/audit"
-	"hookguard/internal/config"
-	"hookguard/internal/hook"
+	"github.com/agoodkind/agent-gate/internal/audit"
+	"github.com/agoodkind/agent-gate/internal/config"
+	"github.com/agoodkind/agent-gate/internal/hook"
 )
 
 func main() {

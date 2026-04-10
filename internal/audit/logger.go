@@ -6,7 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"hookguard/internal/config"
+	"github.com/agoodkind/agent-gate/internal/config"
 )
 
 // Logger wraps slog and writes structured JSONL entries to the audit log file.

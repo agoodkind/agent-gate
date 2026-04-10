@@ -3,9 +3,9 @@ package hook
 import (
 	"log/slog"
 
-	"hookguard/internal/audit"
-	"hookguard/internal/config"
-	"hookguard/internal/rules"
+	"github.com/agoodkind/agent-gate/internal/audit"
+	"github.com/agoodkind/agent-gate/internal/config"
+	"github.com/agoodkind/agent-gate/internal/rules"
 )
 
 // Handle is the central orchestration function.

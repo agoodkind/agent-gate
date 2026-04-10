@@ -1,4 +1,4 @@
-BINARY := hookguard
+BINARY := agent-gate
 CMD    := ./cmd/$(BINARY)
 
 .DEFAULT_GOAL := build

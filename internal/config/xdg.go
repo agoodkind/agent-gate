@@ -1,4 +1,4 @@
-// Package config resolves XDG base directories and loads hookguard's TOML config.
+// Package config resolves XDG base directories and loads agent-gate's TOML config.
 //
 // Path resolution order for every configurable path:
 //

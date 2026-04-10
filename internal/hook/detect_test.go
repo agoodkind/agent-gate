@@ -3,7 +3,7 @@ package hook_test
 import (
 	"testing"
 
-	"hookguard/internal/hook"
+	"github.com/agoodkind/agent-gate/internal/hook"
 )
 
 func TestDetect_Claude(t *testing.T) {

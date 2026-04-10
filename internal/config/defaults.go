@@ -11,16 +11,16 @@ level = "debug"
 
 # ── Path overrides (optional) ─────────────────────────────────────────────────
 #
-# By default hookguard resolves all paths from XDG env vars:
+# By default agent-gate resolves all paths from XDG env vars:
 #
-#   audit_log  →  $XDG_STATE_HOME/hookguard/audit.jsonl
+#   audit_log  →  $XDG_STATE_HOME/agent-gate/audit.jsonl
 #                 ($XDG_STATE_HOME defaults to ~/.local/state)
 #
 # Set a field below to an absolute path to override that resolution chain.
 # Leave empty (or omit) to keep using the env var / XDG spec default.
 
 [paths]
-audit_log = ""  # example: "/var/log/hookguard/audit.jsonl"
+audit_log = ""  # example: "/var/log/agent-gate/audit.jsonl"
 
 # ── Rules ────────────────────────────────────────────────────────────────────
 #
