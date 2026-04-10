@@ -19,7 +19,7 @@ builds:
 
 archives:
   - id: agent-gate
-    format: tar.gz
+    formats: [tar.gz]
     name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
     files:
       - README.md
