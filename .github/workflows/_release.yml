@@ -1,0 +1,48 @@
+name: Release
+
+on:
+  workflow_call:
+
+jobs:
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Compute release tag
+        id: tag
+        run: |
+          TS=$(date -u +%Y%m%d%H%M)
+          HEX=$(printf '%x' "$GITHUB_RUN_NUMBER")
+          SHA=$(git rev-parse --short HEAD)
+          TAG="${TS}-${HEX}-${SHA}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "hex_run=$HEX" >> "$GITHUB_OUTPUT"
+          echo "Release tag: $TAG"
+
+      - name: Push tag
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "$TAG"
+          git push origin "$TAG"
+
+      - name: Release via goreleaser
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          version: latest
+          args: release --clean --skip=validate
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEX_RUN: ${{ steps.tag.outputs.hex_run }}
