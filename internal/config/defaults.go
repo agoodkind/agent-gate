@@ -40,7 +40,7 @@ audit_log = ""  # example: "/var/log/agent-gate/audit.jsonl"
 name        = "no-shell-redirection"
 description = "Block shell output/error redirection patterns LLMs commonly emit to suppress errors"
 # Apply only to the events where a shell command is present.
-events      = ["PreToolUse", "beforeShellExecution"]
+events      = ["PreToolUse", "beforeShellExecution", "preToolUse"]
 # Claude sends the command at tool_input.command; Cursor sends it at command.
 field_paths = ["tool_input.command", "command"]
 # Matches: 2>&1  >&2  &>  |&  >/dev/null  2>/dev/null  &>/dev/null  (and >> variants)

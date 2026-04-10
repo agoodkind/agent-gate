@@ -7,15 +7,52 @@ import (
 
 // CursorEvent enumerates every known Cursor hook event name (camelCase).
 // Source: Cursor hooks documentation, April 2026.
+// Events are grouped by category: session lifecycle, generic tool hooks,
+// shell, MCP, file, prompt, subagent, compaction, agent output, and Tab.
 type CursorEvent string
 
 const (
-	CursorBeforeSubmitPrompt   CursorEvent = "beforeSubmitPrompt"
+	// Session lifecycle.
+	CursorSessionStart CursorEvent = "sessionStart"
+	CursorSessionEnd   CursorEvent = "sessionEnd"
+
+	// Generic tool use hooks (fire for all tools, including shell and MCP).
+	CursorPreToolUse        CursorEvent = "preToolUse"
+	CursorPostToolUse       CursorEvent = "postToolUse"
+	CursorPostToolUseFailure CursorEvent = "postToolUseFailure"
+
+	// Shell execution.
 	CursorBeforeShellExecution CursorEvent = "beforeShellExecution"
-	CursorBeforeMCPExecution   CursorEvent = "beforeMCPExecution"
-	CursorBeforeReadFile       CursorEvent = "beforeReadFile"
-	CursorAfterFileEdit        CursorEvent = "afterFileEdit"
-	CursorStop                 CursorEvent = "stop"
+	CursorAfterShellExecution  CursorEvent = "afterShellExecution"
+
+	// MCP tool execution.
+	CursorBeforeMCPExecution CursorEvent = "beforeMCPExecution"
+	CursorAfterMCPExecution  CursorEvent = "afterMCPExecution"
+
+	// File access and edits.
+	CursorBeforeReadFile CursorEvent = "beforeReadFile"
+	CursorAfterFileEdit  CursorEvent = "afterFileEdit"
+
+	// Prompt submission.
+	CursorBeforeSubmitPrompt CursorEvent = "beforeSubmitPrompt"
+
+	// Subagent (Task tool) lifecycle.
+	CursorSubagentStart CursorEvent = "subagentStart"
+	CursorSubagentStop  CursorEvent = "subagentStop"
+
+	// Context window compaction.
+	CursorPreCompact CursorEvent = "preCompact"
+
+	// Agent completion.
+	CursorStop CursorEvent = "stop"
+
+	// Agent output observation (informational only).
+	CursorAfterAgentResponse CursorEvent = "afterAgentResponse"
+	CursorAfterAgentThought  CursorEvent = "afterAgentThought"
+
+	// Tab (inline completion) hooks.
+	CursorBeforeTabFileRead CursorEvent = "beforeTabFileRead"
+	CursorAfterTabFileEdit  CursorEvent = "afterTabFileEdit"
 )
 
 // CursorPayload holds Cursor-specific fields extracted from a RawPayload.
