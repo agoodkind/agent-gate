@@ -6,9 +6,9 @@ import (
 	"io"
 	"os"
 
-	"github.com/agoodkind/agent-gate/internal/audit"
-	"github.com/agoodkind/agent-gate/internal/config"
-	"github.com/agoodkind/agent-gate/internal/hook"
+	"goodkind.io/agent-gate/internal/audit"
+	"goodkind.io/agent-gate/internal/config"
+	"goodkind.io/agent-gate/internal/hook"
 )
 
 func main() {

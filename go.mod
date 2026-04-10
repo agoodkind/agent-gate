@@ -1,4 +1,4 @@
-module github.com/agoodkind/agent-gate
+module goodkind.io/agent-gate
 
 go 1.26.1
 

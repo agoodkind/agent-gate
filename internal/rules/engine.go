@@ -3,7 +3,7 @@ package rules
 import (
 	"strings"
 
-	"github.com/agoodkind/agent-gate/internal/config"
+	"goodkind.io/agent-gate/internal/config"
 )
 
 // Violation describes a rule that matched the current hook payload.

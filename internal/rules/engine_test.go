@@ -4,8 +4,8 @@ import (
 	"regexp"
 	"testing"
 
-	"github.com/agoodkind/agent-gate/internal/config"
-	"github.com/agoodkind/agent-gate/internal/rules"
+	"goodkind.io/agent-gate/internal/config"
+	"goodkind.io/agent-gate/internal/rules"
 )
 
 // makeRule constructs a config.Rule with a compiled regex for testing.

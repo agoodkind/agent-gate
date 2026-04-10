@@ -3,7 +3,7 @@ package hook_test
 import (
 	"testing"
 
-	"github.com/agoodkind/agent-gate/internal/hook"
+	"goodkind.io/agent-gate/internal/hook"
 )
 
 func TestDetect_Claude(t *testing.T) {
