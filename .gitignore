@@ -1,2 +1,2 @@
 agent-gate
-vendor/go.mk/
+.make/
