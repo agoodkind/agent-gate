@@ -1,6 +1,6 @@
 package hook
 
-// HookSystem identifies which tool invoked hookguard.
+// HookSystem identifies which tool invoked agent-gate.
 type HookSystem int
 
 const (

@@ -76,5 +76,5 @@ func ClaudeAllow() []byte {
 // The caller must write these to stderr and exit with code 2.
 // Claude receives the stderr text as feedback explaining why the action was blocked.
 func ClaudeBlock(ruleName, message string) []byte {
-	return []byte(fmt.Sprintf("hookguard: [%s] %s\n", ruleName, message))
+	return []byte(fmt.Sprintf("agent-gate: [%s] %s\n", ruleName, message))
 }

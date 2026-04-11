@@ -19,7 +19,7 @@ type Log struct {
 // Non-empty values take highest priority in the resolution chain.
 type Paths struct {
 	// AuditLog overrides the resolved audit log file path.
-	// Empty: use $XDG_STATE_HOME/hookguard/audit.jsonl (or ~/.local/state/… default).
+	// Empty: use $XDG_STATE_HOME/agent-gate/audit.jsonl (or ~/.local/state/… default).
 	AuditLog string `toml:"audit_log"`
 }
 

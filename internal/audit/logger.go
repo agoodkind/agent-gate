@@ -21,7 +21,7 @@ type Logger struct {
 // The log path is taken from cfg.Log.Path; if empty, the XDG default is used.
 func New(cfg *config.Config) (*Logger, error) {
 	// AuditLogPath applies the full resolution chain:
-	// TOML [paths].audit_log > $XDG_STATE_HOME > ~/.local/state/hookguard/audit.jsonl
+	// TOML [paths].audit_log > $XDG_STATE_HOME > ~/.local/state/agent-gate/audit.jsonl
 	path := cfg.AuditLogPath()
 
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

@@ -2,7 +2,7 @@ package hook
 
 import "unicode"
 
-// Detect determines which hook system called hookguard by examining hook_event_name.
+// Detect determines which hook system called agent-gate by examining hook_event_name.
 //
 // Claude Code uses PascalCase event names (PreToolUse, SessionStart, Stop, ...).
 // Cursor uses camelCase event names (beforeShellExecution, afterFileEdit, stop, ...).

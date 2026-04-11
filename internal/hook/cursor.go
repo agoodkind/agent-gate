@@ -105,7 +105,7 @@ func CursorAllow() []byte {
 func CursorBlock(ruleName, message string) []byte {
 	b, _ := json.Marshal(cursorResponse{
 		Permission:  "deny",
-		UserMessage: fmt.Sprintf("hookguard: [%s] %s", ruleName, message),
+		UserMessage: fmt.Sprintf("agent-gate: [%s] %s", ruleName, message),
 	})
 	return append(b, '\n')
 }
