@@ -10,8 +10,6 @@ import (
 	"os/exec"
 	"path/filepath"
 
-	"github.com/mattn/go-isatty"
-
 	"goodkind.io/agent-gate/internal/audit"
 	"goodkind.io/agent-gate/internal/config"
 	"goodkind.io/agent-gate/internal/daemon"
@@ -42,12 +40,7 @@ func main() {
 		return
 	}
 
-	// Piped stdin + no subcommand args = hook mode (JSON from Claude/Cursor).
-	if !isatty.IsTerminal(os.Stdin.Fd()) && len(os.Args) == 1 {
-		os.Exit(runHook())
-	}
-
-	// Any other invocation: run in hook mode (reads stdin).
+	// Everything else: hook mode (reads JSON from stdin).
 	os.Exit(runHook())
 }
 
