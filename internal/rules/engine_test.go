@@ -15,7 +15,7 @@ func loadRule(t *testing.T, name, pattern string, events, fieldPaths []string, m
 	if err != nil {
 		t.Fatalf("compile pattern %q: %v", pattern, err)
 	}
-	return config.NewRule(name, pattern, re, events, fieldPaths, "block", message)
+	return config.NewSimpleRule(name, pattern, re, events, fieldPaths, "block", message)
 }
 
 // redirectionRule returns the canonical no-shell-redirection rule used in production.
@@ -231,5 +231,89 @@ func TestCheckedRuleNames(t *testing.T) {
 	names = rules.CheckedRuleNames("Stop", rulesSlice)
 	if len(names) != 1 || names[0] != "global" {
 		t.Errorf("expected [global] for Stop, got %v", names)
+	}
+}
+
+// loadConditionRule builds the no-git-write-from-home-cwd rule used in production.
+func loadConditionRule(t *testing.T) config.Rule {
+	t.Helper()
+	cwdCond, err := config.NewCondition(
+		[]string{"cwd"},
+		`^/Users/agoodkind$`,
+		"",
+	)
+	if err != nil {
+		t.Fatalf("compile cwd condition: %v", err)
+	}
+	cmdCond, err := config.NewCondition(
+		[]string{"tool_input.command", "command"},
+		`^git\s+(add|commit|push|reset|rm|mv|rebase|merge|stash|clean|restore|switch|tag)`,
+		`\s-C\s`,
+	)
+	if err != nil {
+		t.Fatalf("compile cmd condition: %v", err)
+	}
+	return config.Rule{
+		Name:             "no-git-write-from-home-cwd",
+		Events:           []string{"PreToolUse", "preToolUse"},
+		Conditions:       []config.Condition{cwdCond, cmdCond},
+		Action:           "block",
+		ViolationMessage: "git write operations are not permitted from the home directory.",
+	}
+}
+
+func TestEvaluate_MultiCondition_HomeCWD(t *testing.T) {
+	rule := loadConditionRule(t)
+
+	homePayload := func(cmd string) map[string]any {
+		return map[string]any{
+			"cwd":        "/Users/agoodkind",
+			"tool_input": map[string]any{"command": cmd},
+		}
+	}
+
+	blocked := []string{
+		"git add .",
+		"git commit -m 'oops'",
+		"git push origin main",
+		"git reset --hard HEAD",
+	}
+	for _, cmd := range blocked {
+		t.Run("blocked/"+cmd, func(t *testing.T) {
+			v := rules.Evaluate("PreToolUse", homePayload(cmd), []config.Rule{rule})
+			if v == nil {
+				t.Errorf("expected block for %q in home cwd, got nil", cmd)
+			}
+		})
+	}
+
+	allowed := []struct {
+		name    string
+		payload map[string]any
+	}{
+		{
+			name:    "git with -C flag escapes home",
+			payload: map[string]any{"cwd": "/Users/agoodkind", "tool_input": map[string]any{"command": "git -C /Users/agoodkind/Sites/proj commit -m msg"}},
+		},
+		{
+			name:    "cwd is subdir not home",
+			payload: map[string]any{"cwd": "/Users/agoodkind/Sites/proj", "tool_input": map[string]any{"command": "git commit -m msg"}},
+		},
+		{
+			name:    "read-only git op from home",
+			payload: map[string]any{"cwd": "/Users/agoodkind", "tool_input": map[string]any{"command": "git status"}},
+		},
+		{
+			name:    "non-git command from home",
+			payload: map[string]any{"cwd": "/Users/agoodkind", "tool_input": map[string]any{"command": "ls -la"}},
+		},
+	}
+	for _, tc := range allowed {
+		t.Run("allowed/"+tc.name, func(t *testing.T) {
+			v := rules.Evaluate("PreToolUse", tc.payload, []config.Rule{rule})
+			if v != nil {
+				t.Errorf("expected allow, got block: %s", v.Message)
+			}
+		})
 	}
 }

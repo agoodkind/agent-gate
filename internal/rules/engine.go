@@ -26,12 +26,20 @@ func Evaluate(eventName string, payload map[string]any, rules []config.Rule) *Vi
 			continue
 		}
 
-		value := extractField(payload, rule.FieldPaths)
-		if value == "" {
-			// Field not present in this payload; rule does not apply.
+		if len(rule.Conditions) > 0 {
+			if allConditionsMatch(payload, rule.Conditions) {
+				return &Violation{
+					RuleName: rule.Name,
+					Message:  rule.ViolationMessage,
+				}
+			}
 			continue
 		}
 
+		value := extractField(payload, rule.FieldPaths)
+		if value == "" {
+			continue
+		}
 		if rule.Compiled().MatchString(value) {
 			return &Violation{
 				RuleName: rule.Name,
@@ -40,6 +48,27 @@ func Evaluate(eventName string, payload map[string]any, rules []config.Rule) *Vi
 		}
 	}
 	return nil
+}
+
+// allConditionsMatch returns true when every condition in the slice matches
+// the payload (AND semantics). A condition matches when:
+//   - Its Pattern is set and matches the extracted field value, AND
+//   - Its NotPattern is either unset or does NOT match the extracted field value.
+func allConditionsMatch(payload map[string]any, conditions []config.Condition) bool {
+	for i := range conditions {
+		c := &conditions[i]
+		value := extractField(payload, c.FieldPaths)
+		if value == "" {
+			return false
+		}
+		if c.CompiledPattern() != nil && !c.CompiledPattern().MatchString(value) {
+			return false
+		}
+		if c.CompiledNotPattern() != nil && c.CompiledNotPattern().MatchString(value) {
+			return false
+		}
+	}
+	return true
 }
 
 // CheckedRuleNames returns the names of rules that would be evaluated for

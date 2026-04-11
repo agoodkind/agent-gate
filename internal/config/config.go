@@ -23,31 +23,76 @@ type Paths struct {
 	AuditLog string `toml:"audit_log"`
 }
 
+// Condition is one clause in a multi-condition rule.
+// All conditions in a rule must match for the rule to fire (AND semantics).
+type Condition struct {
+	FieldPaths []string `toml:"field_paths"`
+	// Pattern must match the extracted field value for the condition to pass.
+	Pattern string `toml:"pattern"`
+	// NotPattern, if set, must NOT match the extracted field value.
+	NotPattern string `toml:"not_pattern"`
+
+	compiled    *regexp.Regexp
+	compiledNot *regexp.Regexp
+}
+
+// CompiledPattern returns the pre-compiled regex for Pattern.
+func (c *Condition) CompiledPattern() *regexp.Regexp { return c.compiled }
+
+// CompiledNotPattern returns the pre-compiled regex for NotPattern, or nil if unset.
+func (c *Condition) CompiledNotPattern() *regexp.Regexp { return c.compiledNot }
+
+// NewCondition constructs a Condition with pre-compiled regexes.
+// Intended for tests and programmatic rule construction.
+func NewCondition(fieldPaths []string, pattern, notPattern string) (Condition, error) {
+	c := Condition{FieldPaths: fieldPaths, Pattern: pattern, NotPattern: notPattern}
+	if pattern != "" {
+		re, err := regexp.Compile(pattern)
+		if err != nil {
+			return Condition{}, fmt.Errorf("compile pattern %q: %w", pattern, err)
+		}
+		c.compiled = re
+	}
+	if notPattern != "" {
+		re, err := regexp.Compile(notPattern)
+		if err != nil {
+			return Condition{}, fmt.Errorf("compile not_pattern %q: %w", notPattern, err)
+		}
+		c.compiledNot = re
+	}
+	return c, nil
+}
+
 // Rule defines a single enforcement rule decoded from a [[rules]] TOML table.
+//
+// A rule fires when:
+//   - It applies to the current event (Events filter).
+//   - AND either:
+//     a) Conditions is non-empty and ALL conditions match, OR
+//     b) Conditions is empty and the single FieldPaths/Pattern matches.
 type Rule struct {
-	Name             string   `toml:"name"`
-	Description      string   `toml:"description"`
-	Events           []string `toml:"events"`
+	Name             string      `toml:"name"`
+	Description      string      `toml:"description"`
+	Events           []string    `toml:"events"`
+	Conditions       []Condition `toml:"conditions"`
+	// FieldPaths and Pattern are used when Conditions is empty (simple rules).
 	FieldPaths       []string `toml:"field_paths"`
 	Pattern          string   `toml:"pattern"`
 	Action           string   `toml:"action"`
 	ViolationMessage string   `toml:"violation_message"`
 
-	// compiled holds the pre-compiled regex for Pattern.
-	// It is populated by Load() and is not read from TOML.
 	compiled *regexp.Regexp
 }
 
-// Compiled returns the pre-compiled regex for this rule.
-// It is always non-nil after a successful call to Load() or NewRule().
+// Compiled returns the pre-compiled regex for the top-level Pattern.
+// Always non-nil after Load() when Conditions is empty.
 func (r *Rule) Compiled() *regexp.Regexp {
 	return r.compiled
 }
 
-// NewRule constructs a Rule with a pre-compiled regex.
-// Intended for use in tests and programmatic rule construction where
-// the config file loading path is bypassed.
-func NewRule(name, pattern string, compiled *regexp.Regexp, events, fieldPaths []string, action, violationMessage string) Rule {
+// NewSimpleRule constructs a simple (no conditions) Rule with a pre-compiled
+// regex. Intended for tests and programmatic rule construction.
+func NewSimpleRule(name, pattern string, compiled *regexp.Regexp, events, fieldPaths []string, action, violationMessage string) Rule {
 	return Rule{
 		Name:             name,
 		Pattern:          pattern,
@@ -93,12 +138,33 @@ func Load() (*Config, error) {
 	}
 
 	for i := range cfg.Rules {
-		re, err := regexp.Compile(cfg.Rules[i].Pattern)
-		if err != nil {
-			return nil, fmt.Errorf("rule %q: compile pattern %q: %w",
-				cfg.Rules[i].Name, cfg.Rules[i].Pattern, err)
+		r := &cfg.Rules[i]
+
+		if len(r.Conditions) > 0 {
+			for j := range r.Conditions {
+				c := &r.Conditions[j]
+				if c.Pattern != "" {
+					re, err := regexp.Compile(c.Pattern)
+					if err != nil {
+						return nil, fmt.Errorf("rule %q condition %d: compile pattern %q: %w", r.Name, j, c.Pattern, err)
+					}
+					c.compiled = re
+				}
+				if c.NotPattern != "" {
+					re, err := regexp.Compile(c.NotPattern)
+					if err != nil {
+						return nil, fmt.Errorf("rule %q condition %d: compile not_pattern %q: %w", r.Name, j, c.NotPattern, err)
+					}
+					c.compiledNot = re
+				}
+			}
+		} else {
+			re, err := regexp.Compile(r.Pattern)
+			if err != nil {
+				return nil, fmt.Errorf("rule %q: compile pattern %q: %w", r.Name, r.Pattern, err)
+			}
+			r.compiled = re
 		}
-		cfg.Rules[i].compiled = re
 	}
 
 	return &cfg, nil
