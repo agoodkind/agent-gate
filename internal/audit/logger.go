@@ -1,6 +1,7 @@
 package audit
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
@@ -48,17 +49,17 @@ func (l *Logger) Close() error {
 
 // Info writes an INFO-level audit entry with arbitrary structured attributes.
 func (l *Logger) Info(msg string, attrs ...slog.Attr) {
-	l.inner.LogAttrs(nil, slog.LevelInfo, msg, attrs...)
+	l.inner.LogAttrs(context.TODO(), slog.LevelInfo, msg, attrs...)
 }
 
 // Debug writes a DEBUG-level entry (recorded only when level = "debug").
 func (l *Logger) Debug(msg string, attrs ...slog.Attr) {
-	l.inner.LogAttrs(nil, slog.LevelDebug, msg, attrs...)
+	l.inner.LogAttrs(context.TODO(), slog.LevelDebug, msg, attrs...)
 }
 
 // Error writes an ERROR-level entry.
 func (l *Logger) Error(msg string, attrs ...slog.Attr) {
-	l.inner.LogAttrs(nil, slog.LevelError, msg, attrs...)
+	l.inner.LogAttrs(context.TODO(), slog.LevelError, msg, attrs...)
 }
 
 // parseLevel converts a config level string to slog.Level.

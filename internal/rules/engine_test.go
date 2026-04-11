@@ -8,20 +8,6 @@ import (
 	"goodkind.io/agent-gate/internal/rules"
 )
 
-// makeRule constructs a config.Rule with a compiled regex for testing.
-// It uses reflection-free approach: Load() compiles regexes, but for tests
-// we build rules via a helper that sets exported fields and injects the
-// compiled pattern through a test-only shim.
-func makeRule(name, pattern string, events, fieldPaths []string) config.Rule {
-	// config.Rule.compiled is unexported; we route through config.Load() semantics
-	// by embedding a rule into a minimal Config and loading it in-memory.
-	_ = name
-	_ = pattern
-	_ = events
-	_ = fieldPaths
-	return config.Rule{} // placeholder — see loadRule below
-}
-
 // loadRule builds a single compiled Rule without touching the filesystem.
 func loadRule(t *testing.T, name, pattern string, events, fieldPaths []string, message string) config.Rule {
 	t.Helper()

@@ -20,22 +20,11 @@ $(GO_MK):
 
 -include $(GO_MK)
 
-# Explicitly pull the latest go.mk and update the cache.
-.PHONY: sync
-sync:
-	@mkdir -p "$(dir $(GO_MK))"
-	@if curl -fsSL --connect-timeout 5 --max-time 10 "$(GO_MK_URL)" -o "$(GO_MK)"; then \
-		mkdir -p "$(dir $(GO_MK_CACHE))" && cp "$(GO_MK)" "$(GO_MK_CACHE)"; \
-		echo "go.mk updated"; \
-	else \
-		echo "error: go.mk fetch failed" >&2; \
-		exit 1; \
-	fi
 
 BINARY := agent-gate
 CMD    := ./cmd/$(BINARY)
 
-.DEFAULT_GOAL := build
+.DEFAULT_GOAL := check
 
 .PHONY: build deploy clean
 
