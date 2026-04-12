@@ -300,7 +300,10 @@ func (s *Server) cleanupFakeHome(sess *wrapperSession) {
 }
 
 func globalClaudeDir() string {
-	home, _ := os.UserHomeDir()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		home = os.Getenv("HOME")
+	}
 	return filepath.Join(home, ".claude")
 }
 

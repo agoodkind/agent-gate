@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"time"
 
 	"goodkind.io/agent-gate/internal/audit"
 	"goodkind.io/agent-gate/internal/config"
@@ -116,7 +117,10 @@ func connectOrStartDaemon(ctx context.Context) (*daemon.Client, error) {
 	}
 
 	// Daemon not running - start it in the background.
-	self, _ := os.Executable()
+	self, err := os.Executable()
+	if err != nil {
+		return nil, fmt.Errorf("failed to determine own path: %w", err)
+	}
 	daemonCmd := exec.Command(self, "daemon")
 	daemonCmd.Stdout = nil
 	daemonCmd.Stderr = nil
@@ -126,12 +130,19 @@ func connectOrStartDaemon(ctx context.Context) (*daemon.Client, error) {
 	// Detach: let it run independently.
 	go func() { _ = daemonCmd.Wait() }()
 
-	// Retry connection with a short backoff.
-	for range 10 {
+	// Retry with exponential backoff (50ms, 100ms, 200ms ... up to 1.6s).
+	delay := 50 * time.Millisecond
+	for range 6 {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(delay):
+		}
 		client, err = daemon.Connect(ctx)
 		if err == nil {
 			return client, nil
 		}
+		delay *= 2
 	}
 
 	return nil, fmt.Errorf("daemon did not become ready: %w", err)

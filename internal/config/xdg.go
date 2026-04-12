@@ -30,7 +30,10 @@ const appName = "agent-gate"
 func DefaultConfigDir() string {
 	base := os.Getenv("XDG_CONFIG_HOME")
 	if base == "" {
-		home, _ := os.UserHomeDir()
+		home, err := os.UserHomeDir()
+		if err != nil {
+			home = os.Getenv("HOME")
+		}
 		base = filepath.Join(home, ".config")
 	}
 	return filepath.Join(base, appName)
@@ -54,7 +57,10 @@ func ConfigPath() string {
 func DefaultStateDir() string {
 	base := os.Getenv("XDG_STATE_HOME")
 	if base == "" {
-		home, _ := os.UserHomeDir()
+		home, err := os.UserHomeDir()
+		if err != nil {
+			home = os.Getenv("HOME")
+		}
 		base = filepath.Join(home, ".local", "state")
 	}
 	return filepath.Join(base, appName)
