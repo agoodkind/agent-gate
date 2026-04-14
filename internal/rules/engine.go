@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 
 	"goodkind.io/agent-gate/internal/config"
@@ -11,29 +12,32 @@ import (
 
 // Violation describes a rule that matched the current hook payload.
 type Violation struct {
-	RuleName string
-	Message  string
+	RuleName  string
+	Message   string
+	AuditOnly bool
 }
 
 // Evaluate iterates over all rules and returns the first Violation whose
 // pattern matches a field extracted from payload, or nil if no rule fires.
 //
+// system is "claude", "cursor", or "unknown".
 // eventName is the raw hook_event_name string from the payload.
 // payload is the full decoded JSON as a map (same value that was read from stdin).
 // rules is the compiled rule list from config.Load().
-func Evaluate(eventName string, payload map[string]any, rules []config.Rule) *Violation {
+func Evaluate(system, eventName string, payload map[string]any, rules []config.Rule) *Violation {
 	for i := range rules {
 		rule := &rules[i]
 
-		if !appliesToEvent(rule, eventName) {
+		if !appliesToEvent(rule, system, eventName) {
 			continue
 		}
 
 		if len(rule.Conditions) > 0 {
 			if allConditionsMatch(payload, rule.Conditions) {
 				return &Violation{
-					RuleName: rule.Name,
-					Message:  rule.ViolationMessage,
+					RuleName:  rule.Name,
+					Message:   rule.ViolationMessage,
+					AuditOnly: rule.AuditOnly,
 				}
 			}
 			continue
@@ -45,8 +49,9 @@ func Evaluate(eventName string, payload map[string]any, rules []config.Rule) *Vi
 		}
 		if rule.Compiled().MatchString(value) {
 			return &Violation{
-				RuleName: rule.Name,
-				Message:  rule.ViolationMessage,
+				RuleName:  rule.Name,
+				Message:   rule.ViolationMessage,
+				AuditOnly: rule.AuditOnly,
 			}
 		}
 	}
@@ -75,29 +80,43 @@ func allConditionsMatch(payload map[string]any, conditions []config.Condition) b
 }
 
 // CheckedRuleNames returns the names of rules that would be evaluated for
-// the given event name. Used for audit logging.
-func CheckedRuleNames(eventName string, rules []config.Rule) []string {
+// the given system and event name. Used for audit logging.
+func CheckedRuleNames(system, eventName string, rules []config.Rule) []string {
 	names := make([]string, 0, len(rules))
 	for i := range rules {
-		if appliesToEvent(&rules[i], eventName) {
+		if appliesToEvent(&rules[i], system, eventName) {
 			names = append(names, rules[i].Name)
 		}
 	}
 	return names
 }
 
-// appliesToEvent returns true when the rule's event filter includes eventName.
-// An empty Events slice means the rule applies to all events.
-func appliesToEvent(rule *config.Rule, eventName string) bool {
-	if len(rule.Events) == 0 {
+// appliesToEvent returns true when the rule's event filter includes eventName
+// for the given system. Only checks the system-specific events array (claude_events
+// or cursor_events) plus the shared events array. If all are empty, the rule
+// applies to all events.
+func appliesToEvent(rule *config.Rule, system, eventName string) bool {
+	shared := rule.Events
+	specific := systemSpecificEvents(rule, system)
+
+	noFilters := len(shared) == 0 && len(specific) == 0
+	if noFilters {
 		return true
 	}
-	for _, e := range rule.Events {
-		if e == eventName {
-			return true
-		}
+
+	return slices.Contains(shared, eventName) ||
+		slices.Contains(specific, eventName)
+}
+
+func systemSpecificEvents(rule *config.Rule, system string) []string {
+	switch system {
+	case "claude":
+		return rule.ClaudeEvents
+	case "cursor":
+		return rule.CursorEvents
+	default:
+		return nil
 	}
-	return false
 }
 
 // extractField walks each dot-path in paths against the nested map and returns

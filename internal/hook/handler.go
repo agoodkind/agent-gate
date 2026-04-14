@@ -43,38 +43,43 @@ func Handle(raw RawPayload, cfg *config.Config, logger *audit.Logger) (stdout, s
 	logger.Info("hook.received", intakeAttrs...)
 
 	// Determine which rules are evaluated for this event (for audit completeness).
-	checked := rules.CheckedRuleNames(eventName, cfg.Rules)
+	systemStr := system.String()
+	checked := rules.CheckedRuleNames(systemStr, eventName, cfg.Rules)
 
 	// Evaluate rules against the raw payload map.
-	violation := rules.Evaluate(eventName, map[string]any(raw), cfg.Rules)
+	violation := rules.Evaluate(systemStr, eventName, map[string]any(raw), cfg.Rules)
 
 	decisionAttrs := append(intakeAttrs,
 		slog.Any("rules_checked", checked),
 	)
 
 	if violation != nil {
-		logger.Info("hook.blocked",
+		decision := "block"
+		if violation.AuditOnly {
+			decision = "audit_only"
+		}
+
+		logger.Info("hook."+decision,
 			append(decisionAttrs,
-				slog.String("decision", "block"),
+				slog.String("decision", decision),
 				slog.String("blocking_rule", violation.RuleName),
 				slog.String("violation_message", violation.Message),
 			)...,
 		)
 
-		switch system {
-		case SystemCursor:
-			if isObservationalCursorEvent(eventName) {
-				// Observational events (afterAgentResponse, etc.) cannot block.
-				// Persist the violation so the next stop hook can send a followup_message.
-				_ = writeFollowup(raw.SessionID(), violation.RuleName, violation.Message)
-				return CursorAllow(), nil, 0
+		if !violation.AuditOnly {
+			switch system {
+			case SystemCursor:
+				if isObservationalCursorEvent(eventName) {
+					_ = writeFollowup(raw.SessionID(), violation.RuleName, violation.Message)
+					return CursorAllow(), nil, 0
+				}
+				return CursorBlock(violation.RuleName, violation.Message), nil, 0
+			default:
+				return ClaudeAllow(), ClaudeBlock(violation.RuleName, violation.Message), 2
 			}
-			// Cursor expects JSON on stdout; exit 0.
-			return CursorBlock(violation.RuleName, violation.Message), nil, 0
-		default:
-			// Claude (and unknown): write allow JSON to stdout, block message to stderr, exit 2.
-			return ClaudeAllow(), ClaudeBlock(violation.RuleName, violation.Message), 2
 		}
+		// audit_only: log was written above, fall through to allow.
 	}
 
 	// No rule violation. For Cursor stop events, check for a pending followup

@@ -3,10 +3,21 @@ package rules_test
 import (
 	"regexp"
 	"testing"
+	"unicode"
+	"unicode/utf8"
 
 	"goodkind.io/agent-gate/internal/config"
 	"goodkind.io/agent-gate/internal/rules"
 )
+
+// systemFor infers "claude" or "cursor" from a PascalCase/camelCase event name.
+func systemFor(event string) string {
+	r, _ := utf8.DecodeRuneInString(event)
+	if unicode.IsUpper(r) {
+		return "claude"
+	}
+	return "cursor"
+}
 
 // loadRule builds a single compiled Rule without touching the filesystem.
 func loadRule(t *testing.T, name, pattern string, events, fieldPaths []string, message string) config.Rule {
@@ -92,7 +103,7 @@ func TestEvaluate_RedirectionBlocked(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			v := rules.Evaluate(tc.event, tc.payload, []config.Rule{rule})
+			v := rules.Evaluate(systemFor(tc.event), tc.event, tc.payload, []config.Rule{rule})
 			if v == nil {
 				t.Errorf("expected violation for command %q, got nil", tc.payload)
 			}
@@ -148,7 +159,7 @@ func TestEvaluate_CleanCommandAllowed(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			v := rules.Evaluate(tc.event, tc.payload, []config.Rule{rule})
+			v := rules.Evaluate(systemFor(tc.event), tc.event, tc.payload, []config.Rule{rule})
 			if v != nil {
 				t.Errorf("expected no violation, got rule %q: %s", v.RuleName, v.Message)
 			}
@@ -162,7 +173,7 @@ func TestEvaluate_EventFilter(t *testing.T) {
 
 	// A redirect in a PostToolUse payload should not fire the rule
 	// because PostToolUse is not in the rule's events list.
-	v := rules.Evaluate("PostToolUse", map[string]any{
+	v := rules.Evaluate("claude", "PostToolUse", map[string]any{
 		"tool_input": map[string]any{"command": "ls 2>/dev/null"},
 	}, []config.Rule{rule})
 
@@ -176,7 +187,7 @@ func TestEvaluate_EmptyEventList(t *testing.T) {
 	rule := loadRule(t, "catch-all", `forbidden`, nil,
 		[]string{"command"}, "forbidden keyword")
 
-	v := rules.Evaluate("AnyEvent", map[string]any{
+	v := rules.Evaluate("unknown", "AnyEvent", map[string]any{
 		"command": "do something forbidden here",
 	}, []config.Rule{rule})
 
@@ -194,7 +205,7 @@ func TestEvaluate_DotPathExtraction(t *testing.T) {
 	)
 
 	// Deeply nested match.
-	v := rules.Evaluate("PreToolUse", map[string]any{
+	v := rules.Evaluate("claude", "PreToolUse", map[string]any{
 		"a": map[string]any{
 			"b": map[string]any{
 				"c": "contains secret value",
@@ -206,7 +217,7 @@ func TestEvaluate_DotPathExtraction(t *testing.T) {
 	}
 
 	// Field missing entirely — should not fire.
-	v = rules.Evaluate("PreToolUse", map[string]any{
+	v = rules.Evaluate("claude", "PreToolUse", map[string]any{
 		"a": map[string]any{"b": map[string]any{}},
 	}, []config.Rule{rule})
 	if v != nil {
@@ -222,13 +233,13 @@ func TestCheckedRuleNames(t *testing.T) {
 	rulesSlice := []config.Rule{rules1, allEvents}
 
 	// PreToolUse matches both rules.
-	names := rules.CheckedRuleNames("PreToolUse", rulesSlice)
+	names := rules.CheckedRuleNames("claude", "PreToolUse", rulesSlice)
 	if len(names) != 2 {
 		t.Errorf("expected 2 checked rules for PreToolUse, got %d: %v", len(names), names)
 	}
 
 	// Stop matches only the catch-all.
-	names = rules.CheckedRuleNames("Stop", rulesSlice)
+	names = rules.CheckedRuleNames("claude", "Stop", rulesSlice)
 	if len(names) != 1 || names[0] != "global" {
 		t.Errorf("expected [global] for Stop, got %v", names)
 	}
@@ -284,7 +295,7 @@ func TestEvaluate_MultiCondition_HomeCWD(t *testing.T) {
 	}
 	for _, cmd := range blocked {
 		t.Run("blocked/"+cmd, func(t *testing.T) {
-			v := rules.Evaluate("PreToolUse", homePayload(cmd), []config.Rule{rule})
+			v := rules.Evaluate("claude", "PreToolUse", homePayload(cmd), []config.Rule{rule})
 			if v == nil {
 				t.Errorf("expected block for %q in home cwd, got nil", cmd)
 			}
@@ -343,7 +354,7 @@ func TestEvaluate_MultiCondition_HomeCWD(t *testing.T) {
 	}
 	for _, tc := range allowed {
 		t.Run("allowed/"+tc.name, func(t *testing.T) {
-			v := rules.Evaluate("PreToolUse", tc.payload, []config.Rule{rule})
+			v := rules.Evaluate("claude", "PreToolUse", tc.payload, []config.Rule{rule})
 			if v != nil {
 				t.Errorf("expected allow, got block: %s", v.Message)
 			}
@@ -374,7 +385,7 @@ func TestEvaluate_EffectiveCwd_StillHome(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			v := rules.Evaluate("PreToolUse", tc.payload, []config.Rule{rule})
+			v := rules.Evaluate("claude", "PreToolUse", tc.payload, []config.Rule{rule})
 			if v == nil {
 				t.Errorf("expected block (effective cwd is still home), got nil")
 			}
@@ -555,7 +566,7 @@ func TestEvaluate_EmdashBlocked(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			v := rules.Evaluate(tc.event, tc.payload, []config.Rule{rule})
+			v := rules.Evaluate(systemFor(tc.event), tc.event, tc.payload, []config.Rule{rule})
 			if v == nil {
 				t.Error("expected violation, got nil")
 			}
@@ -616,7 +627,7 @@ func TestEvaluate_EmdashAllowed(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			v := rules.Evaluate(tc.event, tc.payload, []config.Rule{rule})
+			v := rules.Evaluate(systemFor(tc.event), tc.event, tc.payload, []config.Rule{rule})
 			if v != nil {
 				t.Errorf("expected no violation, got rule %q: %s", v.RuleName, v.Message)
 			}

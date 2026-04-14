@@ -74,12 +74,16 @@ type Rule struct {
 	Name             string      `toml:"name"`
 	Description      string      `toml:"description"`
 	Events           []string    `toml:"events"`
+	ClaudeEvents     []string    `toml:"claude_events"`
+	CursorEvents     []string    `toml:"cursor_events"`
 	Conditions       []Condition `toml:"conditions"`
 	// FieldPaths and Pattern are used when Conditions is empty (simple rules).
 	FieldPaths       []string `toml:"field_paths"`
 	Pattern          string   `toml:"pattern"`
 	Action           string   `toml:"action"`
 	ViolationMessage string   `toml:"violation_message"`
+	// AuditOnly logs the violation without blocking when true.
+	AuditOnly bool `toml:"audit_only"`
 
 	compiled *regexp.Regexp
 }
