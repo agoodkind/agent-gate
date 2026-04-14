@@ -55,6 +55,20 @@ const (
 	CursorAfterTabFileEdit  CursorEvent = "afterTabFileEdit"
 )
 
+// isObservationalCursorEvent returns true for Cursor events that are fire-and-forget
+// (informational only). These events cannot block or modify the agent's behavior,
+// so violations must be deferred to the next stop hook via followup_message.
+func isObservationalCursorEvent(eventName string) bool {
+	switch CursorEvent(eventName) {
+	case CursorAfterAgentResponse, CursorAfterAgentThought,
+		CursorAfterShellExecution, CursorAfterMCPExecution,
+		CursorAfterFileEdit, CursorAfterTabFileEdit,
+		CursorPostToolUse, CursorPostToolUseFailure:
+		return true
+	}
+	return false
+}
+
 // CursorPayload holds Cursor-specific fields extracted from a RawPayload.
 type CursorPayload struct {
 	Event          CursorEvent
@@ -90,8 +104,9 @@ func ParseCursor(p RawPayload) CursorPayload {
 
 // cursorResponse is the JSON structure Cursor reads from stdout.
 type cursorResponse struct {
-	Permission  string `json:"permission"`
-	UserMessage string `json:"userMessage,omitempty"`
+	Permission     string `json:"permission"`
+	UserMessage    string `json:"userMessage,omitempty"`
+	FollowupMessage string `json:"followup_message,omitempty"`
 }
 
 // CursorAllow returns stdout JSON bytes for an allow response (exit 0).
@@ -106,6 +121,15 @@ func CursorBlock(ruleName, message string) []byte {
 	b, _ := json.Marshal(cursorResponse{
 		Permission:  "deny",
 		UserMessage: fmt.Sprintf("agent-gate: [%s] %s", ruleName, message),
+	})
+	return append(b, '\n')
+}
+
+// CursorFollowup returns stdout JSON for a stop hook response that sends
+// a followup_message, causing Cursor to auto-submit it as the next user prompt.
+func CursorFollowup(ruleName, message string) []byte {
+	b, _ := json.Marshal(cursorResponse{
+		FollowupMessage: fmt.Sprintf("agent-gate: [%s] %s", ruleName, message),
 	})
 	return append(b, '\n')
 }

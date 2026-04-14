@@ -34,7 +34,8 @@ func main() {
 
 	// Hidden subcommand: start the background daemon.
 	if len(os.Args) > 1 && os.Args[1] == "daemon" {
-		if err := daemon.Run(slog.Default()); err != nil {
+		log := openLog("daemon")
+		if err := daemon.Run(log); err != nil {
 			fmt.Fprintf(os.Stderr, "agent-gate: daemon: %v\n", err)
 			os.Exit(1)
 		}
@@ -45,66 +46,70 @@ func main() {
 	os.Exit(runHook())
 }
 
-// runClaudeWrapper connects to the daemon, acquires a fake HOME for this
-// process, then execs the real claude with HOME overridden and --settings
-// pointing at the per-process settings.json (which has the per-session model
-// injected). On exit, releases the session so the daemon cleans up.
+// runClaudeWrapper connects to the daemon, acquires a per-session settings
+// file, then execs the real claude with --settings pointing at it.
+// On exit, releases the session so the daemon cleans up.
 func runClaudeWrapper() int {
+	log := openLog("wrapper")
 	ctx := context.Background()
 	wrapperID := fmt.Sprintf("%d", os.Getpid())
 
-	// Connect to daemon (auto-start if not running).
+	cwd, _ := os.Getwd()
+	log.Debug("wrapper starting", "pid", wrapperID, "cwd", cwd, "args", os.Args[1:])
+
 	client, err := connectOrStartDaemon(ctx)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "agent-gate: daemon unavailable: %v\n", err)
+		log.Error("daemon unavailable", "err", err)
 		return 1
 	}
-	defer client.Close()
+	defer func() {
+		if err := client.Close(); err != nil {
+			log.Warn("close client", "err", err)
+		}
+	}()
 
-	// Session name from env (set by the user's shell or a wrapper script).
 	sessionName := os.Getenv("AGENT_GATE_SESSION_NAME")
 
 	resp, err := client.AcquireSession(wrapperID, sessionName)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "agent-gate: acquire session: %v\n", err)
+		log.Error("acquire session failed", "err", err)
 		return 1
 	}
 
 	defer func() {
 		if err := client.ReleaseSession(wrapperID); err != nil {
-			fmt.Fprintf(os.Stderr, "agent-gate: release session: %v\n", err)
+			log.Warn("release session", "err", err)
 		}
 	}()
 
-	// Build args: pass through all user args, inject --settings for model.
 	args := append([]string{}, os.Args[1:]...)
 	if resp.SettingsFile != "" && !containsFlag(args, "--settings") {
 		args = append([]string{"--settings", resp.SettingsFile}, args...)
 	}
 
+	log.Info("launching claude",
+		"claude_bin", resp.RealClaude,
+		"model", resp.Model,
+		"settings", resp.SettingsFile,
+		"cwd", cwd,
+		"args", args,
+	)
+
 	claudeCmd := exec.Command(resp.RealClaude, args...)
+	claudeCmd.Dir = cwd
 	claudeCmd.Stdin = os.Stdin
 	claudeCmd.Stdout = os.Stdout
 	claudeCmd.Stderr = os.Stderr
 
-	// Override HOME so /model writes stay isolated to this process.
-	env := make([]string, 0, len(os.Environ())+1)
-	for _, e := range os.Environ() {
-		if len(e) >= 5 && e[:5] == "HOME=" {
-			continue
-		}
-		env = append(env, e)
-	}
-	env = append(env, "HOME="+resp.FakeHome)
-	claudeCmd.Env = env
-
 	if err := claudeCmd.Run(); err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
+			log.Info("claude exited", "code", exitErr.ExitCode())
 			return exitErr.ExitCode()
 		}
-		fmt.Fprintf(os.Stderr, "agent-gate: claude exited with error: %v\n", err)
+		log.Error("claude exec failed", "err", err)
 		return 1
 	}
+	log.Info("claude exited", "code", 0)
 	return 0
 }
 
@@ -146,6 +151,19 @@ func connectOrStartDaemon(ctx context.Context) (*daemon.Client, error) {
 	}
 
 	return nil, fmt.Errorf("daemon did not become ready: %w", err)
+}
+
+// openLog returns a slog.Logger that writes JSON to the unified XDG state
+// log file at ~/.local/state/agent-gate/agent-gate.jsonl.
+// The component field distinguishes daemon vs wrapper entries.
+func openLog(component string) *slog.Logger {
+	logPath := filepath.Join(config.DefaultStateDir(), "agent-gate.jsonl")
+	_ = os.MkdirAll(filepath.Dir(logPath), 0o755)
+	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return slog.New(slog.NewJSONHandler(io.Discard, nil))
+	}
+	return slog.New(slog.NewJSONHandler(f, nil)).With("component", component)
 }
 
 // containsFlag reports whether args contains the given flag string.

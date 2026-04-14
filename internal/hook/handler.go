@@ -63,11 +63,32 @@ func Handle(raw RawPayload, cfg *config.Config, logger *audit.Logger) (stdout, s
 
 		switch system {
 		case SystemCursor:
+			if isObservationalCursorEvent(eventName) {
+				// Observational events (afterAgentResponse, etc.) cannot block.
+				// Persist the violation so the next stop hook can send a followup_message.
+				_ = writeFollowup(raw.SessionID(), violation.RuleName, violation.Message)
+				return CursorAllow(), nil, 0
+			}
 			// Cursor expects JSON on stdout; exit 0.
 			return CursorBlock(violation.RuleName, violation.Message), nil, 0
 		default:
 			// Claude (and unknown): write allow JSON to stdout, block message to stderr, exit 2.
 			return ClaudeAllow(), ClaudeBlock(violation.RuleName, violation.Message), 2
+		}
+	}
+
+	// No rule violation. For Cursor stop events, check for a pending followup
+	// from a prior observational hook (e.g. afterAgentResponse detected emdashes).
+	if system == SystemCursor && eventName == string(CursorStop) {
+		if ruleName, message := consumeFollowup(raw.SessionID()); ruleName != "" {
+			logger.Info("hook.followup",
+				append(decisionAttrs,
+					slog.String("decision", "followup"),
+					slog.String("blocking_rule", ruleName),
+					slog.String("violation_message", message),
+				)...,
+			)
+			return CursorFollowup(ruleName, message), nil, 0
 		}
 	}
 

@@ -1,7 +1,6 @@
 // Package daemon implements the agent-gate daemon gRPC server.
-// The daemon is the monolith: it manages per-process fake HOME directories
-// in XDG_RUNTIME_DIR, syncs global Claude settings live, and processes
-// all hook events from wrapper-launched sessions.
+// It manages per-session settings.json files so that /model changes
+// in one Claude session don't leak to others.
 package daemon
 
 import (
@@ -29,7 +28,7 @@ type Server struct {
 	mu      sync.RWMutex
 	sessions map[string]*wrapperSession // keyed by wrapper_id
 
-	watcher     *fsnotify.Watcher
+	watcher        *fsnotify.Watcher
 	globalSettings map[string]any // last-known global settings.json content
 }
 
@@ -38,7 +37,6 @@ type wrapperSession struct {
 	wrapperID   string
 	sessionName string // empty for bare claude invocations
 	model       string
-	fakeHome    string
 }
 
 // New creates a new daemon Server and starts watching the global settings file.
@@ -54,13 +52,18 @@ func New(log *slog.Logger) (*Server, error) {
 		watcher:  watcher,
 	}
 
+	globalPath := globalSettingsPath()
 	if err := s.loadGlobalSettings(); err != nil {
-		log.Warn("failed to load global settings on startup", "err", err)
+		log.Warn("global settings load failed on startup", "path", globalPath, "err", err)
+	} else {
+		globalModel, _ := s.globalSettings["model"].(string)
+		log.Info("global settings loaded", "path", globalPath, "model", globalModel, "keys", len(s.globalSettings))
 	}
 
-	globalPath := globalSettingsPath()
 	if err := watcher.Add(globalPath); err != nil {
 		log.Warn("failed to watch global settings", "path", globalPath, "err", err)
+	} else {
+		log.Info("watching global settings", "path", globalPath)
 	}
 
 	go s.watchGlobalSettings()
@@ -68,7 +71,7 @@ func New(log *slog.Logger) (*Server, error) {
 	return s, nil
 }
 
-// Close shuts down the watcher and cleans up all active session fake homes.
+// Close shuts down the watcher and cleans up all active session runtime dirs.
 func (s *Server) Close() {
 	_ = s.watcher.Close()
 
@@ -76,11 +79,13 @@ func (s *Server) Close() {
 	defer s.mu.Unlock()
 
 	for _, sess := range s.sessions {
-		s.cleanupFakeHome(sess)
+		_ = os.RemoveAll(config.SessionRuntimeDir(sess.wrapperID))
 	}
+	s.log.Info("daemon closed", "cleaned_sessions", len(s.sessions))
 }
 
-// AcquireSession creates a fake HOME for a new claude wrapper process.
+// AcquireSession writes a per-session settings.json (global settings with
+// model overridden) and returns the path along with the real claude binary.
 func (s *Server) AcquireSession(ctx context.Context, req *daemonpb.AcquireSessionRequest) (*daemonpb.AcquireSessionResponse, error) {
 	if req.WrapperId == "" {
 		return nil, status.Error(codes.InvalidArgument, "wrapper_id is required")
@@ -88,17 +93,11 @@ func (s *Server) AcquireSession(ctx context.Context, req *daemonpb.AcquireSessio
 
 	model, err := s.resolveModel(req.SessionName)
 	if err != nil {
-		s.log.Warn("failed to resolve model, using empty", "err", err)
-	}
-
-	fakeHome, err := s.createFakeHome(req.WrapperId)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to create fake home: %v", err)
+		s.log.Warn("model resolution failed, using global", "session", req.SessionName, "err", err)
 	}
 
 	settingsFile, err := s.writeSettingsJSON(req.WrapperId, model)
 	if err != nil {
-		_ = os.RemoveAll(fakeHome)
 		return nil, status.Errorf(codes.Internal, "failed to write settings: %v", err)
 	}
 
@@ -106,7 +105,6 @@ func (s *Server) AcquireSession(ctx context.Context, req *daemonpb.AcquireSessio
 		wrapperID:   req.WrapperId,
 		sessionName: req.SessionName,
 		model:       model,
-		fakeHome:    fakeHome,
 	}
 
 	s.mu.Lock()
@@ -118,17 +116,23 @@ func (s *Server) AcquireSession(ctx context.Context, req *daemonpb.AcquireSessio
 		return nil, status.Errorf(codes.Internal, "failed to find real claude binary: %v", err)
 	}
 
-	s.log.Info("session acquired", "wrapper_id", req.WrapperId, "session", req.SessionName, "model", model, "fake_home", fakeHome)
+	s.log.Info("session acquired",
+		"wrapper_id", req.WrapperId,
+		"session", req.SessionName,
+		"model", model,
+		"settings_file", settingsFile,
+		"claude_bin", realClaude,
+		"active_sessions", len(s.sessions),
+	)
 
 	return &daemonpb.AcquireSessionResponse{
-		FakeHome:     fakeHome,
 		RealClaude:   realClaude,
 		Model:        model,
 		SettingsFile: settingsFile,
 	}, nil
 }
 
-// ReleaseSession cleans up the fake HOME after claude exits.
+// ReleaseSession removes the per-session runtime dir after claude exits.
 func (s *Server) ReleaseSession(ctx context.Context, req *daemonpb.ReleaseSessionRequest) (*daemonpb.ReleaseSessionResponse, error) {
 	s.mu.Lock()
 	sess, ok := s.sessions[req.WrapperId]
@@ -138,8 +142,16 @@ func (s *Server) ReleaseSession(ctx context.Context, req *daemonpb.ReleaseSessio
 	s.mu.Unlock()
 
 	if ok {
-		s.cleanupFakeHome(sess)
-		s.log.Info("session released", "wrapper_id", req.WrapperId)
+		sessionDir := config.SessionRuntimeDir(sess.wrapperID)
+		_ = os.RemoveAll(sessionDir)
+		s.log.Info("session released",
+			"wrapper_id", req.WrapperId,
+			"session", sess.sessionName,
+			"model", sess.model,
+			"active_sessions", len(s.sessions),
+		)
+	} else {
+		s.log.Warn("release for unknown session", "wrapper_id", req.WrapperId)
 	}
 
 	return &daemonpb.ReleaseSessionResponse{}, nil
@@ -151,51 +163,41 @@ func (s *Server) HookEvent(ctx context.Context, req *daemonpb.HookEventRequest) 
 	return &daemonpb.HookEventResponse{ExitCode: 0}, nil
 }
 
-// createFakeHome sets up the per-process fake HOME directory structure.
-func (s *Server) createFakeHome(wrapperID string) (string, error) {
-	fakeHome := config.FakeHomeDir(wrapperID)
-
-	claudeDir := filepath.Join(fakeHome, ".claude")
-	if err := os.MkdirAll(claudeDir, 0o700); err != nil {
-		return "", fmt.Errorf("failed to create fake .claude dir: %w", err)
-	}
-
-	realClaudeDir := globalClaudeDir()
-
-	// Symlink projects/ so transcripts land in the real location.
-	if err := symlinkIfExists(filepath.Join(realClaudeDir, "projects"), filepath.Join(claudeDir, "projects")); err != nil {
-		return "", err
-	}
-
-	// Symlink output-styles/ so custom styles are accessible.
-	if err := symlinkIfExists(filepath.Join(realClaudeDir, "output-styles"), filepath.Join(claudeDir, "output-styles")); err != nil {
-		return "", err
-	}
-
-	return fakeHome, nil
-}
-
-// writeSettingsJSON writes settings.json into the fake home, merging global
-// settings with the per-session model override.
+// writeSettingsJSON writes a per-session settings.json to the runtime dir,
+// merging global settings with the per-session model override.
 func (s *Server) writeSettingsJSON(wrapperID, model string) (string, error) {
 	s.mu.RLock()
 	globalCopy := make(map[string]any, len(s.globalSettings))
 	for k, v := range s.globalSettings {
 		globalCopy[k] = v
 	}
+	globalModel, _ := s.globalSettings["model"].(string)
 	s.mu.RUnlock()
 
-	// Inject per-session model. Everything else comes from the live global copy.
 	if model != "" {
 		globalCopy["model"] = model
 	}
+
+	effectiveModel, _ := globalCopy["model"].(string)
+	s.log.Debug("writing per-session settings",
+		"wrapper_id", wrapperID,
+		"global_model", globalModel,
+		"session_model", model,
+		"effective_model", effectiveModel,
+		"settings_keys", len(globalCopy),
+	)
 
 	data, err := json.MarshalIndent(globalCopy, "", "  ")
 	if err != nil {
 		return "", fmt.Errorf("failed to marshal settings: %w", err)
 	}
 
-	settingsPath := config.FakeSettingsPath(wrapperID)
+	sessionDir := config.SessionRuntimeDir(wrapperID)
+	if err := os.MkdirAll(sessionDir, 0o700); err != nil {
+		return "", fmt.Errorf("failed to create session dir: %w", err)
+	}
+
+	settingsPath := filepath.Join(sessionDir, "settings.json")
 	if err := os.WriteFile(settingsPath, data, 0o600); err != nil {
 		return "", fmt.Errorf("failed to write settings.json: %w", err)
 	}
@@ -203,9 +205,10 @@ func (s *Server) writeSettingsJSON(wrapperID, model string) (string, error) {
 	return settingsPath, nil
 }
 
-// syncAllFakeHomes rewrites settings.json in all active fake homes when
-// the global settings file changes, preserving each session's model.
-func (s *Server) syncAllFakeHomes() {
+// syncAllSessions rewrites settings.json for all active sessions when the
+// global settings file changes. Each session's current model is preserved
+// so that /model changes in one session don't leak to others.
+func (s *Server) syncAllSessions() {
 	s.mu.RLock()
 	sessions := make([]*wrapperSession, 0, len(s.sessions))
 	for _, sess := range s.sessions {
@@ -214,13 +217,41 @@ func (s *Server) syncAllFakeHomes() {
 	s.mu.RUnlock()
 
 	for _, sess := range sessions {
+		currentModel := s.readSessionModel(sess.wrapperID)
+		if currentModel != "" {
+			sess.model = currentModel
+		}
+		s.log.Debug("syncing session",
+			"wrapper_id", sess.wrapperID,
+			"session", sess.sessionName,
+			"preserved_model", sess.model,
+		)
 		if _, err := s.writeSettingsJSON(sess.wrapperID, sess.model); err != nil {
-			s.log.Warn("failed to sync settings to fake home", "wrapper_id", sess.wrapperID, "err", err)
+			s.log.Warn("failed to sync settings", "wrapper_id", sess.wrapperID, "err", err)
 		}
 	}
+
+	s.log.Info("global settings synced to all sessions", "active_sessions", len(sessions))
 }
 
-// watchGlobalSettings runs in a goroutine, syncing global settings changes to all fake homes.
+// readSessionModel reads the model from a session's current settings.json.
+// Returns "" if the file doesn't exist or has no model.
+func (s *Server) readSessionModel(wrapperID string) string {
+	path := filepath.Join(config.SessionRuntimeDir(wrapperID), "settings.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	var settings map[string]any
+	if err := json.Unmarshal(data, &settings); err != nil {
+		return ""
+	}
+	model, _ := settings["model"].(string)
+	return model
+}
+
+// watchGlobalSettings runs in a goroutine, syncing global settings changes
+// to all active sessions.
 func (s *Server) watchGlobalSettings() {
 	for {
 		select {
@@ -229,12 +260,12 @@ func (s *Server) watchGlobalSettings() {
 				return
 			}
 			if event.Has(fsnotify.Write) || event.Has(fsnotify.Create) {
+				s.log.Debug("global settings file changed", "event", event.Op.String())
 				if err := s.loadGlobalSettings(); err != nil {
 					s.log.Warn("failed to reload global settings", "err", err)
 					continue
 				}
-				s.syncAllFakeHomes()
-				s.log.Debug("synced global settings to all fake homes", "active_sessions", len(s.sessions))
+				s.syncAllSessions()
 			}
 
 		case err, ok := <-s.watcher.Errors:
@@ -248,9 +279,11 @@ func (s *Server) watchGlobalSettings() {
 
 // loadGlobalSettings reads ~/.claude/settings.json into memory.
 func (s *Server) loadGlobalSettings() error {
-	data, err := os.ReadFile(globalSettingsPath())
+	path := globalSettingsPath()
+	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
+			s.log.Debug("global settings file not found, using empty", "path", path)
 			s.mu.Lock()
 			s.globalSettings = make(map[string]any)
 			s.mu.Unlock()
@@ -264,6 +297,9 @@ func (s *Server) loadGlobalSettings() error {
 		return fmt.Errorf("failed to parse global settings: %w", err)
 	}
 
+	model, _ := settings["model"].(string)
+	s.log.Debug("global settings reloaded", "model", model, "keys", len(settings))
+
 	s.mu.Lock()
 	s.globalSettings = settings
 	s.mu.Unlock()
@@ -274,49 +310,24 @@ func (s *Server) loadGlobalSettings() error {
 // resolveModel returns the model for a session by looking up session metadata.
 // Falls back to the global settings model if no session-specific model is set.
 func (s *Server) resolveModel(sessionName string) (string, error) {
+	s.mu.RLock()
+	globalModel, _ := s.globalSettings["model"].(string)
+	s.mu.RUnlock()
+
 	if sessionName == "" {
-		s.mu.RLock()
-		model, _ := s.globalSettings["model"].(string)
-		s.mu.RUnlock()
-		return model, nil
+		s.log.Debug("no session name, using global model", "model", globalModel)
+		return globalModel, nil
 	}
 
 	// TODO: look up session settings from .agent-gate/sessions/<name>/settings.json
-	// For now fall back to global model.
-	s.mu.RLock()
-	model, _ := s.globalSettings["model"].(string)
-	s.mu.RUnlock()
-	return model, nil
+	s.log.Debug("session model resolution (stub, using global)", "session", sessionName, "model", globalModel)
+	return globalModel, nil
 }
 
-// cleanupFakeHome removes the per-process fake HOME directory.
-func (s *Server) cleanupFakeHome(sess *wrapperSession) {
-	if sess.fakeHome == "" {
-		return
-	}
-	if err := os.RemoveAll(filepath.Dir(sess.fakeHome)); err != nil {
-		s.log.Warn("failed to cleanup fake home", "wrapper_id", sess.wrapperID, "err", err)
-	}
-}
-
-func globalClaudeDir() string {
+func globalSettingsPath() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		home = os.Getenv("HOME")
 	}
-	return filepath.Join(home, ".claude")
-}
-
-func globalSettingsPath() string {
-	return filepath.Join(globalClaudeDir(), "settings.json")
-}
-
-func symlinkIfExists(target, link string) error {
-	if _, err := os.Stat(target); os.IsNotExist(err) {
-		return nil
-	}
-	if err := os.Symlink(target, link); err != nil && !os.IsExist(err) {
-		return fmt.Errorf("failed to symlink %s -> %s: %w", link, target, err)
-	}
-	return nil
+	return filepath.Join(home, ".claude", "settings.json")
 }

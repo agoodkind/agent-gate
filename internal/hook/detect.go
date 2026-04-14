@@ -1,6 +1,9 @@
 package hook
 
-import "unicode"
+import (
+	"unicode"
+	"unicode/utf8"
+)
 
 // Detect determines which hook system called agent-gate by examining hook_event_name.
 //
@@ -14,8 +17,8 @@ func Detect(p RawPayload) HookSystem {
 	if name == "" {
 		return SystemUnknown
 	}
-	runes := []rune(name)
-	if unicode.IsUpper(runes[0]) {
+	r, _ := utf8.DecodeRuneInString(name)
+	if unicode.IsUpper(r) {
 		return SystemClaude
 	}
 	return SystemCursor

@@ -34,8 +34,8 @@ func Connect(ctx context.Context) (*Client, error) {
 }
 
 // Close closes the gRPC connection.
-func (c *Client) Close() {
-	_ = c.conn.Close()
+func (c *Client) Close() error {
+	return c.conn.Close()
 }
 
 // AcquireSession asks the daemon to create a fake HOME for this wrapper process.

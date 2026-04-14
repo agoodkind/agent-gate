@@ -7,14 +7,15 @@ GO_MK_CACHE := $(HOME)/.cache/go-makefile/go.mk
 # GNU Make re-reads after building an included file, so any target works
 # on a fresh clone without a separate bootstrap step.
 $(GO_MK):
-	@mkdir -p $(dir $@)
-	@if curl -fsSL --connect-timeout 5 --max-time 10 "$(GO_MK_URL)" -o "$@"; then \
+	@[ -f "$@" ] && exit 0; \
+	mkdir -p $(dir $@); \
+	if curl -fsSL --connect-timeout 5 --max-time 10 "$(GO_MK_URL)" -o "$@"; then \
 		mkdir -p "$(dir $(GO_MK_CACHE))" && cp "$@" "$(GO_MK_CACHE)"; \
 	elif [ -f "$(GO_MK_CACHE)" ]; then \
-		echo "warning: go.mk fetch failed, using cached version" >&2; \
+		echo "warning: go.mk fetch failed, using cached version"; \
 		cp "$(GO_MK_CACHE)" "$@"; \
 	else \
-		echo "error: go.mk fetch failed and no cache available" >&2; \
+		echo "error: go.mk fetch failed and no cache available"; \
 		exit 1; \
 	fi
 

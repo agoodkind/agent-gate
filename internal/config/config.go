@@ -126,13 +126,13 @@ func (c *Config) AuditLogPath() string {
 func Load() (*Config, error) {
 	path := ConfigPath()
 
+	var cfg Config
+
 	if _, err := os.Stat(path); os.IsNotExist(err) {
-		if writeErr := writeDefault(path); writeErr != nil {
-			return nil, fmt.Errorf("write default config to %s: %w", path, writeErr)
-		}
+		// No config file: return zero-value config (no rules, default paths).
+		return &cfg, nil
 	}
 
-	var cfg Config
 	if _, err := toml.DecodeFile(path, &cfg); err != nil {
 		return nil, fmt.Errorf("decode config %s: %w", path, err)
 	}
