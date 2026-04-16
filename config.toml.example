@@ -46,22 +46,49 @@ pattern     = '(\d+>&\d+|>&\d+|&>|\|&|>/dev/null|2>/dev/null|>>/dev/null|2>>/dev
 action      = "block"
 violation_message = "Shell redirection is not permitted (e.g. 2>&1, >/dev/null, &>). Express output handling explicitly without redirects."
 
+# Emdash enforcement: block on new output, audit on existing content.
+
 [[rules]]
 name        = "no-emdashes"
-description = "Block typographic dash variants (em dash, en dash, figure dash, etc.) in LLM-generated text output"
-events      = ["PreToolUse", "preToolUse", "beforeShellExecution", "Stop", "SubagentStop", "afterAgentResponse"]
-# Tool inputs: file content (Write), edit replacement (Edit), shell command (Bash),
-# agent prompt (Agent), tool description. Cursor shell command.
-# Free-text responses: assistant_message (Stop), last_assistant_message (SubagentStop),
-# text (Cursor afterAgentResponse, deferred to stop via followup_message).
+description = "Block Unicode dash variants in all LLM-generated output"
+claude_events = [
+  "PreToolUse", "PostToolUse", "PostToolUseFailure",
+  "Stop", "StopFailure",
+  "SubagentStart", "SubagentStop",
+  "SessionStart", "SessionEnd",
+  "UserPromptSubmit",
+  "PermissionRequest", "PermissionDenied",
+  "Notification",
+  "ConfigChange", "CwdChanged", "InstructionsLoaded",
+  "PreCompact", "PostCompact",
+  "WorktreeCreate", "WorktreeRemove",
+  "FileChanged",
+  "TaskCreated", "TaskCompleted",
+  "Elicitation", "ElicitationResult",
+  "TeammateIdle",
+]
+cursor_events = [
+  "preToolUse", "postToolUse",
+  "beforeShellExecution",
+  "beforeMCPExecution", "beforeSubmitPrompt", "beforeReadFile",
+  "afterFileEdit", "afterAgentResponse",
+  "stop",
+]
+# All LLM-generated text fields. old_string excluded -- existing content
+# doesn't trigger a block.
 field_paths = ["tool_input.content", "tool_input.new_string", "tool_input.command", "tool_input.prompt", "tool_input.description", "command", "assistant_message", "last_assistant_message", "text"]
-# U+2010 HYPHEN, U+2011 NON-BREAKING HYPHEN, U+2012 FIGURE DASH,
-# U+2013 EN DASH, U+2014 EM DASH, U+2015 HORIZONTAL BAR,
-# U+2212 MINUS SIGN, U+2E3A TWO-EM DASH, U+2E3B THREE-EM DASH,
-# U+FE31 VERTICAL EM DASH, U+FE32 VERTICAL EN DASH,
-# U+FE58 SMALL EM DASH, U+FE63 SMALL HYPHEN-MINUS,
-# U+FF0D FULLWIDTH HYPHEN-MINUS.
-# ASCII hyphen-minus (U+002D) used in kebab-case is unaffected.
+# U+2010..U+2015, U+2212, U+2E3A, U+2E3B, U+FE31, U+FE32, U+FE58, U+FE63, U+FF0D
 pattern     = '[\x{2010}-\x{2015}\x{2212}\x{2E3A}\x{2E3B}\x{FE31}\x{FE32}\x{FE58}\x{FE63}\x{FF0D}]'
 action      = "block"
 violation_message = "BLOCKED: Typographic dash detected (em dash, en dash, or variant). Completely restructure the sentence. The dash exists because you packed an aside or parenthetical into the middle of a clause. Decompose it: make the aside its own sentence with an explicit subject and verb. Every sentence must stand alone without mid-sentence interruptions. Resubmit the corrected output immediately and silently, as if the block never happened."
+
+[[rules]]
+name        = "emdash-audit-existing"
+description = "Audit log when the LLM edits a region containing existing emdashes (does not block)"
+claude_events = ["PreToolUse"]
+cursor_events = ["preToolUse"]
+field_paths = ["tool_input.old_string"]
+pattern     = '[\x{2010}-\x{2015}\x{2212}\x{2E3A}\x{2E3B}\x{FE31}\x{FE32}\x{FE58}\x{FE63}\x{FF0D}]'
+action      = "block"
+audit_only  = true
+violation_message = "Existing content contains typographic dashes. The LLM should clean these up in its replacement."

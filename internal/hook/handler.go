@@ -34,9 +34,9 @@ func Handle(raw RawPayload, cfg *config.Config, logger *audit.Logger) (stdout, s
 	var extra []slog.Attr
 	switch system {
 	case SystemClaude:
-		extra = claudeLogAttrs(ParseClaude(raw))
+		extra = claudeLogAttrs(raw)
 	case SystemCursor:
-		extra = cursorLogAttrs(ParseCursor(raw))
+		extra = cursorLogAttrs(raw)
 	}
 
 	intakeAttrs := append(base, extra...)
@@ -113,31 +113,138 @@ func Handle(raw RawPayload, cfg *config.Config, logger *audit.Logger) (stdout, s
 	}
 }
 
-// claudeLogAttrs extracts slog attributes from a parsed Claude payload.
-func claudeLogAttrs(cp ClaudePayload) []slog.Attr {
+// claudeLogAttrs extracts slog attributes from a Claude payload.
+// Logs every field from the payload for full audit trail.
+func claudeLogAttrs(raw RawPayload) []slog.Attr {
 	attrs := []slog.Attr{
-		slog.String("tool_name", cp.ToolName),
-		slog.String("source", cp.Source),
-		slog.String("file_path", cp.FilePath),
+		slog.String("tool_name", strField(raw, "tool_name")),
+		slog.String("tool_use_id", strField(raw, "tool_use_id")),
+		slog.String("source", strField(raw, "source")),
+		slog.String("file_path", strField(raw, "file_path")),
+		slog.String("model", strField(raw, "model")),
+		slog.String("permission_mode", strField(raw, "permission_mode")),
+		slog.String("agent_id", strField(raw, "agent_id")),
+		slog.String("agent_type", strField(raw, "agent_type")),
 	}
-	if cmd, ok := cp.ToolInput["command"].(string); ok {
-		attrs = append(attrs, slog.String("command", cmd))
+
+	// Tool input: log command, file_path, description, content snippet, old/new string snippets.
+	if ti, ok := raw["tool_input"].(map[string]any); ok {
+		attrs = append(attrs,
+			slog.String("ti_command", strFromMap(ti, "command")),
+			slog.String("ti_file_path", strFromMap(ti, "file_path")),
+			slog.String("ti_description", truncate(strFromMap(ti, "description"), 200)),
+			slog.String("ti_content_snippet", truncate(strFromMap(ti, "content"), 200)),
+			slog.String("ti_old_string_snippet", truncate(strFromMap(ti, "old_string"), 200)),
+			slog.String("ti_new_string_snippet", truncate(strFromMap(ti, "new_string"), 200)),
+			slog.String("ti_pattern", strFromMap(ti, "pattern")),
+			slog.String("ti_url", strFromMap(ti, "url")),
+			slog.String("ti_query", strFromMap(ti, "query")),
+			slog.String("ti_prompt_snippet", truncate(strFromMap(ti, "prompt"), 200)),
+		)
 	}
-	if cp.Prompt != "" {
-		attrs = append(attrs, slog.String("prompt_snippet", truncate(cp.Prompt, 120)))
+
+	// Event-specific fields.
+	if v := strField(raw, "prompt"); v != "" {
+		attrs = append(attrs, slog.String("prompt_snippet", truncate(v, 200)))
 	}
+	if v := strField(raw, "message"); v != "" {
+		attrs = append(attrs, slog.String("message", truncate(v, 200)))
+	}
+	if v := strField(raw, "error"); v != "" {
+		attrs = append(attrs, slog.String("error", v))
+	}
+	if v := strField(raw, "error_type"); v != "" {
+		attrs = append(attrs, slog.String("error_type", v))
+	}
+	if v := strField(raw, "reason"); v != "" {
+		attrs = append(attrs, slog.String("reason", v))
+	}
+	if v := strField(raw, "change_type"); v != "" {
+		attrs = append(attrs, slog.String("change_type", v))
+	}
+	if v := strField(raw, "trigger"); v != "" {
+		attrs = append(attrs, slog.String("trigger", v))
+	}
+	if v := strField(raw, "memory_type"); v != "" {
+		attrs = append(attrs, slog.String("memory_type", v))
+	}
+	if v := strField(raw, "load_reason"); v != "" {
+		attrs = append(attrs, slog.String("load_reason", v))
+	}
+	if v := strField(raw, "notification_type"); v != "" {
+		attrs = append(attrs, slog.String("notification_type", v))
+	}
+	if v := strField(raw, "last_assistant_message"); v != "" {
+		attrs = append(attrs, slog.String("last_assistant_message_snippet", truncate(v, 200)))
+	}
+	if v := strField(raw, "task_id"); v != "" {
+		attrs = append(attrs, slog.String("task_id", v))
+	}
+	if v := strField(raw, "task_subject"); v != "" {
+		attrs = append(attrs, slog.String("task_subject", v))
+	}
+	if v := strField(raw, "new_cwd"); v != "" {
+		attrs = append(attrs, slog.String("new_cwd", v))
+	}
+	if v := strField(raw, "previous_cwd"); v != "" {
+		attrs = append(attrs, slog.String("previous_cwd", v))
+	}
+	if v := strField(raw, "mcp_server_name"); v != "" {
+		attrs = append(attrs, slog.String("mcp_server_name", v))
+	}
+
 	return attrs
 }
 
-// cursorLogAttrs extracts slog attributes from a parsed Cursor payload.
-func cursorLogAttrs(cur CursorPayload) []slog.Attr {
-	return []slog.Attr{
-		slog.String("conversation_id", cur.ConversationID),
-		slog.String("generation_id", cur.GenerationID),
-		slog.String("command", cur.Command),
-		slog.String("tool_name", cur.ToolName),
-		slog.String("file_path", cur.FilePath),
+// cursorLogAttrs extracts slog attributes from a Cursor payload.
+// Logs every field from the payload for full audit trail.
+func cursorLogAttrs(raw RawPayload) []slog.Attr {
+	attrs := []slog.Attr{
+		slog.String("conversation_id", strField(raw, "conversation_id")),
+		slog.String("generation_id", strField(raw, "generation_id")),
+		slog.String("tool_name", strField(raw, "tool_name")),
+		slog.String("file_path", strField(raw, "file_path")),
+		slog.String("command", strField(raw, "command")),
 	}
+
+	// Tool input for MCP/tool calls.
+	if ti, ok := raw["tool_input"].(map[string]any); ok {
+		attrs = append(attrs,
+			slog.String("ti_command", strFromMap(ti, "command")),
+			slog.String("ti_file_path", strFromMap(ti, "file_path")),
+			slog.String("ti_content_snippet", truncate(strFromMap(ti, "content"), 200)),
+			slog.String("ti_old_string_snippet", truncate(strFromMap(ti, "old_string"), 200)),
+			slog.String("ti_new_string_snippet", truncate(strFromMap(ti, "new_string"), 200)),
+		)
+	}
+
+	// Agent output fields.
+	if v := strField(raw, "text"); v != "" {
+		attrs = append(attrs, slog.String("text_snippet", truncate(v, 200)))
+	}
+	if v := strField(raw, "assistant_message"); v != "" {
+		attrs = append(attrs, slog.String("assistant_message_snippet", truncate(v, 200)))
+	}
+	if v := strField(raw, "last_assistant_message"); v != "" {
+		attrs = append(attrs, slog.String("last_assistant_message_snippet", truncate(v, 200)))
+	}
+	if v := strField(raw, "prompt"); v != "" {
+		attrs = append(attrs, slog.String("prompt_snippet", truncate(v, 200)))
+	}
+
+	return attrs
+}
+
+// strField extracts a string from a RawPayload, returning "" if missing.
+func strField(p RawPayload, key string) string {
+	v, _ := p[key].(string)
+	return v
+}
+
+// strFromMap extracts a string from a nested map, returning "" if missing.
+func strFromMap(m map[string]any, key string) string {
+	v, _ := m[key].(string)
+	return v
 }
 
 // truncate returns s shortened to at most n runes, appending "…" if truncated.

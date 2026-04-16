@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 
 	"goodkind.io/agent-gate/internal/config"
+	"goodkind.io/agent-gate/internal/version"
 )
 
 // Logger wraps slog and writes structured JSONL entries to the audit log file.
@@ -34,7 +35,8 @@ func New(cfg *config.Config) (*Logger, error) {
 	}
 
 	level := parseLevel(cfg.Log.Level)
-	handler := slog.NewJSONHandler(f, &slog.HandlerOptions{Level: level})
+	handler := slog.NewJSONHandler(f, &slog.HandlerOptions{Level: level}).
+		WithAttrs(version.Attrs())
 
 	return &Logger{
 		inner: slog.New(handler),

@@ -24,16 +24,25 @@ $(GO_MK):
 
 BINARY := agent-gate
 CMD    := ./cmd/$(BINARY)
+VPKG   := goodkind.io/agent-gate/internal/version
+
+GIT_COMMIT  := $(shell git rev-parse --short HEAD)
+GIT_VERSION := $(shell git describe --tags --always --dirty)
+GIT_DIRTY   := $(shell git diff --quiet && echo false || echo true)
+
+LDFLAGS := -X $(VPKG).Commit=$(GIT_COMMIT) \
+           -X $(VPKG).Version=$(GIT_VERSION) \
+           -X $(VPKG).Dirty=$(GIT_DIRTY)
 
 .DEFAULT_GOAL := check
 
 .PHONY: build deploy clean
 
 build:
-	go build $(CMD)
+	go build -ldflags "$(LDFLAGS)" $(CMD)
 
 deploy:
-	go install $(CMD)
+	go install -ldflags "$(LDFLAGS)" $(CMD)
 	@echo "deployed: $$(go env GOPATH)/bin/$(BINARY)"
 
 clean:
