@@ -55,9 +55,9 @@ const (
 	CursorAfterTabFileEdit  CursorEvent = "afterTabFileEdit"
 )
 
-// isObservationalCursorEvent returns true for Cursor events that are fire-and-forget
-// (informational only). These events cannot block or modify the agent's behavior,
-// so violations must be deferred to the next stop hook via followup_message.
+// isObservationalCursorEvent returns true for Cursor events that are fire and forget
+// (informational only). These events cannot block or modify the agent's behavior.
+// Violations on these events are logged for audit but otherwise ignored.
 func isObservationalCursorEvent(eventName string) bool {
 	switch CursorEvent(eventName) {
 	case CursorAfterAgentResponse, CursorAfterAgentThought,
@@ -103,10 +103,12 @@ func ParseCursor(p RawPayload) CursorPayload {
 }
 
 // cursorResponse is the JSON structure Cursor reads from stdout.
+// Field names are snake_case per Cursor hooks documentation.
 type cursorResponse struct {
-	Permission     string `json:"permission"`
-	UserMessage    string `json:"userMessage,omitempty"`
-	FollowupMessage string `json:"followup_message,omitempty"`
+	Permission   string `json:"permission,omitempty"`
+	Continue     *bool  `json:"continue,omitempty"`
+	UserMessage  string `json:"user_message,omitempty"`
+	AgentMessage string `json:"agent_message,omitempty"`
 }
 
 // CursorAllow returns stdout JSON bytes for an allow response (exit 0).
@@ -116,20 +118,15 @@ func CursorAllow() []byte {
 }
 
 // CursorBlock returns stdout JSON bytes for a deny response (exit 0).
-// Cursor reads the userMessage and can surface it to the user.
+// Sets both user_message (shown to the user) and agent_message (fed back to
+// the agent), so the blocking rule name and violation_message reach the model
+// instead of Cursor's generic canned rejection.
 func CursorBlock(ruleName, message string) []byte {
+	text := fmt.Sprintf("agent-gate: [%s] %s", ruleName, message)
 	b, _ := json.Marshal(cursorResponse{
-		Permission:  "deny",
-		UserMessage: fmt.Sprintf("agent-gate: [%s] %s", ruleName, message),
-	})
-	return append(b, '\n')
-}
-
-// CursorFollowup returns stdout JSON for a stop hook response that sends
-// a followup_message, causing Cursor to auto-submit it as the next user prompt.
-func CursorFollowup(ruleName, message string) []byte {
-	b, _ := json.Marshal(cursorResponse{
-		FollowupMessage: fmt.Sprintf("agent-gate: [%s] %s", ruleName, message),
+		Permission:   "deny",
+		UserMessage:  text,
+		AgentMessage: text,
 	})
 	return append(b, '\n')
 }

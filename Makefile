@@ -2,10 +2,24 @@ GO_MK_URL   := https://raw.githubusercontent.com/agoodkind/go-makefile/main/go.m
 GO_MK       := .make/go.mk
 GO_MK_CACHE := $(HOME)/.cache/go-makefile/go.mk
 
+BINARY := agent-gate
+CMD    := ./cmd/$(BINARY)
+VPKG   := goodkind.io/agent-gate/internal/version
+
+GIT_COMMIT  := $(shell git rev-parse --short HEAD)
+GIT_VERSION := $(shell git describe --tags --always --dirty)
+GIT_DIRTY   := $(shell git diff --quiet && echo false || echo true)
+
+LDFLAGS := -X $(VPKG).Commit=$(GIT_COMMIT) \
+           -X $(VPKG).Version=$(GIT_VERSION) \
+           -X $(VPKG).Dirty=$(GIT_DIRTY)
+
 # Auto-download go.mk if missing. On success, update the local cache.
 # On failure, fall back to the last known good cache. If neither exists, fail.
 # GNU Make re-reads after building an included file, so any target works
 # on a fresh clone without a separate bootstrap step.
+# BINARY and CMD are defined above so go.mk's 'ifndef CMD' sees us as a
+# binary project and skips its default library-style 'build' recipe.
 $(GO_MK):
 	@[ -f "$@" ] && exit 0; \
 	mkdir -p $(dir $@); \
@@ -20,19 +34,6 @@ $(GO_MK):
 	fi
 
 -include $(GO_MK)
-
-
-BINARY := agent-gate
-CMD    := ./cmd/$(BINARY)
-VPKG   := goodkind.io/agent-gate/internal/version
-
-GIT_COMMIT  := $(shell git rev-parse --short HEAD)
-GIT_VERSION := $(shell git describe --tags --always --dirty)
-GIT_DIRTY   := $(shell git diff --quiet && echo false || echo true)
-
-LDFLAGS := -X $(VPKG).Commit=$(GIT_COMMIT) \
-           -X $(VPKG).Version=$(GIT_VERSION) \
-           -X $(VPKG).Dirty=$(GIT_DIRTY)
 
 .DEFAULT_GOAL := check
 
