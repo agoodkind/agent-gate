@@ -5,14 +5,20 @@ GO_MK_CACHE := $(HOME)/.cache/go-makefile/go.mk
 BINARY := agent-gate
 CMD    := ./cmd/$(BINARY)
 VPKG   := goodkind.io/agent-gate/internal/version
+GKLOG_VPKG := goodkind.io/gklog/version
 
 GIT_COMMIT  := $(shell git rev-parse --short HEAD)
 GIT_VERSION := $(shell git describe --tags --always --dirty)
 GIT_DIRTY   := $(shell git diff --quiet && echo false || echo true)
+BUILD_TIME  := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 
 LDFLAGS := -X $(VPKG).Commit=$(GIT_COMMIT) \
            -X $(VPKG).Version=$(GIT_VERSION) \
-           -X $(VPKG).Dirty=$(GIT_DIRTY)
+           -X $(VPKG).Dirty=$(GIT_DIRTY) \
+           -X $(GKLOG_VPKG).Commit=$(GIT_COMMIT) \
+           -X $(GKLOG_VPKG).Dirty=$(GIT_DIRTY) \
+           -X $(GKLOG_VPKG).BuildTime=$(BUILD_TIME) \
+           -X $(GKLOG_VPKG).BinHash=
 
 # Auto-download go.mk if missing. On success, update the local cache.
 # On failure, fall back to the last known good cache. If neither exists, fail.

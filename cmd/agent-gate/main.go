@@ -15,6 +15,7 @@ import (
 	"goodkind.io/agent-gate/internal/config"
 	"goodkind.io/agent-gate/internal/daemon"
 	"goodkind.io/agent-gate/internal/hook"
+	"goodkind.io/gklog"
 )
 
 func main() {
@@ -34,7 +35,8 @@ func main() {
 
 	// Hidden subcommand: start the background daemon.
 	if len(os.Args) > 1 && os.Args[1] == "daemon" {
-		log := openLog("daemon")
+		log, closeLog := openLog("daemon")
+		defer closeLog()
 		if err := daemon.Run(log); err != nil {
 			fmt.Fprintf(os.Stderr, "agent-gate: daemon: %v\n", err)
 			os.Exit(1)
@@ -50,7 +52,8 @@ func main() {
 // file, then execs the real claude with --settings pointing at it.
 // On exit, releases the session so the daemon cleans up.
 func runClaudeWrapper() int {
-	log := openLog("wrapper")
+	log, closeLog := openLog("wrapper")
+	defer closeLog()
 	ctx := context.Background()
 	wrapperID := fmt.Sprintf("%d", os.Getpid())
 
@@ -154,16 +157,28 @@ func connectOrStartDaemon(ctx context.Context) (*daemon.Client, error) {
 }
 
 // openLog returns a slog.Logger that writes JSON to the unified XDG state
-// log file at ~/.local/state/agent-gate/agent-gate.jsonl.
+// log file at ~/.local/state/agent-gate/agent-gate.jsonl, with rotation.
 // The component field distinguishes daemon vs wrapper entries.
-func openLog(component string) *slog.Logger {
+// The returned function closes the rotating log writer; call it before exit.
+func openLog(component string) (*slog.Logger, func()) {
 	logPath := filepath.Join(config.DefaultStateDir(), "agent-gate.jsonl")
-	_ = os.MkdirAll(filepath.Dir(logPath), 0o755)
-	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		return slog.New(slog.NewJSONHandler(io.Discard, nil))
+	noClose := func() {}
+	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
+		return slog.New(slog.NewJSONHandler(io.Discard, nil)), noClose
 	}
-	return slog.New(slog.NewJSONHandler(f, nil)).With("component", component)
+	inner, closer, err := gklog.New(gklog.Config{
+		JSONLogFile:   logPath,
+		Rotation:      gklog.RotationConfig{MaxSizeMB: 5, MaxBackups: 0, MaxAgeDays: 0},
+		DisableStdout: true,
+	})
+	if err != nil {
+		return slog.New(slog.NewJSONHandler(io.Discard, nil)), noClose
+	}
+	return inner.With("component", component), func() {
+		if closer != nil {
+			_ = closer.Close()
+		}
+	}
 }
 
 // containsFlag reports whether args contains the given flag string.
