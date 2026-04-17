@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 
 	"goodkind.io/agent-gate/internal/config"
+	"goodkind.io/agent-gate/internal/version"
 	"goodkind.io/gklog"
 )
 
@@ -44,6 +45,13 @@ func New(cfg *config.Config) (*Logger, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open audit log %s: %w", path, err)
 	}
+
+	inner = inner.With(
+		slog.String("commit", version.Commit),
+		slog.String("version", version.Version),
+		slog.String("buildHash", version.BuildHash()),
+		slog.String("dirty", version.Dirty),
+	)
 
 	return &Logger{
 		inner:  inner,
