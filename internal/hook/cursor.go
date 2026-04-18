@@ -5,6 +5,8 @@ import (
 	"fmt"
 )
 
+
+
 // CursorEvent enumerates every known Cursor hook event name (camelCase).
 // Source: Cursor hooks documentation, April 2026.
 // Events are grouped by category: session lifecycle, generic tool hooks,
@@ -70,39 +72,6 @@ func CanBlockCursor(eventName string) bool {
 		return true
 	}
 	return false
-}
-
-// CursorPayload holds Cursor-specific fields extracted from a RawPayload.
-type CursorPayload struct {
-	Event          CursorEvent
-	ConversationID string
-	GenerationID   string
-	CWD            string
-	// Command is set for beforeShellExecution.
-	Command string
-	// FilePath is set for beforeReadFile and afterFileEdit.
-	FilePath string
-	// ToolName and ToolInput are set for beforeMCPExecution.
-	ToolName  string
-	ToolInput map[string]any
-	// Prompt is set for beforeSubmitPrompt.
-	Prompt string
-}
-
-// ParseCursor extracts a typed CursorPayload from a RawPayload.
-func ParseCursor(p RawPayload) CursorPayload {
-	cp := CursorPayload{
-		Event:          CursorEvent(p.EventName()),
-		ConversationID: p.SessionID(),
-		CWD:            p.CWD(),
-	}
-	cp.GenerationID, _ = p["generation_id"].(string)
-	cp.Command, _ = p["command"].(string)
-	cp.FilePath, _ = p["file_path"].(string)
-	cp.ToolName, _ = p["tool_name"].(string)
-	cp.ToolInput, _ = p["tool_input"].(map[string]any)
-	cp.Prompt, _ = p["prompt"].(string)
-	return cp
 }
 
 // cursorResponse is the JSON structure Cursor reads from stdout.

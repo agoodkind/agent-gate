@@ -218,6 +218,13 @@ func runHook() int {
 		return 2
 	}
 
+	if errs := hook.ValidateConfig(cfg); len(errs) > 0 {
+		for _, e := range errs {
+			fmt.Fprintf(os.Stderr, "agent-gate: config: %v\n", e)
+		}
+		return 2
+	}
+
 	// Open per-system audit logs (creates directories if needed).
 	loggers, err := audit.NewLoggers(cfg)
 	if err != nil {

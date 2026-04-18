@@ -31,26 +31,10 @@ const (
 	ClaudeWorktreeRemove     ClaudeEvent = "WorktreeRemove"
 	ClaudeElicitation        ClaudeEvent = "Elicitation"
 	ClaudeElicitationResult  ClaudeEvent = "ElicitationResult"
+	ClaudeSetup              ClaudeEvent = "Setup"
 	ClaudeTeammateIdle       ClaudeEvent = "TeammateIdle"
 	ClaudeSessionEnd         ClaudeEvent = "SessionEnd"
 )
-
-// ClaudePayload holds Claude-specific fields extracted from a RawPayload.
-type ClaudePayload struct {
-	Event     ClaudeEvent
-	SessionID string
-	CWD       string
-	// ToolName is set for PreToolUse, PostToolUse, PermissionRequest, etc.
-	ToolName string
-	// ToolInput is the tool arguments map (e.g. {"command": "..."} for Bash).
-	ToolInput map[string]any
-	// Prompt is set for UserPromptSubmit.
-	Prompt string
-	// Source distinguishes subtypes within events (e.g. SessionStart source: startup/resume).
-	Source string
-	// FilePath is set for FileChanged, WorktreeCreate/Remove, etc.
-	FilePath string
-}
 
 // CanBlockClaude returns true for Claude events where exit code 2 causes the
 // action to be blocked. Only pre-hooks are blockable.
@@ -62,21 +46,6 @@ func CanBlockClaude(eventName string) bool {
 		return true
 	}
 	return false
-}
-
-// ParseClaude extracts a typed ClaudePayload from a RawPayload.
-func ParseClaude(p RawPayload) ClaudePayload {
-	cp := ClaudePayload{
-		Event:     ClaudeEvent(p.EventName()),
-		SessionID: p.SessionID(),
-		CWD:       p.CWD(),
-	}
-	cp.ToolName, _ = p["tool_name"].(string)
-	cp.ToolInput, _ = p["tool_input"].(map[string]any)
-	cp.Prompt, _ = p["prompt"].(string)
-	cp.Source, _ = p["source"].(string)
-	cp.FilePath, _ = p["file_path"].(string)
-	return cp
 }
 
 // ClaudeAllow returns the stdout bytes for an allow response (exit 0).
