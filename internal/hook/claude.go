@@ -52,6 +52,18 @@ type ClaudePayload struct {
 	FilePath string
 }
 
+// CanBlockClaude returns true for Claude events where exit code 2 causes the
+// action to be blocked. Only pre-hooks are blockable.
+func CanBlockClaude(eventName string) bool {
+	switch ClaudeEvent(eventName) {
+	case ClaudePreToolUse,
+		ClaudePermissionRequest,
+		ClaudeUserPromptSubmit:
+		return true
+	}
+	return false
+}
+
 // ParseClaude extracts a typed ClaudePayload from a RawPayload.
 func ParseClaude(p RawPayload) ClaudePayload {
 	cp := ClaudePayload{

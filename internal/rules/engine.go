@@ -186,12 +186,54 @@ func cmdSegments(payload map[string]any) string {
 // navigatePath recursively descends into nested maps following parts.
 // Returns the string value at the leaf, or "" if the path does not exist
 // or the leaf is not a string.
+//
+// A path segment ending in "[*]" (e.g. "edits[*]") selects all elements of
+// an array at that key. The remaining sub-path is extracted from each element
+// and the results are joined with newlines so that a single MatchString call
+// covers every array entry.
 func navigatePath(node map[string]any, parts []string) string {
 	if len(parts) == 0 || node == nil {
 		return ""
 	}
 
-	val, ok := node[parts[0]]
+	segment := parts[0]
+
+	// Array wildcard: segment like "edits[*]"
+	if strings.HasSuffix(segment, "[*]") {
+		key := segment[:len(segment)-3]
+		val, ok := node[key]
+		if !ok {
+			return ""
+		}
+		arr, ok := val.([]any)
+		if !ok {
+			return ""
+		}
+		if len(parts) == 1 {
+			// Collect string elements directly.
+			var collected []string
+			for _, elem := range arr {
+				if s, ok := elem.(string); ok && s != "" {
+					collected = append(collected, s)
+				}
+			}
+			return strings.Join(collected, "\n")
+		}
+		// Recurse into each array element map with the remaining path.
+		var collected []string
+		for _, elem := range arr {
+			m, ok := elem.(map[string]any)
+			if !ok {
+				continue
+			}
+			if v := navigatePath(m, parts[1:]); v != "" {
+				collected = append(collected, v)
+			}
+		}
+		return strings.Join(collected, "\n")
+	}
+
+	val, ok := node[segment]
 	if !ok {
 		return ""
 	}

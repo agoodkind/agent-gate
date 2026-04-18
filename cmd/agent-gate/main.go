@@ -218,16 +218,16 @@ func runHook() int {
 		return 2
 	}
 
-	// Open the audit log (creates directories if needed).
-	logger, err := audit.New(cfg)
+	// Open per-system audit logs (creates directories if needed).
+	loggers, err := audit.NewLoggers(cfg)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "agent-gate: open audit logger: %v\n", err)
+		fmt.Fprintf(os.Stderr, "agent-gate: open audit loggers: %v\n", err)
 		return 2
 	}
-	defer logger.Close()
+	defer loggers.Close()
 
 	// Dispatch to the hook handler.
-	stdout, stderr, exitCode := hook.Handle(raw, cfg, logger)
+	stdout, stderr, exitCode := hook.Handle(raw, data, cfg, loggers)
 
 	if len(stdout) > 0 {
 		if _, err := os.Stdout.Write(stdout); err != nil {

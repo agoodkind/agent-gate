@@ -13,34 +13,33 @@ import (
 	"goodkind.io/gklog"
 )
 
-// Logger wraps slog and writes structured JSONL entries to the audit log file.
-// Every hook invocation produces at least one log entry.
+// Logger wraps slog and writes structured JSONL entries to an audit log file.
 type Logger struct {
 	inner  *slog.Logger
 	closer io.Closer
 }
 
-// New opens (or creates) the audit log file and returns a Logger.
-// The log path is taken from cfg.Log.Path; if empty, the XDG default is used.
+// New opens (or creates) the audit log file at cfg.AuditLogPath() and returns a Logger.
 func New(cfg *config.Config) (*Logger, error) {
-	// AuditLogPath applies the full resolution chain:
-	// TOML [paths].audit_log > $XDG_STATE_HOME > ~/.local/state/agent-gate/audit.jsonl
-	path := cfg.AuditLogPath()
+	return newLogger(cfg.AuditLogPath(), cfg.Log.Level)
+}
 
+// newLogger opens (or creates) the audit log at path with the given level.
+func newLogger(path, level string) (*Logger, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("create audit log dir %s: %w", filepath.Dir(path), err)
 	}
 
-	jsonMinLevel := cfg.Log.Level
-	if jsonMinLevel == "" {
-		jsonMinLevel = "info"
+	minLevel := level
+	if minLevel == "" {
+		minLevel = "info"
 	}
 
 	inner, closer, err := gklog.New(gklog.Config{
 		JSONLogFile:   path,
 		Rotation:      gklog.RotationConfig{MaxSizeMB: 5, MaxBackups: 0, MaxAgeDays: 0},
 		DisableStdout: true,
-		JSONMinLevel:  jsonMinLevel,
+		JSONMinLevel:  minLevel,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("open audit log %s: %w", path, err)
@@ -53,10 +52,7 @@ func New(cfg *config.Config) (*Logger, error) {
 		slog.String("dirty", version.Dirty),
 	)
 
-	return &Logger{
-		inner:  inner,
-		closer: closer,
-	}, nil
+	return &Logger{inner: inner, closer: closer}, nil
 }
 
 // Close flushes and closes the underlying rotating log writer.
@@ -80,4 +76,48 @@ func (l *Logger) Debug(msg string, attrs ...slog.Attr) {
 // Error writes an ERROR-level entry.
 func (l *Logger) Error(msg string, attrs ...slog.Attr) {
 	l.inner.LogAttrs(context.TODO(), slog.LevelError, msg, attrs...)
+}
+
+// Loggers holds separate audit loggers for Claude and Cursor hooks.
+// All Claude hook events write to the Claude log; all Cursor events write to the Cursor log.
+type Loggers struct {
+	Claude *Logger
+	Cursor *Logger
+}
+
+// NewLoggers opens both per-system audit log files and returns a Loggers.
+func NewLoggers(cfg *config.Config) (*Loggers, error) {
+	level := cfg.Log.Level
+
+	claude, err := newLogger(cfg.ClaudeAuditLogPath(), level)
+	if err != nil {
+		return nil, fmt.Errorf("open claude audit log: %w", err)
+	}
+
+	cursor, err := newLogger(cfg.CursorAuditLogPath(), level)
+	if err != nil {
+		_ = claude.Close()
+		return nil, fmt.Errorf("open cursor audit log: %w", err)
+	}
+
+	return &Loggers{Claude: claude, Cursor: cursor}, nil
+}
+
+// For returns the logger for the given system string ("claude", "cursor", or any other).
+// Unknown systems fall back to the Claude logger.
+func (l *Loggers) For(system string) *Logger {
+	if system == "cursor" {
+		return l.Cursor
+	}
+	return l.Claude
+}
+
+// Close closes both underlying loggers.
+func (l *Loggers) Close() error {
+	err1 := l.Claude.Close()
+	err2 := l.Cursor.Close()
+	if err1 != nil {
+		return err1
+	}
+	return err2
 }

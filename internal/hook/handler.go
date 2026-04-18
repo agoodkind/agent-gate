@@ -8,21 +8,42 @@ import (
 	"goodkind.io/agent-gate/internal/rules"
 )
 
-// Handle is the central orchestration function.
-//
-// It receives a decoded RawPayload, detects which system sent it, logs the
-// intake, evaluates all configured rules, logs the decision, and returns:
+// Handle is the central orchestration function. It always audits the full
+// payload, then conditionally enforces rules only on events that can block.
 //
 //   - stdout: bytes to write to os.Stdout
 //   - stderr: bytes to write to os.Stderr
 //   - exitCode: process exit code (0 = allow, 2 = block for Claude)
-//
-// Callers are responsible for writing the returned bytes and calling os.Exit.
-func Handle(raw RawPayload, cfg *config.Config, logger *audit.Logger) (stdout, stderr []byte, exitCode int) {
+func Handle(raw RawPayload, rawBytes []byte, cfg *config.Config, loggers *audit.Loggers) (stdout, stderr []byte, exitCode int) {
 	system := Detect(raw)
 	eventName := raw.EventName()
+	logger := loggers.For(system.String())
 
-	// Build the base attributes shared by all log entries for this invocation.
+	// Step 1: Audit — always runs, unconditionally. Logs the full structured
+	// payload plus the raw JSON bytes at debug level for field discovery.
+	auditReceived(raw, rawBytes, system, eventName, logger)
+
+	// Step 2: Enforce — evaluate rules on all events; only block on CanBlock events.
+	return enforce(raw, system, eventName, cfg, logger)
+}
+
+// CanBlock returns true when exit code 2 or permission:"deny" actually
+// prevents the action for the given system and event.
+func CanBlock(system HookSystem, eventName string) bool {
+	switch system {
+	case SystemClaude:
+		return CanBlockClaude(eventName)
+	case SystemCursor:
+		return CanBlockCursor(eventName)
+	default:
+		return false
+	}
+}
+
+// auditReceived logs hook.received for every invocation, plus a debug-level
+// hook.raw_payload entry that contains the full unparsed JSON — useful for
+// discovering undocumented fields from new Cursor/Claude versions.
+func auditReceived(raw RawPayload, rawBytes []byte, system HookSystem, eventName string, logger *audit.Logger) {
 	base := []slog.Attr{
 		slog.String("system", system.String()),
 		slog.String("event", eventName),
@@ -30,7 +51,6 @@ func Handle(raw RawPayload, cfg *config.Config, logger *audit.Logger) (stdout, s
 		slog.String("cwd", raw.CWD()),
 	}
 
-	// Add system-specific payload fields to the log.
 	var extra []slog.Attr
 	switch system {
 	case SystemClaude:
@@ -39,68 +59,83 @@ func Handle(raw RawPayload, cfg *config.Config, logger *audit.Logger) (stdout, s
 		extra = cursorLogAttrs(raw)
 	}
 
-	intakeAttrs := append(base, extra...)
-	logger.Info("hook.received", intakeAttrs...)
+	logger.Info("hook.received", append(base, extra...)...)
 
-	// Determine which rules are evaluated for this event (for audit completeness).
+	// Raw payload at debug — logged when config log.level = "debug".
+	// This gives the exact bytes Cursor/Claude sent, enabling field discovery
+	// without needing to instrument the calling tool.
+	logger.Debug("hook.raw_payload",
+		slog.String("system", system.String()),
+		slog.String("event", eventName),
+		slog.String("session_id", raw.SessionID()),
+		slog.String("raw_payload", string(rawBytes)),
+	)
+}
+
+// enforce evaluates rules and returns the appropriate response. Only called
+// for events where CanBlock is true.
+func enforce(raw RawPayload, system HookSystem, eventName string, cfg *config.Config, logger *audit.Logger) (stdout, stderr []byte, exitCode int) {
 	systemStr := system.String()
 	checked := rules.CheckedRuleNames(systemStr, eventName, cfg.Rules)
-
-	// Evaluate rules against the raw payload map.
 	violation := rules.Evaluate(systemStr, eventName, map[string]any(raw), cfg.Rules)
 
-	decisionAttrs := append(intakeAttrs,
+	base := []slog.Attr{
+		slog.String("system", systemStr),
+		slog.String("event", eventName),
+		slog.String("session_id", raw.SessionID()),
 		slog.Any("rules_checked", checked),
-	)
+	}
 
-	if violation != nil {
-		decision := "block"
-		if violation.AuditOnly {
-			decision = "audit_only"
-		}
-
-		logger.Info("hook."+decision,
-			append(decisionAttrs,
-				slog.String("decision", decision),
+	if violation != nil && !violation.AuditOnly && CanBlock(system, eventName) {
+		logger.Info("hook.blocked",
+			append(base,
+				slog.String("decision", "block"),
 				slog.String("blocking_rule", violation.RuleName),
 				slog.String("violation_message", violation.Message),
 			)...,
 		)
+		return blockResponse(system, violation)
+	}
 
-		if !violation.AuditOnly {
-			switch system {
-			case SystemCursor:
-				// Observational events cannot block, so violations there are
-				// audit only. No follow up prompt is injected.
-				if isObservationalCursorEvent(eventName) {
-					return CursorAllow(), nil, 0
-				}
-				return CursorBlock(violation.RuleName, violation.Message), nil, 0
-			default:
-				return ClaudeAllow(), ClaudeBlock(violation.RuleName, violation.Message), 2
-			}
-		}
-		// audit_only: log was written above, fall through to allow.
+	if violation != nil {
+		logger.Info("hook.audit_violation",
+			append(base,
+				slog.String("decision", "audit_only"),
+				slog.String("blocking_rule", violation.RuleName),
+				slog.String("violation_message", violation.Message),
+			)...,
+		)
 	}
 
 	logger.Info("hook.allowed",
-		append(decisionAttrs,
+		append(base,
 			slog.String("decision", "allow"),
 			slog.String("blocking_rule", ""),
 			slog.String("violation_message", ""),
 		)...,
 	)
+	return defaultAllow(system), nil, 0
+}
 
+// blockResponse builds the stdout/stderr/exitCode for a blocking violation.
+func blockResponse(system HookSystem, v *rules.Violation) (stdout, stderr []byte, exitCode int) {
 	switch system {
 	case SystemCursor:
-		return CursorAllow(), nil, 0
+		return CursorBlock(v.RuleName, v.Message), nil, 0
 	default:
-		return ClaudeAllow(), nil, 0
+		return ClaudeAllow(), ClaudeBlock(v.RuleName, v.Message), 2
 	}
 }
 
+// defaultAllow returns a system-appropriate allow response.
+func defaultAllow(system HookSystem) []byte {
+	if system == SystemCursor {
+		return CursorAllow()
+	}
+	return ClaudeAllow()
+}
+
 // claudeLogAttrs extracts slog attributes from a Claude payload.
-// Logs every field from the payload for full audit trail.
 func claudeLogAttrs(raw RawPayload) []slog.Attr {
 	attrs := []slog.Attr{
 		slog.String("tool_name", strField(raw, "tool_name")),
@@ -113,7 +148,6 @@ func claudeLogAttrs(raw RawPayload) []slog.Attr {
 		slog.String("agent_type", strField(raw, "agent_type")),
 	}
 
-	// Tool input: log command, file_path, description, content snippet, old/new string snippets.
 	if ti, ok := raw["tool_input"].(map[string]any); ok {
 		attrs = append(attrs,
 			slog.String("ti_command", strFromMap(ti, "command")),
@@ -129,61 +163,25 @@ func claudeLogAttrs(raw RawPayload) []slog.Attr {
 		)
 	}
 
-	// Event-specific fields.
-	if v := strField(raw, "prompt"); v != "" {
-		attrs = append(attrs, slog.String("prompt_snippet", truncate(v, 200)))
+	for _, key := range []string{
+		"prompt", "message", "error", "error_type", "reason",
+		"change_type", "trigger", "memory_type", "load_reason",
+		"notification_type", "task_id", "task_subject",
+		"new_cwd", "previous_cwd", "mcp_server_name",
+	} {
+		if v := strField(raw, key); v != "" {
+			attrs = append(attrs, slog.String(key, truncate(v, 200)))
+		}
 	}
-	if v := strField(raw, "message"); v != "" {
-		attrs = append(attrs, slog.String("message", truncate(v, 200)))
-	}
-	if v := strField(raw, "error"); v != "" {
-		attrs = append(attrs, slog.String("error", v))
-	}
-	if v := strField(raw, "error_type"); v != "" {
-		attrs = append(attrs, slog.String("error_type", v))
-	}
-	if v := strField(raw, "reason"); v != "" {
-		attrs = append(attrs, slog.String("reason", v))
-	}
-	if v := strField(raw, "change_type"); v != "" {
-		attrs = append(attrs, slog.String("change_type", v))
-	}
-	if v := strField(raw, "trigger"); v != "" {
-		attrs = append(attrs, slog.String("trigger", v))
-	}
-	if v := strField(raw, "memory_type"); v != "" {
-		attrs = append(attrs, slog.String("memory_type", v))
-	}
-	if v := strField(raw, "load_reason"); v != "" {
-		attrs = append(attrs, slog.String("load_reason", v))
-	}
-	if v := strField(raw, "notification_type"); v != "" {
-		attrs = append(attrs, slog.String("notification_type", v))
-	}
+
 	if v := strField(raw, "last_assistant_message"); v != "" {
 		attrs = append(attrs, slog.String("last_assistant_message_snippet", truncate(v, 200)))
-	}
-	if v := strField(raw, "task_id"); v != "" {
-		attrs = append(attrs, slog.String("task_id", v))
-	}
-	if v := strField(raw, "task_subject"); v != "" {
-		attrs = append(attrs, slog.String("task_subject", v))
-	}
-	if v := strField(raw, "new_cwd"); v != "" {
-		attrs = append(attrs, slog.String("new_cwd", v))
-	}
-	if v := strField(raw, "previous_cwd"); v != "" {
-		attrs = append(attrs, slog.String("previous_cwd", v))
-	}
-	if v := strField(raw, "mcp_server_name"); v != "" {
-		attrs = append(attrs, slog.String("mcp_server_name", v))
 	}
 
 	return attrs
 }
 
 // cursorLogAttrs extracts slog attributes from a Cursor payload.
-// Logs every field from the payload for full audit trail.
 func cursorLogAttrs(raw RawPayload) []slog.Attr {
 	attrs := []slog.Attr{
 		slog.String("conversation_id", strField(raw, "conversation_id")),
@@ -193,7 +191,6 @@ func cursorLogAttrs(raw RawPayload) []slog.Attr {
 		slog.String("command", strField(raw, "command")),
 	}
 
-	// Tool input for MCP/tool calls.
 	if ti, ok := raw["tool_input"].(map[string]any); ok {
 		attrs = append(attrs,
 			slog.String("ti_command", strFromMap(ti, "command")),
@@ -204,18 +201,20 @@ func cursorLogAttrs(raw RawPayload) []slog.Attr {
 		)
 	}
 
-	// Agent output fields.
-	if v := strField(raw, "text"); v != "" {
-		attrs = append(attrs, slog.String("text_snippet", truncate(v, 200)))
+	// afterFileEdit sends edits as an array; log the first new_string snippet.
+	if edits, ok := raw["edits"].([]any); ok && len(edits) > 0 {
+		if edit, ok := edits[0].(map[string]any); ok {
+			attrs = append(attrs,
+				slog.String("edit0_old_snippet", truncate(strFromMap(edit, "old_string"), 200)),
+				slog.String("edit0_new_snippet", truncate(strFromMap(edit, "new_string"), 200)),
+			)
+		}
 	}
-	if v := strField(raw, "assistant_message"); v != "" {
-		attrs = append(attrs, slog.String("assistant_message_snippet", truncate(v, 200)))
-	}
-	if v := strField(raw, "last_assistant_message"); v != "" {
-		attrs = append(attrs, slog.String("last_assistant_message_snippet", truncate(v, 200)))
-	}
-	if v := strField(raw, "prompt"); v != "" {
-		attrs = append(attrs, slog.String("prompt_snippet", truncate(v, 200)))
+
+	for _, key := range []string{"text", "prompt", "assistant_message", "last_assistant_message"} {
+		if v := strField(raw, key); v != "" {
+			attrs = append(attrs, slog.String(key+"_snippet", truncate(v, 200)))
+		}
 	}
 
 	return attrs

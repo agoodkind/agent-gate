@@ -55,15 +55,18 @@ const (
 	CursorAfterTabFileEdit  CursorEvent = "afterTabFileEdit"
 )
 
-// isObservationalCursorEvent returns true for Cursor events that are fire and forget
-// (informational only). These events cannot block or modify the agent's behavior.
-// Violations on these events are logged for audit but otherwise ignored.
-func isObservationalCursorEvent(eventName string) bool {
+// CanBlockCursor returns true for Cursor events where exit code 2 or
+// permission:"deny" actually prevents the action. Only pre-hooks are blockable;
+// post and observational hooks are fire-and-forget.
+func CanBlockCursor(eventName string) bool {
 	switch CursorEvent(eventName) {
-	case CursorAfterAgentResponse, CursorAfterAgentThought,
-		CursorAfterShellExecution, CursorAfterMCPExecution,
-		CursorAfterFileEdit, CursorAfterTabFileEdit,
-		CursorPostToolUse, CursorPostToolUseFailure:
+	case CursorPreToolUse,
+		CursorBeforeShellExecution,
+		CursorBeforeMCPExecution,
+		CursorBeforeReadFile,
+		CursorSubagentStart,
+		CursorBeforeSubmitPrompt,
+		CursorBeforeTabFileRead:
 		return true
 	}
 	return false

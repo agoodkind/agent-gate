@@ -18,9 +18,15 @@ type Log struct {
 // An empty string for any field means "use the XDG env var (or its default)".
 // Non-empty values take highest priority in the resolution chain.
 type Paths struct {
-	// AuditLog overrides the resolved audit log file path.
+	// AuditLog overrides the resolved audit log file path (legacy single-file mode).
 	// Empty: use $XDG_STATE_HOME/agent-gate/audit.jsonl (or ~/.local/state/… default).
 	AuditLog string `toml:"audit_log"`
+	// ClaudeAuditLog overrides the Claude-specific audit log path.
+	// Empty: use $XDG_STATE_HOME/agent-gate/audit-claude.jsonl.
+	ClaudeAuditLog string `toml:"audit_log_claude"`
+	// CursorAuditLog overrides the Cursor-specific audit log path.
+	// Empty: use $XDG_STATE_HOME/agent-gate/audit-cursor.jsonl.
+	CursorAuditLog string `toml:"audit_log_cursor"`
 }
 
 // Condition is one clause in a multi-condition rule.
@@ -122,6 +128,22 @@ func (c *Config) AuditLogPath() string {
 		return c.Paths.AuditLog
 	}
 	return DefaultAuditLogPath()
+}
+
+// ClaudeAuditLogPath returns the resolved Claude-specific audit log path.
+func (c *Config) ClaudeAuditLogPath() string {
+	if c.Paths.ClaudeAuditLog != "" {
+		return c.Paths.ClaudeAuditLog
+	}
+	return DefaultClaudeAuditLogPath()
+}
+
+// CursorAuditLogPath returns the resolved Cursor-specific audit log path.
+func (c *Config) CursorAuditLogPath() string {
+	if c.Paths.CursorAuditLog != "" {
+		return c.Paths.CursorAuditLog
+	}
+	return DefaultCursorAuditLogPath()
 }
 
 // Load reads the config file at the XDG config path.

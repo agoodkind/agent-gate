@@ -635,6 +635,101 @@ func TestEvaluate_EmdashAllowed(t *testing.T) {
 	}
 }
 
+// arrayPathRule returns a rule that matches em dashes in edits[*].new_string.
+func arrayPathRule(t *testing.T) config.Rule {
+	t.Helper()
+	return loadRule(t,
+		"no-emdashes-in-edits",
+		`[\x{2010}-\x{2015}\x{2212}\x{2E3A}\x{2E3B}\x{FE31}\x{FE32}\x{FE58}\x{FE63}\x{FF0D}]`,
+		[]string{"afterFileEdit"},
+		[]string{"edits[*].new_string"},
+		"Unicode dashes are not permitted in edits.",
+	)
+}
+
+// TestNavigatePath_ArrayWildcard verifies [*] path traversal through arrays.
+func TestNavigatePath_ArrayWildcard(t *testing.T) {
+	rule := arrayPathRule(t)
+
+	blocked := []struct {
+		name    string
+		payload map[string]any
+	}{
+		{
+			name: "em dash in first edit",
+			payload: map[string]any{
+				"edits": []any{
+					map[string]any{"old_string": "before", "new_string": "after \u2014 done"},
+				},
+			},
+		},
+		{
+			name: "en dash in second edit",
+			payload: map[string]any{
+				"edits": []any{
+					map[string]any{"old_string": "a", "new_string": "clean"},
+					map[string]any{"old_string": "b", "new_string": "pages 10\u201320"},
+				},
+			},
+		},
+		{
+			name: "unicode hyphen in one of three edits",
+			payload: map[string]any{
+				"edits": []any{
+					map[string]any{"new_string": "normal text"},
+					map[string]any{"new_string": "soft\u2010hyphen here"},
+					map[string]any{"new_string": "also clean"},
+				},
+			},
+		},
+	}
+
+	for _, tc := range blocked {
+		t.Run("blocked/"+tc.name, func(t *testing.T) {
+			v := rules.Evaluate("cursor", "afterFileEdit", tc.payload, []config.Rule{rule})
+			if v == nil {
+				t.Error("expected violation, got nil")
+			}
+		})
+	}
+
+	allowed := []struct {
+		name    string
+		payload map[string]any
+	}{
+		{
+			name: "all edits are clean",
+			payload: map[string]any{
+				"edits": []any{
+					map[string]any{"new_string": "clean text"},
+					map[string]any{"new_string": "also-clean-with-hyphen"},
+				},
+			},
+		},
+		{
+			name: "empty edits array",
+			payload: map[string]any{
+				"edits": []any{},
+			},
+		},
+		{
+			name: "no edits key",
+			payload: map[string]any{
+				"tool_input": map[string]any{"content": "clean"},
+			},
+		},
+	}
+
+	for _, tc := range allowed {
+		t.Run("allowed/"+tc.name, func(t *testing.T) {
+			v := rules.Evaluate("cursor", "afterFileEdit", tc.payload, []config.Rule{rule})
+			if v != nil {
+				t.Errorf("expected no violation, got rule %q: %s", v.RuleName, v.Message)
+			}
+		})
+	}
+}
+
 // TestCmdSegments verifies the cmd_segments virtual field splits correctly.
 func TestCmdSegments(t *testing.T) {
 	cases := []struct {
