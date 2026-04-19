@@ -211,18 +211,26 @@ func runHook() int {
 		return 2
 	}
 
-	// Load config from the XDG path, writing defaults on first run.
+	// Load config. If loading fails (malformed TOML, compile errors, etc.)
+	// we must fail OPEN. Failing closed would brick every tool invocation
+	// the moment the config becomes unparseable, making it impossible to
+	// edit the config back to a valid state. Log loudly and continue with
+	// an empty config (no rules, default paths).
 	cfg, err := config.Load()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "agent-gate: load config: %v\n", err)
-		return 2
+		fmt.Fprintf(os.Stderr,
+			"agent-gate: WARNING: config load failed, continuing with no rules: %v\n",
+			err,
+		)
+		cfg = &config.Config{}
 	}
 
+	// Validation errors are reported but do NOT block. Same reasoning: a
+	// stale field_path should not prevent the user from editing the config.
 	if errs := hook.ValidateConfig(cfg); len(errs) > 0 {
 		for _, e := range errs {
-			fmt.Fprintf(os.Stderr, "agent-gate: config: %v\n", e)
+			fmt.Fprintf(os.Stderr, "agent-gate: WARNING: config: %v\n", e)
 		}
-		return 2
 	}
 
 	// Open per-system audit logs (creates directories if needed).
