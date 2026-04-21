@@ -5,7 +5,7 @@ go 1.26.2
 require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/fsnotify/fsnotify v1.9.0
-	goodkind.io/gklog v0.0.0-20260417063337-a3af1650e1a2
+	goodkind.io/gklog v0.0.0-20260421042800-8d0cf3e6c2c8
 	google.golang.org/grpc v1.80.0
 	google.golang.org/protobuf v1.36.11
 )
