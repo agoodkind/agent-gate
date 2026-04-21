@@ -24,8 +24,8 @@ import (
 type Server struct {
 	daemonpb.UnimplementedAgentGateDServer
 
-	log     *slog.Logger
-	mu      sync.RWMutex
+	log      *slog.Logger
+	mu       sync.RWMutex
 	sessions map[string]*wrapperSession // keyed by wrapper_id
 
 	watcher        *fsnotify.Watcher
@@ -41,6 +41,7 @@ type wrapperSession struct {
 
 // New creates a new daemon Server and starts watching the global settings file.
 func New(log *slog.Logger) (*Server, error) {
+	bg := context.Background()
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create settings watcher: %w", err)
@@ -53,17 +54,17 @@ func New(log *slog.Logger) (*Server, error) {
 	}
 
 	globalPath := globalSettingsPath()
-	if err := s.loadGlobalSettings(); err != nil {
-		log.Warn("global settings load failed on startup", "path", globalPath, "err", err)
+	if err := s.loadGlobalSettings(bg); err != nil {
+		log.WarnContext(bg, "global settings load failed on startup", "path", globalPath, "err", err)
 	} else {
 		globalModel, _ := s.globalSettings["model"].(string)
-		log.Info("global settings loaded", "path", globalPath, "model", globalModel, "keys", len(s.globalSettings))
+		log.InfoContext(bg, "global settings loaded", "path", globalPath, "model", globalModel, "keys", len(s.globalSettings))
 	}
 
 	if err := watcher.Add(globalPath); err != nil {
-		log.Warn("failed to watch global settings", "path", globalPath, "err", err)
+		log.WarnContext(bg, "failed to watch global settings", "path", globalPath, "err", err)
 	} else {
-		log.Info("watching global settings", "path", globalPath)
+		log.InfoContext(bg, "watching global settings", "path", globalPath)
 	}
 
 	go s.watchGlobalSettings()
@@ -73,6 +74,7 @@ func New(log *slog.Logger) (*Server, error) {
 
 // Close shuts down the watcher and cleans up all active session runtime dirs.
 func (s *Server) Close() {
+	bg := context.Background()
 	_ = s.watcher.Close()
 
 	s.mu.Lock()
@@ -81,7 +83,7 @@ func (s *Server) Close() {
 	for _, sess := range s.sessions {
 		_ = os.RemoveAll(config.SessionRuntimeDir(sess.wrapperID))
 	}
-	s.log.Info("daemon closed", "cleaned_sessions", len(s.sessions))
+	s.log.InfoContext(bg, "daemon closed", "cleaned_sessions", len(s.sessions))
 }
 
 // AcquireSession writes a per-session settings.json (global settings with
@@ -91,12 +93,12 @@ func (s *Server) AcquireSession(ctx context.Context, req *daemonpb.AcquireSessio
 		return nil, status.Error(codes.InvalidArgument, "wrapper_id is required")
 	}
 
-	model, err := s.resolveModel(req.SessionName)
+	model, err := s.resolveModel(ctx, req.SessionName)
 	if err != nil {
-		s.log.Warn("model resolution failed, using global", "session", req.SessionName, "err", err)
+		s.log.WarnContext(ctx, "model resolution failed, using global", "session", req.SessionName, "err", err)
 	}
 
-	settingsFile, err := s.writeSettingsJSON(req.WrapperId, model)
+	settingsFile, err := s.writeSettingsJSON(ctx, req.WrapperId, model)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to write settings: %v", err)
 	}
@@ -116,7 +118,7 @@ func (s *Server) AcquireSession(ctx context.Context, req *daemonpb.AcquireSessio
 		return nil, status.Errorf(codes.Internal, "failed to find real claude binary: %v", err)
 	}
 
-	s.log.Info("session acquired",
+	s.log.InfoContext(ctx, "session acquired",
 		"wrapper_id", req.WrapperId,
 		"session", req.SessionName,
 		"model", model,
@@ -144,14 +146,14 @@ func (s *Server) ReleaseSession(ctx context.Context, req *daemonpb.ReleaseSessio
 	if ok {
 		sessionDir := config.SessionRuntimeDir(sess.wrapperID)
 		_ = os.RemoveAll(sessionDir)
-		s.log.Info("session released",
+		s.log.InfoContext(ctx, "session released",
 			"wrapper_id", req.WrapperId,
 			"session", sess.sessionName,
 			"model", sess.model,
 			"active_sessions", len(s.sessions),
 		)
 	} else {
-		s.log.Warn("release for unknown session", "wrapper_id", req.WrapperId)
+		s.log.WarnContext(ctx, "release for unknown session", "wrapper_id", req.WrapperId)
 	}
 
 	return &daemonpb.ReleaseSessionResponse{}, nil
@@ -165,7 +167,7 @@ func (s *Server) HookEvent(ctx context.Context, req *daemonpb.HookEventRequest) 
 
 // writeSettingsJSON writes a per-session settings.json to the runtime dir,
 // merging global settings with the per-session model override.
-func (s *Server) writeSettingsJSON(wrapperID, model string) (string, error) {
+func (s *Server) writeSettingsJSON(ctx context.Context, wrapperID, model string) (string, error) {
 	s.mu.RLock()
 	globalCopy := make(map[string]any, len(s.globalSettings))
 	for k, v := range s.globalSettings {
@@ -179,7 +181,7 @@ func (s *Server) writeSettingsJSON(wrapperID, model string) (string, error) {
 	}
 
 	effectiveModel, _ := globalCopy["model"].(string)
-	s.log.Debug("writing per-session settings",
+	s.log.DebugContext(ctx, "writing per-session settings",
 		"wrapper_id", wrapperID,
 		"global_model", globalModel,
 		"session_model", model,
@@ -209,6 +211,7 @@ func (s *Server) writeSettingsJSON(wrapperID, model string) (string, error) {
 // global settings file changes. Each session's current model is preserved
 // so that /model changes in one session don't leak to others.
 func (s *Server) syncAllSessions() {
+	bg := context.Background()
 	s.mu.RLock()
 	sessions := make([]*wrapperSession, 0, len(s.sessions))
 	for _, sess := range s.sessions {
@@ -221,17 +224,17 @@ func (s *Server) syncAllSessions() {
 		if currentModel != "" {
 			sess.model = currentModel
 		}
-		s.log.Debug("syncing session",
+		s.log.DebugContext(bg, "syncing session",
 			"wrapper_id", sess.wrapperID,
 			"session", sess.sessionName,
 			"preserved_model", sess.model,
 		)
-		if _, err := s.writeSettingsJSON(sess.wrapperID, sess.model); err != nil {
-			s.log.Warn("failed to sync settings", "wrapper_id", sess.wrapperID, "err", err)
+		if _, err := s.writeSettingsJSON(bg, sess.wrapperID, sess.model); err != nil {
+			s.log.WarnContext(bg, "failed to sync settings", "wrapper_id", sess.wrapperID, "err", err)
 		}
 	}
 
-	s.log.Info("global settings synced to all sessions", "active_sessions", len(sessions))
+	s.log.InfoContext(bg, "global settings synced to all sessions", "active_sessions", len(sessions))
 }
 
 // readSessionModel reads the model from a session's current settings.json.
@@ -253,6 +256,7 @@ func (s *Server) readSessionModel(wrapperID string) string {
 // watchGlobalSettings runs in a goroutine, syncing global settings changes
 // to all active sessions.
 func (s *Server) watchGlobalSettings() {
+	bg := context.Background()
 	for {
 		select {
 		case event, ok := <-s.watcher.Events:
@@ -260,9 +264,9 @@ func (s *Server) watchGlobalSettings() {
 				return
 			}
 			if event.Has(fsnotify.Write) || event.Has(fsnotify.Create) {
-				s.log.Debug("global settings file changed", "event", event.Op.String())
-				if err := s.loadGlobalSettings(); err != nil {
-					s.log.Warn("failed to reload global settings", "err", err)
+				s.log.DebugContext(bg, "global settings file changed", "event", event.Op.String())
+				if err := s.loadGlobalSettings(bg); err != nil {
+					s.log.WarnContext(bg, "failed to reload global settings", "err", err)
 					continue
 				}
 				s.syncAllSessions()
@@ -272,18 +276,18 @@ func (s *Server) watchGlobalSettings() {
 			if !ok {
 				return
 			}
-			s.log.Warn("settings watcher error", "err", err)
+			s.log.WarnContext(bg, "settings watcher error", "err", err)
 		}
 	}
 }
 
 // loadGlobalSettings reads ~/.claude/settings.json into memory.
-func (s *Server) loadGlobalSettings() error {
+func (s *Server) loadGlobalSettings(ctx context.Context) error {
 	path := globalSettingsPath()
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			s.log.Debug("global settings file not found, using empty", "path", path)
+			s.log.DebugContext(ctx, "global settings file not found, using empty", "path", path)
 			s.mu.Lock()
 			s.globalSettings = make(map[string]any)
 			s.mu.Unlock()
@@ -298,7 +302,7 @@ func (s *Server) loadGlobalSettings() error {
 	}
 
 	model, _ := settings["model"].(string)
-	s.log.Debug("global settings reloaded", "model", model, "keys", len(settings))
+	s.log.DebugContext(ctx, "global settings reloaded", "model", model, "keys", len(settings))
 
 	s.mu.Lock()
 	s.globalSettings = settings
@@ -309,18 +313,18 @@ func (s *Server) loadGlobalSettings() error {
 
 // resolveModel returns the model for a session by looking up session metadata.
 // Falls back to the global settings model if no session-specific model is set.
-func (s *Server) resolveModel(sessionName string) (string, error) {
+func (s *Server) resolveModel(ctx context.Context, sessionName string) (string, error) {
 	s.mu.RLock()
 	globalModel, _ := s.globalSettings["model"].(string)
 	s.mu.RUnlock()
 
 	if sessionName == "" {
-		s.log.Debug("no session name, using global model", "model", globalModel)
+		s.log.DebugContext(ctx, "no session name, using global model", "model", globalModel)
 		return globalModel, nil
 	}
 
 	// TODO: look up session settings from .agent-gate/sessions/<name>/settings.json
-	s.log.Debug("session model resolution (stub, using global)", "session", sessionName, "model", globalModel)
+	s.log.DebugContext(ctx, "session model resolution (stub, using global)", "session", sessionName, "model", globalModel)
 	return globalModel, nil
 }
 

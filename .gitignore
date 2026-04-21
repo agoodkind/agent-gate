@@ -1,3 +1,5 @@
 /agent-gate
 .make/
 notarize.env
+.vscode/
+

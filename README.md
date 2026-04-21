@@ -14,6 +14,16 @@ Both Claude Code and Cursor expose lifecycle hook systems that call external bin
 
 Requires Go 1.21 or later.
 
+`agent-gate` now uses PCRE2 via cgo, so build hosts must have PCRE2 and a working C toolchain available.
+
+Install prerequisites:
+- macOS: `brew install pcre2`
+- Debian/Ubuntu: `sudo apt-get update && sudo apt-get install -y libpcre2-dev`
+- Fedora/RHEL: `sudo dnf install pcre2-devel`
+- Alpine: `apk add pcre2-dev build-base`
+
+When building, set CGO_ENABLED=1. Rule patterns compile against system `libpcre2-8` (PCRE2 10.x) via cgo; there is no bundled third-party Go regex binding.
+
 ```sh
 git clone https://github.com/agoodkind/agent-gate
 cd agent-gate
@@ -21,6 +31,7 @@ make deploy
 ```
 
 `make deploy` runs `go install` with ldflags that inject git commit, version, and build hash into the binary.
+CI and release builds should export CGO_ENABLED=1 so PCRE2 JIT and match limits are available at runtime.
 
 ## Wiring up hooks
 
@@ -136,7 +147,7 @@ violation_message = "Shell redirection is not permitted."
 | `claude_events` | Claude-only event filter (takes precedence over `events` for Claude). |
 | `cursor_events` | Cursor-only event filter (takes precedence over `events` for Cursor). |
 | `field_paths` | Dot-paths into the JSON payload. First non-empty value is tested. |
-| `pattern` | RE2 regex matched against the extracted field value. |
+| `pattern` | PCRE2 regex matched against the extracted field value. |
 | `action` | `"block"` is the only supported action. |
 | `audit_only` | If `true`, log the violation but do not block. |
 | `violation_message` | Returned to the LLM and written to the audit log. |

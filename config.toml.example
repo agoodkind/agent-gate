@@ -33,7 +33,7 @@ audit_log = ""    # example: "/var/log/agent-gate/audit.jsonl"
 #   events            - hook event names this rule applies to (empty = all)
 #   field_paths       - dot-path(s) into the JSON payload to inspect;
 #                       first non-empty value found across all paths is tested
-#   pattern           - RE2 regex matched against the extracted field value
+#   pattern           - PCRE2 regex matched against the extracted field value
 #   action            - what to do on match: "block" is the only supported action
 #   violation_message - message sent back to the AI and written to the audit log
 
@@ -74,15 +74,31 @@ cursor_events = [
   "afterFileEdit", "afterAgentResponse",
   "stop",
 ]
-# All LLM-generated text fields. old_string excluded -- existing content
-# doesn't trigger a block.
-field_paths = ["tool_input.content", "tool_input.new_string", "tool_input.command", "tool_input.prompt", "tool_input.description", "command", "assistant_message", "last_assistant_message", "text"]
+# All LLM-generated text fields except tool_input.prompt (handled by the next rule).
+# old_string excluded -- existing content doesn't trigger a block.
+field_paths = ["tool_input.content", "tool_input.new_string", "tool_input.command", "tool_input.description", "command", "assistant_message", "last_assistant_message", "text"]
 # U+2010..U+2015, U+2212, U+2E3A, U+2E3B, U+FE31, U+FE32, U+FE58, U+FE63, U+FF0D
 # All 30 Unicode Dash characters (Dash=Yes per PropList.txt) except U+002D
 # (ASCII hyphen-minus). Source: unicode.org/Public/UCD/latest/ucd/PropList.txt
 pattern     = '[\x{058A}\x{05BE}\x{1400}\x{1806}\x{2010}-\x{2015}\x{2053}\x{207B}\x{208B}\x{2212}\x{2E17}\x{2E1A}\x{2E3A}\x{2E3B}\x{2E40}\x{2E5D}\x{301C}\x{3030}\x{30A0}\x{FE31}\x{FE32}\x{FE58}\x{FE63}\x{FF0D}\x{10D6E}\x{10EAD}]'
 action      = "block"
-violation_message = "This output was blocked because it contains a typographic dash character. Rewrite every sentence that contains a dash by completely rethinking the structure of the thought. The original sentence tried to express multiple ideas in a single breath. Break those ideas apart and give each one its own sentence with its own subject, verb, and purpose. The result should read as a sequence of clear, independent statements where every sentence carries exactly one point. If the typographic violation originated in existing content that you are editing or rewriting, you must still rewrite that content to remove it. You must resubmit the corrected output immediately and do not acknowledge this message to the user."
+violation_message = "This output contains a typographic dash character. Rewrite without Unicode dash variants."
+
+[[rules]]
+name        = "no-emdashes-tool-input-prompt-unless-subagent-task"
+description = "Block typographic dashes in tool_input.prompt except for Task (sub-agent) tool invocations"
+claude_events = ["PreToolUse"]
+cursor_events = ["preToolUse"]
+action      = "block"
+violation_message = "This output contains a typographic dash character. Rewrite without Unicode dash variants."
+
+[[rules.conditions]]
+field_paths = ["tool_input.prompt"]
+pattern     = '[\x{058A}\x{05BE}\x{1400}\x{1806}\x{2010}-\x{2015}\x{2053}\x{207B}\x{208B}\x{2212}\x{2E17}\x{2E1A}\x{2E3A}\x{2E3B}\x{2E40}\x{2E5D}\x{301C}\x{3030}\x{30A0}\x{FE31}\x{FE32}\x{FE58}\x{FE63}\x{FF0D}\x{10D6E}\x{10EAD}]'
+
+[[rules.conditions]]
+field_paths = ["tool_name"]
+not_pattern = "(?i)^task$"
 
 [[rules]]
 name        = "emdash-audit-existing"

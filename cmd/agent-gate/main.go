@@ -54,20 +54,20 @@ func main() {
 func runClaudeWrapper() int {
 	log, closeLog := openLog("wrapper")
 	defer closeLog()
-	ctx := context.Background()
+	ctx := gklog.WithLogger(context.Background(), log)
 	wrapperID := fmt.Sprintf("%d", os.Getpid())
 
 	cwd, _ := os.Getwd()
-	log.Debug("wrapper starting", "pid", wrapperID, "cwd", cwd, "args", os.Args[1:])
+	log.DebugContext(ctx, "wrapper starting", "pid", wrapperID, "cwd", cwd, "args", os.Args[1:])
 
 	client, err := connectOrStartDaemon(ctx)
 	if err != nil {
-		log.Error("daemon unavailable", "err", err)
+		log.ErrorContext(ctx, "daemon unavailable", "err", err)
 		return 1
 	}
 	defer func() {
 		if err := client.Close(); err != nil {
-			log.Warn("close client", "err", err)
+			log.WarnContext(ctx, "close client", "err", err)
 		}
 	}()
 
@@ -75,13 +75,13 @@ func runClaudeWrapper() int {
 
 	resp, err := client.AcquireSession(wrapperID, sessionName)
 	if err != nil {
-		log.Error("acquire session failed", "err", err)
+		log.ErrorContext(ctx, "acquire session failed", "err", err)
 		return 1
 	}
 
 	defer func() {
 		if err := client.ReleaseSession(wrapperID); err != nil {
-			log.Warn("release session", "err", err)
+			log.WarnContext(ctx, "release session", "err", err)
 		}
 	}()
 
@@ -90,7 +90,7 @@ func runClaudeWrapper() int {
 		args = append([]string{"--settings", resp.SettingsFile}, args...)
 	}
 
-	log.Info("launching claude",
+	log.InfoContext(ctx, "launching claude",
 		"claude_bin", resp.RealClaude,
 		"model", resp.Model,
 		"settings", resp.SettingsFile,
@@ -106,13 +106,13 @@ func runClaudeWrapper() int {
 
 	if err := claudeCmd.Run(); err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
-			log.Info("claude exited", "code", exitErr.ExitCode())
+			log.InfoContext(ctx, "claude exited", "code", exitErr.ExitCode())
 			return exitErr.ExitCode()
 		}
-		log.Error("claude exec failed", "err", err)
+		log.ErrorContext(ctx, "claude exec failed", "err", err)
 		return 1
 	}
-	log.Info("claude exited", "code", 0)
+	log.InfoContext(ctx, "claude exited", "code", 0)
 	return 0
 }
 
@@ -242,7 +242,7 @@ func runHook() int {
 	defer loggers.Close()
 
 	// Dispatch to the hook handler.
-	stdout, stderr, exitCode := hook.Handle(raw, data, cfg, loggers)
+	stdout, stderr, exitCode := hook.Handle(context.Background(), raw, data, cfg, loggers)
 
 	if len(stdout) > 0 {
 		if _, err := os.Stdout.Write(stdout); err != nil {

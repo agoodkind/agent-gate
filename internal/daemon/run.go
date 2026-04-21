@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net"
@@ -40,6 +41,6 @@ func Run(log *slog.Logger) error {
 	grpcServer := grpc.NewServer()
 	daemonpb.RegisterAgentGateDServer(grpcServer, srv)
 
-	log.Info("daemon listening", "socket", socketPath)
+	log.InfoContext(context.Background(), "daemon listening", "socket", socketPath)
 	return grpcServer.Serve(listener)
 }

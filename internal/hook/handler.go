@@ -1,6 +1,7 @@
 package hook
 
 import (
+	"context"
 	"log/slog"
 
 	"goodkind.io/agent-gate/internal/audit"
@@ -14,17 +15,17 @@ import (
 //   - stdout: bytes to write to os.Stdout
 //   - stderr: bytes to write to os.Stderr
 //   - exitCode: process exit code (0 = allow, 2 = block for Claude)
-func Handle(raw RawPayload, rawBytes []byte, cfg *config.Config, loggers *audit.Loggers) (stdout, stderr []byte, exitCode int) {
+func Handle(ctx context.Context, raw RawPayload, rawBytes []byte, cfg *config.Config, loggers *audit.Loggers) (stdout, stderr []byte, exitCode int) {
 	system := Detect(raw)
 	eventName := raw.EventName()
 	logger := loggers.For(system.String())
 
-	// Step 1: Audit — always runs, unconditionally. Logs the full structured
+	// Step 1: Audit always runs, unconditionally. Logs the full structured
 	// payload plus the raw JSON bytes at debug level for field discovery.
-	auditReceived(raw, rawBytes, system, eventName, logger)
+	auditReceived(ctx, raw, rawBytes, system, eventName, logger)
 
-	// Step 2: Enforce — evaluate rules on all events; only block on CanBlock events.
-	return enforce(raw, system, eventName, cfg, logger)
+	// Step 2: Enforce evaluates rules on all events; only block on CanBlock events.
+	return enforce(ctx, raw, system, eventName, cfg, logger)
 }
 
 // CanBlock returns true when exit code 2 or permission:"deny" actually
@@ -41,9 +42,9 @@ func CanBlock(system HookSystem, eventName string) bool {
 }
 
 // auditReceived logs hook.received for every invocation, plus a debug-level
-// hook.raw_payload entry that contains the full unparsed JSON — useful for
+// hook.raw_payload entry that contains the full unparsed JSON. Useful for
 // discovering undocumented fields from new Cursor/Claude versions.
-func auditReceived(raw RawPayload, rawBytes []byte, system HookSystem, eventName string, logger *audit.Logger) {
+func auditReceived(ctx context.Context, raw RawPayload, rawBytes []byte, system HookSystem, eventName string, logger *audit.Logger) {
 	base := []slog.Attr{
 		slog.String("system", system.String()),
 		slog.String("event", eventName),
@@ -59,12 +60,12 @@ func auditReceived(raw RawPayload, rawBytes []byte, system HookSystem, eventName
 		extra = cursorLogAttrs(raw)
 	}
 
-	logger.Info("hook.received", append(base, extra...)...)
+	logger.InfoContext(ctx, "hook.received", append(base, extra...)...)
 
-	// Raw payload at debug — logged when config log.level = "debug".
+	// Raw payload at debug, logged when config log.level = "debug".
 	// This gives the exact bytes Cursor/Claude sent, enabling field discovery
 	// without needing to instrument the calling tool.
-	logger.Debug("hook.raw_payload",
+	logger.DebugContext(ctx, "hook.raw_payload",
 		slog.String("system", system.String()),
 		slog.String("event", eventName),
 		slog.String("session_id", raw.SessionID()),
@@ -74,7 +75,7 @@ func auditReceived(raw RawPayload, rawBytes []byte, system HookSystem, eventName
 
 // enforce evaluates rules and returns the appropriate response. Only called
 // for events where CanBlock is true.
-func enforce(raw RawPayload, system HookSystem, eventName string, cfg *config.Config, logger *audit.Logger) (stdout, stderr []byte, exitCode int) {
+func enforce(ctx context.Context, raw RawPayload, system HookSystem, eventName string, cfg *config.Config, logger *audit.Logger) (stdout, stderr []byte, exitCode int) {
 	systemStr := system.String()
 	checked := rules.CheckedRuleNames(systemStr, eventName, cfg.Rules)
 	violation := rules.Evaluate(systemStr, eventName, map[string]any(raw), cfg.Rules)
@@ -87,7 +88,7 @@ func enforce(raw RawPayload, system HookSystem, eventName string, cfg *config.Co
 	}
 
 	if violation != nil && !violation.AuditOnly && CanBlock(system, eventName) {
-		logger.Info("hook.blocked",
+		logger.InfoContext(ctx, "hook.blocked",
 			append(base,
 				slog.String("decision", "block"),
 				slog.String("blocking_rule", violation.RuleName),
@@ -98,7 +99,7 @@ func enforce(raw RawPayload, system HookSystem, eventName string, cfg *config.Co
 	}
 
 	if violation != nil {
-		logger.Info("hook.audit_violation",
+		logger.InfoContext(ctx, "hook.audit_violation",
 			append(base,
 				slog.String("decision", "audit_only"),
 				slog.String("blocking_rule", violation.RuleName),
@@ -107,7 +108,7 @@ func enforce(raw RawPayload, system HookSystem, eventName string, cfg *config.Co
 		)
 	}
 
-	logger.Info("hook.allowed",
+	logger.InfoContext(ctx, "hook.allowed",
 		append(base,
 			slog.String("decision", "allow"),
 			slog.String("blocking_rule", ""),

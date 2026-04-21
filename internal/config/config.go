@@ -3,9 +3,9 @@ package config
 import (
 	"fmt"
 	"os"
-	"regexp"
 
 	"github.com/BurntSushi/toml"
+	"goodkind.io/agent-gate/internal/regex"
 )
 
 // Log holds logging configuration decoded from the [log] TOML table.
@@ -38,29 +38,29 @@ type Condition struct {
 	// NotPattern, if set, must NOT match the extracted field value.
 	NotPattern string `toml:"not_pattern"`
 
-	compiled    *regexp.Regexp
-	compiledNot *regexp.Regexp
+	compiled    *regex.Regexp
+	compiledNot *regex.Regexp
 }
 
 // CompiledPattern returns the pre-compiled regex for Pattern.
-func (c *Condition) CompiledPattern() *regexp.Regexp { return c.compiled }
+func (c *Condition) CompiledPattern() *regex.Regexp { return c.compiled }
 
 // CompiledNotPattern returns the pre-compiled regex for NotPattern, or nil if unset.
-func (c *Condition) CompiledNotPattern() *regexp.Regexp { return c.compiledNot }
+func (c *Condition) CompiledNotPattern() *regex.Regexp { return c.compiledNot }
 
 // NewCondition constructs a Condition with pre-compiled regexes.
 // Intended for tests and programmatic rule construction.
 func NewCondition(fieldPaths []string, pattern, notPattern string) (Condition, error) {
 	c := Condition{FieldPaths: fieldPaths, Pattern: pattern, NotPattern: notPattern}
 	if pattern != "" {
-		re, err := regexp.Compile(pattern)
+		re, err := regex.Compile(pattern)
 		if err != nil {
 			return Condition{}, fmt.Errorf("compile pattern %q: %w", pattern, err)
 		}
 		c.compiled = re
 	}
 	if notPattern != "" {
-		re, err := regexp.Compile(notPattern)
+		re, err := regex.Compile(notPattern)
 		if err != nil {
 			return Condition{}, fmt.Errorf("compile not_pattern %q: %w", notPattern, err)
 		}
@@ -91,18 +91,18 @@ type Rule struct {
 	// AuditOnly logs the violation without blocking when true.
 	AuditOnly bool `toml:"audit_only"`
 
-	compiled *regexp.Regexp
+	compiled *regex.Regexp
 }
 
 // Compiled returns the pre-compiled regex for the top-level Pattern.
 // Always non-nil after Load() when Conditions is empty.
-func (r *Rule) Compiled() *regexp.Regexp {
+func (r *Rule) Compiled() *regex.Regexp {
 	return r.compiled
 }
 
 // NewSimpleRule constructs a simple (no conditions) Rule with a pre-compiled
 // regex. Intended for tests and programmatic rule construction.
-func NewSimpleRule(name, pattern string, compiled *regexp.Regexp, events, fieldPaths []string, action, violationMessage string) Rule {
+func NewSimpleRule(name, pattern string, compiled *regex.Regexp, events, fieldPaths []string, action, violationMessage string) Rule {
 	return Rule{
 		Name:             name,
 		Pattern:          pattern,
@@ -170,14 +170,14 @@ func Load() (*Config, error) {
 			for j := range r.Conditions {
 				c := &r.Conditions[j]
 				if c.Pattern != "" {
-					re, err := regexp.Compile(c.Pattern)
+					re, err := regex.Compile(c.Pattern)
 					if err != nil {
 						return nil, fmt.Errorf("rule %q condition %d: compile pattern %q: %w", r.Name, j, c.Pattern, err)
 					}
 					c.compiled = re
 				}
 				if c.NotPattern != "" {
-					re, err := regexp.Compile(c.NotPattern)
+					re, err := regex.Compile(c.NotPattern)
 					if err != nil {
 						return nil, fmt.Errorf("rule %q condition %d: compile not_pattern %q: %w", r.Name, j, c.NotPattern, err)
 					}
@@ -185,7 +185,7 @@ func Load() (*Config, error) {
 				}
 			}
 		} else {
-			re, err := regexp.Compile(r.Pattern)
+			re, err := regex.Compile(r.Pattern)
 			if err != nil {
 				return nil, fmt.Errorf("rule %q: compile pattern %q: %w", r.Name, r.Pattern, err)
 			}

@@ -1,12 +1,12 @@
 package rules_test
 
 import (
-	"regexp"
 	"testing"
 	"unicode"
 	"unicode/utf8"
 
 	"goodkind.io/agent-gate/internal/config"
+	"goodkind.io/agent-gate/internal/regex"
 	"goodkind.io/agent-gate/internal/rules"
 )
 
@@ -22,7 +22,7 @@ func systemFor(event string) string {
 // loadRule builds a single compiled Rule without touching the filesystem.
 func loadRule(t *testing.T, name, pattern string, events, fieldPaths []string, message string) config.Rule {
 	t.Helper()
-	re, err := regexp.Compile(pattern)
+	re, err := regex.Compile(pattern)
 	if err != nil {
 		t.Fatalf("compile pattern %q: %v", pattern, err)
 	}
@@ -216,7 +216,7 @@ func TestEvaluate_DotPathExtraction(t *testing.T) {
 		t.Error("expected violation for deeply nested field, got nil")
 	}
 
-	// Field missing entirely — should not fire.
+	// Field missing entirely should not fire.
 	v = rules.Evaluate("claude", "PreToolUse", map[string]any{
 		"a": map[string]any{"b": map[string]any{}},
 	}, []config.Rule{rule})
@@ -422,21 +422,67 @@ func TestApplyCdChain(t *testing.T) {
 	}
 }
 
-// emdashRule returns the canonical no-emdashes rule used in production.
-func emdashRule(t *testing.T) config.Rule {
+// emdashDashPattern is the Unicode dash class used by no-emdashes rules in these tests.
+const emdashDashPattern = `[\x{2010}-\x{2015}\x{2212}\x{2E3A}\x{2E3B}\x{FE31}\x{FE32}\x{FE58}\x{FE63}\x{FF0D}]`
+
+func TestEmdashDashPatternMatchesU2011(t *testing.T) {
+	t.Helper()
+	re := regex.MustCompile(emdashDashPattern)
+	if !re.MatchString("non\u2011breaking") {
+		t.Fatal("emdashDashPattern should match U+2011 (non-breaking hyphen)")
+	}
+}
+
+// emdashMainRule returns the broad no-emdashes rule (tool_input.prompt excluded; see emdashPromptUnlessTaskRule).
+func emdashMainRule(t *testing.T) config.Rule {
 	t.Helper()
 	return loadRule(t,
 		"no-emdashes",
-		`[\x{2010}-\x{2015}\x{2212}\x{2E3A}\x{2E3B}\x{FE31}\x{FE32}\x{FE58}\x{FE63}\x{FF0D}]`,
+		emdashDashPattern,
 		[]string{"PreToolUse", "preToolUse", "beforeShellExecution", "Stop", "SubagentStop", "afterAgentResponse"},
-		[]string{"tool_input.content", "tool_input.new_string", "tool_input.command", "tool_input.prompt", "tool_input.description", "command", "assistant_message", "last_assistant_message", "text"},
+		[]string{"tool_input.content", "tool_input.new_string", "tool_input.command", "tool_input.description", "command", "assistant_message", "last_assistant_message", "text"},
 		"Unicode dashes are not permitted.",
 	)
 }
 
+// emdashPromptUnlessTaskRule blocks typographic dashes in tool_input.prompt unless tool_name is Task (sub-agent).
+func emdashPromptUnlessTaskRule(t *testing.T) config.Rule {
+	t.Helper()
+	promptCond, err := config.NewCondition(
+		[]string{"tool_input.prompt"},
+		emdashDashPattern,
+		"",
+	)
+	if err != nil {
+		t.Fatalf("compile prompt condition: %v", err)
+	}
+	toolCond, err := config.NewCondition(
+		[]string{"tool_name"},
+		"",
+		`(?i)^task$`,
+	)
+	if err != nil {
+		t.Fatalf("compile tool_name condition: %v", err)
+	}
+	return config.Rule{
+		Name:             "no-emdashes-tool-input-prompt-unless-subagent-task",
+		ClaudeEvents:     []string{"PreToolUse"},
+		CursorEvents:     []string{"preToolUse"},
+		Conditions:       []config.Condition{promptCond, toolCond},
+		Action:           "block",
+		ViolationMessage: "Unicode dashes are not permitted in tool_input.prompt.",
+	}
+}
+
+// emdashRules returns the main no-emdashes rule plus the conditional prompt rule (production order).
+func emdashRules(t *testing.T) []config.Rule {
+	t.Helper()
+	return []config.Rule{emdashMainRule(t), emdashPromptUnlessTaskRule(t)}
+}
+
 // TestEvaluate_EmdashBlocked verifies that Unicode dash variants are blocked.
 func TestEvaluate_EmdashBlocked(t *testing.T) {
-	rule := emdashRule(t)
+	rulesSlice := emdashRules(t)
 
 	cases := []struct {
 		name    string
@@ -562,11 +608,21 @@ func TestEvaluate_EmdashBlocked(t *testing.T) {
 				"tool_input": map[string]any{"content": "vert\uFE31dash"},
 			},
 		},
+		{
+			name:  "em dash in tool_input.prompt with non-Task tool_name",
+			event: "PreToolUse",
+			payload: map[string]any{
+				"tool_name": "Write",
+				"tool_input": map[string]any{
+					"prompt": "Instructions \u2014 with a dash.",
+				},
+			},
+		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			v := rules.Evaluate(systemFor(tc.event), tc.event, tc.payload, []config.Rule{rule})
+			v := rules.Evaluate(systemFor(tc.event), tc.event, tc.payload, rulesSlice)
 			if v == nil {
 				t.Error("expected violation, got nil")
 			}
@@ -576,7 +632,7 @@ func TestEvaluate_EmdashBlocked(t *testing.T) {
 
 // TestEvaluate_EmdashAllowed verifies that regular hyphens and clean text pass through.
 func TestEvaluate_EmdashAllowed(t *testing.T) {
-	rule := emdashRule(t)
+	rulesSlice := emdashRules(t)
 
 	cases := []struct {
 		name    string
@@ -619,15 +675,45 @@ func TestEvaluate_EmdashAllowed(t *testing.T) {
 			},
 		},
 		{
-			name:  "empty payload",
-			event: "PreToolUse",
+			name:    "empty payload",
+			event:   "PreToolUse",
 			payload: map[string]any{},
+		},
+		{
+			name:  "em dash in Task tool prompt (Claude PreToolUse)",
+			event: "PreToolUse",
+			payload: map[string]any{
+				"tool_name": "Task",
+				"tool_input": map[string]any{
+					"prompt": "Sub-agent brief \u2014 with a dash.",
+				},
+			},
+		},
+		{
+			name:  "em dash in Task tool prompt case-insensitive tool_name",
+			event: "PreToolUse",
+			payload: map[string]any{
+				"tool_name": "task",
+				"tool_input": map[string]any{
+					"prompt": "Sub-agent brief \u2014 with a dash.",
+				},
+			},
+		},
+		{
+			name:  "em dash in Task tool prompt (Cursor preToolUse)",
+			event: "preToolUse",
+			payload: map[string]any{
+				"tool_name": "Task",
+				"tool_input": map[string]any{
+					"prompt": "Sub-agent brief \u2014 with a dash.",
+				},
+			},
 		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			v := rules.Evaluate(systemFor(tc.event), tc.event, tc.payload, []config.Rule{rule})
+			v := rules.Evaluate(systemFor(tc.event), tc.event, tc.payload, rulesSlice)
 			if v != nil {
 				t.Errorf("expected no violation, got rule %q: %s", v.RuleName, v.Message)
 			}

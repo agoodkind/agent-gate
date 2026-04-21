@@ -3,11 +3,11 @@ package rules
 import (
 	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 
 	"goodkind.io/agent-gate/internal/config"
+	"goodkind.io/agent-gate/internal/regex"
 )
 
 // Violation describes a rule that matched the current hook payload.
@@ -62,13 +62,13 @@ func Evaluate(system, eventName string, payload map[string]any, rules []config.R
 // the payload (AND semantics). A condition matches when:
 //   - Its Pattern is set and matches the extracted field value, AND
 //   - Its NotPattern is either unset or does NOT match the extracted field value.
+//
+// Empty extracted values are handled only by Pattern and NotPattern, so optional
+// fields (for example tool_name when absent) can use not_pattern alone.
 func allConditionsMatch(payload map[string]any, conditions []config.Condition) bool {
 	for i := range conditions {
 		c := &conditions[i]
 		value := extractField(payload, c.FieldPaths)
-		if value == "" {
-			return false
-		}
 		if c.CompiledPattern() != nil && !c.CompiledPattern().MatchString(value) {
 			return false
 		}
@@ -164,7 +164,7 @@ func extractField(payload map[string]any, paths []string) string {
 // returns  "git status\ngit commit -m msg"
 //
 // Example: "git log --grep=\"git commit\""
-// returns  "git log --grep=\"git commit\""   (no splitting — no chain operators)
+// returns  "git log --grep=\"git commit\""   (no splitting; no chain operators)
 // CmdSegments is exported for direct testing.
 func CmdSegments(payload map[string]any) string { return cmdSegments(payload) }
 
@@ -253,11 +253,11 @@ func navigatePath(node map[string]any, parts []string) string {
 }
 
 // cmdChainRe splits a shell command on common chain and sequence operators.
-var cmdChainRe = regexp.MustCompile(`&&|\|\||;|\n`)
+var cmdChainRe = regex.MustCompile(`&&|\|\||;|\n`)
 
 // cdCommandRe matches a bare cd command and captures the target path.
 // Requires cd at the start of the segment (after trimming whitespace).
-var cdCommandRe = regexp.MustCompile(`^cd\s+(.+)$`)
+var cdCommandRe = regex.MustCompile(`^cd\s+(.+)$`)
 
 // effectiveCwd computes the working directory active when commands in a shell
 // chain execute, by simulating cd operations. It starts from the payload cwd

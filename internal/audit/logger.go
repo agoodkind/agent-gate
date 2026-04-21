@@ -65,17 +65,32 @@ func (l *Logger) Close() error {
 
 // Info writes an INFO-level audit entry with arbitrary structured attributes.
 func (l *Logger) Info(msg string, attrs ...slog.Attr) {
-	l.inner.LogAttrs(context.TODO(), slog.LevelInfo, msg, attrs...)
+	l.InfoContext(context.Background(), msg, attrs...)
+}
+
+// InfoContext writes an INFO-level audit entry bound to ctx for slog handlers.
+func (l *Logger) InfoContext(ctx context.Context, msg string, attrs ...slog.Attr) {
+	l.inner.LogAttrs(ctx, slog.LevelInfo, msg, attrs...)
 }
 
 // Debug writes a DEBUG-level entry (recorded only when level = "debug").
 func (l *Logger) Debug(msg string, attrs ...slog.Attr) {
-	l.inner.LogAttrs(context.TODO(), slog.LevelDebug, msg, attrs...)
+	l.DebugContext(context.Background(), msg, attrs...)
+}
+
+// DebugContext writes a DEBUG-level entry bound to ctx for slog handlers.
+func (l *Logger) DebugContext(ctx context.Context, msg string, attrs ...slog.Attr) {
+	l.inner.LogAttrs(ctx, slog.LevelDebug, msg, attrs...)
 }
 
 // Error writes an ERROR-level entry.
 func (l *Logger) Error(msg string, attrs ...slog.Attr) {
-	l.inner.LogAttrs(context.TODO(), slog.LevelError, msg, attrs...)
+	l.ErrorContext(context.Background(), msg, attrs...)
+}
+
+// ErrorContext writes an ERROR-level entry bound to ctx for slog handlers.
+func (l *Logger) ErrorContext(ctx context.Context, msg string, attrs ...slog.Attr) {
+	l.inner.LogAttrs(ctx, slog.LevelError, msg, attrs...)
 }
 
 // Loggers holds separate audit loggers for Claude and Cursor hooks.
