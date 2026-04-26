@@ -69,6 +69,45 @@ func (r *Regexp) MatchString(s string) bool {
 	return rc == 1
 }
 
+// FindAllStringIndex returns byte offsets for all non-overlapping matches.
+// It follows regexp.Regexp.FindAllStringIndex closely enough for diagnostics.
+func (r *Regexp) FindAllStringIndex(s string, n int) [][2]int {
+	if n == 0 || r == nil || r.handle == nil {
+		return nil
+	}
+
+	out := make([][2]int, 0)
+	offset := 0
+	for offset <= len(s) && (n < 0 || len(out) < n) {
+		rc := HandleMatch(r.handle, s, offset)
+		if rc != 1 {
+			break
+		}
+
+		start, end, unset, ok := HandleGroupBounds(r.handle, 0)
+		if !ok || unset || start < offset || end < start || end > len(s) {
+			break
+		}
+
+		out = append(out, [2]int{start, end})
+		if start == end {
+			if end == len(s) {
+				break
+			}
+			_, width := utf8.DecodeRuneInString(s[end:])
+			if width == 0 {
+				width = 1
+			}
+			offset = end + width
+			continue
+		}
+
+		offset = end
+	}
+
+	return out
+}
+
 // Split behaves like regexp.Regexp.Split for the methods needed by this project.
 func (r *Regexp) Split(s string, n int) []string {
 	if n == 0 {

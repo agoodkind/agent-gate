@@ -60,7 +60,9 @@ func auditReceived(ctx context.Context, raw RawPayload, rawBytes []byte, system 
 func enforce(ctx context.Context, raw RawPayload, system HookSystem, eventName string, cfg *config.Config, logger *audit.Logger) (stdout, stderr []byte, exitCode int) {
 	systemStr := system.String()
 	checked := rules.CheckedRuleNames(systemStr, eventName, cfg.Rules)
-	violation := rules.Evaluate(systemStr, eventName, map[string]any(raw), cfg.Rules)
+	violations := rules.EvaluateAll(systemStr, eventName, map[string]any(raw), cfg.Rules)
+	blockingViolations := blockingMatches(violations)
+	auditOnlyViolations := auditOnlyMatches(violations)
 
 	base := []slog.Attr{
 		slog.String("system", systemStr),
@@ -69,23 +71,24 @@ func enforce(ctx context.Context, raw RawPayload, system HookSystem, eventName s
 		slog.Any("rules_checked", checked),
 	}
 
-	if violation != nil && !violation.AuditOnly && CanBlock(system, eventName) {
+	if len(blockingViolations) > 0 && CanBlock(system, eventName) {
+		diagnostic := rules.FormatViolations(blockingViolations)
 		logger.InfoContext(ctx, "hook.blocked",
 			append(base,
 				slog.String("decision", "block"),
-				slog.String("blocking_rule", violation.RuleName),
-				slog.String("violation_message", violation.Message),
+				slog.Any("blocking_rules", matchRuleNames(blockingViolations)),
+				slog.String("violation_message", diagnostic),
 			)...,
 		)
-		return blockResponse(system, eventName, violation)
+		return blockTextResponse(system, eventName, diagnostic)
 	}
 
-	if violation != nil {
+	if len(auditOnlyViolations) > 0 {
 		logger.InfoContext(ctx, "hook.audit_violation",
 			append(base,
 				slog.String("decision", "audit_only"),
-				slog.String("blocking_rule", violation.RuleName),
-				slog.String("violation_message", violation.Message),
+				slog.Any("blocking_rules", matchRuleNames(auditOnlyViolations)),
+				slog.String("violation_message", rules.FormatViolations(auditOnlyViolations)),
 			)...,
 		)
 	}
@@ -100,16 +103,53 @@ func enforce(ctx context.Context, raw RawPayload, system HookSystem, eventName s
 	return defaultAllow(system), nil, 0
 }
 
+func blockingMatches(violations []rules.MatchViolation) []rules.MatchViolation {
+	out := make([]rules.MatchViolation, 0, len(violations))
+	for _, v := range violations {
+		if !v.AuditOnly {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+func auditOnlyMatches(violations []rules.MatchViolation) []rules.MatchViolation {
+	out := make([]rules.MatchViolation, 0, len(violations))
+	for _, v := range violations {
+		if v.AuditOnly {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+func matchRuleNames(violations []rules.MatchViolation) []string {
+	seen := make(map[string]bool)
+	var names []string
+	for _, v := range violations {
+		if seen[v.RuleName] {
+			continue
+		}
+		seen[v.RuleName] = true
+		names = append(names, v.RuleName)
+	}
+	return names
+}
+
 func blockResponse(system HookSystem, eventName string, v *rules.Violation) (stdout, stderr []byte, exitCode int) {
+	return blockTextResponse(system, eventName, "agent-gate: ["+v.RuleName+"] "+v.Message)
+}
+
+func blockTextResponse(system HookSystem, eventName, text string) (stdout, stderr []byte, exitCode int) {
 	switch system {
 	case SystemCursor:
-		return CursorBlock(v.RuleName, v.Message), nil, 0
+		return CursorBlockText(text), nil, 0
 	case SystemCodex:
-		return CodexBlock(eventName, v.RuleName, v.Message), nil, 0
+		return CodexBlockText(eventName, text), nil, 0
 	case SystemGemini:
-		return GeminiBlock(eventName, v.RuleName, v.Message), nil, 0
+		return GeminiBlockText(eventName, text), nil, 0
 	default:
-		return ClaudeAllow(), ClaudeBlock(v.RuleName, v.Message), 2
+		return ClaudeAllow(), ClaudeBlockText(text), 2
 	}
 }
 

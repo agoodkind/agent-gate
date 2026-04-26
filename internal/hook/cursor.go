@@ -93,6 +93,10 @@ func CursorAllow() []byte {
 // instead of Cursor's generic canned rejection.
 func CursorBlock(ruleName, message string) []byte {
 	text := fmt.Sprintf("agent-gate: [%s] %s", ruleName, message)
+	return CursorBlockText(text)
+}
+
+func CursorBlockText(text string) []byte {
 	b, _ := json.Marshal(cursorResponse{
 		Permission:   "deny",
 		UserMessage:  text,

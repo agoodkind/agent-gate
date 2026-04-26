@@ -45,6 +45,22 @@ func TestCodexBlockResponses(t *testing.T) {
 	}
 }
 
+func TestBlockTextResponses(t *testing.T) {
+	diagnostic := "agent-gate blocked 2 violations:\n\nassistant_message\n1 | alpha xx\n  |       ^A"
+	if got := string(hook.CodexBlockText("Stop", diagnostic)); !strings.Contains(got, "agent-gate blocked 2 violations") || !strings.Contains(got, "alpha xx") {
+		t.Fatalf("CodexBlockText missing diagnostic: %s", got)
+	}
+	if got := string(hook.CursorBlockText(diagnostic)); !strings.Contains(got, `"permission":"deny"`) || !strings.Contains(got, "alpha xx") {
+		t.Fatalf("CursorBlockText missing deny diagnostic: %s", got)
+	}
+	if got := string(hook.ClaudeBlockText(diagnostic)); got != diagnostic+"\n" {
+		t.Fatalf("ClaudeBlockText = %q", got)
+	}
+	if got := string(hook.GeminiBlockText("BeforeTool", diagnostic)); !strings.Contains(got, `"decision":"deny"`) || !strings.Contains(got, "alpha xx") {
+		t.Fatalf("GeminiBlockText missing deny diagnostic: %s", got)
+	}
+}
+
 func TestGeminiBlockResponses(t *testing.T) {
 	got := string(hook.GeminiBlock("BeforeTool", "r", "blocked"))
 	if !strings.Contains(got, `"decision":"deny"`) || !strings.Contains(got, `"reason":"agent-gate: [r] blocked"`) {

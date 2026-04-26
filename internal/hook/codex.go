@@ -44,6 +44,10 @@ func CodexAllow() []byte {
 
 func CodexBlock(eventName, ruleName, message string) []byte {
 	text := "agent-gate: [" + ruleName + "] " + message
+	return CodexBlockText(eventName, text)
+}
+
+func CodexBlockText(eventName, text string) []byte {
 	resp := codexResponse{}
 
 	switch CodexEvent(eventName) {

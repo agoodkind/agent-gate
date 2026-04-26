@@ -17,6 +17,18 @@ type Violation struct {
 	AuditOnly bool
 }
 
+// MatchViolation describes one concrete regex match that violated a rule.
+type MatchViolation struct {
+	RuleName  string
+	Message   string
+	AuditOnly bool
+	FieldPath string
+	FilePath  string
+	Value     string
+	Start     int
+	End       int
+}
+
 // Evaluate iterates over all rules and returns the first Violation whose
 // pattern matches a field extracted from payload, or nil if no rule fires.
 //
@@ -25,37 +37,117 @@ type Violation struct {
 // payload is the full decoded JSON as a map (same value that was read from stdin).
 // rules is the compiled rule list from config.Load().
 func Evaluate(system, eventName string, payload map[string]any, rules []config.Rule) *Violation {
+	violations := EvaluateAll(system, eventName, payload, rules)
+	if len(violations) == 0 {
+		return nil
+	}
+
+	return &Violation{
+		RuleName:  violations[0].RuleName,
+		Message:   violations[0].Message,
+		AuditOnly: violations[0].AuditOnly,
+	}
+}
+
+// EvaluateAll returns every concrete regex match for every applicable rule.
+func EvaluateAll(system, eventName string, payload map[string]any, rules []config.Rule) []MatchViolation {
+	var violations []MatchViolation
 	for i := range rules {
 		rule := &rules[i]
-
 		if !appliesToEvent(rule, system, eventName) {
 			continue
 		}
-
 		if len(rule.Conditions) > 0 {
 			if allConditionsMatch(payload, rule.Conditions) {
-				return &Violation{
-					RuleName:  rule.Name,
-					Message:   rule.ViolationMessage,
-					AuditOnly: rule.AuditOnly,
-				}
+				violations = append(violations, conditionViolations(payload, rule)...)
 			}
 			continue
 		}
 
-		value := extractField(payload, rule.FieldPaths)
+		violations = append(violations, fieldViolations(payload, rule, rule.FieldPaths, rule.Compiled())...)
+	}
+	return violations
+}
+
+func conditionViolations(payload map[string]any, rule *config.Rule) []MatchViolation {
+	var violations []MatchViolation
+	for i := range rule.Conditions {
+		c := &rule.Conditions[i]
+		if c.CompiledPattern() == nil {
+			continue
+		}
+		violations = append(violations, fieldViolations(payload, rule, c.FieldPaths, c.CompiledPattern())...)
+	}
+	if len(violations) == 0 {
+		violations = append(violations, conditionFallbackViolation(payload, rule))
+	}
+	return violations
+}
+
+func conditionFallbackViolation(payload map[string]any, rule *config.Rule) MatchViolation {
+	fieldPath := "payload"
+	value := rule.Name
+	for i := range rule.Conditions {
+		for _, path := range rule.Conditions[i].FieldPaths {
+			if v := extractField(payload, []string{path}); v != "" {
+				fieldPath = path
+				value = v
+				break
+			}
+		}
+		if fieldPath != "payload" {
+			break
+		}
+	}
+	end := len(value)
+	if end > 1 {
+		end = 1
+	}
+	return MatchViolation{
+		RuleName:  rule.Name,
+		Message:   rule.ViolationMessage,
+		AuditOnly: rule.AuditOnly,
+		FieldPath: fieldPath,
+		FilePath:  payloadFilePath(payload),
+		Value:     value,
+		Start:     0,
+		End:       end,
+	}
+}
+
+func fieldViolations(payload map[string]any, rule *config.Rule, paths []string, re interface {
+	FindAllStringIndex(string, int) [][2]int
+}) []MatchViolation {
+	var violations []MatchViolation
+	filePath := payloadFilePath(payload)
+	for _, path := range paths {
+		value := extractField(payload, []string{path})
 		if value == "" {
 			continue
 		}
-		if rule.Compiled().MatchString(value) {
-			return &Violation{
+		for _, idx := range re.FindAllStringIndex(value, -1) {
+			violations = append(violations, MatchViolation{
 				RuleName:  rule.Name,
 				Message:   rule.ViolationMessage,
 				AuditOnly: rule.AuditOnly,
-			}
+				FieldPath: path,
+				FilePath:  filePath,
+				Value:     value,
+				Start:     idx[0],
+				End:       idx[1],
+			})
 		}
 	}
-	return nil
+	return violations
+}
+
+func payloadFilePath(payload map[string]any) string {
+	for _, path := range []string{"file_path", "path", "tool_input.file_path", "tool_input.path"} {
+		if v := extractField(payload, []string{path}); v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // allConditionsMatch returns true when every condition in the slice matches

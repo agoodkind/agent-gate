@@ -240,7 +240,7 @@ See [config.toml.example](config.toml.example) for a complete annotated example.
 
 ### Rules
 
-Each `[[rules]]` block defines one enforcement rule. Rules are evaluated in order; the first match wins.
+Each `[[rules]]` block defines one enforcement rule. Agent-gate evaluates every applicable rule and reports every concrete match in the block message.
 
 ```toml
 [[rules]]

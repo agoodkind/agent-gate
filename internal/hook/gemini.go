@@ -50,6 +50,10 @@ func GeminiAllow() []byte {
 
 func GeminiBlock(eventName, ruleName, message string) []byte {
 	text := "agent-gate: [" + ruleName + "] " + message
+	return GeminiBlockText(eventName, text)
+}
+
+func GeminiBlockText(eventName, text string) []byte {
 	resp := geminiResponse{
 		Decision: "deny",
 		Reason:   text,
