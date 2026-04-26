@@ -7,6 +7,8 @@ const (
 	SystemUnknown HookSystem = iota
 	SystemClaude
 	SystemCursor
+	SystemCodex
+	SystemGemini
 )
 
 // String returns a lowercase label suitable for log output.
@@ -16,6 +18,10 @@ func (s HookSystem) String() string {
 		return "claude"
 	case SystemCursor:
 		return "cursor"
+	case SystemCodex:
+		return "codex"
+	case SystemGemini:
+		return "gemini"
 	default:
 		return "unknown"
 	}

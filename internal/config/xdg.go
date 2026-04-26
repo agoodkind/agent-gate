@@ -82,6 +82,16 @@ func DefaultCursorAuditLogPath() string {
 	return filepath.Join(DefaultStateDir(), "audit-cursor.jsonl")
 }
 
+// DefaultCodexAuditLogPath returns the XDG-derived audit log path for Codex hooks.
+func DefaultCodexAuditLogPath() string {
+	return filepath.Join(DefaultStateDir(), "audit-codex.jsonl")
+}
+
+// DefaultGeminiAuditLogPath returns the XDG-derived audit log path for Gemini hooks.
+func DefaultGeminiAuditLogPath() string {
+	return filepath.Join(DefaultStateDir(), "audit-gemini.jsonl")
+}
+
 // ProfilesConfigPath returns the path to profiles.toml in the XDG config directory.
 func ProfilesConfigPath() string {
 	return filepath.Join(DefaultConfigDir(), "profiles.toml")

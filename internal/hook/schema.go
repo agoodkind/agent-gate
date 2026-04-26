@@ -69,8 +69,8 @@ func init() {
 		CursorSessionStart: makeSchema(cursorEnvelope),
 		CursorSessionEnd:   makeSchema(cursorEnvelope),
 
-		CursorPreToolUse:        makeSchema(toolUseBase),
-		CursorPostToolUse:       makeSchema(toolUseBase, "tool_output"),
+		CursorPreToolUse:         makeSchema(toolUseBase),
+		CursorPostToolUse:        makeSchema(toolUseBase, "tool_output"),
 		CursorPostToolUseFailure: makeSchema(toolUseBase, "error"),
 
 		CursorBeforeShellExecution: makeSchema(cursorEnvelope, "command", "cwd"),
@@ -79,7 +79,7 @@ func init() {
 		CursorBeforeMCPExecution: makeSchema(cursorEnvelope, "tool_name", "cwd"),
 		CursorAfterMCPExecution:  makeSchema(cursorEnvelope, "tool_name", "cwd", "tool_output"),
 
-		CursorBeforeReadFile:   makeSchema(cursorEnvelope, "file_path", "cwd"),
+		CursorBeforeReadFile:    makeSchema(cursorEnvelope, "file_path", "cwd"),
 		CursorBeforeTabFileRead: makeSchema(cursorEnvelope, "file_path", "cwd"),
 
 		CursorAfterFileEdit: makeSchema(cursorEnvelope,
@@ -136,6 +136,8 @@ var claudeToolInputPaths = []string{
 }
 
 var claudeSchema map[ClaudeEvent]EventSchema
+var codexSchema map[CodexEvent]EventSchema
+var geminiSchema map[GeminiEvent]EventSchema
 
 func init() {
 	claudeToolUseBase := append(claudeEnvelope,
@@ -211,6 +213,83 @@ func init() {
 
 		ClaudeTeammateIdle: makeSchema(claudeEnvelope, "teammate_name", "team_name"),
 	}
+
+	codexEnvelope := []string{
+		"hook_event_name",
+		"session_id",
+		"transcript_path",
+		"cwd",
+		"model",
+	}
+	codexToolInputPaths := []string{
+		"tool_input.command",
+		"tool_input.file_path",
+		"tool_input.content",
+		"tool_input.old_string",
+		"tool_input.new_string",
+		"tool_input.description",
+		"tool_input.prompt",
+		"tool_input.url",
+		"tool_input.query",
+		"tool_input.pattern",
+	}
+	codexToolBase := append(codexEnvelope,
+		append(codexToolInputPaths,
+			"turn_id",
+			"tool_name",
+			"tool_use_id",
+		)...,
+	)
+
+	codexSchema = map[CodexEvent]EventSchema{
+		CodexSessionStart:      makeSchema(codexEnvelope, "source"),
+		CodexPreToolUse:        makeSchema(codexToolBase),
+		CodexPermissionRequest: makeSchema(codexToolBase, "tool_input.description"),
+		CodexPostToolUse:       makeSchema(codexToolBase, "tool_response"),
+		CodexUserPromptSubmit:  makeSchema(codexEnvelope, "turn_id", "prompt"),
+		CodexStop:              makeSchema(codexEnvelope, "turn_id", "stop_hook_active", "last_assistant_message"),
+	}
+
+	geminiEnvelope := []string{
+		"hook_event_name",
+		"session_id",
+		"transcript_path",
+		"cwd",
+		"timestamp",
+	}
+	geminiToolInputPaths := []string{
+		"tool_input.file_path",
+		"tool_input.content",
+		"tool_input.command",
+		"tool_input.old_string",
+		"tool_input.new_string",
+		"tool_input.pattern",
+		"tool_input.path",
+		"tool_input.url",
+		"tool_input.query",
+		"tool_input.description",
+	}
+	geminiToolBase := append(geminiEnvelope,
+		append(geminiToolInputPaths,
+			"tool_name",
+			"mcp_context",
+			"original_request_name",
+		)...,
+	)
+
+	geminiSchema = map[GeminiEvent]EventSchema{
+		GeminiBeforeTool:          makeSchema(geminiToolBase),
+		GeminiAfterTool:           makeSchema(geminiToolBase, "tool_response"),
+		GeminiBeforeAgent:         makeSchema(geminiEnvelope, "prompt"),
+		GeminiAfterAgent:          makeSchema(geminiEnvelope, "prompt", "prompt_response", "stop_hook_active"),
+		GeminiBeforeModel:         makeSchema(geminiEnvelope, "llm_request"),
+		GeminiBeforeToolSelection: makeSchema(geminiEnvelope, "llm_request"),
+		GeminiAfterModel:          makeSchema(geminiEnvelope, "llm_request", "llm_response"),
+		GeminiSessionStart:        makeSchema(geminiEnvelope, "source"),
+		GeminiSessionEnd:          makeSchema(geminiEnvelope, "reason"),
+		GeminiNotification:        makeSchema(geminiEnvelope, "notification_type", "message", "details"),
+		GeminiPreCompress:         makeSchema(geminiEnvelope, "trigger"),
+	}
 }
 
 // ── Public API ───────────────────────────────────────────────────────────────
@@ -223,6 +302,10 @@ func ValidPaths(system, eventName string) EventSchema {
 		return cursorSchema[CursorEvent(eventName)]
 	case "claude":
 		return claudeSchema[ClaudeEvent(eventName)]
+	case "codex":
+		return codexSchema[CodexEvent(eventName)]
+	case "gemini":
+		return geminiSchema[GeminiEvent(eventName)]
 	default:
 		return nil
 	}
@@ -255,24 +338,38 @@ func ValidateConfig(cfg *config.Config) []error {
 			}
 		}
 
-		allEmpty := len(r.Events) == 0 && len(r.ClaudeEvents) == 0 && len(r.CursorEvents) == 0
+		allEmpty := len(r.Events) == 0 &&
+			len(r.ClaudeEvents) == 0 &&
+			len(r.CursorEvents) == 0 &&
+			len(r.CodexEvents) == 0 &&
+			len(r.GeminiEvents) == 0
 
 		if allEmpty {
-			// Applies to every known event on both systems.
+			// Applies to every known event on all systems.
 			for ev := range cursorSchema {
 				applicable = append(applicable, pair{"cursor", string(ev)})
 			}
 			for ev := range claudeSchema {
 				applicable = append(applicable, pair{"claude", string(ev)})
 			}
+			for ev := range codexSchema {
+				applicable = append(applicable, pair{"codex", string(ev)})
+			}
+			for ev := range geminiSchema {
+				applicable = append(applicable, pair{"gemini", string(ev)})
+			}
 		} else {
-			// Shared events apply to both systems.
+			// Shared events apply to all systems.
 			for _, ev := range r.Events {
 				applicable = append(applicable, pair{"cursor", ev})
 				applicable = append(applicable, pair{"claude", ev})
+				applicable = append(applicable, pair{"codex", ev})
+				applicable = append(applicable, pair{"gemini", ev})
 			}
 			addEvents("claude", r.ClaudeEvents)
 			addEvents("cursor", r.CursorEvents)
+			addEvents("codex", r.CodexEvents)
+			addEvents("gemini", r.GeminiEvents)
 		}
 
 		// For each field_path, verify it is valid for at least one applicable event.

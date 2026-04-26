@@ -1,12 +1,110 @@
 # Hook Event Schemas
 
-Complete JSON payload schemas for every hook event in Claude Code and Cursor.
+Complete JSON payload schemas for supported hook events in Claude Code, Cursor, Codex, and Gemini CLI.
 
 **Sources:**
 - Claude Code: https://code.claude.com/docs/en/hooks
 - Cursor: https://cursor.com/docs/hooks
+- Codex: local integration notes in this repository
+- Gemini CLI: local integration notes in this repository
 
 Last verified: 2026-04-15.
+
+---
+
+## Codex
+
+### Common fields
+
+```typescript
+{
+  session_id: string;
+  transcript_path: string | null;
+  cwd: string;
+  hook_event_name: string;
+  model: string;
+}
+```
+
+### Supported events
+
+```typescript
+type CodexEvent =
+  | "SessionStart"
+  | "PreToolUse"
+  | "PermissionRequest"
+  | "PostToolUse"
+  | "UserPromptSubmit"
+  | "Stop";
+```
+
+### Important event-specific fields
+
+```typescript
+// SessionStart
+{ source: "startup" | "resume" | "clear" }
+
+// PreToolUse / PermissionRequest / PostToolUse
+{ turn_id: string; tool_name: string; tool_use_id?: string; tool_input: object; tool_response?: object }
+
+// UserPromptSubmit
+{ turn_id: string; prompt: string }
+
+// Stop
+{ turn_id: string; stop_hook_active: boolean; last_assistant_message?: string }
+```
+
+---
+
+## Gemini CLI
+
+### Common fields
+
+```typescript
+{
+  session_id: string;
+  transcript_path: string;
+  cwd: string;
+  hook_event_name: string;
+  timestamp: string;
+}
+```
+
+### Supported events
+
+```typescript
+type GeminiEvent =
+  | "BeforeTool"
+  | "AfterTool"
+  | "BeforeAgent"
+  | "AfterAgent"
+  | "BeforeModel"
+  | "BeforeToolSelection"
+  | "AfterModel"
+  | "SessionStart"
+  | "SessionEnd"
+  | "Notification"
+  | "PreCompress";
+```
+
+### Important event-specific fields
+
+```typescript
+// BeforeTool / AfterTool
+{ tool_name: string; tool_input: object; tool_response?: object; mcp_context?: object; original_request_name?: string }
+
+// BeforeAgent
+{ prompt: string }
+
+// AfterAgent
+{ prompt: string; prompt_response: string; stop_hook_active: boolean }
+
+// BeforeModel / BeforeToolSelection / AfterModel
+{ llm_request: object; llm_response?: object }
+
+// SessionStart / SessionEnd / Notification / PreCompress
+{ source?: "startup" | "resume" | "clear"; reason?: string; notification_type?: string; message?: string; trigger?: "auto" | "manual" }
+```
 
 ---
 

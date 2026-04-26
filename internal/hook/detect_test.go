@@ -80,6 +80,17 @@ func TestDetect_Unknown(t *testing.T) {
 	}
 }
 
+func TestDetectWithOverride(t *testing.T) {
+	p := hook.RawPayload{"hook_event_name": "SessionStart"}
+
+	if got := hook.DetectWithOverride(p, hook.SystemCodex); got != hook.SystemCodex {
+		t.Fatalf("DetectWithOverride(..., SystemCodex) = %v, want SystemCodex", got)
+	}
+	if got := hook.DetectWithOverride(p, hook.SystemGemini); got != hook.SystemGemini {
+		t.Fatalf("DetectWithOverride(..., SystemGemini) = %v, want SystemGemini", got)
+	}
+}
+
 func TestRawPayload_Accessors(t *testing.T) {
 	p := hook.RawPayload{
 		"hook_event_name": "PreToolUse",

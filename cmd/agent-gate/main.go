@@ -33,6 +33,15 @@ func main() {
 		os.Exit(runClaudeWrapper())
 	}
 
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "codex-hook":
+			os.Exit(runHook(hook.SystemCodex))
+		case "gemini-hook":
+			os.Exit(runHook(hook.SystemGemini))
+		}
+	}
+
 	// Hidden subcommand: start the background daemon.
 	if len(os.Args) > 1 && os.Args[1] == "daemon" {
 		log, closeLog := openLog("daemon")
@@ -45,7 +54,7 @@ func main() {
 	}
 
 	// Everything else: hook mode (reads JSON from stdin).
-	os.Exit(runHook())
+	os.Exit(runHook(hook.SystemUnknown))
 }
 
 // runClaudeWrapper connects to the daemon, acquires a per-session settings
@@ -192,7 +201,7 @@ func containsFlag(args []string, flag string) bool {
 }
 
 // runHook handles hook mode: reads JSON from stdin, evaluates rules, writes output.
-func runHook() int {
+func runHook(forcedSystem hook.HookSystem) int {
 	data, err := io.ReadAll(os.Stdin)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent-gate: read stdin: %v\n", err)
@@ -242,7 +251,7 @@ func runHook() int {
 	defer loggers.Close()
 
 	// Dispatch to the hook handler.
-	stdout, stderr, exitCode := hook.Handle(context.Background(), raw, data, cfg, loggers)
+	stdout, stderr, exitCode := hook.HandleWithOverride(context.Background(), raw, data, cfg, loggers, forcedSystem)
 
 	if len(stdout) > 0 {
 		if _, err := os.Stdout.Write(stdout); err != nil {

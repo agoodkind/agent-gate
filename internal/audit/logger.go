@@ -93,46 +93,51 @@ func (l *Logger) ErrorContext(ctx context.Context, msg string, attrs ...slog.Att
 	l.inner.LogAttrs(ctx, slog.LevelError, msg, attrs...)
 }
 
-// Loggers holds separate audit loggers for Claude and Cursor hooks.
-// All Claude hook events write to the Claude log; all Cursor events write to the Cursor log.
+// Loggers holds per-provider audit loggers.
 type Loggers struct {
-	Claude *Logger
-	Cursor *Logger
+	BySystem map[string]*Logger
 }
 
-// NewLoggers opens both per-system audit log files and returns a Loggers.
+// NewLoggers opens all per-provider audit log files and returns a Loggers.
 func NewLoggers(cfg *config.Config) (*Loggers, error) {
 	level := cfg.Log.Level
-
-	claude, err := newLogger(cfg.ClaudeAuditLogPath(), level)
-	if err != nil {
-		return nil, fmt.Errorf("open claude audit log: %w", err)
+	paths := map[string]string{
+		"claude": cfg.ClaudeAuditLogPath(),
+		"cursor": cfg.CursorAuditLogPath(),
+		"codex":  cfg.CodexAuditLogPath(),
+		"gemini": cfg.GeminiAuditLogPath(),
 	}
 
-	cursor, err := newLogger(cfg.CursorAuditLogPath(), level)
-	if err != nil {
-		_ = claude.Close()
-		return nil, fmt.Errorf("open cursor audit log: %w", err)
+	bySystem := make(map[string]*Logger, len(paths))
+	for system, path := range paths {
+		logger, err := newLogger(path, level)
+		if err != nil {
+			for _, existing := range bySystem {
+				_ = existing.Close()
+			}
+			return nil, fmt.Errorf("open %s audit log: %w", system, err)
+		}
+		bySystem[system] = logger
 	}
 
-	return &Loggers{Claude: claude, Cursor: cursor}, nil
+	return &Loggers{BySystem: bySystem}, nil
 }
 
-// For returns the logger for the given system string ("claude", "cursor", or any other).
+// For returns the logger for the given system string.
 // Unknown systems fall back to the Claude logger.
 func (l *Loggers) For(system string) *Logger {
-	if system == "cursor" {
-		return l.Cursor
+	if logger, ok := l.BySystem[system]; ok {
+		return logger
 	}
-	return l.Claude
+	return l.BySystem["claude"]
 }
 
 // Close closes both underlying loggers.
 func (l *Loggers) Close() error {
-	err1 := l.Claude.Close()
-	err2 := l.Cursor.Close()
-	if err1 != nil {
-		return err1
+	for _, logger := range l.BySystem {
+		if err := logger.Close(); err != nil {
+			return err
+		}
 	}
-	return err2
+	return nil
 }

@@ -21,7 +21,11 @@ level = "debug"   # debug | info | warn | error
 # Leave empty (or omit) to keep using the env var / XDG spec default.
 
 [paths]
-audit_log = ""    # example: "/var/log/agent-gate/audit.jsonl"
+audit_log = ""           # legacy single-log override
+audit_log_claude = ""    # example: "/var/log/agent-gate/audit-claude.jsonl"
+audit_log_cursor = ""    # example: "/var/log/agent-gate/audit-cursor.jsonl"
+audit_log_codex = ""     # example: "/var/log/agent-gate/audit-codex.jsonl"
+audit_log_gemini = ""    # example: "/var/log/agent-gate/audit-gemini.jsonl"
 
 # ── Rules ────────────────────────────────────────────────────────────────────
 #
@@ -40,7 +44,7 @@ audit_log = ""    # example: "/var/log/agent-gate/audit.jsonl"
 [[rules]]
 name        = "no-shell-redirection"
 description = "Block shell output/error redirection patterns LLMs commonly emit to suppress errors"
-events      = ["PreToolUse", "beforeShellExecution", "preToolUse"]
+events      = ["PreToolUse", "beforeShellExecution", "preToolUse", "BeforeTool"]
 field_paths = ["tool_input.command", "command"]
 pattern     = '(\d+>&\d+|>&\d+|&>|\|&|>/dev/null|2>/dev/null|>>/dev/null|2>>/dev/null|&>/dev/null)'
 action      = "block"
@@ -74,6 +78,17 @@ cursor_events = [
   "afterFileEdit", "afterAgentResponse",
   "stop",
 ]
+codex_events = [
+  "PreToolUse", "PostToolUse",
+  "PermissionRequest", "UserPromptSubmit", "Stop",
+]
+gemini_events = [
+  "BeforeTool", "AfterTool",
+  "BeforeAgent", "AfterAgent",
+  "BeforeModel", "AfterModel",
+  "SessionStart", "SessionEnd",
+  "Notification", "PreCompress",
+]
 # All LLM-generated text fields except tool_input.prompt (handled by the next rule).
 # old_string excluded -- existing content doesn't trigger a block.
 field_paths = ["tool_input.content", "tool_input.new_string", "tool_input.command", "tool_input.description", "command", "assistant_message", "last_assistant_message", "text"]
@@ -89,6 +104,8 @@ name        = "no-emdashes-tool-input-prompt-unless-subagent-task"
 description = "Block typographic dashes in tool_input.prompt except for Task (sub-agent) tool invocations"
 claude_events = ["PreToolUse"]
 cursor_events = ["preToolUse"]
+codex_events = ["PreToolUse"]
+gemini_events = ["BeforeTool"]
 action      = "block"
 violation_message = "This output contains a typographic dash character. Rewrite without Unicode dash variants."
 
@@ -105,6 +122,8 @@ name        = "emdash-audit-existing"
 description = "Audit log when the LLM edits a region containing existing emdashes (does not block)"
 claude_events = ["PreToolUse"]
 cursor_events = ["preToolUse"]
+codex_events = ["PreToolUse"]
+gemini_events = ["BeforeTool"]
 field_paths = ["tool_input.old_string"]
 # All 30 Unicode Dash characters (Dash=Yes per PropList.txt) except U+002D
 # (ASCII hyphen-minus). Source: unicode.org/Public/UCD/latest/ucd/PropList.txt

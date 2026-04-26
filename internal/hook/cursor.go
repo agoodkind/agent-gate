@@ -5,8 +5,6 @@ import (
 	"fmt"
 )
 
-
-
 // CursorEvent enumerates every known Cursor hook event name (camelCase).
 // Source: Cursor hooks documentation, April 2026.
 // Events are grouped by category: session lifecycle, generic tool hooks,
@@ -19,8 +17,8 @@ const (
 	CursorSessionEnd   CursorEvent = "sessionEnd"
 
 	// Generic tool use hooks (fire for all tools, including shell and MCP).
-	CursorPreToolUse        CursorEvent = "preToolUse"
-	CursorPostToolUse       CursorEvent = "postToolUse"
+	CursorPreToolUse         CursorEvent = "preToolUse"
+	CursorPostToolUse        CursorEvent = "postToolUse"
 	CursorPostToolUseFailure CursorEvent = "postToolUseFailure"
 
 	// Shell execution.

@@ -5,6 +5,15 @@ import (
 	"unicode/utf8"
 )
 
+// DetectWithOverride resolves the hook system using an explicit override when
+// one is supplied, otherwise it falls back to event-name-based autodetection.
+func DetectWithOverride(p RawPayload, forced HookSystem) HookSystem {
+	if forced != SystemUnknown {
+		return forced
+	}
+	return Detect(p)
+}
+
 // Detect determines which hook system called agent-gate by examining hook_event_name.
 //
 // Claude Code uses PascalCase event names (PreToolUse, SessionStart, Stop, ...).

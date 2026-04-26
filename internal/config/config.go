@@ -27,6 +27,12 @@ type Paths struct {
 	// CursorAuditLog overrides the Cursor-specific audit log path.
 	// Empty: use $XDG_STATE_HOME/agent-gate/audit-cursor.jsonl.
 	CursorAuditLog string `toml:"audit_log_cursor"`
+	// CodexAuditLog overrides the Codex-specific audit log path.
+	// Empty: use $XDG_STATE_HOME/agent-gate/audit-codex.jsonl.
+	CodexAuditLog string `toml:"audit_log_codex"`
+	// GeminiAuditLog overrides the Gemini-specific audit log path.
+	// Empty: use $XDG_STATE_HOME/agent-gate/audit-gemini.jsonl.
+	GeminiAuditLog string `toml:"audit_log_gemini"`
 }
 
 // Condition is one clause in a multi-condition rule.
@@ -77,12 +83,14 @@ func NewCondition(fieldPaths []string, pattern, notPattern string) (Condition, e
 //     a) Conditions is non-empty and ALL conditions match, OR
 //     b) Conditions is empty and the single FieldPaths/Pattern matches.
 type Rule struct {
-	Name             string      `toml:"name"`
-	Description      string      `toml:"description"`
-	Events           []string    `toml:"events"`
-	ClaudeEvents     []string    `toml:"claude_events"`
-	CursorEvents     []string    `toml:"cursor_events"`
-	Conditions       []Condition `toml:"conditions"`
+	Name         string      `toml:"name"`
+	Description  string      `toml:"description"`
+	Events       []string    `toml:"events"`
+	ClaudeEvents []string    `toml:"claude_events"`
+	CursorEvents []string    `toml:"cursor_events"`
+	CodexEvents  []string    `toml:"codex_events"`
+	GeminiEvents []string    `toml:"gemini_events"`
+	Conditions   []Condition `toml:"conditions"`
 	// FieldPaths and Pattern are used when Conditions is empty (simple rules).
 	FieldPaths       []string `toml:"field_paths"`
 	Pattern          string   `toml:"pattern"`
@@ -144,6 +152,22 @@ func (c *Config) CursorAuditLogPath() string {
 		return c.Paths.CursorAuditLog
 	}
 	return DefaultCursorAuditLogPath()
+}
+
+// CodexAuditLogPath returns the resolved Codex-specific audit log path.
+func (c *Config) CodexAuditLogPath() string {
+	if c.Paths.CodexAuditLog != "" {
+		return c.Paths.CodexAuditLog
+	}
+	return DefaultCodexAuditLogPath()
+}
+
+// GeminiAuditLogPath returns the resolved Gemini-specific audit log path.
+func (c *Config) GeminiAuditLogPath() string {
+	if c.Paths.GeminiAuditLog != "" {
+		return c.Paths.GeminiAuditLog
+	}
+	return DefaultGeminiAuditLogPath()
 }
 
 // Load reads the config file at the XDG config path.

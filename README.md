@@ -1,10 +1,10 @@
 # agent-gate
 
-A unified hook handler for [Claude Code](https://code.claude.com) and [Cursor](https://cursor.com). It registers with every lifecycle hook event in both tools (26 Claude + 20 Cursor), writes a structured audit trail with build metadata on every invocation, and enforces configurable regex rules that can block unwanted actions.
+A unified hook handler for [Claude Code](https://code.claude.com), [Cursor](https://cursor.com), Codex, and Gemini CLI. It writes a structured audit trail with build metadata on every invocation and enforces configurable regex rules that can block unwanted actions across providers.
 
 ## What it does
 
-Both Claude Code and Cursor expose lifecycle hook systems that call external binaries via stdin/stdout JSON. `agent-gate` sits at that boundary as a single Go binary and does two things:
+Claude Code, Cursor, Codex, and Gemini CLI all expose lifecycle hook systems that call external binaries via stdin/stdout JSON. `agent-gate` sits at that boundary as a single Go binary and does two things:
 
 1. **Audit.** Every hook invocation produces a structured JSON log entry with full payload details: tool inputs (command, file_path, old_string, new_string, content), prompts, agent messages, session metadata, and build provenance (commit, version, buildHash, dirty).
 
@@ -106,13 +106,126 @@ Add to `~/.cursor/hooks.json`. All 20 events should be registered:
 
 `failClosed: true` means that if the binary crashes or times out, Cursor blocks the action.
 
+### Codex
+
+Codex event names overlap with Claude, so use the explicit `codex-hook` subcommand instead of plain `agent-gate`.
+
+Inline `~/.codex/config.toml` example:
+
+```toml
+[features]
+codex_hooks = true
+
+[[hooks.PreToolUse]]
+matcher = ".*"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "/path/to/agent-gate codex-hook"
+
+[[hooks.PostToolUse]]
+matcher = ".*"
+
+[[hooks.PostToolUse.hooks]]
+type = "command"
+command = "/path/to/agent-gate codex-hook"
+
+[[hooks.PermissionRequest]]
+matcher = ".*"
+
+[[hooks.PermissionRequest.hooks]]
+type = "command"
+command = "/path/to/agent-gate codex-hook"
+
+[[hooks.UserPromptSubmit]]
+
+[[hooks.UserPromptSubmit.hooks]]
+type = "command"
+command = "/path/to/agent-gate codex-hook"
+
+[[hooks.Stop]]
+
+[[hooks.Stop.hooks]]
+type = "command"
+command = "/path/to/agent-gate codex-hook"
+```
+
+Equivalent `~/.codex/hooks.json` example:
+
+```json
+{
+  "hooks": {
+    "SessionStart": [{"hooks": [{"type": "command", "command": "/path/to/agent-gate codex-hook"}]}],
+    "PreToolUse": [{"matcher": ".*", "hooks": [{"type": "command", "command": "/path/to/agent-gate codex-hook"}]}],
+    "PermissionRequest": [{"matcher": ".*", "hooks": [{"type": "command", "command": "/path/to/agent-gate codex-hook"}]}],
+    "PostToolUse": [{"matcher": ".*", "hooks": [{"type": "command", "command": "/path/to/agent-gate codex-hook"}]}],
+    "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "/path/to/agent-gate codex-hook"}]}],
+    "Stop": [{"hooks": [{"type": "command", "command": "/path/to/agent-gate codex-hook"}]}]
+  }
+}
+```
+
+### Gemini CLI
+
+Gemini also shares overlapping lifecycle names, so use the explicit `gemini-hook` subcommand.
+
+Add to Gemini CLI `settings.json`:
+
+```json
+{
+  "hooks": {
+    "BeforeTool": [{
+      "matcher": ".*",
+      "hooks": [{"type": "command", "command": "/path/to/agent-gate gemini-hook"}]
+    }],
+    "AfterTool": [{
+      "matcher": ".*",
+      "hooks": [{"type": "command", "command": "/path/to/agent-gate gemini-hook"}]
+    }],
+    "BeforeAgent": [{
+      "hooks": [{"type": "command", "command": "/path/to/agent-gate gemini-hook"}]
+    }],
+    "AfterAgent": [{
+      "hooks": [{"type": "command", "command": "/path/to/agent-gate gemini-hook"}]
+    }],
+    "BeforeModel": [{
+      "hooks": [{"type": "command", "command": "/path/to/agent-gate gemini-hook"}]
+    }],
+    "BeforeToolSelection": [{
+      "hooks": [{"type": "command", "command": "/path/to/agent-gate gemini-hook"}]
+    }],
+    "AfterModel": [{
+      "hooks": [{"type": "command", "command": "/path/to/agent-gate gemini-hook"}]
+    }],
+    "SessionStart": [{
+      "matcher": "startup",
+      "hooks": [{"type": "command", "command": "/path/to/agent-gate gemini-hook"}]
+    }],
+    "SessionEnd": [{
+      "matcher": "exit",
+      "hooks": [{"type": "command", "command": "/path/to/agent-gate gemini-hook"}]
+    }],
+    "Notification": [{
+      "matcher": "ToolPermission",
+      "hooks": [{"type": "command", "command": "/path/to/agent-gate gemini-hook"}]
+    }],
+    "PreCompress": [{
+      "matcher": "auto",
+      "hooks": [{"type": "command", "command": "/path/to/agent-gate gemini-hook"}]
+    }]
+  }
+}
+```
+
 ## Hook event reference
 
-Full JSON payload schemas for all 46 events are documented in [docs/hook-schemas.md](docs/hook-schemas.md).
+Full JSON payload schemas for Claude, Cursor, Codex, and Gemini CLI are documented in [docs/hook-schemas.md](docs/hook-schemas.md).
 
 **Sources:**
 - Claude Code hooks: https://code.claude.com/docs/en/hooks
 - Cursor hooks: https://cursor.com/docs/hooks
+- Codex hooks: see repository docs / local integration contract
+- Gemini CLI hooks: see repository docs / local integration contract
 
 ## Configuration
 
@@ -146,6 +259,8 @@ violation_message = "Shell redirection is not permitted."
 | `events` | Hook events this rule applies to. Empty = all events. |
 | `claude_events` | Claude-only event filter (takes precedence over `events` for Claude). |
 | `cursor_events` | Cursor-only event filter (takes precedence over `events` for Cursor). |
+| `codex_events` | Codex-only event filter (takes precedence over `events` for Codex). |
+| `gemini_events` | Gemini-only event filter (takes precedence over `events` for Gemini). |
 | `field_paths` | Dot-paths into the JSON payload. First non-empty value is tested. |
 | `pattern` | PCRE2 regex matched against the extracted field value. |
 | `action` | `"block"` is the only supported action. |
@@ -162,12 +277,19 @@ The rule engine supports virtual field paths for advanced matching:
 
 ## Audit log
 
-Written as newline-delimited JSON to:
+Written as newline-delimited JSON under:
 
 ```
-$XDG_STATE_HOME/agent-gate/audit.jsonl
-~/.local/state/agent-gate/audit.jsonl  (default)
+$XDG_STATE_HOME/agent-gate/
+~/.local/state/agent-gate/  (default)
 ```
+
+By default `agent-gate` writes provider-specific logs:
+
+- `audit-claude.jsonl`
+- `audit-cursor.jsonl`
+- `audit-codex.jsonl`
+- `audit-gemini.jsonl`
 
 Every log entry includes build provenance (`commit`, `version`, `buildHash`, `dirty`) and full payload details:
 
@@ -212,12 +334,16 @@ internal/config/xdg.go          XDG path resolution
 internal/config/defaults.go     default config written on first run
 internal/audit/logger.go        slog JSON handler with build metadata attrs
 internal/hook/types.go          RawPayload, HookSystem, Decision
-internal/hook/detect.go         PascalCase = Claude, camelCase = Cursor
+internal/hook/detect.go         Claude/Cursor autodetection plus provider override support
 internal/hook/claude.go         26 Claude events, payload parsing, response helpers
 internal/hook/cursor.go         20 Cursor events, payload parsing, response helpers
-internal/hook/handler.go        orchestration: receive, log full payload, evaluate, respond
+internal/hook/codex.go          Codex events and response helpers
+internal/hook/gemini.go         Gemini CLI events and response helpers
+internal/hook/provider.go       provider-aware orchestration and dispatch
+internal/hook/handler.go        provider-specific audit attribute extraction
+internal/runtime/*.go           provider runtime adapter scaffolding (Claude active, others stubbed)
 internal/rules/engine.go        dot-path field extraction, regex rule evaluation
-docs/hook-schemas.md            complete JSON schemas for all 46 hook events
+docs/hook-schemas.md            complete JSON schemas for supported providers
 config.toml.example             annotated example configuration
 ```
 

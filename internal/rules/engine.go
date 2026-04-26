@@ -114,6 +114,10 @@ func systemSpecificEvents(rule *config.Rule, system string) []string {
 		return rule.ClaudeEvents
 	case "cursor":
 		return rule.CursorEvents
+	case "codex":
+		return rule.CodexEvents
+	case "gemini":
+		return rule.GeminiEvents
 	default:
 		return nil
 	}
