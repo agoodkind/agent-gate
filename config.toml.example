@@ -12,20 +12,16 @@ level = "debug"   # debug | info | warn | error
 
 # ── Path overrides (optional) ────────────────────────────────────────────────
 #
-# By default agent-gate resolves all paths from XDG env vars:
+# By default agent-gate writes per-conversation audit logs under:
 #
-#   audit_log  ->  $XDG_STATE_HOME/agent-gate/audit.jsonl
+#   $XDG_STATE_HOME/agent-gate/conversations/<system>/<session_id>/<event>.jsonl
 #                  ($XDG_STATE_HOME defaults to ~/.local/state)
 #
-# Set a field below to an absolute path to override that resolution chain.
-# Leave empty (or omit) to keep using the env var / XDG spec default.
+# Set conversations_dir to an absolute path to override the base directory.
+# Leave empty (or omit) to keep using the XDG default.
 
 [paths]
-audit_log = ""           # legacy single-log override
-audit_log_claude = ""    # example: "/var/log/agent-gate/audit-claude.jsonl"
-audit_log_cursor = ""    # example: "/var/log/agent-gate/audit-cursor.jsonl"
-audit_log_codex = ""     # example: "/var/log/agent-gate/audit-codex.jsonl"
-audit_log_gemini = ""    # example: "/var/log/agent-gate/audit-gemini.jsonl"
+conversations_dir = ""   # example: "/var/log/agent-gate/conversations"
 
 # ── Rules ────────────────────────────────────────────────────────────────────
 #

@@ -1,143 +1,62 @@
+// Package audit writes per-conversation, per-event JSONL audit entries.
+//
+// Each hook event is written to a path of the form
+//
+//	<state>/conversations/<system>/<session_id>/<event_name>.jsonl
+//
+// The Sink interface abstracts the destination. The daemon owns a
+// SessionLogger-backed LocalSink. Hook CLI processes use a DaemonSink that
+// forwards entries to the daemon over gRPC.
 package audit
 
 import (
 	"context"
-	"fmt"
-	"io"
-	"log/slog"
-	"os"
-	"path/filepath"
-
-	"goodkind.io/agent-gate/internal/config"
-	"goodkind.io/agent-gate/internal/version"
-	"goodkind.io/gklog"
 )
 
-// Logger wraps slog and writes structured JSONL entries to an audit log file.
-type Logger struct {
-	inner  *slog.Logger
-	closer io.Closer
+// Sink is the audit destination interface. Implementations route entries
+// to per-conversation JSONL files keyed by (system, sessionID, eventName).
+type Sink interface {
+	// Log records one audit entry. The call must not block on disk I/O.
+	// Implementations may drop entries under sustained pressure.
+	Log(ctx context.Context, system, sessionID, eventName, level, msg string, attrs map[string]any)
+
+	// Close flushes pending writes and releases resources.
+	Close() error
 }
 
-// New opens (or creates) the audit log file at cfg.AuditLogPath() and returns a Logger.
-func New(cfg *config.Config) (*Logger, error) {
-	return newLogger(cfg.AuditLogPath(), cfg.Log.Level)
+// LocalSink is a Sink backed by a local SessionLogger. Used by the daemon.
+type LocalSink struct {
+	logger *SessionLogger
 }
 
-// newLogger opens (or creates) the audit log at path with the given level.
-func newLogger(path, level string) (*Logger, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return nil, fmt.Errorf("create audit log dir %s: %w", filepath.Dir(path), err)
-	}
-
-	minLevel := level
-	if minLevel == "" {
-		minLevel = "info"
-	}
-
-	inner, closer, err := gklog.New(gklog.Config{
-		JSONLogFile:   path,
-		Rotation:      gklog.RotationConfig{MaxSizeMB: 5, MaxBackups: 0, MaxAgeDays: 0},
-		DisableStdout: true,
-		JSONMinLevel:  minLevel,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("open audit log %s: %w", path, err)
-	}
-
-	inner = inner.With(
-		slog.String("commit", version.Commit),
-		slog.String("version", version.Version),
-		slog.String("buildHash", version.BuildHash()),
-		slog.String("dirty", version.Dirty),
-	)
-
-	return &Logger{inner: inner, closer: closer}, nil
+// NewLocalSink wraps a SessionLogger as a Sink.
+func NewLocalSink(logger *SessionLogger) *LocalSink {
+	return &LocalSink{logger: logger}
 }
 
-// Close flushes and closes the underlying rotating log writer.
-func (l *Logger) Close() error {
-	if l.closer == nil {
+// Log forwards to the underlying SessionLogger.
+func (s *LocalSink) Log(_ context.Context, system, sessionID, eventName, level, msg string, attrs map[string]any) {
+	if s == nil || s.logger == nil {
+		return
+	}
+	s.logger.Log(system, sessionID, eventName, level, msg, attrs)
+}
+
+// Close closes the underlying SessionLogger.
+func (s *LocalSink) Close() error {
+	if s == nil || s.logger == nil {
 		return nil
 	}
-	return l.closer.Close()
+	return s.logger.Close()
 }
 
-// Info writes an INFO-level audit entry with arbitrary structured attributes.
-func (l *Logger) Info(msg string, attrs ...slog.Attr) {
-	l.InfoContext(context.Background(), msg, attrs...)
+// DiscardSink drops all entries. Useful as a safe fallback when no sink is
+// configured.
+type DiscardSink struct{}
+
+// Log is a no-op.
+func (DiscardSink) Log(context.Context, string, string, string, string, string, map[string]any) {
 }
 
-// InfoContext writes an INFO-level audit entry bound to ctx for slog handlers.
-func (l *Logger) InfoContext(ctx context.Context, msg string, attrs ...slog.Attr) {
-	l.inner.LogAttrs(ctx, slog.LevelInfo, msg, attrs...)
-}
-
-// Debug writes a DEBUG-level entry (recorded only when level = "debug").
-func (l *Logger) Debug(msg string, attrs ...slog.Attr) {
-	l.DebugContext(context.Background(), msg, attrs...)
-}
-
-// DebugContext writes a DEBUG-level entry bound to ctx for slog handlers.
-func (l *Logger) DebugContext(ctx context.Context, msg string, attrs ...slog.Attr) {
-	l.inner.LogAttrs(ctx, slog.LevelDebug, msg, attrs...)
-}
-
-// Error writes an ERROR-level entry.
-func (l *Logger) Error(msg string, attrs ...slog.Attr) {
-	l.ErrorContext(context.Background(), msg, attrs...)
-}
-
-// ErrorContext writes an ERROR-level entry bound to ctx for slog handlers.
-func (l *Logger) ErrorContext(ctx context.Context, msg string, attrs ...slog.Attr) {
-	l.inner.LogAttrs(ctx, slog.LevelError, msg, attrs...)
-}
-
-// Loggers holds per-provider audit loggers.
-type Loggers struct {
-	BySystem map[string]*Logger
-}
-
-// NewLoggers opens all per-provider audit log files and returns a Loggers.
-func NewLoggers(cfg *config.Config) (*Loggers, error) {
-	level := cfg.Log.Level
-	paths := map[string]string{
-		"claude": cfg.ClaudeAuditLogPath(),
-		"cursor": cfg.CursorAuditLogPath(),
-		"codex":  cfg.CodexAuditLogPath(),
-		"gemini": cfg.GeminiAuditLogPath(),
-	}
-
-	bySystem := make(map[string]*Logger, len(paths))
-	for system, path := range paths {
-		logger, err := newLogger(path, level)
-		if err != nil {
-			for _, existing := range bySystem {
-				_ = existing.Close()
-			}
-			return nil, fmt.Errorf("open %s audit log: %w", system, err)
-		}
-		bySystem[system] = logger
-	}
-
-	return &Loggers{BySystem: bySystem}, nil
-}
-
-// For returns the logger for the given system string.
-// Unknown systems fall back to the Claude logger.
-func (l *Loggers) For(system string) *Logger {
-	if logger, ok := l.BySystem[system]; ok {
-		return logger
-	}
-	return l.BySystem["claude"]
-}
-
-// Close closes both underlying loggers.
-func (l *Loggers) Close() error {
-	for _, logger := range l.BySystem {
-		if err := logger.Close(); err != nil {
-			return err
-		}
-	}
-	return nil
-}
+// Close is a no-op.
+func (DiscardSink) Close() error { return nil }

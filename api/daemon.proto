@@ -19,6 +19,13 @@ service AgentGateD {
   // HookEvent forwards a Claude Code hook event to the daemon for processing.
   // Replaces direct stdin-based hook handling for wrapper-launched sessions.
   rpc HookEvent(HookEventRequest) returns (HookEventResponse);
+
+  // Audit forwards a single audit log entry to the daemon. The daemon
+  // enqueues the entry to its per-conversation JSONL writer and returns
+  // immediately. Disk writes happen asynchronously on a worker goroutine.
+  // The call is lossy under heavy load. Entries may be dropped if the queue
+  // is full. The call never blocks the caller on disk I/O.
+  rpc Audit(AuditRequest) returns (AuditResponse);
 }
 
 message AcquireSessionRequest {
@@ -72,3 +79,29 @@ message HookEventResponse {
   // stderr_data is written to hook process stderr.
   bytes stderr_data = 3;
 }
+
+message AuditRequest {
+  // system identifies the provider: claude, cursor, codex, gemini.
+  string system = 1;
+
+  // session_id is the conversation identifier from the hook payload.
+  // The daemon groups all entries with the same (system, session_id) into
+  // one folder on disk.
+  string session_id = 2;
+
+  // event_name is the hook event name (PreToolUse, Stop, etc).
+  // The daemon routes each entry to the matching event_name.jsonl file.
+  string event_name = 3;
+
+  // level is one of debug, info, warn, error.
+  string level = 4;
+
+  // msg is the human-readable message for this entry.
+  string msg = 5;
+
+  // attrs_json is a UTF-8 JSON object containing structured attributes.
+  // The daemon merges these fields into the JSONL line at the top level.
+  bytes attrs_json = 6;
+}
+
+message AuditResponse {}

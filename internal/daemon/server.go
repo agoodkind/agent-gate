@@ -17,6 +17,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"goodkind.io/agent-gate/api/daemonpb"
+	"goodkind.io/agent-gate/internal/audit"
 	"goodkind.io/agent-gate/internal/config"
 )
 
@@ -30,6 +31,8 @@ type Server struct {
 
 	watcher        *fsnotify.Watcher
 	globalSettings map[string]any // last-known global settings.json content
+
+	sessionLogger *audit.SessionLogger
 }
 
 // wrapperSession holds runtime state for one active claude wrapper process.
@@ -40,17 +43,30 @@ type wrapperSession struct {
 }
 
 // New creates a new daemon Server and starts watching the global settings file.
-func New(log *slog.Logger) (*Server, error) {
+func New(log *slog.Logger, cfg *config.Config) (*Server, error) {
 	bg := context.Background()
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create settings watcher: %w", err)
 	}
 
+	convDir := config.DefaultConversationsDir()
+	level := ""
+	if cfg != nil {
+		convDir = cfg.ConversationsDir()
+		level = cfg.Log.Level
+	}
+	sessionLogger, err := audit.NewSessionLogger(convDir, level, log)
+	if err != nil {
+		_ = watcher.Close()
+		return nil, fmt.Errorf("failed to create session logger: %w", err)
+	}
+
 	s := &Server{
-		log:      log,
-		sessions: make(map[string]*wrapperSession),
-		watcher:  watcher,
+		log:           log,
+		sessions:      make(map[string]*wrapperSession),
+		watcher:       watcher,
+		sessionLogger: sessionLogger,
 	}
 
 	globalPath := globalSettingsPath()
@@ -76,6 +92,9 @@ func New(log *slog.Logger) (*Server, error) {
 func (s *Server) Close() {
 	bg := context.Background()
 	_ = s.watcher.Close()
+	if s.sessionLogger != nil {
+		_ = s.sessionLogger.Close()
+	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -163,6 +182,24 @@ func (s *Server) ReleaseSession(ctx context.Context, req *daemonpb.ReleaseSessio
 func (s *Server) HookEvent(ctx context.Context, req *daemonpb.HookEventRequest) (*daemonpb.HookEventResponse, error) {
 	// TODO: route to hook handler, handle ConfigChange to update per-session model
 	return &daemonpb.HookEventResponse{ExitCode: 0}, nil
+}
+
+// Audit accepts an audit log entry and enqueues it on the session logger.
+// The call returns immediately. Disk writes happen asynchronously.
+func (s *Server) Audit(_ context.Context, req *daemonpb.AuditRequest) (*daemonpb.AuditResponse, error) {
+	if s.sessionLogger == nil {
+		return &daemonpb.AuditResponse{}, nil
+	}
+
+	var attrs map[string]any
+	if len(req.AttrsJson) > 0 {
+		if err := json.Unmarshal(req.AttrsJson, &attrs); err != nil {
+			return nil, status.Errorf(codes.InvalidArgument, "invalid attrs_json: %v", err)
+		}
+	}
+
+	s.sessionLogger.Log(req.System, req.SessionId, req.EventName, req.Level, req.Msg, attrs)
+	return &daemonpb.AuditResponse{}, nil
 }
 
 // writeSettingsJSON writes a per-session settings.json to the runtime dir,

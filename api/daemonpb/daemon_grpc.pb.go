@@ -22,6 +22,7 @@ const (
 	AgentGateD_AcquireSession_FullMethodName = "/agentgate.AgentGateD/AcquireSession"
 	AgentGateD_ReleaseSession_FullMethodName = "/agentgate.AgentGateD/ReleaseSession"
 	AgentGateD_HookEvent_FullMethodName      = "/agentgate.AgentGateD/HookEvent"
+	AgentGateD_Audit_FullMethodName          = "/agentgate.AgentGateD/Audit"
 )
 
 // AgentGateDClient is the client API for AgentGateD service.
@@ -41,6 +42,12 @@ type AgentGateDClient interface {
 	// HookEvent forwards a Claude Code hook event to the daemon for processing.
 	// Replaces direct stdin-based hook handling for wrapper-launched sessions.
 	HookEvent(ctx context.Context, in *HookEventRequest, opts ...grpc.CallOption) (*HookEventResponse, error)
+	// Audit forwards a single audit log entry to the daemon. The daemon
+	// enqueues the entry to its per-conversation JSONL writer and returns
+	// immediately. Disk writes happen asynchronously on a worker goroutine.
+	// The call is lossy under heavy load. Entries may be dropped if the queue
+	// is full. The call never blocks the caller on disk I/O.
+	Audit(ctx context.Context, in *AuditRequest, opts ...grpc.CallOption) (*AuditResponse, error)
 }
 
 type agentGateDClient struct {
@@ -81,6 +88,16 @@ func (c *agentGateDClient) HookEvent(ctx context.Context, in *HookEventRequest, 
 	return out, nil
 }
 
+func (c *agentGateDClient) Audit(ctx context.Context, in *AuditRequest, opts ...grpc.CallOption) (*AuditResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AuditResponse)
+	err := c.cc.Invoke(ctx, AgentGateD_Audit_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AgentGateDServer is the server API for AgentGateD service.
 // All implementations must embed UnimplementedAgentGateDServer
 // for forward compatibility.
@@ -98,6 +115,12 @@ type AgentGateDServer interface {
 	// HookEvent forwards a Claude Code hook event to the daemon for processing.
 	// Replaces direct stdin-based hook handling for wrapper-launched sessions.
 	HookEvent(context.Context, *HookEventRequest) (*HookEventResponse, error)
+	// Audit forwards a single audit log entry to the daemon. The daemon
+	// enqueues the entry to its per-conversation JSONL writer and returns
+	// immediately. Disk writes happen asynchronously on a worker goroutine.
+	// The call is lossy under heavy load. Entries may be dropped if the queue
+	// is full. The call never blocks the caller on disk I/O.
+	Audit(context.Context, *AuditRequest) (*AuditResponse, error)
 	mustEmbedUnimplementedAgentGateDServer()
 }
 
@@ -116,6 +139,9 @@ func (UnimplementedAgentGateDServer) ReleaseSession(context.Context, *ReleaseSes
 }
 func (UnimplementedAgentGateDServer) HookEvent(context.Context, *HookEventRequest) (*HookEventResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method HookEvent not implemented")
+}
+func (UnimplementedAgentGateDServer) Audit(context.Context, *AuditRequest) (*AuditResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Audit not implemented")
 }
 func (UnimplementedAgentGateDServer) mustEmbedUnimplementedAgentGateDServer() {}
 func (UnimplementedAgentGateDServer) testEmbeddedByValue()                    {}
@@ -192,6 +218,24 @@ func _AgentGateD_HookEvent_Handler(srv interface{}, ctx context.Context, dec fun
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AgentGateD_Audit_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AuditRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentGateDServer).Audit(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentGateD_Audit_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentGateDServer).Audit(ctx, req.(*AuditRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AgentGateD_ServiceDesc is the grpc.ServiceDesc for AgentGateD service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -210,6 +254,10 @@ var AgentGateD_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "HookEvent",
 			Handler:    _AgentGateD_HookEvent_Handler,
+		},
+		{
+			MethodName: "Audit",
+			Handler:    _AgentGateD_Audit_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

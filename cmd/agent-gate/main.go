@@ -46,7 +46,14 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "daemon" {
 		log, closeLog := openLog("daemon")
 		defer closeLog()
-		if err := daemon.Run(log); err != nil {
+		cfg, cfgErr := config.Load()
+		if cfgErr != nil {
+			fmt.Fprintf(os.Stderr,
+				"agent-gate: daemon: config load failed, using defaults: %v\n", cfgErr,
+			)
+			cfg = &config.Config{}
+		}
+		if err := daemon.Run(log, cfg); err != nil {
 			fmt.Fprintf(os.Stderr, "agent-gate: daemon: %v\n", err)
 			os.Exit(1)
 		}
@@ -128,9 +135,14 @@ func runClaudeWrapper() int {
 // connectOrStartDaemon connects to the daemon, starting it in the background
 // if it is not already running.
 func connectOrStartDaemon(ctx context.Context) (*daemon.Client, error) {
-	client, err := daemon.Connect(ctx)
-	if err == nil {
-		return client, nil
+	// gRPC NewClient is lazy and never fails on a missing socket. Probe the
+	// Unix socket file directly so the auto-start path actually fires when
+	// the daemon is not running.
+	if _, statErr := os.Stat(config.DaemonSocketPath()); statErr == nil {
+		client, err := daemon.Connect(ctx)
+		if err == nil {
+			return client, nil
+		}
 	}
 
 	// Daemon not running - start it in the background.
@@ -155,7 +167,11 @@ func connectOrStartDaemon(ctx context.Context) (*daemon.Client, error) {
 			return nil, ctx.Err()
 		case <-time.After(delay):
 		}
-		client, err = daemon.Connect(ctx)
+		if _, statErr := os.Stat(config.DaemonSocketPath()); statErr != nil {
+			delay *= 2
+			continue
+		}
+		client, err := daemon.Connect(ctx)
 		if err == nil {
 			return client, nil
 		}
@@ -242,16 +258,21 @@ func runHook(forcedSystem hook.HookSystem) int {
 		}
 	}
 
-	// Open per-system audit logs (creates directories if needed).
-	loggers, err := audit.NewLoggers(cfg)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "agent-gate: open audit loggers: %v\n", err)
-		return 2
+	// Audit goes through the daemon. The daemon owns the LRU file-handle
+	// cache and the async write worker. If the daemon is unreachable we
+	// fall back to a discard sink so that hook enforcement still proceeds.
+	var sink audit.Sink = audit.DiscardSink{}
+	ctx := context.Background()
+	if client, derr := connectOrStartDaemon(ctx); derr == nil {
+		defer func() { _ = client.Close() }()
+		sink = daemon.NewAuditSink(client)
+	} else {
+		fmt.Fprintf(os.Stderr,
+			"agent-gate: WARNING: daemon unreachable, audit disabled: %v\n", derr,
+		)
 	}
-	defer loggers.Close()
 
-	// Dispatch to the hook handler.
-	stdout, stderr, exitCode := hook.HandleWithOverride(context.Background(), raw, data, cfg, loggers, forcedSystem)
+	stdout, stderr, exitCode := hook.HandleWithOverride(ctx, raw, data, cfg, sink, forcedSystem)
 
 	if len(stdout) > 0 {
 		if _, err := os.Stdout.Write(stdout); err != nil {

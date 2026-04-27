@@ -18,21 +18,9 @@ type Log struct {
 // An empty string for any field means "use the XDG env var (or its default)".
 // Non-empty values take highest priority in the resolution chain.
 type Paths struct {
-	// AuditLog overrides the resolved audit log file path (legacy single-file mode).
-	// Empty: use $XDG_STATE_HOME/agent-gate/audit.jsonl (or ~/.local/state/… default).
-	AuditLog string `toml:"audit_log"`
-	// ClaudeAuditLog overrides the Claude-specific audit log path.
-	// Empty: use $XDG_STATE_HOME/agent-gate/audit-claude.jsonl.
-	ClaudeAuditLog string `toml:"audit_log_claude"`
-	// CursorAuditLog overrides the Cursor-specific audit log path.
-	// Empty: use $XDG_STATE_HOME/agent-gate/audit-cursor.jsonl.
-	CursorAuditLog string `toml:"audit_log_cursor"`
-	// CodexAuditLog overrides the Codex-specific audit log path.
-	// Empty: use $XDG_STATE_HOME/agent-gate/audit-codex.jsonl.
-	CodexAuditLog string `toml:"audit_log_codex"`
-	// GeminiAuditLog overrides the Gemini-specific audit log path.
-	// Empty: use $XDG_STATE_HOME/agent-gate/audit-gemini.jsonl.
-	GeminiAuditLog string `toml:"audit_log_gemini"`
+	// ConversationsDir overrides the base directory for per-conversation logs.
+	// Empty: use $XDG_STATE_HOME/agent-gate/conversations.
+	ConversationsDir string `toml:"conversations_dir"`
 }
 
 // Condition is one clause in a multi-condition rule.
@@ -129,45 +117,13 @@ type Config struct {
 	Rules []Rule `toml:"rules"`
 }
 
-// AuditLogPath returns the resolved audit log path applying the full
-// override chain: TOML [paths].audit_log > $XDG_STATE_HOME > ~/.local/state.
-func (c *Config) AuditLogPath() string {
-	if c.Paths.AuditLog != "" {
-		return c.Paths.AuditLog
+// ConversationsDir returns the resolved base directory for per-conversation
+// audit logs. Each conversation gets its own subfolder.
+func (c *Config) ConversationsDir() string {
+	if c.Paths.ConversationsDir != "" {
+		return c.Paths.ConversationsDir
 	}
-	return DefaultAuditLogPath()
-}
-
-// ClaudeAuditLogPath returns the resolved Claude-specific audit log path.
-func (c *Config) ClaudeAuditLogPath() string {
-	if c.Paths.ClaudeAuditLog != "" {
-		return c.Paths.ClaudeAuditLog
-	}
-	return DefaultClaudeAuditLogPath()
-}
-
-// CursorAuditLogPath returns the resolved Cursor-specific audit log path.
-func (c *Config) CursorAuditLogPath() string {
-	if c.Paths.CursorAuditLog != "" {
-		return c.Paths.CursorAuditLog
-	}
-	return DefaultCursorAuditLogPath()
-}
-
-// CodexAuditLogPath returns the resolved Codex-specific audit log path.
-func (c *Config) CodexAuditLogPath() string {
-	if c.Paths.CodexAuditLog != "" {
-		return c.Paths.CodexAuditLog
-	}
-	return DefaultCodexAuditLogPath()
-}
-
-// GeminiAuditLogPath returns the resolved Gemini-specific audit log path.
-func (c *Config) GeminiAuditLogPath() string {
-	if c.Paths.GeminiAuditLog != "" {
-		return c.Paths.GeminiAuditLog
-	}
-	return DefaultGeminiAuditLogPath()
+	return DefaultConversationsDir()
 }
 
 // Load reads the config file at the XDG config path.

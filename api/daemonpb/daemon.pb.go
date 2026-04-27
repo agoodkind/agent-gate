@@ -349,6 +349,136 @@ func (x *HookEventResponse) GetStderrData() []byte {
 	return nil
 }
 
+type AuditRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// system identifies the provider: claude, cursor, codex, gemini.
+	System string `protobuf:"bytes,1,opt,name=system,proto3" json:"system,omitempty"`
+	// session_id is the conversation identifier from the hook payload.
+	// The daemon groups all entries with the same (system, session_id) into
+	// one folder on disk.
+	SessionId string `protobuf:"bytes,2,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	// event_name is the hook event name (PreToolUse, Stop, etc).
+	// The daemon routes each entry to the matching event_name.jsonl file.
+	EventName string `protobuf:"bytes,3,opt,name=event_name,json=eventName,proto3" json:"event_name,omitempty"`
+	// level is one of debug, info, warn, error.
+	Level string `protobuf:"bytes,4,opt,name=level,proto3" json:"level,omitempty"`
+	// msg is the human-readable message for this entry.
+	Msg string `protobuf:"bytes,5,opt,name=msg,proto3" json:"msg,omitempty"`
+	// attrs_json is a UTF-8 JSON object containing structured attributes.
+	// The daemon merges these fields into the JSONL line at the top level.
+	AttrsJson     []byte `protobuf:"bytes,6,opt,name=attrs_json,json=attrsJson,proto3" json:"attrs_json,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AuditRequest) Reset() {
+	*x = AuditRequest{}
+	mi := &file_daemon_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AuditRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AuditRequest) ProtoMessage() {}
+
+func (x *AuditRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_daemon_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AuditRequest.ProtoReflect.Descriptor instead.
+func (*AuditRequest) Descriptor() ([]byte, []int) {
+	return file_daemon_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *AuditRequest) GetSystem() string {
+	if x != nil {
+		return x.System
+	}
+	return ""
+}
+
+func (x *AuditRequest) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *AuditRequest) GetEventName() string {
+	if x != nil {
+		return x.EventName
+	}
+	return ""
+}
+
+func (x *AuditRequest) GetLevel() string {
+	if x != nil {
+		return x.Level
+	}
+	return ""
+}
+
+func (x *AuditRequest) GetMsg() string {
+	if x != nil {
+		return x.Msg
+	}
+	return ""
+}
+
+func (x *AuditRequest) GetAttrsJson() []byte {
+	if x != nil {
+		return x.AttrsJson
+	}
+	return nil
+}
+
+type AuditResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AuditResponse) Reset() {
+	*x = AuditResponse{}
+	mi := &file_daemon_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AuditResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AuditResponse) ProtoMessage() {}
+
+func (x *AuditResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_daemon_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AuditResponse.ProtoReflect.Descriptor instead.
+func (*AuditResponse) Descriptor() ([]byte, []int) {
+	return file_daemon_proto_rawDescGZIP(), []int{7}
+}
+
 var File_daemon_proto protoreflect.FileDescriptor
 
 const file_daemon_proto_rawDesc = "" +
@@ -377,12 +507,24 @@ const file_daemon_proto_rawDesc = "" +
 	"\vstdout_data\x18\x02 \x01(\fR\n" +
 	"stdoutData\x12\x1f\n" +
 	"\vstderr_data\x18\x03 \x01(\fR\n" +
-	"stderrData2\x82\x02\n" +
+	"stderrData\"\xab\x01\n" +
+	"\fAuditRequest\x12\x16\n" +
+	"\x06system\x18\x01 \x01(\tR\x06system\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x02 \x01(\tR\tsessionId\x12\x1d\n" +
+	"\n" +
+	"event_name\x18\x03 \x01(\tR\teventName\x12\x14\n" +
+	"\x05level\x18\x04 \x01(\tR\x05level\x12\x10\n" +
+	"\x03msg\x18\x05 \x01(\tR\x03msg\x12\x1d\n" +
+	"\n" +
+	"attrs_json\x18\x06 \x01(\fR\tattrsJson\"\x0f\n" +
+	"\rAuditResponse2\xbe\x02\n" +
 	"\n" +
 	"AgentGateD\x12U\n" +
 	"\x0eAcquireSession\x12 .agentgate.AcquireSessionRequest\x1a!.agentgate.AcquireSessionResponse\x12U\n" +
 	"\x0eReleaseSession\x12 .agentgate.ReleaseSessionRequest\x1a!.agentgate.ReleaseSessionResponse\x12F\n" +
-	"\tHookEvent\x12\x1b.agentgate.HookEventRequest\x1a\x1c.agentgate.HookEventResponseB%Z#goodkind.io/agent-gate/api/daemonpbb\x06proto3"
+	"\tHookEvent\x12\x1b.agentgate.HookEventRequest\x1a\x1c.agentgate.HookEventResponse\x12:\n" +
+	"\x05Audit\x12\x17.agentgate.AuditRequest\x1a\x18.agentgate.AuditResponseB%Z#goodkind.io/agent-gate/api/daemonpbb\x06proto3"
 
 var (
 	file_daemon_proto_rawDescOnce sync.Once
@@ -396,7 +538,7 @@ func file_daemon_proto_rawDescGZIP() []byte {
 	return file_daemon_proto_rawDescData
 }
 
-var file_daemon_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
+var file_daemon_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
 var file_daemon_proto_goTypes = []any{
 	(*AcquireSessionRequest)(nil),  // 0: agentgate.AcquireSessionRequest
 	(*AcquireSessionResponse)(nil), // 1: agentgate.AcquireSessionResponse
@@ -404,16 +546,20 @@ var file_daemon_proto_goTypes = []any{
 	(*ReleaseSessionResponse)(nil), // 3: agentgate.ReleaseSessionResponse
 	(*HookEventRequest)(nil),       // 4: agentgate.HookEventRequest
 	(*HookEventResponse)(nil),      // 5: agentgate.HookEventResponse
+	(*AuditRequest)(nil),           // 6: agentgate.AuditRequest
+	(*AuditResponse)(nil),          // 7: agentgate.AuditResponse
 }
 var file_daemon_proto_depIdxs = []int32{
 	0, // 0: agentgate.AgentGateD.AcquireSession:input_type -> agentgate.AcquireSessionRequest
 	2, // 1: agentgate.AgentGateD.ReleaseSession:input_type -> agentgate.ReleaseSessionRequest
 	4, // 2: agentgate.AgentGateD.HookEvent:input_type -> agentgate.HookEventRequest
-	1, // 3: agentgate.AgentGateD.AcquireSession:output_type -> agentgate.AcquireSessionResponse
-	3, // 4: agentgate.AgentGateD.ReleaseSession:output_type -> agentgate.ReleaseSessionResponse
-	5, // 5: agentgate.AgentGateD.HookEvent:output_type -> agentgate.HookEventResponse
-	3, // [3:6] is the sub-list for method output_type
-	0, // [0:3] is the sub-list for method input_type
+	6, // 3: agentgate.AgentGateD.Audit:input_type -> agentgate.AuditRequest
+	1, // 4: agentgate.AgentGateD.AcquireSession:output_type -> agentgate.AcquireSessionResponse
+	3, // 5: agentgate.AgentGateD.ReleaseSession:output_type -> agentgate.ReleaseSessionResponse
+	5, // 6: agentgate.AgentGateD.HookEvent:output_type -> agentgate.HookEventResponse
+	7, // 7: agentgate.AgentGateD.Audit:output_type -> agentgate.AuditResponse
+	4, // [4:8] is the sub-list for method output_type
+	0, // [0:4] is the sub-list for method input_type
 	0, // [0:0] is the sub-list for extension type_name
 	0, // [0:0] is the sub-list for extension extendee
 	0, // [0:0] is the sub-list for field type_name
@@ -430,7 +576,7 @@ func file_daemon_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_daemon_proto_rawDesc), len(file_daemon_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   6,
+			NumMessages:   8,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

@@ -14,8 +14,9 @@ import (
 )
 
 // Run starts the daemon gRPC server on the XDG runtime Unix socket.
-// It blocks until the server stops.
-func Run(log *slog.Logger) error {
+// It blocks until the server stops. The cfg argument may be nil. In that
+// case the daemon falls back to default XDG paths.
+func Run(log *slog.Logger, cfg *config.Config) error {
 	if err := config.EnsureRuntimeDir(); err != nil {
 		return err
 	}
@@ -32,7 +33,7 @@ func Run(log *slog.Logger) error {
 		return fmt.Errorf("failed to listen on %s: %w", socketPath, err)
 	}
 
-	srv, err := New(log)
+	srv, err := New(log, cfg)
 	if err != nil {
 		return fmt.Errorf("failed to create daemon server: %w", err)
 	}

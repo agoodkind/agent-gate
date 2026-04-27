@@ -10,18 +10,20 @@ import (
 )
 
 // HandleWithOverride is the provider-aware orchestration entrypoint.
-func HandleWithOverride(ctx context.Context, raw RawPayload, rawBytes []byte, cfg *config.Config, loggers *audit.Loggers, forced HookSystem) (stdout, stderr []byte, exitCode int) {
+func HandleWithOverride(ctx context.Context, raw RawPayload, rawBytes []byte, cfg *config.Config, sink audit.Sink, forced HookSystem) (stdout, stderr []byte, exitCode int) {
+	if sink == nil {
+		sink = audit.DiscardSink{}
+	}
 	system := DetectWithOverride(raw, forced)
 	eventName := raw.EventName()
-	logger := loggers.For(system.String())
 
-	auditReceived(ctx, raw, rawBytes, system, eventName, logger)
-	return enforce(ctx, raw, system, eventName, cfg, logger)
+	auditReceived(ctx, raw, rawBytes, system, eventName, sink)
+	return enforce(ctx, raw, system, eventName, cfg, sink)
 }
 
 // Handle is preserved for callers that rely on autodetection.
-func Handle(ctx context.Context, raw RawPayload, rawBytes []byte, cfg *config.Config, loggers *audit.Loggers) (stdout, stderr []byte, exitCode int) {
-	return HandleWithOverride(ctx, raw, rawBytes, cfg, loggers, SystemUnknown)
+func Handle(ctx context.Context, raw RawPayload, rawBytes []byte, cfg *config.Config, sink audit.Sink) (stdout, stderr []byte, exitCode int) {
+	return HandleWithOverride(ctx, raw, rawBytes, cfg, sink, SystemUnknown)
 }
 
 // CanBlock returns true when the provider can meaningfully change the hook flow.
@@ -40,25 +42,32 @@ func CanBlock(system HookSystem, eventName string) bool {
 	}
 }
 
-func auditReceived(ctx context.Context, raw RawPayload, rawBytes []byte, system HookSystem, eventName string, logger *audit.Logger) {
+func auditReceived(ctx context.Context, raw RawPayload, rawBytes []byte, system HookSystem, eventName string, sink audit.Sink) {
+	systemStr := system.String()
+	sessionID := raw.SessionID()
+
 	base := []slog.Attr{
-		slog.String("system", system.String()),
+		slog.String("system", systemStr),
 		slog.String("event", eventName),
-		slog.String("session_id", raw.SessionID()),
+		slog.String("session_id", sessionID),
 		slog.String("cwd", raw.CWD()),
 	}
 
-	logger.InfoContext(ctx, "hook.received", append(base, logAttrs(system, raw)...)...)
-	logger.DebugContext(ctx, "hook.raw_payload",
-		slog.String("system", system.String()),
+	infoAttrs := audit.AttrsFromSlog(append(base, logAttrs(system, raw)...))
+	sink.Log(ctx, systemStr, sessionID, eventName, "info", "hook.received", infoAttrs)
+
+	debugAttrs := audit.AttrsFromSlog([]slog.Attr{
+		slog.String("system", systemStr),
 		slog.String("event", eventName),
-		slog.String("session_id", raw.SessionID()),
+		slog.String("session_id", sessionID),
 		slog.String("raw_payload", string(rawBytes)),
-	)
+	})
+	sink.Log(ctx, systemStr, sessionID, eventName, "debug", "hook.raw_payload", debugAttrs)
 }
 
-func enforce(ctx context.Context, raw RawPayload, system HookSystem, eventName string, cfg *config.Config, logger *audit.Logger) (stdout, stderr []byte, exitCode int) {
+func enforce(ctx context.Context, raw RawPayload, system HookSystem, eventName string, cfg *config.Config, sink audit.Sink) (stdout, stderr []byte, exitCode int) {
 	systemStr := system.String()
+	sessionID := raw.SessionID()
 	checked := rules.CheckedRuleNames(systemStr, eventName, cfg.Rules)
 	violations := rules.EvaluateAll(systemStr, eventName, map[string]any(raw), cfg.Rules)
 	blockingViolations := blockingMatches(violations)
@@ -67,39 +76,36 @@ func enforce(ctx context.Context, raw RawPayload, system HookSystem, eventName s
 	base := []slog.Attr{
 		slog.String("system", systemStr),
 		slog.String("event", eventName),
-		slog.String("session_id", raw.SessionID()),
+		slog.String("session_id", sessionID),
 		slog.Any("rules_checked", checked),
 	}
 
 	if len(blockingViolations) > 0 && CanBlock(system, eventName) {
 		diagnostic := rules.FormatViolations(blockingViolations)
-		logger.InfoContext(ctx, "hook.blocked",
-			append(base,
-				slog.String("decision", "block"),
-				slog.Any("blocking_rules", matchRuleNames(blockingViolations)),
-				slog.String("violation_message", diagnostic),
-			)...,
-		)
+		attrs := audit.AttrsFromSlog(append(base,
+			slog.String("decision", "block"),
+			slog.Any("blocking_rules", matchRuleNames(blockingViolations)),
+			slog.String("violation_message", diagnostic),
+		))
+		sink.Log(ctx, systemStr, sessionID, eventName, "info", "hook.blocked", attrs)
 		return blockTextResponse(system, eventName, diagnostic)
 	}
 
 	if len(auditOnlyViolations) > 0 {
-		logger.InfoContext(ctx, "hook.audit_violation",
-			append(base,
-				slog.String("decision", "audit_only"),
-				slog.Any("blocking_rules", matchRuleNames(auditOnlyViolations)),
-				slog.String("violation_message", rules.FormatViolations(auditOnlyViolations)),
-			)...,
-		)
+		attrs := audit.AttrsFromSlog(append(base,
+			slog.String("decision", "audit_only"),
+			slog.Any("blocking_rules", matchRuleNames(auditOnlyViolations)),
+			slog.String("violation_message", rules.FormatViolations(auditOnlyViolations)),
+		))
+		sink.Log(ctx, systemStr, sessionID, eventName, "info", "hook.audit_violation", attrs)
 	}
 
-	logger.InfoContext(ctx, "hook.allowed",
-		append(base,
-			slog.String("decision", "allow"),
-			slog.String("blocking_rule", ""),
-			slog.String("violation_message", ""),
-		)...,
-	)
+	allowAttrs := audit.AttrsFromSlog(append(base,
+		slog.String("decision", "allow"),
+		slog.String("blocking_rule", ""),
+		slog.String("violation_message", ""),
+	))
+	sink.Log(ctx, systemStr, sessionID, eventName, "info", "hook.allowed", allowAttrs)
 	return defaultAllow(system), nil, 0
 }
 

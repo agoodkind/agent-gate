@@ -66,30 +66,11 @@ func DefaultStateDir() string {
 	return filepath.Join(base, appName)
 }
 
-// DefaultAuditLogPath returns the XDG-derived audit log path.
-// It is the fallback when no override is set in TOML.
-func DefaultAuditLogPath() string {
-	return filepath.Join(DefaultStateDir(), "audit.jsonl")
-}
-
-// DefaultClaudeAuditLogPath returns the XDG-derived audit log path for Claude hooks.
-func DefaultClaudeAuditLogPath() string {
-	return filepath.Join(DefaultStateDir(), "audit-claude.jsonl")
-}
-
-// DefaultCursorAuditLogPath returns the XDG-derived audit log path for Cursor hooks.
-func DefaultCursorAuditLogPath() string {
-	return filepath.Join(DefaultStateDir(), "audit-cursor.jsonl")
-}
-
-// DefaultCodexAuditLogPath returns the XDG-derived audit log path for Codex hooks.
-func DefaultCodexAuditLogPath() string {
-	return filepath.Join(DefaultStateDir(), "audit-codex.jsonl")
-}
-
-// DefaultGeminiAuditLogPath returns the XDG-derived audit log path for Gemini hooks.
-func DefaultGeminiAuditLogPath() string {
-	return filepath.Join(DefaultStateDir(), "audit-gemini.jsonl")
+// DefaultConversationsDir returns the XDG-derived base directory for
+// per-conversation audit logs. Each conversation gets its own subfolder
+// under <state>/conversations/<system>/<session_id>/.
+func DefaultConversationsDir() string {
+	return filepath.Join(DefaultStateDir(), "conversations")
 }
 
 // ProfilesConfigPath returns the path to profiles.toml in the XDG config directory.
