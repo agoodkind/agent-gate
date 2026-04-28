@@ -1,6 +1,6 @@
 GO_MK_URL   := https://raw.githubusercontent.com/agoodkind/go-makefile/main/go.mk
 GO_MK       := .make/go.mk
-GO_MK_CACHE := $(HOME)/.cache/go-makefile/go.mk
+GO_MK_CACHE := $(if $(XDG_CACHE_HOME),$(XDG_CACHE_HOME),$(HOME)/.cache)/go-makefile/go.mk
 
 BINARY := agent-gate
 CMD    := ./cmd/$(BINARY)
