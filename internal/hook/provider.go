@@ -71,10 +71,16 @@ func enforce(ctx context.Context, raw RawPayload, system HookSystem, eventName s
 	blockingViolations := blockingMatches(violations)
 	auditOnlyViolations := auditOnlyMatches(violations)
 
+	// Include enough identifying fields from the payload that two distinct
+	// tool calls in the same session produce different log lines. Without
+	// these the dedup cache in audit.SessionLogger would collapse legitimate
+	// repeat decisions ("allow" / "block") across separate tool invocations.
 	base := []slog.Attr{
 		slog.String("system", systemStr),
 		slog.String("event", eventName),
 		slog.String("session_id", sessionID),
+		slog.String("tool_use_id", strField(raw, "tool_use_id")),
+		slog.String("tool_name", strField(raw, "tool_name")),
 		slog.Any("rules_checked", checked),
 	}
 

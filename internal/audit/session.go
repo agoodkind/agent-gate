@@ -2,21 +2,38 @@ package audit
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	lru "github.com/hashicorp/golang-lru/v2"
+	expirable "github.com/hashicorp/golang-lru/v2/expirable"
 )
 
 // sessionLogCacheSize is the maximum number of open file handles kept in
 // the LRU. Eviction closes the file before it leaves the cache.
 const sessionLogCacheSize = 64
+
+// dedupCacheSize is how many recent entry fingerprints we remember to
+// drop duplicate fires. Editors sometimes merge hook entries from
+// multiple config files (settings.json, hooks/*.json, etc.) and end up
+// invoking agent-gate twice for one tool call. Without dedup we would
+// double-log every such event.
+const dedupCacheSize = 4096
+
+// dedupTTL is how long a fingerprint blocks duplicate writes. Long
+// enough to cover the inter-arrival gap of merged-config double fires
+// (microseconds) and short enough that legitimate identical events
+// hours apart are not silently dropped.
+const dedupTTL = 30 * time.Second
 
 // noSessionDir is the folder used when a hook payload has no session_id.
 const noSessionDir = "_no-session"
@@ -38,6 +55,7 @@ type SessionLogger struct {
 	baseDir  string
 	minLevel slog.Level
 	cache    *lru.Cache[sessionKey, *os.File]
+	dedup    *expirable.LRU[string, struct{}]
 
 	mu       sync.Mutex
 	cond     *sync.Cond
@@ -81,6 +99,7 @@ func NewSessionLogger(baseDir, minLevel string, log *slog.Logger) (*SessionLogge
 		return nil, fmt.Errorf("create session log lru: %w", err)
 	}
 	sl.cache = cache
+	sl.dedup = expirable.NewLRU[string, struct{}](dedupCacheSize, nil, dedupTTL)
 
 	if err := os.MkdirAll(baseDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create session log base dir %s: %w", baseDir, err)
@@ -110,6 +129,22 @@ func (sl *SessionLogger) Log(system, sessionID, eventName, level, msg string, at
 		sessionID: sanitize(sessionID, noSessionDir),
 		eventName: sanitize(eventName, noEventName),
 	}
+
+	// Drop duplicate fires that share the same payload within dedupTTL.
+	// Editors that merge hook entries from multiple config files end up
+	// invoking agent-gate twice for one tool call; without this, every
+	// such event would be written twice.
+	fingerprint := dedupFingerprint(key, level, msg, attrs)
+	if _, seen := sl.dedup.Get(fingerprint); seen {
+		sl.log.Debug("session log dedup drop",
+			"system", key.system,
+			"session_id", key.sessionID,
+			"event", key.eventName,
+			"msg", msg,
+		)
+		return
+	}
+	sl.dedup.Add(fingerprint, struct{}{})
 
 	entry := make(map[string]any, len(attrs)+3)
 	entry["time"] = time.Now().UTC().Format(time.RFC3339Nano)
@@ -227,6 +262,47 @@ func (sl *SessionLogger) openFile(key sessionKey) (*os.File, error) {
 	}
 	path := filepath.Join(dir, key.eventName+".jsonl")
 	return os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+}
+
+// dedupFingerprint produces a stable hash for an entry so that duplicate
+// fires (same destination, same level, same message, same payload) collapse
+// to a single write. The "time" attribute is excluded because it differs
+// on each invocation. Other attributes are serialised in sorted order so
+// map iteration randomness does not change the hash.
+func dedupFingerprint(key sessionKey, level, msg string, attrs map[string]any) string {
+	stable := make(map[string]any, len(attrs))
+	for k, v := range attrs {
+		if k == "time" {
+			continue
+		}
+		stable[k] = v
+	}
+	keys := make([]string, 0, len(stable))
+	for k := range stable {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	h := sha256.New()
+	_, _ = h.Write([]byte(key.system))
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write([]byte(key.sessionID))
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write([]byte(key.eventName))
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write([]byte(level))
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write([]byte(msg))
+	_, _ = h.Write([]byte{0})
+	for _, k := range keys {
+		_, _ = h.Write([]byte(k))
+		_, _ = h.Write([]byte{'='})
+		if b, err := json.Marshal(stable[k]); err == nil {
+			_, _ = h.Write(b)
+		}
+		_, _ = h.Write([]byte{0})
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 // shouldLog returns true if the given level meets the configured minimum.
