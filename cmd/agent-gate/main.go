@@ -15,8 +15,19 @@ import (
 	"goodkind.io/agent-gate/internal/config"
 	"goodkind.io/agent-gate/internal/daemon"
 	"goodkind.io/agent-gate/internal/hook"
+	"goodkind.io/agent-gate/internal/version"
 	"goodkind.io/gklog"
 )
+
+// printVersion writes the build metadata used in log entries to stdout.
+// Output mirrors the slog attrs from internal/version.Attrs so that what
+// appears in audit logs is exactly what `agent-gate version` reports.
+func printVersion() {
+	fmt.Printf("version:   %s\n", version.Version)
+	fmt.Printf("commit:    %s\n", version.Commit)
+	fmt.Printf("dirty:     %s\n", version.Dirty)
+	fmt.Printf("buildHash: %s\n", version.BuildHash())
+}
 
 func main() {
 	// Fail closed: any unrecovered panic exits 2, blocking the pending action.
@@ -39,6 +50,9 @@ func main() {
 			os.Exit(runHook(hook.SystemCodex))
 		case "gemini-hook":
 			os.Exit(runHook(hook.SystemGemini))
+		case "version", "--version", "-v":
+			printVersion()
+			return
 		}
 	}
 
