@@ -9,27 +9,25 @@ import (
 	"goodkind.io/agent-gate/internal/rules"
 )
 
-// HandleWithOverride is the provider-aware orchestration entrypoint.
-func HandleWithOverride(ctx context.Context, raw RawPayload, rawBytes []byte, cfg *config.Config, sink audit.Sink, forced HookSystem) (stdout, stderr []byte, exitCode int) {
+// Handle is the provider-aware orchestration entrypoint. The hint is a
+// CLI subcommand classification (codex-hook, gemini-hook) and is consulted
+// by Detect only as a last resort. Real env or payload fingerprints
+// outrank it because subcommand arguments travel with copied configs.
+func Handle(ctx context.Context, raw RawPayload, rawBytes []byte, cfg *config.Config, sink audit.Sink, hint HookSystem) (stdout, stderr []byte, exitCode int) {
 	if sink == nil {
 		sink = audit.DiscardSink{}
 	}
-	system := DetectWithOverride(raw, forced)
+	system := Detect(raw, hint)
 	eventName := raw.EventName()
 
 	auditReceived(ctx, raw, rawBytes, system, eventName, sink)
 	return enforce(ctx, raw, system, eventName, cfg, sink)
 }
 
-// Handle is preserved for callers that rely on autodetection.
-func Handle(ctx context.Context, raw RawPayload, rawBytes []byte, cfg *config.Config, sink audit.Sink) (stdout, stderr []byte, exitCode int) {
-	return HandleWithOverride(ctx, raw, rawBytes, cfg, sink, SystemUnknown)
-}
-
 // CanBlock returns true when the provider can meaningfully change the hook flow.
 func CanBlock(system HookSystem, eventName string) bool {
 	switch system {
-	case SystemClaude:
+	case SystemClaude, SystemVSCode:
 		return CanBlockClaude(eventName)
 	case SystemCursor:
 		return CanBlockCursor(eventName)
@@ -174,7 +172,7 @@ func defaultAllow(system HookSystem) []byte {
 
 func logAttrs(system HookSystem, raw RawPayload) []slog.Attr {
 	switch system {
-	case SystemClaude:
+	case SystemClaude, SystemVSCode:
 		return claudeLogAttrs(raw)
 	case SystemCursor:
 		return cursorLogAttrs(raw)

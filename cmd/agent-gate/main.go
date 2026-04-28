@@ -231,7 +231,7 @@ func containsFlag(args []string, flag string) bool {
 }
 
 // runHook handles hook mode: reads JSON from stdin, evaluates rules, writes output.
-func runHook(forcedSystem hook.HookSystem) int {
+func runHook(systemHint hook.HookSystem) int {
 	data, err := io.ReadAll(os.Stdin)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent-gate: read stdin: %v\n", err)
@@ -286,7 +286,7 @@ func runHook(forcedSystem hook.HookSystem) int {
 		)
 	}
 
-	stdout, stderr, exitCode := hook.HandleWithOverride(ctx, raw, data, cfg, sink, forcedSystem)
+	stdout, stderr, exitCode := hook.Handle(ctx, raw, data, cfg, sink, systemHint)
 
 	if len(stdout) > 0 {
 		if _, err := os.Stdout.Write(stdout); err != nil {

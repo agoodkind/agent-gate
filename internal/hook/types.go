@@ -1,6 +1,11 @@
 package hook
 
 // HookSystem identifies which tool invoked agent-gate.
+//
+// SystemUnknown is a real classification, not a sentinel for "not yet
+// decided". It means detection ran every priority layer and none matched.
+// Entries land in conversations/unknown/ so detection gaps are visible in
+// the audit log rather than silently misattributed.
 type HookSystem int
 
 const (
@@ -9,9 +14,11 @@ const (
 	SystemCursor
 	SystemCodex
 	SystemGemini
+	SystemVSCode
 )
 
-// String returns a lowercase label suitable for log output.
+// String returns a lowercase label suitable for log output and folder
+// naming under conversations/<system>/.
 func (s HookSystem) String() string {
 	switch s {
 	case SystemClaude:
@@ -22,6 +29,8 @@ func (s HookSystem) String() string {
 		return "codex"
 	case SystemGemini:
 		return "gemini"
+	case SystemVSCode:
+		return "vscode"
 	default:
 		return "unknown"
 	}
