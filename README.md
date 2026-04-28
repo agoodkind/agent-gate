@@ -145,11 +145,43 @@ $XDG_STATE_HOME/agent-gate/conversations/<system>/<session_id>/<event>.jsonl
 ~/.local/state/agent-gate/conversations/...  (default)
 ```
 
-The path is keyed on the `system` (`claude`, `cursor`, `codex`,
-`gemini`), the session or conversation id from the payload, and the hook
-event name. The daemon owns the writer: it keeps an LRU of open file
-handles and drains an unbounded queue on a background goroutine, so hook
-processes never block on disk I/O and no entry is dropped.
+The `<system>` folder is chosen by a priority chain that inspects env
+vars set by each tool, payload fingerprints, and finally the CLI
+subcommand hint. Tools that share another tool's hook config (Cursor
+copying Claude, VS Code extensions copying Claude, anyone copying
+Codex) are still classified by who actually invoked the binary, not by
+the config they came from.
+
+| Folder      | Picked when                                                                                                       |
+| ----------- | ----------------------------------------------------------------------------------------------------------------- |
+| `claude/`   | `CLAUDE_CODE_ENTRYPOINT` env set or `AI_AGENT=claude-code/...`, or payload has `transcript_path`, `permission_mode`, `agent_id`, or `agent_type` |
+| `codex/`    | `CODEX_THREAD_ID` or `CODEX_CI` env set (direct invoker wins even when claude env is also inherited)              |
+| `cursor/`   | `CURSOR_VERSION`, `CURSOR_WORKSPACE_NAME`, or `CURSOR_MODE` env, or payload has `cursor_version`, `conversation_id`, `generation_id`, `workspace_roots`, or `user_email`, or camel-case event name |
+| `gemini/`   | `GEMINI_CLI` env, or payload has `mcp_context` or ISO `timestamp`, or event name in {`BeforeTool`, `AfterTool`, `BeforeAgent`, `AfterAgent`, `BeforeModel`, `AfterModel`, `BeforeToolSelection`, `PreCompress`} |
+| `vscode/`   | `TERM_PROGRAM=vscode` and nothing above matched                                                                   |
+| `unknown/`  | No fingerprint matched. Anything landing here is a detection gap to file as a follow-up                           |
+
+Layout on disk:
+
+```
+~/.local/state/agent-gate/conversations/
+├── claude/<session>/PreToolUse.jsonl
+├── codex/<thread>/PreToolUse.jsonl
+├── cursor/<conversation>/preToolUse.jsonl
+├── gemini/<session>/BeforeTool.jsonl
+├── vscode/<session>/PreToolUse.jsonl
+└── unknown/<session>/PreToolUse.jsonl
+```
+
+`CLAUDECODE=1` is intentionally not a primary Claude signal because it
+is inherited by every subprocess of a claude shell.
+`CLAUDE_CODE_ENTRYPOINT` is set fresh by the claude binary on each
+invocation and is robust against inherited env. The full priority chain
+lives in [`internal/hook/detect.go`](internal/hook/detect.go).
+
+The daemon owns the writer: it keeps an LRU of open file handles and
+drains an unbounded queue on a background goroutine, so hook processes
+never block on disk I/O and no entry is dropped.
 
 Each entry includes build provenance (`commit`, `version`, `buildHash`,
 `dirty`) and full payload details:
