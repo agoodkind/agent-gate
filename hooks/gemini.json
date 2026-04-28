@@ -1,0 +1,181 @@
+{
+  "BeforeTool": [
+    {
+      "matcher": ".*",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "__AGENT_GATE_BIN__ gemini-hook"
+        }
+      ]
+    }
+  ],
+  "AfterTool": [
+    {
+      "matcher": ".*",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "__AGENT_GATE_BIN__ gemini-hook"
+        }
+      ]
+    }
+  ],
+  "BeforeAgent": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "__AGENT_GATE_BIN__ gemini-hook"
+        }
+      ]
+    }
+  ],
+  "AfterAgent": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "__AGENT_GATE_BIN__ gemini-hook"
+        }
+      ]
+    }
+  ],
+  "BeforeModel": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "__AGENT_GATE_BIN__ gemini-hook"
+        }
+      ]
+    }
+  ],
+  "BeforeToolSelection": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "__AGENT_GATE_BIN__ gemini-hook"
+        }
+      ]
+    }
+  ],
+  "AfterModel": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "__AGENT_GATE_BIN__ gemini-hook"
+        }
+      ]
+    }
+  ],
+  "SessionStart": [
+    {
+      "matcher": "startup",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "__AGENT_GATE_BIN__ gemini-hook"
+        }
+      ]
+    },
+    {
+      "matcher": "resume",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "__AGENT_GATE_BIN__ gemini-hook"
+        }
+      ]
+    },
+    {
+      "matcher": "clear",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "__AGENT_GATE_BIN__ gemini-hook"
+        }
+      ]
+    }
+  ],
+  "SessionEnd": [
+    {
+      "matcher": "exit",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "__AGENT_GATE_BIN__ gemini-hook"
+        }
+      ]
+    },
+    {
+      "matcher": "clear",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "__AGENT_GATE_BIN__ gemini-hook"
+        }
+      ]
+    },
+    {
+      "matcher": "logout",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "__AGENT_GATE_BIN__ gemini-hook"
+        }
+      ]
+    },
+    {
+      "matcher": "prompt_input_exit",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "__AGENT_GATE_BIN__ gemini-hook"
+        }
+      ]
+    },
+    {
+      "matcher": "other",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "__AGENT_GATE_BIN__ gemini-hook"
+        }
+      ]
+    }
+  ],
+  "Notification": [
+    {
+      "matcher": "ToolPermission",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "__AGENT_GATE_BIN__ gemini-hook"
+        }
+      ]
+    }
+  ],
+  "PreCompress": [
+    {
+      "matcher": "auto",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "__AGENT_GATE_BIN__ gemini-hook"
+        }
+      ]
+    },
+    {
+      "matcher": "manual",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "__AGENT_GATE_BIN__ gemini-hook"
+        }
+      ]
+    }
+  ]
+}

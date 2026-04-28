@@ -12,9 +12,36 @@ Claude Code, Cursor, Codex, and Gemini CLI all expose lifecycle hook systems tha
 
 ## Installation
 
-Requires Go 1.21 or later.
+### One-liner (recommended)
 
-`agent-gate` now uses PCRE2 via cgo, so build hosts must have PCRE2 and a working C toolchain available.
+Pulls the latest release tarball for your platform, installs the binary
+to `${XDG_BIN_HOME:-$HOME/.local/bin}`, and merges hook templates into
+your Claude, Codex, and Gemini config files. Existing user settings in
+those files are preserved.
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/agoodkind/agent-gate/main/install.sh | bash
+```
+
+Flags:
+
+```sh
+./install.sh --bin-only          # binary only, skip hook config updates
+./install.sh --hooks-only        # update hook configs, skip download
+./install.sh --no-claude         # opt out of Claude (additive: combine flags)
+./install.sh --no-codex
+./install.sh --no-gemini
+./install.sh --bin-dir /opt/bin  # override $XDG_BIN_HOME
+./install.sh --version v1.2.3    # pin to a specific release tag
+```
+
+`make install`, `make install-bin`, and `make install-hooks` are thin
+wrappers around the script.
+
+### From source
+
+Requires Go 1.21 or later. `agent-gate` uses PCRE2 via cgo, so build
+hosts must have PCRE2 and a working C toolchain available.
 
 Install prerequisites:
 - macOS: `brew install pcre2`
@@ -22,200 +49,33 @@ Install prerequisites:
 - Fedora/RHEL: `sudo dnf install pcre2-devel`
 - Alpine: `apk add pcre2-dev build-base`
 
-When building, set CGO_ENABLED=1. Rule patterns compile against system `libpcre2-8` (PCRE2 10.x) via cgo; there is no bundled third-party Go regex binding.
+When building, set `CGO_ENABLED=1`. Rule patterns compile against system
+`libpcre2-8` (PCRE2 10.x) via cgo. There is no bundled third-party Go
+regex binding.
 
 ```sh
 git clone https://github.com/agoodkind/agent-gate
 cd agent-gate
-make deploy
+make build               # writes dist/agent-gate
 ```
 
-`make deploy` runs `go install` with ldflags that inject git commit, version, and build hash into the binary.
-CI and release builds should export CGO_ENABLED=1 so PCRE2 JIT and match limits are available at runtime.
+CI and release builds export `CGO_ENABLED=1` so PCRE2 JIT and match
+limits are available at runtime.
 
 ## Wiring up hooks
 
-### Claude Code
+The one-liner above wires hooks for all three tools automatically.
+Templates live in [`hooks/`](hooks/) and the canonical inventory is in
+[`.agent.md`](.agent.md). To re-apply after a binary move or template
+change:
 
-Add to `~/.claude/settings.json`. All 26 events should be registered:
-
-```json
-{
-  "hooks": {
-    "SessionStart":       [{"hooks": [{"type": "command", "command": "/path/to/agent-gate"}]}],
-    "SessionEnd":         [{"hooks": [{"type": "command", "command": "/path/to/agent-gate"}]}],
-    "UserPromptSubmit":   [{"hooks": [{"type": "command", "command": "/path/to/agent-gate"}]}],
-    "PreToolUse":         [{"matcher": ".*", "hooks": [{"type": "command", "command": "/path/to/agent-gate"}]}],
-    "PostToolUse":        [{"matcher": ".*", "hooks": [{"type": "command", "command": "/path/to/agent-gate"}]}],
-    "PostToolUseFailure": [{"matcher": ".*", "hooks": [{"type": "command", "command": "/path/to/agent-gate"}]}],
-    "PermissionRequest":  [{"matcher": ".*", "hooks": [{"type": "command", "command": "/path/to/agent-gate"}]}],
-    "PermissionDenied":   [{"matcher": ".*", "hooks": [{"type": "command", "command": "/path/to/agent-gate"}]}],
-    "Notification":       [{"hooks": [{"type": "command", "command": "/path/to/agent-gate"}]}],
-    "SubagentStart":      [{"hooks": [{"type": "command", "command": "/path/to/agent-gate"}]}],
-    "SubagentStop":       [{"hooks": [{"type": "command", "command": "/path/to/agent-gate"}]}],
-    "TaskCreated":        [{"hooks": [{"type": "command", "command": "/path/to/agent-gate"}]}],
-    "TaskCompleted":      [{"hooks": [{"type": "command", "command": "/path/to/agent-gate"}]}],
-    "Stop":               [{"hooks": [{"type": "command", "command": "/path/to/agent-gate"}]}],
-    "StopFailure":        [{"hooks": [{"type": "command", "command": "/path/to/agent-gate"}]}],
-    "TeammateIdle":       [{"hooks": [{"type": "command", "command": "/path/to/agent-gate"}]}],
-    "InstructionsLoaded": [{"hooks": [{"type": "command", "command": "/path/to/agent-gate"}]}],
-    "ConfigChange":       [{"hooks": [{"type": "command", "command": "/path/to/agent-gate"}]}],
-    "CwdChanged":         [{"hooks": [{"type": "command", "command": "/path/to/agent-gate"}]}],
-    "FileChanged":        [{"hooks": [{"type": "command", "command": "/path/to/agent-gate"}]}],
-    "WorktreeCreate":     [{"hooks": [{"type": "command", "command": "/path/to/agent-gate"}]}],
-    "WorktreeRemove":     [{"hooks": [{"type": "command", "command": "/path/to/agent-gate"}]}],
-    "PreCompact":         [{"hooks": [{"type": "command", "command": "/path/to/agent-gate"}]}],
-    "PostCompact":        [{"hooks": [{"type": "command", "command": "/path/to/agent-gate"}]}],
-    "Elicitation":        [{"hooks": [{"type": "command", "command": "/path/to/agent-gate"}]}],
-    "ElicitationResult":  [{"hooks": [{"type": "command", "command": "/path/to/agent-gate"}]}]
-  }
-}
+```sh
+make install-hooks
 ```
 
-### Cursor
-
-Add to `~/.cursor/hooks.json`. All 20 events should be registered:
-
-```json
-{
-  "version": 1,
-  "hooks": {
-    "sessionStart":         [{"command": "/path/to/agent-gate", "failClosed": true}],
-    "sessionEnd":           [{"command": "/path/to/agent-gate", "failClosed": true}],
-    "preToolUse":           [{"command": "/path/to/agent-gate", "failClosed": true}],
-    "postToolUse":          [{"command": "/path/to/agent-gate", "failClosed": true}],
-    "postToolUseFailure":   [{"command": "/path/to/agent-gate", "failClosed": true}],
-    "subagentStart":        [{"command": "/path/to/agent-gate", "failClosed": true}],
-    "subagentStop":         [{"command": "/path/to/agent-gate", "failClosed": true}],
-    "beforeShellExecution": [{"command": "/path/to/agent-gate", "failClosed": true}],
-    "afterShellExecution":  [{"command": "/path/to/agent-gate", "failClosed": true}],
-    "beforeMCPExecution":   [{"command": "/path/to/agent-gate", "failClosed": true}],
-    "afterMCPExecution":    [{"command": "/path/to/agent-gate", "failClosed": true}],
-    "beforeReadFile":       [{"command": "/path/to/agent-gate", "failClosed": true}],
-    "afterFileEdit":        [{"command": "/path/to/agent-gate", "failClosed": true}],
-    "beforeSubmitPrompt":   [{"command": "/path/to/agent-gate", "failClosed": true}],
-    "preCompact":           [{"command": "/path/to/agent-gate", "failClosed": true}],
-    "stop":                 [{"command": "/path/to/agent-gate", "failClosed": true}],
-    "afterAgentResponse":   [{"command": "/path/to/agent-gate", "failClosed": true}],
-    "afterAgentThought":    [{"command": "/path/to/agent-gate", "failClosed": true}],
-    "beforeTabFileRead":    [{"command": "/path/to/agent-gate", "failClosed": true}],
-    "afterTabFileEdit":     [{"command": "/path/to/agent-gate", "failClosed": true}]
-  }
-}
-```
-
-`failClosed: true` means that if the binary crashes or times out, Cursor blocks the action.
-
-### Codex
-
-Codex event names overlap with Claude, so use the explicit `codex-hook` subcommand instead of plain `agent-gate`.
-
-Inline `~/.codex/config.toml` example:
-
-```toml
-[features]
-codex_hooks = true
-
-[[hooks.PreToolUse]]
-matcher = ".*"
-
-[[hooks.PreToolUse.hooks]]
-type = "command"
-command = "/path/to/agent-gate codex-hook"
-
-[[hooks.PostToolUse]]
-matcher = ".*"
-
-[[hooks.PostToolUse.hooks]]
-type = "command"
-command = "/path/to/agent-gate codex-hook"
-
-[[hooks.PermissionRequest]]
-matcher = ".*"
-
-[[hooks.PermissionRequest.hooks]]
-type = "command"
-command = "/path/to/agent-gate codex-hook"
-
-[[hooks.UserPromptSubmit]]
-
-[[hooks.UserPromptSubmit.hooks]]
-type = "command"
-command = "/path/to/agent-gate codex-hook"
-
-[[hooks.Stop]]
-
-[[hooks.Stop.hooks]]
-type = "command"
-command = "/path/to/agent-gate codex-hook"
-```
-
-Equivalent `~/.codex/hooks.json` example:
-
-```json
-{
-  "hooks": {
-    "SessionStart": [{"hooks": [{"type": "command", "command": "/path/to/agent-gate codex-hook"}]}],
-    "PreToolUse": [{"matcher": ".*", "hooks": [{"type": "command", "command": "/path/to/agent-gate codex-hook"}]}],
-    "PermissionRequest": [{"matcher": ".*", "hooks": [{"type": "command", "command": "/path/to/agent-gate codex-hook"}]}],
-    "PostToolUse": [{"matcher": ".*", "hooks": [{"type": "command", "command": "/path/to/agent-gate codex-hook"}]}],
-    "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "/path/to/agent-gate codex-hook"}]}],
-    "Stop": [{"hooks": [{"type": "command", "command": "/path/to/agent-gate codex-hook"}]}]
-  }
-}
-```
-
-### Gemini CLI
-
-Gemini also shares overlapping lifecycle names, so use the explicit `gemini-hook` subcommand.
-
-Add to Gemini CLI `settings.json`:
-
-```json
-{
-  "hooks": {
-    "BeforeTool": [{
-      "matcher": ".*",
-      "hooks": [{"type": "command", "command": "/path/to/agent-gate gemini-hook"}]
-    }],
-    "AfterTool": [{
-      "matcher": ".*",
-      "hooks": [{"type": "command", "command": "/path/to/agent-gate gemini-hook"}]
-    }],
-    "BeforeAgent": [{
-      "hooks": [{"type": "command", "command": "/path/to/agent-gate gemini-hook"}]
-    }],
-    "AfterAgent": [{
-      "hooks": [{"type": "command", "command": "/path/to/agent-gate gemini-hook"}]
-    }],
-    "BeforeModel": [{
-      "hooks": [{"type": "command", "command": "/path/to/agent-gate gemini-hook"}]
-    }],
-    "BeforeToolSelection": [{
-      "hooks": [{"type": "command", "command": "/path/to/agent-gate gemini-hook"}]
-    }],
-    "AfterModel": [{
-      "hooks": [{"type": "command", "command": "/path/to/agent-gate gemini-hook"}]
-    }],
-    "SessionStart": [{
-      "matcher": "startup",
-      "hooks": [{"type": "command", "command": "/path/to/agent-gate gemini-hook"}]
-    }],
-    "SessionEnd": [{
-      "matcher": "exit",
-      "hooks": [{"type": "command", "command": "/path/to/agent-gate gemini-hook"}]
-    }],
-    "Notification": [{
-      "matcher": "ToolPermission",
-      "hooks": [{"type": "command", "command": "/path/to/agent-gate gemini-hook"}]
-    }],
-    "PreCompress": [{
-      "matcher": "auto",
-      "hooks": [{"type": "command", "command": "/path/to/agent-gate gemini-hook"}]
-    }]
-  }
-}
-```
+To opt out of any tool, pass `--no-claude`, `--no-codex`, or
+`--no-gemini` (combinable). Hook merges only touch the `.hooks` key,
+so any other settings in the target config files are preserved.
 
 ## Hook event reference
 
@@ -277,21 +137,22 @@ The rule engine supports virtual field paths for advanced matching:
 
 ## Audit log
 
-Written as newline-delimited JSON under:
+Each hook event is written as a newline-delimited JSON entry to a
+per-conversation file under:
 
 ```
-$XDG_STATE_HOME/agent-gate/
-~/.local/state/agent-gate/  (default)
+$XDG_STATE_HOME/agent-gate/conversations/<system>/<session_id>/<event>.jsonl
+~/.local/state/agent-gate/conversations/...  (default)
 ```
 
-By default `agent-gate` writes provider-specific logs:
+The path is keyed on the `system` (`claude`, `cursor`, `codex`,
+`gemini`), the session or conversation id from the payload, and the hook
+event name. The daemon owns the writer: it keeps an LRU of open file
+handles and drains an unbounded queue on a background goroutine, so hook
+processes never block on disk I/O and no entry is dropped.
 
-- `audit-claude.jsonl`
-- `audit-cursor.jsonl`
-- `audit-codex.jsonl`
-- `audit-gemini.jsonl`
-
-Every log entry includes build provenance (`commit`, `version`, `buildHash`, `dirty`) and full payload details:
+Each entry includes build provenance (`commit`, `version`, `buildHash`,
+`dirty`) and full payload details:
 
 ```json
 {

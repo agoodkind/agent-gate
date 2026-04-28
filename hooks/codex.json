@@ -1,0 +1,66 @@
+{
+  "SessionStart": [
+    {
+      "matcher": "startup|resume|clear",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "__AGENT_GATE_BIN__ codex-hook"
+        }
+      ]
+    }
+  ],
+  "PreToolUse": [
+    {
+      "matcher": ".*",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "__AGENT_GATE_BIN__ codex-hook"
+        }
+      ]
+    }
+  ],
+  "PermissionRequest": [
+    {
+      "matcher": ".*",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "__AGENT_GATE_BIN__ codex-hook"
+        }
+      ]
+    }
+  ],
+  "PostToolUse": [
+    {
+      "matcher": ".*",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "__AGENT_GATE_BIN__ codex-hook"
+        }
+      ]
+    }
+  ],
+  "UserPromptSubmit": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "__AGENT_GATE_BIN__ codex-hook"
+        }
+      ]
+    }
+  ],
+  "Stop": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "__AGENT_GATE_BIN__ codex-hook"
+        }
+      ]
+    }
+  ]
+}

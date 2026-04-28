@@ -1,0 +1,275 @@
+{
+  "ConfigChange": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "__AGENT_GATE_BIN__"
+        }
+      ]
+    }
+  ],
+  "CwdChanged": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "__AGENT_GATE_BIN__"
+        }
+      ]
+    }
+  ],
+  "Elicitation": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "__AGENT_GATE_BIN__"
+        }
+      ]
+    }
+  ],
+  "ElicitationResult": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "__AGENT_GATE_BIN__"
+        }
+      ]
+    }
+  ],
+  "FileChanged": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "__AGENT_GATE_BIN__"
+        }
+      ]
+    }
+  ],
+  "InstructionsLoaded": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "__AGENT_GATE_BIN__"
+        }
+      ]
+    }
+  ],
+  "Notification": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "__AGENT_GATE_BIN__"
+        }
+      ]
+    }
+  ],
+  "PermissionDenied": [
+    {
+      "matcher": ".*",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "__AGENT_GATE_BIN__"
+        }
+      ]
+    }
+  ],
+  "PermissionRequest": [
+    {
+      "matcher": ".*",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "__AGENT_GATE_BIN__"
+        }
+      ]
+    }
+  ],
+  "PostCompact": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "__AGENT_GATE_BIN__"
+        }
+      ]
+    }
+  ],
+  "PostToolUse": [
+    {
+      "matcher": ".*",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "__AGENT_GATE_BIN__"
+        }
+      ]
+    }
+  ],
+  "PostToolUseFailure": [
+    {
+      "matcher": ".*",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "__AGENT_GATE_BIN__"
+        }
+      ]
+    }
+  ],
+  "PreCompact": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "__AGENT_GATE_BIN__"
+        }
+      ]
+    }
+  ],
+  "PreToolUse": [
+    {
+      "matcher": ".*",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "__AGENT_GATE_BIN__"
+        }
+      ]
+    }
+  ],
+  "SessionEnd": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "__AGENT_GATE_BIN__"
+        }
+      ]
+    }
+  ],
+  "SessionStart": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "__AGENT_GATE_BIN__"
+        }
+      ]
+    },
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "/Users/agoodkind/.local/bin/clyde hook sessionstart"
+        }
+      ]
+    }
+  ],
+  "Stop": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "__AGENT_GATE_BIN__"
+        }
+      ]
+    }
+  ],
+  "StopFailure": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "__AGENT_GATE_BIN__"
+        }
+      ]
+    }
+  ],
+  "SubagentStart": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "__AGENT_GATE_BIN__"
+        }
+      ]
+    }
+  ],
+  "SubagentStop": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "__AGENT_GATE_BIN__"
+        }
+      ]
+    }
+  ],
+  "TaskCompleted": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "__AGENT_GATE_BIN__"
+        }
+      ]
+    }
+  ],
+  "TaskCreated": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "__AGENT_GATE_BIN__"
+        }
+      ]
+    }
+  ],
+  "TeammateIdle": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "__AGENT_GATE_BIN__"
+        }
+      ]
+    }
+  ],
+  "UserPromptSubmit": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "__AGENT_GATE_BIN__"
+        }
+      ]
+    }
+  ],
+  "WorktreeCreate": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "__AGENT_GATE_BIN__"
+        }
+      ]
+    }
+  ],
+  "WorktreeRemove": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "__AGENT_GATE_BIN__"
+        }
+      ]
+    }
+  ]
+}

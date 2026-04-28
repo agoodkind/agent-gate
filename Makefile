@@ -9,7 +9,10 @@ GKLOG_VPKG := goodkind.io/gklog/version
 
 DIST_DIR    := dist
 DIST_BIN    := $(DIST_DIR)/$(BINARY)
-INSTALL_DIR := $(HOME)/.local/bin
+
+# XDG_BIN_HOME is the spec-aligned per-user binary dir. The XDG spec
+# defaults to ~/.local/bin when unset.
+INSTALL_DIR := $(if $(XDG_BIN_HOME),$(XDG_BIN_HOME),$(HOME)/.local/bin)
 INSTALL_BIN := $(INSTALL_DIR)/$(BINARY)
 
 GIT_COMMIT  := $(shell git rev-parse --short HEAD)
@@ -48,29 +51,33 @@ $(GO_MK):
 
 .DEFAULT_GOAL := check
 
-.PHONY: build deploy install uninstall clean
+.PHONY: build install install-bin install-hooks uninstall deploy clean
 
-# build compiles to dist/agent-gate. Recreated on every invocation so the
-# version ldflags (which depend on `git describe`) are always current.
+# build compiles a local dev binary to dist/agent-gate. Used for iteration.
+# `make install` does NOT use this output: it pulls the latest release.
 build:
 	@mkdir -p $(DIST_DIR)
 	go build -ldflags "$(LDFLAGS)" -o $(DIST_BIN) $(CMD)
 	@echo "built: $(DIST_BIN)"
 
-# install symlinks ~/.local/bin/agent-gate to the freshly built dist binary.
-# A symlink is intentional: subsequent `make build` runs are picked up
-# automatically without re-running install. Use `make uninstall` to remove.
-install: build
-	@mkdir -p $(INSTALL_DIR)
-	@ln -sfn "$(abspath $(DIST_BIN))" $(INSTALL_BIN)
-	@echo "linked: $(INSTALL_BIN) -> $(abspath $(DIST_BIN))"
+# install runs install.sh which downloads the latest release for the host
+# platform and wires hooks into Claude, Codex, and Gemini configs. Override
+# behavior with flags, e.g. `make install ARGS=--bin-only`.
+install:
+	./install.sh $(ARGS)
+
+install-bin:
+	./install.sh --bin-only $(ARGS)
+
+install-hooks:
+	./install.sh --hooks-only $(ARGS)
 
 uninstall:
 	@rm -f $(INSTALL_BIN)
 	@echo "removed: $(INSTALL_BIN)"
 
-# deploy is kept for compatibility. It writes a self-contained binary to
-# the Go bin dir via `go install`. Prefer `make install` for local use.
+# deploy is kept for compatibility. Writes a self-contained binary to the
+# Go bin dir via `go install`. Prefer `make install` for normal use.
 deploy:
 	go install -ldflags "$(LDFLAGS)" $(CMD)
 	@echo "deployed: $$(go env GOPATH)/bin/$(BINARY)"
