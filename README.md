@@ -156,9 +156,10 @@ the config they came from.
 | ----------- | ----------------------------------------------------------------------------------------------------------------- |
 | `claude/`   | `CLAUDE_CODE_ENTRYPOINT` env set or `AI_AGENT=claude-code/...`, or payload has `transcript_path`, `permission_mode`, `agent_id`, or `agent_type` |
 | `codex/`    | `CODEX_THREAD_ID` or `CODEX_CI` env set (direct invoker wins even when claude env is also inherited)              |
+| `copilot/`  | Any `COPILOT_OTEL_*` env set. Copilot Chat shares Claude's payload shape, so this check runs before any Claude marker test |
 | `cursor/`   | `CURSOR_VERSION`, `CURSOR_WORKSPACE_NAME`, or `CURSOR_MODE` env, or payload has `cursor_version`, `conversation_id`, `generation_id`, `workspace_roots`, or `user_email`, or camel-case event name |
-| `gemini/`   | `GEMINI_CLI` env, or payload has `mcp_context` or ISO `timestamp`, or event name in {`BeforeTool`, `AfterTool`, `BeforeAgent`, `AfterAgent`, `BeforeModel`, `AfterModel`, `BeforeToolSelection`, `PreCompress`} |
-| `vscode/`   | `TERM_PROGRAM=vscode` and nothing above matched                                                                   |
+| `gemini/`   | `GEMINI_CLI` env, or event name in {`BeforeTool`, `AfterTool`, `BeforeAgent`, `AfterAgent`, `BeforeModel`, `AfterModel`, `BeforeToolSelection`, `PreCompress`} |
+| `vscode/`   | `VSCODE_PID` or `VSCODE_IPC_HOOK` env set and none of the above matched. Catches generic VS Code extensions that are not Copilot |
 | `unknown/`  | No fingerprint matched. Anything landing here is a detection gap to file as a follow-up                           |
 
 Layout on disk:
@@ -167,6 +168,7 @@ Layout on disk:
 ~/.local/state/agent-gate/conversations/
 ├── claude/<session>/PreToolUse.jsonl
 ├── codex/<thread>/PreToolUse.jsonl
+├── copilot/<session>/PreToolUse.jsonl
 ├── cursor/<conversation>/preToolUse.jsonl
 ├── gemini/<session>/BeforeTool.jsonl
 ├── vscode/<session>/PreToolUse.jsonl

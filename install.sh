@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 #
 # install.sh installs agent-gate from the latest GitHub release and wires
-# its hooks into Claude, Codex, and Gemini config files.
+# its hooks into Claude, Codex, Gemini, and GitHub Copilot Chat config
+# files.
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/agoodkind/agent-gate/main/install.sh | bash
@@ -15,6 +16,7 @@
 #   --no-claude         skip Claude hook config update
 #   --no-codex          skip Codex hook config update
 #   --no-gemini         skip Gemini hook config update
+#   --no-copilot        skip GitHub Copilot Chat hook config update
 #   --bin-dir PATH      override binary install dir (default: $XDG_BIN_HOME or
 #                       $HOME/.local/bin)
 #   --version TAG       pin to a specific release tag (default: latest)
@@ -38,6 +40,7 @@ DO_HOOKS=1
 DO_CLAUDE=1
 DO_CODEX=1
 DO_GEMINI=1
+DO_COPILOT=1
 TEMPLATES=""
 
 # Resolve to a local templates dir when run from a checkout.
@@ -62,6 +65,7 @@ while [[ $# -gt 0 ]]; do
     --no-claude)   DO_CLAUDE=0 ;;
     --no-codex)    DO_CODEX=0 ;;
     --no-gemini)   DO_GEMINI=0 ;;
+    --no-copilot)  DO_COPILOT=0 ;;
     --bin-dir)     shift; BIN_DIR="${1:?--bin-dir requires a value}" ;;
     --version)     shift; VERSION="${1:?--version requires a value}" ;;
     --repo)        shift; REPO="${1:?--repo requires a value}" ;;
@@ -187,6 +191,9 @@ install_hooks() {
   fi
   if [[ "$DO_GEMINI" -eq 1 ]]; then
     update_hooks gemini "$HOME/.gemini/settings.json"
+  fi
+  if [[ "$DO_COPILOT" -eq 1 ]]; then
+    update_hooks copilot "$HOME/.copilot/hooks/agent-gate.json"
   fi
 }
 

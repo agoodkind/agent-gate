@@ -15,6 +15,7 @@ const (
 	SystemCodex
 	SystemGemini
 	SystemVSCode
+	SystemCopilot
 )
 
 // String returns a lowercase label suitable for log output and folder
@@ -31,6 +32,8 @@ func (s HookSystem) String() string {
 		return "gemini"
 	case SystemVSCode:
 		return "vscode"
+	case SystemCopilot:
+		return "copilot"
 	default:
 		return "unknown"
 	}

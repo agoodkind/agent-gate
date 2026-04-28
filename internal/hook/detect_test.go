@@ -13,12 +13,17 @@ import (
 var allTrackedEnvVars = []string{
 	"CODEX_THREAD_ID",
 	"CODEX_CI",
+	"COPILOT_OTEL_FILE_EXPORTER_PATH",
+	"COPILOT_OTEL_ENABLED",
+	"COPILOT_OTEL_EXPORTER_TYPE",
 	"CURSOR_VERSION",
 	"CURSOR_WORKSPACE_NAME",
 	"CURSOR_MODE",
 	"GEMINI_CLI",
 	"CLAUDE_CODE_ENTRYPOINT",
 	"AI_AGENT",
+	"VSCODE_PID",
+	"VSCODE_IPC_HOOK",
 	"TERM_PROGRAM",
 }
 
@@ -99,15 +104,38 @@ func TestDetect_PriorityChain(t *testing.T) {
 			want:    hook.SystemClaude,
 		},
 		{
+			name:    "copilot env beats claude payload",
+			env:     map[string]string{"COPILOT_OTEL_FILE_EXPORTER_PATH": "/dev/null", "VSCODE_PID": "62178"},
+			payload: hook.RawPayload{"hook_event_name": "PreToolUse", "transcript_path": "/tmp/x.jsonl", "timestamp": "2026-04-28T01:43:35Z"},
+			want:    hook.SystemCopilot,
+		},
+		{
+			name:    "copilot OTEL_ENABLED alone",
+			env:     map[string]string{"COPILOT_OTEL_ENABLED": "true"},
+			payload: hook.RawPayload{"hook_event_name": "UserPromptSubmit"},
+			want:    hook.SystemCopilot,
+		},
+		{
 			name:    "vscode env without other markers",
-			env:     map[string]string{"TERM_PROGRAM": "vscode"},
+			env:     map[string]string{"VSCODE_PID": "12345"},
 			payload: hook.RawPayload{"hook_event_name": "PreToolUse"},
 			want:    hook.SystemVSCode,
 		},
 		{
 			name:    "vscode env loses to claude env",
-			env:     map[string]string{"TERM_PROGRAM": "vscode", "CLAUDE_CODE_ENTRYPOINT": "cli"},
+			env:     map[string]string{"VSCODE_PID": "12345", "CLAUDE_CODE_ENTRYPOINT": "cli"},
 			payload: hook.RawPayload{"hook_event_name": "PreToolUse"},
+			want:    hook.SystemClaude,
+		},
+		{
+			name:    "copilot timestamp does not falsely match gemini",
+			env:     map[string]string{"COPILOT_OTEL_ENABLED": "true"},
+			payload: hook.RawPayload{"hook_event_name": "PreToolUse", "timestamp": "2026-04-28T01:43:35Z"},
+			want:    hook.SystemCopilot,
+		},
+		{
+			name:    "claude payload with timestamp does not falsely match gemini",
+			payload: hook.RawPayload{"hook_event_name": "PreToolUse", "transcript_path": "/tmp/x.jsonl", "timestamp": "2026-04-28T01:43:35Z"},
 			want:    hook.SystemClaude,
 		},
 		{
@@ -135,6 +163,12 @@ func TestDetect_PriorityChain(t *testing.T) {
 		{
 			name:    "term_program ghostty does not trigger vscode",
 			env:     map[string]string{"TERM_PROGRAM": "ghostty"},
+			payload: hook.RawPayload{"hook_event_name": "PreToolUse"},
+			want:    hook.SystemUnknown,
+		},
+		{
+			name:    "term_program vscode alone is not a vscode signal",
+			env:     map[string]string{"TERM_PROGRAM": "vscode"},
 			payload: hook.RawPayload{"hook_event_name": "PreToolUse"},
 			want:    hook.SystemUnknown,
 		},

@@ -27,7 +27,7 @@ func Handle(ctx context.Context, raw RawPayload, rawBytes []byte, cfg *config.Co
 // CanBlock returns true when the provider can meaningfully change the hook flow.
 func CanBlock(system HookSystem, eventName string) bool {
 	switch system {
-	case SystemClaude, SystemVSCode:
+	case SystemClaude, SystemVSCode, SystemCopilot:
 		return CanBlockClaude(eventName)
 	case SystemCursor:
 		return CanBlockCursor(eventName)
@@ -172,7 +172,7 @@ func defaultAllow(system HookSystem) []byte {
 
 func logAttrs(system HookSystem, raw RawPayload) []slog.Attr {
 	switch system {
-	case SystemClaude, SystemVSCode:
+	case SystemClaude, SystemVSCode, SystemCopilot:
 		return claudeLogAttrs(raw)
 	case SystemCursor:
 		return cursorLogAttrs(raw)
