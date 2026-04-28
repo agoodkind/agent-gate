@@ -7,6 +7,11 @@ CMD    := ./cmd/$(BINARY)
 VPKG   := goodkind.io/agent-gate/internal/version
 GKLOG_VPKG := goodkind.io/gklog/version
 
+DIST_DIR    := dist
+DIST_BIN    := $(DIST_DIR)/$(BINARY)
+INSTALL_DIR := $(HOME)/.local/bin
+INSTALL_BIN := $(INSTALL_DIR)/$(BINARY)
+
 GIT_COMMIT  := $(shell git rev-parse --short HEAD)
 GIT_VERSION := $(shell git describe --tags --always --dirty)
 GIT_DIRTY   := $(shell git diff --quiet && echo false || echo true)
@@ -43,14 +48,33 @@ $(GO_MK):
 
 .DEFAULT_GOAL := check
 
-.PHONY: build deploy clean
+.PHONY: build deploy install uninstall clean
 
+# build compiles to dist/agent-gate. Recreated on every invocation so the
+# version ldflags (which depend on `git describe`) are always current.
 build:
-	go build -ldflags "$(LDFLAGS)" $(CMD)
+	@mkdir -p $(DIST_DIR)
+	go build -ldflags "$(LDFLAGS)" -o $(DIST_BIN) $(CMD)
+	@echo "built: $(DIST_BIN)"
 
+# install symlinks ~/.local/bin/agent-gate to the freshly built dist binary.
+# A symlink is intentional: subsequent `make build` runs are picked up
+# automatically without re-running install. Use `make uninstall` to remove.
+install: build
+	@mkdir -p $(INSTALL_DIR)
+	@ln -sfn "$(abspath $(DIST_BIN))" $(INSTALL_BIN)
+	@echo "linked: $(INSTALL_BIN) -> $(abspath $(DIST_BIN))"
+
+uninstall:
+	@rm -f $(INSTALL_BIN)
+	@echo "removed: $(INSTALL_BIN)"
+
+# deploy is kept for compatibility. It writes a self-contained binary to
+# the Go bin dir via `go install`. Prefer `make install` for local use.
 deploy:
 	go install -ldflags "$(LDFLAGS)" $(CMD)
 	@echo "deployed: $$(go env GOPATH)/bin/$(BINARY)"
 
 clean:
+	rm -rf $(DIST_DIR)
 	rm -f $(BINARY)

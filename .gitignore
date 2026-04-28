@@ -1,4 +1,5 @@
 /agent-gate
+/dist/
 .make/
 notarize.env
 .vscode/
