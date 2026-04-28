@@ -1,6 +1,6 @@
 GO_MK_URL   := https://raw.githubusercontent.com/agoodkind/go-makefile/main/go.mk
 GO_MK       := .make/go.mk
-GO_MK_CACHE := $(if $(XDG_CACHE_HOME),$(XDG_CACHE_HOME),$(HOME)/.cache)/go-makefile/go.mk
+GO_MK_CACHE := $(or $(XDG_CACHE_HOME),$(HOME)/.cache)/go-makefile/go.mk
 
 BINARY := agent-gate
 CMD    := ./cmd/$(BINARY)
@@ -12,7 +12,7 @@ DIST_BIN    := $(DIST_DIR)/$(BINARY)
 
 # XDG_BIN_HOME is the spec-aligned per-user binary dir. The XDG spec
 # defaults to ~/.local/bin when unset.
-INSTALL_DIR := $(if $(XDG_BIN_HOME),$(XDG_BIN_HOME),$(HOME)/.local/bin)
+INSTALL_DIR := $(or $(XDG_BIN_HOME),$(HOME)/.local/bin)
 INSTALL_BIN := $(INSTALL_DIR)/$(BINARY)
 
 GIT_COMMIT  := $(shell git rev-parse --short HEAD)
