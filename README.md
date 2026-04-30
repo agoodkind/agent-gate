@@ -251,4 +251,13 @@ make test     # go test -race ./...
 make lint     # golangci-lint
 make check    # full: vet + lint + test + govulncheck
 make clean    # remove local build artifact
+make spawn-smoke INPUT=/path/to/large.txt
+make spawn-smoke ARGS='-generate-bytes 1048576'
 ```
+
+`make spawn-smoke` runs a real subprocess harness against `agent-gate` and
+probes when launch-time argv or env padding starts failing with `E2BIG`. By
+default it targets `~/.local/bin/agent-gate`; override with
+`ARGS='-target ./dist/agent-gate -payload-kind preToolUse'`. If you do not
+want to provide an input file, use `-generate-bytes` and the harness will
+write lorem-style text to a temporary file and use that as the payload source.

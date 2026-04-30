@@ -51,7 +51,7 @@ $(GO_MK):
 
 .DEFAULT_GOAL := check
 
-.PHONY: build install install-bin install-hooks uninstall deploy clean
+.PHONY: build install install-bin install-hooks uninstall deploy clean spawn-smoke
 
 # build compiles a local dev binary to dist/agent-gate. Used for iteration.
 # `make install` does NOT use this output: it pulls the latest release.
@@ -85,3 +85,6 @@ deploy:
 clean:
 	rm -rf $(DIST_DIR)
 	rm -f $(BINARY)
+
+spawn-smoke:
+	go run ./cmd/spawn-smoke -input-file "$(INPUT)" $(ARGS)
