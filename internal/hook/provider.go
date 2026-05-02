@@ -14,10 +14,15 @@ import (
 // by Detect only as a last resort. Real env or payload fingerprints
 // outrank it because subcommand arguments travel with copied configs.
 func Handle(ctx context.Context, raw RawPayload, rawBytes []byte, cfg *config.Config, sink audit.Sink, hint HookSystem) (stdout, stderr []byte, exitCode int) {
+	return HandleWithEnv(ctx, raw, rawBytes, cfg, sink, hint, nil)
+}
+
+func HandleWithEnv(ctx context.Context, raw RawPayload, rawBytes []byte, cfg *config.Config, sink audit.Sink, hint HookSystem, getenv func(string) string) (stdout, stderr []byte, exitCode int) {
 	if sink == nil {
 		sink = audit.DiscardSink{}
 	}
-	system := Detect(raw, hint)
+	raw = EnrichPayload(raw)
+	system := DetectWithEnv(raw, hint, getenv)
 	eventName := raw.EventName()
 
 	auditReceived(ctx, raw, rawBytes, system, eventName, sink)
@@ -49,6 +54,7 @@ func auditReceived(ctx context.Context, raw RawPayload, rawBytes []byte, system 
 		slog.String("event", eventName),
 		slog.String("session_id", sessionID),
 		slog.String("cwd", raw.CWD()),
+		slog.String("effective_cwd", strField(raw, "effective_cwd")),
 	}
 
 	infoAttrs := audit.AttrsFromSlog(append(base, logAttrs(system, raw)...))
@@ -73,15 +79,23 @@ func enforce(ctx context.Context, raw RawPayload, system HookSystem, eventName s
 
 	// Include enough identifying fields from the payload that two distinct
 	// tool calls in the same session produce different log lines. Without
-	// these the dedup cache in audit.SessionLogger would collapse legitimate
-	// repeat decisions ("allow" / "block") across separate tool invocations.
+	// these the audit dedup cache would collapse legitimate repeat decisions
+	// ("allow" / "block") across separate tool invocations.
 	base := []slog.Attr{
 		slog.String("system", systemStr),
 		slog.String("event", eventName),
 		slog.String("session_id", sessionID),
 		slog.String("tool_use_id", strField(raw, "tool_use_id")),
 		slog.String("tool_name", strField(raw, "tool_name")),
+		slog.String("cwd", raw.CWD()),
+		slog.String("effective_cwd", strField(raw, "effective_cwd")),
 		slog.Any("rules_checked", checked),
+	}
+	if ti, ok := raw["tool_input"].(map[string]any); ok {
+		base = append(base,
+			slog.String("ti_command", strFromMap(ti, "command")),
+			slog.String("ti_file_path", strFromMap(ti, "file_path")),
+		)
 	}
 
 	if len(blockingViolations) > 0 && CanBlock(system, eventName) {

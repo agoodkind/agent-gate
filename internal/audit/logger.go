@@ -1,20 +1,12 @@
-// Package audit writes per-conversation, per-event JSONL audit entries.
-//
-// Each hook event is written to a path of the form
-//
-//	<state>/conversations/<system>/<session_id>/<event_name>.jsonl
-//
-// The Sink interface abstracts the destination. The daemon owns a
-// SessionLogger-backed LocalSink. Hook CLI processes use a DaemonSink that
-// forwards entries to the daemon over gRPC.
+// Package audit normalizes hook log records into audit events and writes them
+// to configured outputs such as JSONL files and SQLite.
 package audit
 
 import (
 	"context"
 )
 
-// Sink is the audit destination interface. Implementations route entries
-// to per-conversation JSONL files keyed by (system, sessionID, eventName).
+// Sink is the audit destination interface.
 type Sink interface {
 	// Log records one audit entry. The call must not block on disk I/O.
 	// Implementations may drop entries under sustained pressure.
@@ -24,17 +16,17 @@ type Sink interface {
 	Close() error
 }
 
-// LocalSink is a Sink backed by a local SessionLogger. Used by the daemon.
+// LocalSink is a Sink backed by a local EventLogger. Used by the daemon.
 type LocalSink struct {
-	logger *SessionLogger
+	logger *EventLogger
 }
 
-// NewLocalSink wraps a SessionLogger as a Sink.
-func NewLocalSink(logger *SessionLogger) *LocalSink {
+// NewLocalSink wraps an EventLogger as a Sink.
+func NewLocalSink(logger *EventLogger) *LocalSink {
 	return &LocalSink{logger: logger}
 }
 
-// Log forwards to the underlying SessionLogger.
+// Log forwards to the underlying EventLogger.
 func (s *LocalSink) Log(_ context.Context, system, sessionID, eventName, level, msg string, attrs map[string]any) {
 	if s == nil || s.logger == nil {
 		return
@@ -42,7 +34,7 @@ func (s *LocalSink) Log(_ context.Context, system, sessionID, eventName, level, 
 	s.logger.Log(system, sessionID, eventName, level, msg, attrs)
 }
 
-// Close closes the underlying SessionLogger.
+// Close closes the underlying EventLogger.
 func (s *LocalSink) Close() error {
 	if s == nil || s.logger == nil {
 		return nil

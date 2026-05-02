@@ -1,10 +1,10 @@
 # agent-gate
 
-A unified hook handler for [Claude Code](https://code.claude.com), [Cursor](https://cursor.com), Codex, and Gemini CLI. It writes a structured audit trail with build metadata on every invocation and enforces configurable regex rules that can block unwanted actions across providers.
+A unified hook daemon for [Claude Code](https://code.claude.com), [Cursor](https://cursor.com), Codex, and Gemini CLI. Hook binaries are dumb gRPC clients; the daemon writes a structured audit trail and enforces configurable rules that can block unwanted actions across providers.
 
 ## What it does
 
-Claude Code, Cursor, Codex, and Gemini CLI all expose lifecycle hook systems that call external binaries via stdin/stdout JSON. `agent-gate` sits at that boundary as a single Go binary and does two things:
+Claude Code, Cursor, Codex, and Gemini CLI all expose lifecycle hook systems that call external binaries via stdin/stdout JSON. `agent-gate` installs a small hook entrypoint for each tool, but all parsing, enrichment, rule evaluation, response formatting, and audit logging happen in the background daemon.
 
 1. **Audit.** Every hook invocation produces a structured JSON log entry with full payload details: tool inputs (command, file_path, old_string, new_string, content), prompts, agent messages, session metadata, and build provenance (commit, version, buildHash, dirty).
 
@@ -15,9 +15,9 @@ Claude Code, Cursor, Codex, and Gemini CLI all expose lifecycle hook systems tha
 ### One-liner (recommended)
 
 Pulls the latest release tarball for your platform, installs the binary
-to `${XDG_BIN_HOME:-$HOME/.local/bin}`, and merges hook templates into
-your Claude, Codex, and Gemini config files. Existing user settings in
-those files are preserved.
+to `${XDG_BIN_HOME:-$HOME/.local/bin}`, installs and starts the user daemon
+service, and merges hook templates into your Claude, Codex, Gemini, and
+Copilot config files. Existing user settings in those files are preserved.
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/agoodkind/agent-gate/main/install.sh | bash
@@ -28,15 +28,18 @@ Flags:
 ```sh
 ./install.sh --bin-only          # binary only, skip hook config updates
 ./install.sh --hooks-only        # update hook configs, skip download
+./install.sh --service-only      # install/start only the user daemon service
+./install.sh --no-service        # skip launchd/systemd user service setup
 ./install.sh --no-claude         # opt out of Claude (additive: combine flags)
 ./install.sh --no-codex
 ./install.sh --no-gemini
+./install.sh --no-copilot
 ./install.sh --bin-dir /opt/bin  # override $XDG_BIN_HOME
 ./install.sh --version v1.2.3    # pin to a specific release tag
 ```
 
-`make install`, `make install-bin`, and `make install-hooks` are thin
-wrappers around the script.
+`make install`, `make install-bin`, `make install-hooks`, and
+`make install-service` are thin wrappers around the script.
 
 ### From source
 
@@ -62,9 +65,33 @@ make build               # writes dist/agent-gate
 CI and release builds export `CGO_ENABLED=1` so PCRE2 JIT and match
 limits are available at runtime.
 
+## Daemon and hooks
+
+The daemon is the source of truth for enforcement. Hook invocations only
+read stdin, forward raw bytes and a small provider hint over gRPC, mirror
+the daemon response, and exit. If the daemon is unavailable, hooks fail
+closed with exit code 2.
+
+The installer manages a per-user service:
+
+- macOS: `~/Library/LaunchAgents/io.goodkind.agent-gate.plist`
+- Linux: `${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/agent-gate.service`
+
+Useful local commands:
+
+```sh
+make install-service
+make daemon-status
+make daemon-restart
+```
+
+`make deploy` builds a signed binary to the stable per-user path and
+restarts the user service under launchd or systemd so the supervisor owns
+the active daemon process.
+
 ## Wiring up hooks
 
-The one-liner above wires hooks for all three tools automatically.
+The one-liner above wires hooks for all supported tools automatically.
 Templates live in [`hooks/`](hooks/) and the canonical inventory is in
 [`.agent.md`](.agent.md). To re-apply after a binary move or template
 change:
@@ -73,8 +100,8 @@ change:
 make install-hooks
 ```
 
-To opt out of any tool, pass `--no-claude`, `--no-codex`, or
-`--no-gemini` (combinable). Hook merges only touch the `.hooks` key,
+To opt out of any tool, pass `--no-claude`, `--no-codex`, `--no-gemini`,
+or `--no-copilot` (combinable). Hook merges only touch the `.hooks` key,
 so any other settings in the target config files are preserved.
 
 ## Hook event reference
@@ -126,24 +153,63 @@ violation_message = "Shell redirection is not permitted."
 | `action` | `"block"` is the only supported action. |
 | `audit_only` | If `true`, log the violation but do not block. |
 | `violation_message` | Returned to the LLM and written to the audit log. |
-| `conditions` | Multi-condition AND rules. Each condition has `field_paths`, `pattern`, and optional `not_pattern`. |
+| `conditions` | Multi-condition AND rules. Each condition has a `kind`; missing `kind` means `regex` for compatibility. |
 
 ### Virtual fields
 
 The rule engine supports virtual field paths for advanced matching:
 
-- `effective_cwd`: Simulates `cd` chains in a command to compute the actual working directory.
+- `effective_cwd`: Computes the actual operation directory from the best available source. It prefers normalized operation-level cwd values such as `tool_input.workdir`, transcript function-call arguments, or an existing `effective_cwd`, then falls back to top-level `cwd` and simulates `cd` chains in the command.
 - `cmd_segments`: Splits shell commands on `&&`, `||`, `;`, and newlines for per-segment matching.
+
+### Condition Kinds
+
+Rules with `[[rules.conditions]]` use AND semantics: every condition must pass.
+
+- `kind = "regex"`: matches `pattern` and optional `not_pattern` against the first non-empty value from `field_paths`. This is the default for existing configs.
+- `kind = "command"`: matches shell command segments by `argv0` and optional `subcommands`. `strip_env`, `strip_args`, and `cwd_flags` can normalize common wrappers and command-specific cwd flags.
+- `kind = "project"`: walks upward from the effective cwd, finds the nearest directory containing any `root_markers`, then applies `require_any`, `require_all`, and `forbid_any` relative to that root. When a prior `command` condition matched, project checks use the cwd active at each matched command segment, so `cd project && go test` is evaluated against `project`.
+
+Example:
+
+```toml
+[[rules]]
+name = "go-build-test-through-make"
+description = "Require make for Go build/test in Go modules that provide a Makefile"
+claude_events = ["PreToolUse"]
+cursor_events = ["preToolUse", "beforeShellExecution"]
+codex_events = ["PreToolUse"]
+gemini_events = ["BeforeTool"]
+action = "block"
+violation_message = "This Go project has a Makefile. Use the appropriate make target instead of calling go build or go test directly."
+
+[[rules.conditions]]
+kind = "command"
+argv0 = "go"
+subcommands = ["build", "test"]
+strip_env = true
+strip_args = ["env", "time", "command"]
+cwd_flags = ["-C"]
+
+[[rules.conditions]]
+kind = "project"
+root_markers = ["go.mod"]
+require_any = ["Makefile", "makefile", "GNUmakefile"]
+```
 
 ## Audit log
 
-Each hook event is written as a newline-delimited JSON entry to a
-per-conversation file under:
+Each hook event is normalized into an audit event and written to the
+configured audit outputs. The default JSONL output writes:
 
 ```
-$XDG_STATE_HOME/agent-gate/conversations/<system>/<session_id>/<event>.jsonl
-~/.local/state/agent-gate/conversations/...  (default)
+$XDG_STATE_HOME/agent-gate/events/YYYY/MM/DD/events.jsonl
+$XDG_STATE_HOME/agent-gate/payloads/sha256/ab/cd/<payload-hash>.json
+~/.local/state/agent-gate/events/...     (default)
 ```
+
+SQLite output is optional and writes to
+`$XDG_STATE_HOME/agent-gate/sqlite/audit.db` when enabled.
 
 The `<system>` folder is chosen by a priority chain that inspects env
 vars set by each tool, payload fingerprints, and finally the CLI
@@ -162,17 +228,13 @@ the config they came from.
 | `vscode/`   | `VSCODE_PID` or `VSCODE_IPC_HOOK` env set and none of the above matched. Catches generic VS Code extensions that are not Copilot |
 | `unknown/`  | No fingerprint matched. Anything landing here is a detection gap to file as a follow-up                           |
 
-Layout on disk:
+Mature layout on disk:
 
 ```
-~/.local/state/agent-gate/conversations/
-├── claude/<session>/PreToolUse.jsonl
-├── codex/<thread>/PreToolUse.jsonl
-├── copilot/<session>/PreToolUse.jsonl
-├── cursor/<conversation>/preToolUse.jsonl
-├── gemini/<session>/BeforeTool.jsonl
-├── vscode/<session>/PreToolUse.jsonl
-└── unknown/<session>/PreToolUse.jsonl
+~/.local/state/agent-gate/
+├── events/YYYY/MM/DD/events.jsonl
+├── payloads/sha256/ab/cd/<hash>.json
+└── sqlite/audit.db
 ```
 
 `CLAUDECODE=1` is intentionally not a primary Claude signal because it
@@ -181,33 +243,48 @@ is inherited by every subprocess of a claude shell.
 invocation and is robust against inherited env. The full priority chain
 lives in [`internal/hook/detect.go`](internal/hook/detect.go).
 
-The daemon owns the writer: it keeps an LRU of open file handles and
-drains an unbounded queue on a background goroutine, so hook processes
-never block on disk I/O and no entry is dropped.
+The daemon owns the writer. It normalizes hook log entries, deduplicates
+duplicate hook fires, and fans out to independently configured outputs on
+a background goroutine. JSONL and SQLite are peer outputs; neither is used
+as recovery for the other.
 
-Each entry includes build provenance (`commit`, `version`, `buildHash`,
-`dirty`) and full payload details:
+Each event includes normalized operation, decision, and violation details:
 
 ```json
 {
+  "event_id": "evt_...",
+  "schema_version": 1,
   "time": "2026-04-15T17:57:22Z",
-  "level": "INFO",
-  "msg": "hook.received",
-  "commit": "b887996",
-  "version": "v1.2.0",
-  "buildHash": "88668c50e75b",
-  "dirty": "false",
+  "level": "info",
+  "message": "hook.blocked",
   "system": "claude",
-  "event": "PreToolUse",
+  "event_name": "PreToolUse",
   "session_id": "abc123",
-  "cwd": "/Users/you/project",
+  "tool_use_id": "toolu_...",
   "tool_name": "Edit",
-  "ti_file_path": "main.go",
-  "ti_old_string_snippet": "func main() {",
-  "ti_new_string_snippet": "func main() {\n\tlog.Info(\"starting\")",
-  "rules_checked": ["no-emdashes"],
-  "decision": "allow"
+  "operation": {
+    "cwd": "/Users/you/project",
+    "effective_cwd": "/Users/you/project",
+    "command": "go build ./..."
+  },
+  "decision": {
+    "kind": "block",
+    "rules_checked": ["use-make-not-go-direct"],
+    "rules_matched": ["use-make-not-go-direct"]
+  },
+  "violations": [
+    {"rule": "use-make-not-go-direct", "mode": "blocking"}
+  ],
+  "raw_payload_hash": "sha256:..."
 }
+```
+
+Query recent audit events with:
+
+```
+agent-gate logs query --today
+agent-gate logs query --system claude --decision block
+agent-gate logs query --rule use-make-not-go-direct --since 24h --json
 ```
 
 ## Fail-closed behavior
@@ -224,10 +301,12 @@ Each entry includes build provenance (`commit`, `version`, `buildHash`,
 ```
 cmd/agent-gate/main.go          entry point, panic recovery, stdin read, dispatch
 internal/version/version.go     build metadata (commit, version, buildHash, dirty via ldflags)
-internal/config/config.go       TOML structs, Load(), AuditLogPath()
+internal/config/config.go       TOML structs, Load(), audit path resolution
 internal/config/xdg.go          XDG path resolution
 internal/config/defaults.go     default config written on first run
-internal/audit/logger.go        slog JSON handler with build metadata attrs
+internal/audit/logger.go        audit Sink interface
+internal/audit/session.go       event logger and JSONL/SQLite audit outputs
+internal/audit/query.go         logs query backend
 internal/hook/types.go          RawPayload, HookSystem, Decision
 internal/hook/detect.go         Claude/Cursor autodetection plus provider override support
 internal/hook/claude.go         26 Claude events, payload parsing, response helpers
@@ -245,8 +324,9 @@ config.toml.example             annotated example configuration
 ## Development
 
 ```sh
-make build    # compile with ldflags (version, commit, buildHash)
-make deploy   # go install to $GOPATH/bin
+make build    # compile/sign with ldflags (version, commit, buildHash)
+make deploy   # build/sign to ~/.local/bin and restart the supervised daemon
+make proto    # regenerate protobuf/gRPC files with Buf
 make test     # go test -race ./...
 make lint     # golangci-lint
 make check    # full: vet + lint + test + govulncheck

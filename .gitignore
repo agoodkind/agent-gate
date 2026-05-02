@@ -2,5 +2,5 @@
 /dist/
 .make/
 notarize.env
+config.mk
 .vscode/
-

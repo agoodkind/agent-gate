@@ -322,6 +322,11 @@ func ValidateConfig(cfg *config.Config) []error {
 		var allPaths []string
 		allPaths = append(allPaths, r.FieldPaths...)
 		for j := range r.Conditions {
+			switch r.Conditions[j].Kind {
+			case "", "regex", "command", "project":
+			default:
+				errs = append(errs, fmt.Errorf("rule %q: condition %d has unknown kind %q", r.Name, j, r.Conditions[j].Kind))
+			}
 			allPaths = append(allPaths, r.Conditions[j].FieldPaths...)
 		}
 		if len(allPaths) == 0 {

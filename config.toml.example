@@ -12,16 +12,33 @@ level = "debug"   # debug | info | warn | error
 
 # ── Path overrides (optional) ────────────────────────────────────────────────
 #
-# By default agent-gate writes per-conversation audit logs under:
+# By default agent-gate writes normalized audit events under:
 #
-#   $XDG_STATE_HOME/agent-gate/conversations/<system>/<session_id>/<event>.jsonl
+#   $XDG_STATE_HOME/agent-gate/events/YYYY/MM/DD/events.jsonl
+#   $XDG_STATE_HOME/agent-gate/payloads/sha256/ab/cd/<hash>.json
 #                  ($XDG_STATE_HOME defaults to ~/.local/state)
 #
-# Set conversations_dir to an absolute path to override the base directory.
-# Leave empty (or omit) to keep using the XDG default.
+# conversations_dir is legacy and only kept for compatibility with older logs.
 
 [paths]
 conversations_dir = ""   # example: "/var/log/agent-gate/conversations"
+
+[audit]
+enabled = true
+level = "debug"
+
+[audit.outputs.jsonl]
+enabled = true
+events_dir = ""
+payloads_dir = ""
+write_raw_payloads = true
+
+[audit.outputs.sqlite]
+enabled = false
+path = ""
+
+[audit.query]
+prefer = "sqlite" # sqlite | jsonl
 
 # ── Rules ────────────────────────────────────────────────────────────────────
 #
@@ -36,6 +53,11 @@ conversations_dir = ""   # example: "/var/log/agent-gate/conversations"
 #   pattern           - PCRE2 regex matched against the extracted field value
 #   action            - what to do on match: "block" is the only supported action
 #   violation_message - message sent back to the AI and written to the audit log
+#
+# Conditional rules can use:
+#   kind = "regex"    - default; uses field_paths plus pattern/not_pattern
+#   kind = "command"  - matches shell command segments by argv0/subcommands
+#   kind = "project"  - checks files relative to a discovered project root
 
 [[rules]]
 name        = "no-shell-redirection"
@@ -45,6 +67,30 @@ field_paths = ["tool_input.command", "command"]
 pattern     = '(\d+>&\d+|>&\d+|&>|\|&|>/dev/null|2>/dev/null|>>/dev/null|2>>/dev/null|&>/dev/null)'
 action      = "block"
 violation_message = "Shell redirection is not permitted (e.g. 2>&1, >/dev/null, &>). Express output handling explicitly without redirects."
+
+[[rules]]
+name        = "go-build-test-through-make"
+description = "Require make for Go build/test in Go modules that provide a Makefile"
+claude_events = ["PreToolUse"]
+cursor_events = ["preToolUse", "beforeShellExecution"]
+codex_events  = ["PreToolUse"]
+gemini_events = ["BeforeTool"]
+action      = "block"
+violation_message = "This Go project has a Makefile. Use the appropriate make target instead of calling go build or go test directly."
+
+[[rules.conditions]]
+kind        = "command"
+argv0       = "go"
+subcommands = ["build", "test"]
+strip_env   = true
+strip_args  = ["env", "time", "command"]
+cwd_flags   = ["-C"]
+pattern     = '^(?:build(?:\s|$)|test(?:\s+.*)?\s(?:\./\.\.\.|all)(?:\s|$))'
+
+[[rules.conditions]]
+kind         = "project"
+root_markers = ["go.mod"]
+require_any  = ["Makefile", "makefile", "GNUmakefile"]
 
 # Emdash enforcement: block on new output, audit on existing content.
 
@@ -112,6 +158,47 @@ pattern     = '[\x{058A}\x{05BE}\x{1400}\x{1806}\x{2010}-\x{2015}\x{2053}\x{207B
 [[rules.conditions]]
 field_paths = ["tool_name"]
 not_pattern = "(?i)^task$"
+
+[[rules]]
+name        = "no-double-hyphen-prose"
+description = "Block ASCII double-hyphen used as a lazy prose em dash, while allowing command flags and option separators"
+claude_events = [
+  "PreToolUse", "PostToolUse", "PostToolUseFailure",
+  "Stop", "StopFailure",
+  "SubagentStart", "SubagentStop",
+  "SessionStart", "SessionEnd",
+  "UserPromptSubmit",
+  "PermissionRequest", "PermissionDenied",
+  "Notification",
+  "ConfigChange", "CwdChanged", "InstructionsLoaded",
+  "PreCompact", "PostCompact",
+  "WorktreeCreate", "WorktreeRemove",
+  "FileChanged",
+  "TaskCreated", "TaskCompleted",
+  "Elicitation", "ElicitationResult",
+  "TeammateIdle",
+]
+cursor_events = [
+  "preToolUse", "postToolUse",
+  "beforeMCPExecution", "beforeSubmitPrompt", "beforeReadFile",
+  "afterFileEdit", "afterAgentResponse",
+  "stop",
+]
+codex_events = [
+  "PreToolUse", "PostToolUse",
+  "PermissionRequest", "UserPromptSubmit", "Stop",
+]
+gemini_events = [
+  "BeforeTool", "AfterTool",
+  "BeforeAgent", "AfterAgent",
+  "BeforeModel", "AfterModel",
+  "SessionStart", "SessionEnd",
+  "Notification", "PreCompress",
+]
+field_paths = ["tool_input.content", "tool_input.new_string", "tool_input.description", "edits[*].new_string", "assistant_message", "last_assistant_message", "text"]
+pattern     = '(?m)(?:(?:`[^`\n]+`|\b(?!(?:bash|sh|zsh|fish|exec|command|env|xargs|sudo|doas|go|git|make|npm|pnpm|yarn|node|python|python3|ruby|perl|cargo|docker|kubectl|helm|terraform|ansible|rg|grep|sed|awk|jq|curl|ssh|scp|rsync)\b)[A-Za-z][A-Za-z0-9_./-]*)\s+--\s+[A-Za-z][A-Za-z0-9_./-]*|\b(?!(?:bash|sh|zsh|fish|exec|command|env|xargs|sudo|doas|go|git|make|npm|pnpm|yarn|node|python|python3|ruby|perl|cargo|docker|kubectl|helm|terraform|ansible|rg|grep|sed|awk|jq|curl|ssh|scp|rsync)\b)[A-Za-z][A-Za-z0-9_./-]*--[A-Za-z][A-Za-z0-9_./-]*)'
+action      = "block"
+violation_message = "This output uses ASCII double-hyphen as a lazy prose dash. Rewrite the sentence without `--`; use separate sentences or punctuation that is not pretending to be an em dash. Command flags like `--help` and option separators like `exec -- input` are allowed in command contexts."
 
 [[rules]]
 name        = "emdash-audit-existing"

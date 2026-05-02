@@ -19,6 +19,8 @@ import (
 	"goodkind.io/agent-gate/api/daemonpb"
 	"goodkind.io/agent-gate/internal/audit"
 	"goodkind.io/agent-gate/internal/config"
+	"goodkind.io/agent-gate/internal/hook"
+	"goodkind.io/agent-gate/internal/version"
 )
 
 // Server implements the AgentGateD gRPC service.
@@ -26,13 +28,14 @@ type Server struct {
 	daemonpb.UnimplementedAgentGateDServer
 
 	log      *slog.Logger
+	cfg      *config.Config
 	mu       sync.RWMutex
 	sessions map[string]*wrapperSession // keyed by wrapper_id
 
 	watcher        *fsnotify.Watcher
 	globalSettings map[string]any // last-known global settings.json content
 
-	sessionLogger *audit.SessionLogger
+	eventLogger *audit.EventLogger
 }
 
 // wrapperSession holds runtime state for one active claude wrapper process.
@@ -45,28 +48,30 @@ type wrapperSession struct {
 // New creates a new daemon Server and starts watching the global settings file.
 func New(log *slog.Logger, cfg *config.Config) (*Server, error) {
 	bg := context.Background()
+	if cfg == nil {
+		cfg = &config.Config{}
+	}
+	if errs := hook.ValidateConfig(cfg); len(errs) > 0 {
+		return nil, fmt.Errorf("invalid hook config: %v", errs[0])
+	}
+
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create settings watcher: %w", err)
 	}
 
-	convDir := config.DefaultConversationsDir()
-	level := ""
-	if cfg != nil {
-		convDir = cfg.ConversationsDir()
-		level = cfg.Log.Level
-	}
-	sessionLogger, err := audit.NewSessionLogger(convDir, level, log)
+	eventLogger, err := audit.NewEventLogger(cfg, log)
 	if err != nil {
 		_ = watcher.Close()
-		return nil, fmt.Errorf("failed to create session logger: %w", err)
+		return nil, fmt.Errorf("failed to create event logger: %w", err)
 	}
 
 	s := &Server{
-		log:           log,
-		sessions:      make(map[string]*wrapperSession),
-		watcher:       watcher,
-		sessionLogger: sessionLogger,
+		log:         log,
+		cfg:         cfg,
+		sessions:    make(map[string]*wrapperSession),
+		watcher:     watcher,
+		eventLogger: eventLogger,
 	}
 
 	globalPath := globalSettingsPath()
@@ -92,8 +97,8 @@ func New(log *slog.Logger, cfg *config.Config) (*Server, error) {
 func (s *Server) Close() {
 	bg := context.Background()
 	_ = s.watcher.Close()
-	if s.sessionLogger != nil {
-		_ = s.sessionLogger.Close()
+	if s.eventLogger != nil {
+		_ = s.eventLogger.Close()
 	}
 
 	s.mu.Lock()
@@ -178,28 +183,65 @@ func (s *Server) ReleaseSession(ctx context.Context, req *daemonpb.ReleaseSessio
 	return &daemonpb.ReleaseSessionResponse{}, nil
 }
 
-// HookEvent processes a Claude Code hook event forwarded from a wrapper process.
-func (s *Server) HookEvent(ctx context.Context, req *daemonpb.HookEventRequest) (*daemonpb.HookEventResponse, error) {
-	// TODO: route to hook handler, handle ConfigChange to update per-session model
-	return &daemonpb.HookEventResponse{ExitCode: 0}, nil
-}
-
-// Audit accepts an audit log entry and enqueues it on the session logger.
-// The call returns immediately. Disk writes happen asynchronously.
-func (s *Server) Audit(_ context.Context, req *daemonpb.AuditRequest) (*daemonpb.AuditResponse, error) {
-	if s.sessionLogger == nil {
-		return &daemonpb.AuditResponse{}, nil
+// EvaluateHook processes a hook event through daemon-owned enforcement.
+func (s *Server) EvaluateHook(ctx context.Context, req *daemonpb.EvaluateHookRequest) (*daemonpb.EvaluateHookResponse, error) {
+	var raw hook.RawPayload
+	if err := json.Unmarshal(req.RawJson, &raw); err != nil {
+		msg := fmt.Sprintf("agent-gate: parse stdin JSON: %v\n", err)
+		return &daemonpb.EvaluateHookResponse{ExitCode: 2, StderrData: []byte(msg)}, nil
 	}
 
-	var attrs map[string]any
-	if len(req.AttrsJson) > 0 {
-		if err := json.Unmarshal(req.AttrsJson, &attrs); err != nil {
-			return nil, status.Errorf(codes.InvalidArgument, "invalid attrs_json: %v", err)
+	if req.Cwd != "" {
+		if _, ok := raw["cwd"].(string); !ok {
+			raw = cloneRawPayload(raw)
+			raw["cwd"] = req.Cwd
 		}
 	}
 
-	s.sessionLogger.Log(req.System, req.SessionId, req.EventName, req.Level, req.Msg, attrs)
-	return &daemonpb.AuditResponse{}, nil
+	getenv := func(key string) string {
+		if req.EnvFingerprint == nil {
+			return ""
+		}
+		return req.EnvFingerprint[key]
+	}
+	sink := audit.NewLocalSink(s.eventLogger)
+	stdout, stderr, exitCode := hook.HandleWithEnv(ctx, raw, req.RawJson, s.cfg, sink, hook.SystemFromString(req.ProviderHint), getenv)
+	return &daemonpb.EvaluateHookResponse{
+		ExitCode:   int32(exitCode),
+		StdoutData: stdout,
+		StderrData: stderr,
+	}, nil
+}
+
+func (s *Server) activeSessionCount() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.sessions)
+}
+
+func (s *Server) Status(ctx context.Context, _ *daemonpb.StatusRequest) (*daemonpb.StatusResponse, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "resolve executable: %v", err)
+	}
+	return &daemonpb.StatusResponse{
+		Pid:            int64(os.Getpid()),
+		ExecutablePath: exe,
+		SocketPath:     config.DaemonSocketPath(),
+		Version:        version.Version,
+		Commit:         version.Commit,
+		Dirty:          version.Dirty,
+		BuildHash:      version.BuildHash(),
+		ActiveSessions: int32(s.activeSessionCount()),
+	}, nil
+}
+
+func cloneRawPayload(in hook.RawPayload) hook.RawPayload {
+	out := make(hook.RawPayload, len(in)+1)
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
 }
 
 // writeSettingsJSON writes a per-session settings.json to the runtime dir,

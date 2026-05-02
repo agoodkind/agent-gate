@@ -37,25 +37,35 @@ import (
 // is inherited by any subprocess of a claude shell. CLAUDE_CODE_ENTRYPOINT
 // is set fresh by claude itself on each invocation, so it is robust.
 func Detect(p RawPayload, hint HookSystem) HookSystem {
-	if hasCodexEnv() {
+	return DetectWithEnv(p, hint, os.Getenv)
+}
+
+// DetectWithEnv is Detect with an explicit environment source. Hook
+// enforcement runs in the daemon, so provider env fingerprints must come from
+// the hook subprocess request rather than the daemon process environment.
+func DetectWithEnv(p RawPayload, hint HookSystem, getenv func(string) string) HookSystem {
+	if getenv == nil {
+		getenv = os.Getenv
+	}
+	if hasCodexEnv(getenv) {
 		return SystemCodex
 	}
-	if hasCopilotEnv() {
+	if hasCopilotEnv(getenv) {
 		return SystemCopilot
 	}
-	if hasCursorEnv() || hasCursorPayload(p) || hasCursorEvent(p) {
+	if hasCursorEnv(getenv) || hasCursorPayload(p) || hasCursorEvent(p) {
 		return SystemCursor
 	}
-	if hasGeminiEnv() || hasGeminiEvent(p) {
+	if hasGeminiEnv(getenv) || hasGeminiEvent(p) {
 		return SystemGemini
 	}
-	if hasClaudeEnv() {
+	if hasClaudeEnv(getenv) {
 		return SystemClaude
 	}
 	if hasClaudePayload(p) {
 		return SystemClaude
 	}
-	if hasVSCodeEnv() {
+	if hasVSCodeEnv(getenv) {
 		return SystemVSCode
 	}
 	if hint != SystemUnknown {
@@ -64,23 +74,23 @@ func Detect(p RawPayload, hint HookSystem) HookSystem {
 	return SystemUnknown
 }
 
-func hasCodexEnv() bool {
-	return os.Getenv("CODEX_THREAD_ID") != "" || os.Getenv("CODEX_CI") != ""
+func hasCodexEnv(getenv func(string) string) bool {
+	return getenv("CODEX_THREAD_ID") != "" || getenv("CODEX_CI") != ""
 }
 
 // hasCopilotEnv detects GitHub Copilot Chat by its OpenTelemetry env vars.
 // Empirically every Copilot hook fire ships COPILOT_OTEL_FILE_EXPORTER_PATH,
 // COPILOT_OTEL_ENABLED, and COPILOT_OTEL_EXPORTER_TYPE. Any one is enough.
-func hasCopilotEnv() bool {
-	return os.Getenv("COPILOT_OTEL_FILE_EXPORTER_PATH") != "" ||
-		os.Getenv("COPILOT_OTEL_ENABLED") != "" ||
-		os.Getenv("COPILOT_OTEL_EXPORTER_TYPE") != ""
+func hasCopilotEnv(getenv func(string) string) bool {
+	return getenv("COPILOT_OTEL_FILE_EXPORTER_PATH") != "" ||
+		getenv("COPILOT_OTEL_ENABLED") != "" ||
+		getenv("COPILOT_OTEL_EXPORTER_TYPE") != ""
 }
 
-func hasCursorEnv() bool {
-	return os.Getenv("CURSOR_VERSION") != "" ||
-		os.Getenv("CURSOR_WORKSPACE_NAME") != "" ||
-		os.Getenv("CURSOR_MODE") != ""
+func hasCursorEnv(getenv func(string) string) bool {
+	return getenv("CURSOR_VERSION") != "" ||
+		getenv("CURSOR_WORKSPACE_NAME") != "" ||
+		getenv("CURSOR_MODE") != ""
 }
 
 func hasCursorPayload(p RawPayload) bool {
@@ -107,8 +117,8 @@ func hasCursorEvent(p RawPayload) bool {
 	return unicode.IsLower(r)
 }
 
-func hasGeminiEnv() bool {
-	return os.Getenv("GEMINI_CLI") != ""
+func hasGeminiEnv(getenv func(string) string) bool {
+	return getenv("GEMINI_CLI") != ""
 }
 
 // hasGeminiEvent matches the event names unique to the Gemini CLI hook
@@ -129,11 +139,11 @@ func hasGeminiEvent(p RawPayload) bool {
 	return false
 }
 
-func hasClaudeEnv() bool {
-	if os.Getenv("CLAUDE_CODE_ENTRYPOINT") != "" {
+func hasClaudeEnv(getenv func(string) string) bool {
+	if getenv("CLAUDE_CODE_ENTRYPOINT") != "" {
 		return true
 	}
-	if v := os.Getenv("AI_AGENT"); strings.HasPrefix(v, "claude-code/") {
+	if v := getenv("AI_AGENT"); strings.HasPrefix(v, "claude-code/") {
 		return true
 	}
 	return false
@@ -159,7 +169,7 @@ func hasClaudePayload(p RawPayload) bool {
 // subprocess. TERM_PROGRAM=vscode is intentionally not used because hooks
 // fired from the extension host (the relevant case) inherit no terminal
 // environment.
-func hasVSCodeEnv() bool {
-	return os.Getenv("VSCODE_PID") != "" ||
-		os.Getenv("VSCODE_IPC_HOOK") != ""
+func hasVSCodeEnv(getenv func(string) string) bool {
+	return getenv("VSCODE_PID") != "" ||
+		getenv("VSCODE_IPC_HOOK") != ""
 }

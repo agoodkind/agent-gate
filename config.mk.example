@@ -1,0 +1,11 @@
+# Local configuration - copy to config.mk and fill in your values.
+# config.mk is gitignored and never committed.
+
+# Developer ID Application certificate SHA-1 or common name.
+# If unset on macOS, the Makefile auto-selects the first
+# "Developer ID Application" identity from:
+#   security find-identity -v -p codesigning
+CERT_ID = YOUR_CERT_SHA_OR_NAME_HERE
+
+# Bundle ID used when signing the agent-gate daemon binary.
+BUNDLE_ID = io.goodkind.agent-gate

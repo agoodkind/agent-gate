@@ -1,6 +1,8 @@
 package rules_test
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"unicode"
 	"unicode/utf8"
@@ -424,6 +426,7 @@ func TestApplyCdChain(t *testing.T) {
 
 // emdashDashPattern is the Unicode dash class used by no-emdashes rules in these tests.
 const emdashDashPattern = `[\x{2010}-\x{2015}\x{2212}\x{2E3A}\x{2E3B}\x{FE31}\x{FE32}\x{FE58}\x{FE63}\x{FF0D}]`
+const doubleHyphenProsePattern = `(?m)(?:(?:` + "`" + `[^` + "`" + `\n]+` + "`" + `|\b(?!(?:bash|sh|zsh|fish|exec|command|env|xargs|sudo|doas|go|git|make|npm|pnpm|yarn|node|python|python3|ruby|perl|cargo|docker|kubectl|helm|terraform|ansible|rg|grep|sed|awk|jq|curl|ssh|scp|rsync)\b)[A-Za-z][A-Za-z0-9_./-]*)\s+--\s+[A-Za-z][A-Za-z0-9_./-]*|\b(?!(?:bash|sh|zsh|fish|exec|command|env|xargs|sudo|doas|go|git|make|npm|pnpm|yarn|node|python|python3|ruby|perl|cargo|docker|kubectl|helm|terraform|ansible|rg|grep|sed|awk|jq|curl|ssh|scp|rsync)\b)[A-Za-z][A-Za-z0-9_./-]*--[A-Za-z][A-Za-z0-9_./-]*)`
 
 func TestEmdashDashPatternMatchesU2011(t *testing.T) {
 	t.Helper()
@@ -721,6 +724,121 @@ func TestEvaluate_EmdashAllowed(t *testing.T) {
 	}
 }
 
+func doubleHyphenProseRule(t *testing.T) config.Rule {
+	t.Helper()
+	return loadRule(t,
+		"no-double-hyphen-prose",
+		doubleHyphenProsePattern,
+		[]string{"PreToolUse", "preToolUse", "Stop", "afterAgentResponse"},
+		[]string{"tool_input.content", "tool_input.new_string", "tool_input.description", "edits[*].new_string", "assistant_message", "last_assistant_message", "text"},
+		"ASCII double-hyphen is not permitted as a prose dash.",
+	)
+}
+
+func TestEvaluate_DoubleHyphenProseBlocked(t *testing.T) {
+	rule := doubleHyphenProseRule(t)
+	cases := []struct {
+		name    string
+		event   string
+		payload map[string]any
+	}{
+		{
+			name:  "spaced lazy em dash",
+			event: "PreToolUse",
+			payload: map[string]any{
+				"tool_input": map[string]any{"new_string": "Word -- word"},
+			},
+		},
+		{
+			name:  "unspaced lazy em dash",
+			event: "PreToolUse",
+			payload: map[string]any{
+				"tool_input": map[string]any{"new_string": "Word--word"},
+			},
+		},
+		{
+			name:  "backticked command label in prose",
+			event: "PreToolUse",
+			payload: map[string]any{
+				"tool_input": map[string]any{"new_string": "`mwan cutover` -- deprecated migration/rollback tooling"},
+			},
+		},
+		{
+			name:  "assistant response prose",
+			event: "Stop",
+			payload: map[string]any{
+				"assistant_message": "This works -- but it should be rewritten.",
+			},
+		},
+		{
+			name:  "cursor edit array",
+			event: "afterAgentResponse",
+			payload: map[string]any{
+				"edits": []any{
+					map[string]any{"new_string": "Clean"},
+					map[string]any{"new_string": "Old text -- new text"},
+				},
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			v := rules.Evaluate(systemFor(tc.event), tc.event, tc.payload, []config.Rule{rule})
+			if v == nil {
+				t.Fatal("expected violation, got nil")
+			}
+		})
+	}
+}
+
+func TestEvaluate_DoubleHyphenProseAllowed(t *testing.T) {
+	rule := doubleHyphenProseRule(t)
+	cases := []struct {
+		name    string
+		event   string
+		payload map[string]any
+	}{
+		{
+			name:  "command field with flags is ignored",
+			event: "PreToolUse",
+			payload: map[string]any{
+				"tool_input": map[string]any{"command": "go test --count=1 ./..."},
+			},
+		},
+		{
+			name:  "bare flag in prose field",
+			event: "PreToolUse",
+			payload: map[string]any{
+				"tool_input": map[string]any{"new_string": "Use --count=1 for this test."},
+			},
+		},
+		{
+			name:  "exec option separator in prose field",
+			event: "PreToolUse",
+			payload: map[string]any{
+				"tool_input": map[string]any{"new_string": "Example: exec -- input"},
+			},
+		},
+		{
+			name:  "regular hyphenated prose",
+			event: "PreToolUse",
+			payload: map[string]any{
+				"tool_input": map[string]any{"new_string": "Use well-formed words and kebab-case identifiers."},
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			v := rules.Evaluate(systemFor(tc.event), tc.event, tc.payload, []config.Rule{rule})
+			if v != nil {
+				t.Fatalf("expected allow, got %s", v.RuleName)
+			}
+		})
+	}
+}
+
 // arrayPathRule returns a rule that matches em dashes in edits[*].new_string.
 func arrayPathRule(t *testing.T) config.Rule {
 	t.Helper()
@@ -862,5 +980,321 @@ func TestCmdSegments(t *testing.T) {
 				t.Errorf("CmdSegments() = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func makeGoThroughMakeRule() config.Rule {
+	return config.Rule{
+		Name:         "go-build-test-through-make",
+		ClaudeEvents: []string{"PreToolUse"},
+		CursorEvents: []string{"preToolUse", "beforeShellExecution"},
+		CodexEvents:  []string{"PreToolUse"},
+		GeminiEvents: []string{"BeforeTool"},
+		Conditions: []config.Condition{
+			{
+				Kind:        "command",
+				Argv0:       "go",
+				Subcommands: []string{"build", "test"},
+				StripEnv:    true,
+				StripArgs:   []string{"env", "time", "command"},
+				CwdFlags:    []string{"-C"},
+				Pattern:     `^(?:build(?:\s|$)|test(?:\s+.*)?\s(?:\./\.\.\.|all)(?:\s|$))`,
+			},
+			{
+				Kind:        "project",
+				RootMarkers: []string{"go.mod"},
+				RequireAny:  []string{"Makefile", "makefile", "GNUmakefile"},
+			},
+		},
+		Action:           "block",
+		ViolationMessage: "Use make.",
+	}
+}
+
+func writeFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+}
+
+func TestEvaluate_CommandAndProjectConditions_GoThroughMake(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "go.mod"), "module example.test/project\n")
+	writeFile(t, filepath.Join(root, "Makefile"), "test:\n\tgo test ./...\n")
+
+	outside := t.TempDir()
+	subdir := filepath.Join(root, "cmd", "server")
+	if err := os.MkdirAll(subdir, 0o755); err != nil {
+		t.Fatalf("mkdir subdir: %v", err)
+	}
+
+	rule := makeGoThroughMakeRule()
+	cases := []struct {
+		name    string
+		system  string
+		event   string
+		payload map[string]any
+		want    bool
+	}{
+		{
+			name:   "claude go build in module with makefile",
+			system: "claude",
+			event:  "PreToolUse",
+			payload: map[string]any{
+				"cwd":        root,
+				"tool_input": map[string]any{"command": "go build ./..."},
+			},
+			want: true,
+		},
+		{
+			name:   "codex env-prefixed go test in module with makefile",
+			system: "codex",
+			event:  "PreToolUse",
+			payload: map[string]any{
+				"cwd":        root,
+				"tool_input": map[string]any{"command": "CGO_ENABLED=1 go test ./..."},
+			},
+			want: true,
+		},
+		{
+			name:   "operation workdir beats chat cwd",
+			system: "codex",
+			event:  "PreToolUse",
+			payload: map[string]any{
+				"cwd":           outside,
+				"effective_cwd": root,
+				"tool_input":    map[string]any{"command": "go test ./..."},
+			},
+			want: true,
+		},
+		{
+			name:   "tool input workdir beats chat cwd",
+			system: "codex",
+			event:  "PreToolUse",
+			payload: map[string]any{
+				"cwd": outside,
+				"tool_input": map[string]any{
+					"command": "go test ./...",
+					"workdir": root,
+				},
+			},
+			want: true,
+		},
+		{
+			name:   "env wrapper go test in module with makefile",
+			system: "codex",
+			event:  "PreToolUse",
+			payload: map[string]any{
+				"cwd":        root,
+				"tool_input": map[string]any{"command": "env CGO_ENABLED=1 go test ./..."},
+			},
+			want: true,
+		},
+		{
+			name:   "time wrapper go test in module with makefile",
+			system: "codex",
+			event:  "PreToolUse",
+			payload: map[string]any{
+				"cwd":        root,
+				"tool_input": map[string]any{"command": "time go test ./..."},
+			},
+			want: true,
+		},
+		{
+			name:   "go -C uses command-specific cwd",
+			system: "codex",
+			event:  "PreToolUse",
+			payload: map[string]any{
+				"cwd":        outside,
+				"tool_input": map[string]any{"command": "go -C " + root + " test ./..."},
+			},
+			want: true,
+		},
+		{
+			name:   "go -C equals uses command-specific cwd",
+			system: "codex",
+			event:  "PreToolUse",
+			payload: map[string]any{
+				"cwd":        outside,
+				"tool_input": map[string]any{"command": "go -C=" + root + " test ./..."},
+			},
+			want: true,
+		},
+		{
+			name:   "cursor command field in module subdir",
+			system: "cursor",
+			event:  "beforeShellExecution",
+			payload: map[string]any{
+				"cwd":     subdir,
+				"command": "/opt/homebrew/bin/go test ./...",
+			},
+			want: true,
+		},
+		{
+			name:   "cd into module before go test",
+			system: "claude",
+			event:  "PreToolUse",
+			payload: map[string]any{
+				"cwd":        outside,
+				"tool_input": map[string]any{"command": "cd " + root + " && go test ./..."},
+			},
+			want: true,
+		},
+		{
+			name:   "go test before cd into module uses original cwd",
+			system: "claude",
+			event:  "PreToolUse",
+			payload: map[string]any{
+				"cwd":        outside,
+				"tool_input": map[string]any{"command": "go test ./... && cd " + root},
+			},
+			want: false,
+		},
+		{
+			name:   "heredoc content with go build is allowed",
+			system: "claude",
+			event:  "PreToolUse",
+			payload: map[string]any{
+				"cwd":        root,
+				"tool_input": map[string]any{"command": "cat <<'EOF' > Makefile\nbuild:\n\tgo build ./...\ntest:\n\tgo test ./...\nEOF"},
+			},
+			want: false,
+		},
+		{
+			name:   "heredoc with later direct go test still blocks",
+			system: "claude",
+			event:  "PreToolUse",
+			payload: map[string]any{
+				"cwd":        root,
+				"tool_input": map[string]any{"command": "cat <<'EOF' > Makefile\nbuild:\n\tgo build ./...\nEOF\ngo test ./..."},
+			},
+			want: true,
+		},
+		{
+			name:   "make test is allowed",
+			system: "claude",
+			event:  "PreToolUse",
+			payload: map[string]any{
+				"cwd":        root,
+				"tool_input": map[string]any{"command": "make test"},
+			},
+			want: false,
+		},
+		{
+			name:   "go list is allowed",
+			system: "claude",
+			event:  "PreToolUse",
+			payload: map[string]any{
+				"cwd":        root,
+				"tool_input": map[string]any{"command": "go list ./..."},
+			},
+			want: false,
+		},
+		{
+			name:   "targeted go test package is allowed",
+			system: "claude",
+			event:  "PreToolUse",
+			payload: map[string]any{
+				"cwd":        root,
+				"tool_input": map[string]any{"command": "go test ./internal/rules"},
+			},
+			want: false,
+		},
+		{
+			name:   "targeted go test with run filter is allowed",
+			system: "codex",
+			event:  "PreToolUse",
+			payload: map[string]any{
+				"cwd":        root,
+				"tool_input": map[string]any{"command": "go test ./internal/rules -run TestEvaluate_CommandAndProjectConditions_GoThroughMake"},
+			},
+			want: false,
+		},
+		{
+			name:   "current package go test is allowed",
+			system: "cursor",
+			event:  "beforeShellExecution",
+			payload: map[string]any{
+				"cwd":     subdir,
+				"command": "go test",
+			},
+			want: false,
+		},
+		{
+			name:   "go test all is blocked",
+			system: "claude",
+			event:  "PreToolUse",
+			payload: map[string]any{
+				"cwd":        root,
+				"tool_input": map[string]any{"command": "go test all"},
+			},
+			want: true,
+		},
+		{
+			name:   "go test ellipsis with flags is blocked",
+			system: "codex",
+			event:  "PreToolUse",
+			payload: map[string]any{
+				"cwd":        root,
+				"tool_input": map[string]any{"command": "go test -count=1 -run TestThing ./..."},
+			},
+			want: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			v := rules.Evaluate(tc.system, tc.event, tc.payload, []config.Rule{rule})
+			if got := v != nil; got != tc.want {
+				t.Fatalf("blocked = %v, want %v; violation = %#v", got, tc.want, v)
+			}
+		})
+	}
+}
+
+func TestEvaluate_CommandAndProjectConditions_OrderIndependent(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "go.mod"), "module example.test/project\n")
+	writeFile(t, filepath.Join(root, "Makefile"), "test:\n\tgo test ./...\n")
+
+	rule := makeGoThroughMakeRule()
+	rule.Conditions[0], rule.Conditions[1] = rule.Conditions[1], rule.Conditions[0]
+
+	v := rules.Evaluate("claude", "PreToolUse", map[string]any{
+		"cwd":        t.TempDir(),
+		"tool_input": map[string]any{"command": "cd " + root + " && go test ./..."},
+	}, []config.Rule{rule})
+
+	if v == nil {
+		t.Fatal("expected project condition to use matched command cwd regardless of condition order")
+	}
+}
+
+func TestEvaluate_ProjectCondition_AllowsWhenProjectDoesNotSupportMake(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "go.mod"), "module example.test/project\n")
+
+	v := rules.Evaluate("claude", "PreToolUse", map[string]any{
+		"cwd":        root,
+		"tool_input": map[string]any{"command": "go test ./..."},
+	}, []config.Rule{makeGoThroughMakeRule()})
+
+	if v != nil {
+		t.Fatalf("expected allow without Makefile, got %s", v.Message)
+	}
+}
+
+func TestEvaluate_ProjectCondition_AllowsOutsideMarkedProject(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "Makefile"), "test:\n\tgo test ./...\n")
+
+	v := rules.Evaluate("claude", "PreToolUse", map[string]any{
+		"cwd":        root,
+		"tool_input": map[string]any{"command": "go test ./..."},
+	}, []config.Rule{makeGoThroughMakeRule()})
+
+	if v != nil {
+		t.Fatalf("expected allow outside Go module, got %s", v.Message)
 	}
 }

@@ -1,6 +1,8 @@
 package hook_test
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -25,6 +27,75 @@ func TestCanBlock_NewProviders(t *testing.T) {
 		if got := hook.CanBlock(tc.system, tc.event); got != tc.want {
 			t.Fatalf("CanBlock(%q, %q) = %v, want %v", tc.system.String(), tc.event, got, tc.want)
 		}
+	}
+}
+
+func TestEnrichPayload_UsesToolInputWorkdir(t *testing.T) {
+	raw := hook.RawPayload{
+		"cwd": "/chat",
+		"tool_input": map[string]any{
+			"command": "go test ./...",
+			"workdir": "/project",
+		},
+	}
+
+	got := hook.EnrichPayload(raw)
+	if got["cwd"] != "/chat" {
+		t.Fatalf("cwd was overwritten: %#v", got)
+	}
+	if got["effective_cwd"] != "/project" {
+		t.Fatalf("effective_cwd = %#v, want /project", got["effective_cwd"])
+	}
+}
+
+func TestEnrichPayload_UsesTranscriptFunctionCallWorkdir(t *testing.T) {
+	dir := t.TempDir()
+	transcript := filepath.Join(dir, "rollout.jsonl")
+	line := `{"type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"go test ./...\",\"workdir\":\"/project\"}","call_id":"call_123"}}` + "\n"
+	if err := os.WriteFile(transcript, []byte(line), 0o600); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
+
+	raw := hook.RawPayload{
+		"cwd":             "/chat",
+		"transcript_path": transcript,
+		"tool_use_id":     "call_123",
+		"tool_input":      map[string]any{"command": "go test ./..."},
+	}
+
+	got := hook.EnrichPayload(raw)
+	if got["cwd"] != "/chat" {
+		t.Fatalf("cwd was overwritten: %#v", got)
+	}
+	if got["effective_cwd"] != "/project" {
+		t.Fatalf("effective_cwd = %#v, want /project", got["effective_cwd"])
+	}
+	ti, ok := got["tool_input"].(map[string]any)
+	if !ok {
+		t.Fatalf("tool_input missing: %#v", got["tool_input"])
+	}
+	if ti["workdir"] != "/project" {
+		t.Fatalf("tool_input.workdir = %#v, want /project", ti["workdir"])
+	}
+}
+
+func TestEnrichPayload_TranscriptNonMatchLeavesPayloadAlone(t *testing.T) {
+	dir := t.TempDir()
+	transcript := filepath.Join(dir, "rollout.jsonl")
+	line := `{"type":"response_item","payload":{"type":"function_call","arguments":"{\"workdir\":\"/project\"}","call_id":"other"}}` + "\n"
+	if err := os.WriteFile(transcript, []byte(line), 0o600); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
+
+	raw := hook.RawPayload{
+		"cwd":             "/chat",
+		"transcript_path": transcript,
+		"tool_use_id":     "call_123",
+	}
+
+	got := hook.EnrichPayload(raw)
+	if _, ok := got["effective_cwd"]; ok {
+		t.Fatalf("unexpected effective_cwd: %#v", got)
 	}
 }
 
@@ -95,5 +166,30 @@ func TestValidateConfig_NewProviderSpecificEvents(t *testing.T) {
 
 	if errs := hook.ValidateConfig(cfg); len(errs) != 0 {
 		t.Fatalf("ValidateConfig returned unexpected errors: %v", errs)
+	}
+}
+
+func TestValidateConfig_ConditionKinds(t *testing.T) {
+	cfg := &config.Config{
+		Rules: []config.Rule{
+			{
+				Name:        "known-kinds",
+				CodexEvents: []string{"PreToolUse"},
+				Conditions: []config.Condition{
+					{Kind: "command", Argv0: "go"},
+					{Kind: "command", Argv0: "go", StripEnv: true, StripArgs: []string{"env"}, CwdFlags: []string{"-C"}},
+					{Kind: "project", RootMarkers: []string{"go.mod"}},
+					{Kind: "regex", FieldPaths: []string{"tool_input.command"}, Pattern: "x"},
+				},
+			},
+		},
+	}
+	if errs := hook.ValidateConfig(cfg); len(errs) != 0 {
+		t.Fatalf("ValidateConfig returned unexpected errors: %v", errs)
+	}
+
+	cfg.Rules[0].Conditions = append(cfg.Rules[0].Conditions, config.Condition{Kind: "unknown"})
+	if errs := hook.ValidateConfig(cfg); len(errs) == 0 {
+		t.Fatal("expected unknown condition kind error")
 	}
 }

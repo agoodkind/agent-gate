@@ -14,6 +14,36 @@ type Log struct {
 	Level string `toml:"level"`
 }
 
+// Audit holds mature audit event pipeline settings. Pointer bools allow the
+// config loader to distinguish "unset" from an explicit false.
+type Audit struct {
+	Enabled *bool       `toml:"enabled"`
+	Level   string      `toml:"level"`
+	Outputs AuditOutput `toml:"outputs"`
+	Query   AuditQuery  `toml:"query"`
+}
+
+type AuditOutput struct {
+	JSONL  AuditJSONLOutput  `toml:"jsonl"`
+	SQLite AuditSQLiteOutput `toml:"sqlite"`
+}
+
+type AuditJSONLOutput struct {
+	Enabled          *bool  `toml:"enabled"`
+	EventsDir        string `toml:"events_dir"`
+	PayloadsDir      string `toml:"payloads_dir"`
+	WriteRawPayloads *bool  `toml:"write_raw_payloads"`
+}
+
+type AuditSQLiteOutput struct {
+	Enabled *bool  `toml:"enabled"`
+	Path    string `toml:"path"`
+}
+
+type AuditQuery struct {
+	Prefer string `toml:"prefer"`
+}
+
 // Paths holds optional explicit path overrides from the [paths] TOML table.
 // An empty string for any field means "use the XDG env var (or its default)".
 // Non-empty values take highest priority in the resolution chain.
@@ -26,11 +56,33 @@ type Paths struct {
 // Condition is one clause in a multi-condition rule.
 // All conditions in a rule must match for the rule to fire (AND semantics).
 type Condition struct {
+	// Kind selects the condition evaluator. Empty means "regex" for backward
+	// compatibility with existing configs.
+	Kind string `toml:"kind"`
+
 	FieldPaths []string `toml:"field_paths"`
 	// Pattern must match the extracted field value for the condition to pass.
+	// For command conditions, this is applied to the normalized command tail
+	// (subcommand plus arguments).
 	Pattern string `toml:"pattern"`
-	// NotPattern, if set, must NOT match the extracted field value.
+	// NotPattern, if set, must NOT match the extracted field value. For command
+	// conditions, this is applied to the same normalized command tail.
 	NotPattern string `toml:"not_pattern"`
+
+	// Command condition fields.
+	Argv0       string   `toml:"argv0"`
+	Subcommands []string `toml:"subcommands"`
+	StripEnv    bool     `toml:"strip_env"`
+	StripArgs   []string `toml:"strip_args"`
+	CwdFlags    []string `toml:"cwd_flags"`
+
+	// Project condition fields. Paths are evaluated relative to the discovered
+	// project root. If RootMarkers is set, the root is the nearest ancestor
+	// containing any marker.
+	RootMarkers []string `toml:"root_markers"`
+	RequireAny  []string `toml:"require_any"`
+	RequireAll  []string `toml:"require_all"`
+	ForbidAny   []string `toml:"forbid_any"`
 
 	compiled    *regex.Regexp
 	compiledNot *regex.Regexp
@@ -45,7 +97,7 @@ func (c *Condition) CompiledNotPattern() *regex.Regexp { return c.compiledNot }
 // NewCondition constructs a Condition with pre-compiled regexes.
 // Intended for tests and programmatic rule construction.
 func NewCondition(fieldPaths []string, pattern, notPattern string) (Condition, error) {
-	c := Condition{FieldPaths: fieldPaths, Pattern: pattern, NotPattern: notPattern}
+	c := Condition{Kind: "regex", FieldPaths: fieldPaths, Pattern: pattern, NotPattern: notPattern}
 	if pattern != "" {
 		re, err := regex.Compile(pattern)
 		if err != nil {
@@ -113,6 +165,7 @@ func NewSimpleRule(name, pattern string, compiled *regex.Regexp, events, fieldPa
 // Config is the top-level configuration structure.
 type Config struct {
 	Log   Log    `toml:"log"`
+	Audit Audit  `toml:"audit"`
 	Paths Paths  `toml:"paths"`
 	Rules []Rule `toml:"rules"`
 }
@@ -124,6 +177,72 @@ func (c *Config) ConversationsDir() string {
 		return c.Paths.ConversationsDir
 	}
 	return DefaultConversationsDir()
+}
+
+func (c *Config) AuditEnabled() bool {
+	if c != nil && c.Audit.Enabled != nil {
+		return *c.Audit.Enabled
+	}
+	return true
+}
+
+func (c *Config) AuditLevel() string {
+	if c != nil && c.Audit.Level != "" {
+		return c.Audit.Level
+	}
+	if c != nil {
+		return c.Log.Level
+	}
+	return ""
+}
+
+func (c *Config) AuditJSONLEnabled() bool {
+	if c != nil && c.Audit.Outputs.JSONL.Enabled != nil {
+		return *c.Audit.Outputs.JSONL.Enabled
+	}
+	return true
+}
+
+func (c *Config) AuditSQLiteEnabled() bool {
+	if c != nil && c.Audit.Outputs.SQLite.Enabled != nil {
+		return *c.Audit.Outputs.SQLite.Enabled
+	}
+	return false
+}
+
+func (c *Config) AuditWriteRawPayloads() bool {
+	if c != nil && c.Audit.Outputs.JSONL.WriteRawPayloads != nil {
+		return *c.Audit.Outputs.JSONL.WriteRawPayloads
+	}
+	return true
+}
+
+func (c *Config) AuditEventsDir() string {
+	if c != nil && c.Audit.Outputs.JSONL.EventsDir != "" {
+		return c.Audit.Outputs.JSONL.EventsDir
+	}
+	return DefaultAuditEventsDir()
+}
+
+func (c *Config) AuditPayloadsDir() string {
+	if c != nil && c.Audit.Outputs.JSONL.PayloadsDir != "" {
+		return c.Audit.Outputs.JSONL.PayloadsDir
+	}
+	return DefaultAuditPayloadsDir()
+}
+
+func (c *Config) AuditSQLitePath() string {
+	if c != nil && c.Audit.Outputs.SQLite.Path != "" {
+		return c.Audit.Outputs.SQLite.Path
+	}
+	return DefaultAuditSQLitePath()
+}
+
+func (c *Config) AuditQueryPrefer() string {
+	if c != nil && c.Audit.Query.Prefer != "" {
+		return c.Audit.Query.Prefer
+	}
+	return "sqlite"
 }
 
 // Load reads the config file at the XDG config path.
@@ -149,6 +268,14 @@ func Load() (*Config, error) {
 		if len(r.Conditions) > 0 {
 			for j := range r.Conditions {
 				c := &r.Conditions[j]
+				if c.Kind == "" {
+					c.Kind = "regex"
+				}
+				switch c.Kind {
+				case "regex", "command", "project":
+				default:
+					return nil, fmt.Errorf("rule %q condition %d: unknown kind %q", r.Name, j, c.Kind)
+				}
 				if c.Pattern != "" {
 					re, err := regex.Compile(c.Pattern)
 					if err != nil {

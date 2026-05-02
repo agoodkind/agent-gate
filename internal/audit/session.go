@@ -3,6 +3,7 @@ package audit
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -16,267 +17,304 @@ import (
 
 	lru "github.com/hashicorp/golang-lru/v2"
 	expirable "github.com/hashicorp/golang-lru/v2/expirable"
+	_ "github.com/mattn/go-sqlite3"
+
+	"goodkind.io/agent-gate/internal/config"
 )
 
-// sessionLogCacheSize is the maximum number of open file handles kept in
-// the LRU. Eviction closes the file before it leaves the cache.
-const sessionLogCacheSize = 64
+const (
+	eventLogCacheSize = 16
+	dedupCacheSize    = 4096
+	dedupTTL          = 30 * time.Second
+	schemaVersion     = 1
+)
 
-// dedupCacheSize is how many recent entry fingerprints we remember to
-// drop duplicate fires. Editors sometimes merge hook entries from
-// multiple config files (settings.json, hooks/*.json, etc.) and end up
-// invoking agent-gate twice for one tool call. Without dedup we would
-// double-log every such event.
-const dedupCacheSize = 4096
-
-// dedupTTL is how long a fingerprint blocks duplicate writes. Long
-// enough to cover the inter-arrival gap of merged-config double fires
-// (microseconds) and short enough that legitimate identical events
-// hours apart are not silently dropped.
-const dedupTTL = 30 * time.Second
-
-// noSessionDir is the folder used when a hook payload has no session_id.
-const noSessionDir = "_no-session"
-
-// noEventName is the file stem used when no event_name is set.
-const noEventName = "_unknown"
-
-// SessionLogger writes per-conversation, per-event JSONL audit entries.
-//
-// Layout on disk:
-//
-//	<baseDir>/<system>/<session_id>/<event_name>.jsonl
-//
-// Open file handles are kept in an LRU cache. Disk writes happen on a
-// background worker goroutine fed by an unbounded in-memory queue. Callers
-// never block on file I/O. The queue grows with backlog so no entry is ever
-// dropped. Memory pressure is the natural backstop.
-type SessionLogger struct {
-	baseDir  string
+type EventLogger struct {
 	minLevel slog.Level
-	cache    *lru.Cache[sessionKey, *os.File]
 	dedup    *expirable.LRU[string, struct{}]
+	outputs  []eventSink
+	rawHash  bool
 
 	mu       sync.Mutex
 	cond     *sync.Cond
-	queue    []sessionWrite
+	queue    []eventWrite
 	stopping bool
 
 	wg  sync.WaitGroup
 	log *slog.Logger
 }
 
-type sessionKey struct {
-	system    string
-	sessionID string
-	eventName string
+type eventWrite struct {
+	event      Event
+	rawPayload string
 }
 
-type sessionWrite struct {
-	key  sessionKey
-	line []byte
+type Event struct {
+	EventID        string      `json:"event_id"`
+	SchemaVersion  int         `json:"schema_version"`
+	Time           string      `json:"time"`
+	Level          string      `json:"level"`
+	Message        string      `json:"message"`
+	System         string      `json:"system"`
+	SessionID      string      `json:"session_id"`
+	TurnID         string      `json:"turn_id,omitempty"`
+	EventName      string      `json:"event_name"`
+	ToolUseID      string      `json:"tool_use_id,omitempty"`
+	ToolName       string      `json:"tool_name,omitempty"`
+	Operation      Operation   `json:"operation,omitempty"`
+	Decision       Decision    `json:"decision,omitempty"`
+	Violations     []Violation `json:"violations,omitempty"`
+	RawPayloadHash string      `json:"raw_payload_hash,omitempty"`
 }
 
-// NewSessionLogger creates a SessionLogger writing under baseDir and starts
-// the background worker. The minLevel argument is one of debug, info, warn,
-// error. An empty or unrecognized value is treated as info.
-func NewSessionLogger(baseDir, minLevel string, log *slog.Logger) (*SessionLogger, error) {
+type Operation struct {
+	CWD          string `json:"cwd,omitempty"`
+	EffectiveCWD string `json:"effective_cwd,omitempty"`
+	Command      string `json:"command,omitempty"`
+	FilePath     string `json:"file_path,omitempty"`
+}
+
+type Decision struct {
+	Kind         string   `json:"kind,omitempty"`
+	CanBlock     bool     `json:"can_block,omitempty"`
+	RulesChecked []string `json:"rules_checked,omitempty"`
+	RulesMatched []string `json:"rules_matched,omitempty"`
+}
+
+type Violation struct {
+	Rule      string `json:"rule"`
+	Mode      string `json:"mode"`
+	FieldPath string `json:"field_path,omitempty"`
+	FilePath  string `json:"file_path,omitempty"`
+	Start     int    `json:"start,omitempty"`
+	End       int    `json:"end,omitempty"`
+	Message   string `json:"message,omitempty"`
+}
+
+type eventSink interface {
+	Write(Event, string) error
+	Close() error
+}
+
+func NewEventLogger(cfg *config.Config, log *slog.Logger) (*EventLogger, error) {
 	if log == nil {
 		log = slog.Default()
 	}
-
-	sl := &SessionLogger{
-		baseDir:  baseDir,
-		minLevel: parseLevel(minLevel),
+	level := ""
+	if cfg != nil {
+		level = cfg.AuditLevel()
+	}
+	el := &EventLogger{
+		minLevel: parseLevel(level),
 		log:      log,
 	}
-	sl.cond = sync.NewCond(&sl.mu)
+	el.cond = sync.NewCond(&el.mu)
+	el.dedup = expirable.NewLRU[string, struct{}](dedupCacheSize, nil, dedupTTL)
 
-	cache, err := lru.NewWithEvict[sessionKey, *os.File](sessionLogCacheSize, func(_ sessionKey, f *os.File) {
-		_ = f.Close()
-	})
-	if err != nil {
-		return nil, fmt.Errorf("create session log lru: %w", err)
+	if cfg == nil || cfg.AuditEnabled() {
+		if cfg == nil || cfg.AuditJSONLEnabled() {
+			eventsDir := config.DefaultAuditEventsDir()
+			payloadsDir := config.DefaultAuditPayloadsDir()
+			writeRaw := true
+			if cfg != nil {
+				eventsDir = cfg.AuditEventsDir()
+				payloadsDir = cfg.AuditPayloadsDir()
+				writeRaw = cfg.AuditWriteRawPayloads()
+			}
+			el.rawHash = writeRaw
+			s, err := newJSONLEventSink(eventsDir, payloadsDir, writeRaw, log)
+			if err != nil {
+				return nil, err
+			}
+			el.outputs = append(el.outputs, s)
+		}
+		if cfg != nil && cfg.AuditSQLiteEnabled() {
+			s, err := newSQLiteEventSink(cfg.AuditSQLitePath())
+			if err != nil {
+				return nil, err
+			}
+			el.outputs = append(el.outputs, s)
+		}
 	}
-	sl.cache = cache
-	sl.dedup = expirable.NewLRU[string, struct{}](dedupCacheSize, nil, dedupTTL)
 
-	if err := os.MkdirAll(baseDir, 0o755); err != nil {
-		return nil, fmt.Errorf("create session log base dir %s: %w", baseDir, err)
-	}
-
-	sl.wg.Add(1)
-	go sl.worker()
-	return sl, nil
+	el.wg.Add(1)
+	go el.worker()
+	return el, nil
 }
 
-// Log enqueues a single audit entry for asynchronous write. The call is
-// non-blocking and never drops the entry.
-//
-// system, sessionID, and eventName together choose the destination file.
-// Empty values are replaced with placeholder folder/file names so that no
-// data is silently lost.
-func (sl *SessionLogger) Log(system, sessionID, eventName, level, msg string, attrs map[string]any) {
-	if sl == nil {
-		return
-	}
-	if !sl.shouldLog(level) {
+func (el *EventLogger) Log(system, sessionID, eventName, level, msg string, attrs map[string]any) {
+	if el == nil || !el.shouldLog(level) {
 		return
 	}
 
-	key := sessionKey{
-		system:    sanitize(system, "unknown"),
-		sessionID: sanitize(sessionID, noSessionDir),
-		eventName: sanitize(eventName, noEventName),
-	}
-
-	// Drop duplicate fires that share the same payload within dedupTTL.
-	// Editors that merge hook entries from multiple config files end up
-	// invoking agent-gate twice for one tool call; without this, every
-	// such event would be written twice.
-	fingerprint := dedupFingerprint(key, level, msg, attrs)
-	if _, seen := sl.dedup.Get(fingerprint); seen {
-		sl.log.Debug("session log dedup drop",
-			"system", key.system,
-			"session_id", key.sessionID,
-			"event", key.eventName,
+	event := normalizeEvent(system, sessionID, eventName, level, msg, attrs)
+	fingerprint := dedupFingerprint(event, attrs)
+	if _, seen := el.dedup.Get(fingerprint); seen {
+		el.log.Debug("audit event dedup drop",
+			"system", event.System,
+			"session_id", event.SessionID,
+			"event", event.EventName,
 			"msg", msg,
 		)
 		return
 	}
-	sl.dedup.Add(fingerprint, struct{}{})
+	el.dedup.Add(fingerprint, struct{}{})
+	event.EventID = "evt_" + fingerprint[:32]
 
-	entry := make(map[string]any, len(attrs)+3)
-	entry["time"] = time.Now().UTC().Format(time.RFC3339Nano)
-	entry["level"] = level
-	entry["msg"] = msg
-	for k, v := range attrs {
-		if k == "time" || k == "level" || k == "msg" {
-			continue
-		}
-		entry[k] = v
+	rawPayload, _ := attrs["raw_payload"].(string)
+	if rawPayload != "" && el.rawHash {
+		event.RawPayloadHash = payloadHash(rawPayload)
 	}
 
-	line, err := json.Marshal(entry)
-	if err != nil {
-		sl.log.Warn("session log marshal failed", "err", err)
+	el.mu.Lock()
+	if el.stopping {
+		el.mu.Unlock()
 		return
 	}
-	line = append(line, '\n')
-
-	sl.mu.Lock()
-	if sl.stopping {
-		sl.mu.Unlock()
-		return
-	}
-	sl.queue = append(sl.queue, sessionWrite{key: key, line: line})
-	sl.cond.Signal()
-	sl.mu.Unlock()
+	el.queue = append(el.queue, eventWrite{event: event, rawPayload: rawPayload})
+	el.cond.Signal()
+	el.mu.Unlock()
 }
 
-// Close marks the logger stopping, waits for the worker to drain all
-// queued writes, then closes every open file. Safe to call multiple times.
-func (sl *SessionLogger) Close() error {
-	if sl == nil {
+func (el *EventLogger) Close() error {
+	if el == nil {
 		return nil
 	}
-	sl.mu.Lock()
-	if sl.stopping {
-		sl.mu.Unlock()
+	el.mu.Lock()
+	if el.stopping {
+		el.mu.Unlock()
 		return nil
 	}
-	sl.stopping = true
-	sl.cond.Broadcast()
-	sl.mu.Unlock()
+	el.stopping = true
+	el.cond.Broadcast()
+	el.mu.Unlock()
 
-	sl.wg.Wait()
-	sl.cache.Purge()
+	el.wg.Wait()
+	for _, output := range el.outputs {
+		_ = output.Close()
+	}
 	return nil
 }
 
-func (sl *SessionLogger) worker() {
-	defer sl.wg.Done()
-
+func (el *EventLogger) worker() {
+	defer el.wg.Done()
 	for {
-		sl.mu.Lock()
-		for len(sl.queue) == 0 && !sl.stopping {
-			sl.cond.Wait()
+		el.mu.Lock()
+		for len(el.queue) == 0 && !el.stopping {
+			el.cond.Wait()
 		}
-		batch := sl.queue
-		sl.queue = nil
-		stopping := sl.stopping
-		sl.mu.Unlock()
+		batch := el.queue
+		el.queue = nil
+		stopping := el.stopping
+		el.mu.Unlock()
 
 		for _, w := range batch {
-			sl.write(w)
+			for _, output := range el.outputs {
+				if err := output.Write(w.event, w.rawPayload); err != nil {
+					el.log.Warn("audit output write failed", "event_id", w.event.EventID, "err", err)
+				}
+			}
 		}
 
 		if stopping {
-			// Re-check the queue under the lock to catch any final writers
-			// that raced past the stopping flag.
-			sl.mu.Lock()
-			remaining := sl.queue
-			sl.queue = nil
-			sl.mu.Unlock()
+			el.mu.Lock()
+			remaining := el.queue
+			el.queue = nil
+			el.mu.Unlock()
 			for _, w := range remaining {
-				sl.write(w)
+				for _, output := range el.outputs {
+					if err := output.Write(w.event, w.rawPayload); err != nil {
+						el.log.Warn("audit output write failed", "event_id", w.event.EventID, "err", err)
+					}
+				}
 			}
 			return
 		}
 	}
 }
 
-func (sl *SessionLogger) write(w sessionWrite) {
-	f, ok := sl.cache.Get(w.key)
-	if !ok {
-		opened, err := sl.openFile(w.key)
-		if err != nil {
-			sl.log.Warn("session log open failed",
-				"system", w.key.system,
-				"session_id", w.key.sessionID,
-				"event", w.key.eventName,
-				"err", err,
-			)
-			return
-		}
-		sl.cache.Add(w.key, opened)
-		f = opened
+func normalizeEvent(system, sessionID, eventName, level, msg string, attrs map[string]any) Event {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	event := Event{
+		SchemaVersion: schemaVersion,
+		Time:          now,
+		Level:         level,
+		Message:       msg,
+		System:        stringAttr(attrs, "system", system),
+		SessionID:     stringAttr(attrs, "session_id", sessionID),
+		TurnID:        stringAttr(attrs, "turn_id", ""),
+		EventName:     stringAttr(attrs, "event", eventName),
+		ToolUseID:     stringAttr(attrs, "tool_use_id", ""),
+		ToolName:      stringAttr(attrs, "tool_name", ""),
+		Operation: Operation{
+			CWD:          stringAttr(attrs, "cwd", ""),
+			EffectiveCWD: stringAttr(attrs, "effective_cwd", ""),
+			Command:      firstStringAttr(attrs, "ti_command", "command"),
+			FilePath:     firstStringAttr(attrs, "file_path", "ti_file_path"),
+		},
+		Decision: Decision{
+			Kind:         stringAttr(attrs, "decision", decisionFromMessage(msg)),
+			RulesChecked: stringSliceAttr(attrs, "rules_checked"),
+			RulesMatched: stringSliceAttr(attrs, "blocking_rules"),
+		},
 	}
+	if event.System == "" {
+		event.System = "unknown"
+	}
+	if event.SessionID == "" {
+		event.SessionID = "_no-session"
+	}
+	if event.EventName == "" {
+		event.EventName = "_unknown"
+	}
+	event.Decision.CanBlock = event.Decision.Kind == "block"
+	event.Violations = violationsFromAttrs(event.Decision.RulesMatched, event.Decision.Kind, attrs)
+	return event
+}
 
-	if _, err := f.Write(w.line); err != nil {
-		sl.log.Warn("session log write failed",
-			"system", w.key.system,
-			"session_id", w.key.sessionID,
-			"event", w.key.eventName,
-			"err", err,
-		)
-		// On write error, drop the cached handle so the next entry reopens.
-		sl.cache.Remove(w.key)
+func decisionFromMessage(msg string) string {
+	switch msg {
+	case "hook.allowed":
+		return "allow"
+	case "hook.blocked":
+		return "block"
+	case "hook.audit_violation":
+		return "audit_only"
+	default:
+		return ""
 	}
 }
 
-func (sl *SessionLogger) openFile(key sessionKey) (*os.File, error) {
-	dir := filepath.Join(sl.baseDir, key.system, key.sessionID)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return nil, fmt.Errorf("mkdir %s: %w", dir, err)
+func violationsFromAttrs(rules []string, decision string, attrs map[string]any) []Violation {
+	if len(rules) == 0 {
+		return nil
 	}
-	path := filepath.Join(dir, key.eventName+".jsonl")
-	return os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	mode := "blocking"
+	if decision == "audit_only" {
+		mode = "audit_only"
+	}
+	message := stringAttr(attrs, "violation_message", "")
+	out := make([]Violation, 0, len(rules))
+	for _, rule := range rules {
+		out = append(out, Violation{Rule: rule, Mode: mode, Message: message})
+	}
+	return out
 }
 
-// dedupFingerprint produces a stable hash for an entry so that duplicate
-// fires (same destination, same level, same message, same payload) collapse
-// to a single write. The "time" attribute is excluded because it differs
-// on each invocation. Other attributes are serialised in sorted order so
-// map iteration randomness does not change the hash.
-func dedupFingerprint(key sessionKey, level, msg string, attrs map[string]any) string {
-	stable := make(map[string]any, len(attrs))
+func dedupFingerprint(event Event, attrs map[string]any) string {
+	stable := make(map[string]any, len(attrs)+12)
 	for k, v := range attrs {
 		if k == "time" {
 			continue
 		}
 		stable[k] = v
 	}
+	stable["system"] = event.System
+	stable["session_id"] = event.SessionID
+	stable["event"] = event.EventName
+	stable["level"] = event.Level
+	stable["msg"] = event.Message
+
 	keys := make([]string, 0, len(stable))
 	for k := range stable {
 		keys = append(keys, k)
@@ -284,16 +322,6 @@ func dedupFingerprint(key sessionKey, level, msg string, attrs map[string]any) s
 	sort.Strings(keys)
 
 	h := sha256.New()
-	_, _ = h.Write([]byte(key.system))
-	_, _ = h.Write([]byte{0})
-	_, _ = h.Write([]byte(key.sessionID))
-	_, _ = h.Write([]byte{0})
-	_, _ = h.Write([]byte(key.eventName))
-	_, _ = h.Write([]byte{0})
-	_, _ = h.Write([]byte(level))
-	_, _ = h.Write([]byte{0})
-	_, _ = h.Write([]byte(msg))
-	_, _ = h.Write([]byte{0})
 	for _, k := range keys {
 		_, _ = h.Write([]byte(k))
 		_, _ = h.Write([]byte{'='})
@@ -305,13 +333,10 @@ func dedupFingerprint(key sessionKey, level, msg string, attrs map[string]any) s
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-// shouldLog returns true if the given level meets the configured minimum.
-func (sl *SessionLogger) shouldLog(level string) bool {
-	return parseLevel(level) >= sl.minLevel
+func (el *EventLogger) shouldLog(level string) bool {
+	return parseLevel(level) >= el.minLevel
 }
 
-// parseLevel maps a string level name to slog.Level. Unknown values map to
-// slog.LevelInfo so misconfiguration never silences info entries.
 func parseLevel(s string) slog.Level {
 	switch strings.ToLower(strings.TrimSpace(s)) {
 	case "debug":
@@ -325,8 +350,45 @@ func parseLevel(s string) slog.Level {
 	}
 }
 
-// sanitize replaces empty strings with fallback and strips path separators
-// so that attacker-controlled fields cannot escape the session folder.
+func stringAttr(attrs map[string]any, key, fallback string) string {
+	if attrs == nil {
+		return fallback
+	}
+	if v, ok := attrs[key].(string); ok && v != "" {
+		return v
+	}
+	return fallback
+}
+
+func firstStringAttr(attrs map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if v := stringAttr(attrs, key, ""); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+func stringSliceAttr(attrs map[string]any, key string) []string {
+	if attrs == nil {
+		return nil
+	}
+	switch v := attrs[key].(type) {
+	case []string:
+		return append([]string(nil), v...)
+	case []any:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			if s, ok := item.(string); ok && s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
 func sanitize(s, fallback string) string {
 	if s == "" {
 		return fallback
@@ -340,8 +402,225 @@ func sanitize(s, fallback string) string {
 	return s
 }
 
-// AttrsFromSlog converts a slice of slog.Attr to a flat map[string]any
-// suitable for SessionLogger.Log. Group attrs are flattened with dotted keys.
+type jsonlEventSink struct {
+	eventsDir        string
+	payloadsDir      string
+	writeRawPayloads bool
+	cache            *lru.Cache[string, *os.File]
+}
+
+func newJSONLEventSink(eventsDir, payloadsDir string, writeRawPayloads bool, log *slog.Logger) (*jsonlEventSink, error) {
+	if err := os.MkdirAll(eventsDir, 0o755); err != nil {
+		return nil, fmt.Errorf("create audit events dir %s: %w", eventsDir, err)
+	}
+	if writeRawPayloads {
+		if err := os.MkdirAll(payloadsDir, 0o755); err != nil {
+			return nil, fmt.Errorf("create audit payloads dir %s: %w", payloadsDir, err)
+		}
+	}
+	cache, err := lru.NewWithEvict[string, *os.File](eventLogCacheSize, func(_ string, f *os.File) {
+		_ = f.Close()
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create audit event lru: %w", err)
+	}
+	return &jsonlEventSink{eventsDir: eventsDir, payloadsDir: payloadsDir, writeRawPayloads: writeRawPayloads, cache: cache}, nil
+}
+
+func (s *jsonlEventSink) Write(event Event, rawPayload string) error {
+	if s.writeRawPayloads && rawPayload != "" {
+		hash, err := s.writePayload(rawPayload)
+		if err != nil {
+			return err
+		}
+		event.RawPayloadHash = hash
+	}
+
+	line, err := json.Marshal(event)
+	if err != nil {
+		return err
+	}
+	line = append(line, '\n')
+
+	f, err := s.fileFor(event.Time)
+	if err != nil {
+		return err
+	}
+	_, err = f.Write(line)
+	return err
+}
+
+func (s *jsonlEventSink) writePayload(rawPayload string) (string, error) {
+	hash := strings.TrimPrefix(payloadHash(rawPayload), "sha256:")
+	dir := filepath.Join(s.payloadsDir, "sha256", hash[:2], hash[2:4])
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	path := filepath.Join(dir, hash+".json")
+	if _, err := os.Stat(path); err == nil {
+		return "sha256:" + hash, nil
+	}
+	return "sha256:" + hash, os.WriteFile(path, []byte(rawPayload), 0o600)
+}
+
+func payloadHash(rawPayload string) string {
+	sum := sha256.Sum256([]byte(rawPayload))
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+func (s *jsonlEventSink) fileFor(ts string) (*os.File, error) {
+	day := ts[:10]
+	if f, ok := s.cache.Get(day); ok {
+		return f, nil
+	}
+	dir := filepath.Join(s.eventsDir, day[:4], day[5:7], day[8:10])
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, err
+	}
+	path := filepath.Join(dir, "events.jsonl")
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return nil, err
+	}
+	s.cache.Add(day, f)
+	return f, nil
+}
+
+func (s *jsonlEventSink) Close() error {
+	if s == nil || s.cache == nil {
+		return nil
+	}
+	s.cache.Purge()
+	return nil
+}
+
+type sqliteEventSink struct {
+	db *sql.DB
+}
+
+func newSQLiteEventSink(path string) (*sqliteEventSink, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return nil, err
+	}
+	db, err := sql.Open("sqlite3", path)
+	if err != nil {
+		return nil, err
+	}
+	s := &sqliteEventSink{db: db}
+	if err := s.init(); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	return s, nil
+}
+
+func (s *sqliteEventSink) init() error {
+	stmts := []string{
+		`create table if not exists events (
+			event_id text primary key,
+			schema_version integer,
+			time text,
+			level text,
+			message text,
+			system text,
+			session_id text,
+			turn_id text,
+			event_name text,
+			tool_use_id text,
+			tool_name text,
+			raw_payload_hash text
+		)`,
+		`create table if not exists operations (
+			event_id text primary key,
+			cwd text,
+			effective_cwd text,
+			command text,
+			file_path text
+		)`,
+		`create table if not exists decisions (
+			event_id text primary key,
+			kind text,
+			can_block integer,
+			rules_checked_json text,
+			rules_matched_json text
+		)`,
+		`create table if not exists violations (
+			id integer primary key autoincrement,
+			event_id text,
+			rule text,
+			mode text,
+			field_path text,
+			file_path text,
+			start integer,
+			end integer,
+			message text
+		)`,
+		`create index if not exists events_time_idx on events(time)`,
+		`create index if not exists events_system_time_idx on events(system, time)`,
+		`create index if not exists events_session_time_idx on events(session_id, time)`,
+		`create index if not exists events_tool_time_idx on events(tool_name, time)`,
+		`create index if not exists events_event_name_time_idx on events(event_name, time)`,
+		`create index if not exists decisions_kind_idx on decisions(kind)`,
+		`create index if not exists violations_rule_idx on violations(rule)`,
+		`create index if not exists violations_mode_idx on violations(mode)`,
+	}
+	for _, stmt := range stmts {
+		if _, err := s.db.Exec(stmt); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *sqliteEventSink) Write(event Event, _ string) error {
+	checked, _ := json.Marshal(event.Decision.RulesChecked)
+	matched, _ := json.Marshal(event.Decision.RulesMatched)
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.Exec(`insert or ignore into events values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		event.EventID, event.SchemaVersion, event.Time, event.Level, event.Message, event.System,
+		event.SessionID, event.TurnID, event.EventName, event.ToolUseID, event.ToolName, event.RawPayloadHash,
+	); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`insert or ignore into operations values (?, ?, ?, ?, ?)`,
+		event.EventID, event.Operation.CWD, event.Operation.EffectiveCWD, event.Operation.Command, event.Operation.FilePath,
+	); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`insert or ignore into decisions values (?, ?, ?, ?, ?)`,
+		event.EventID, event.Decision.Kind, boolInt(event.Decision.CanBlock), string(checked), string(matched),
+	); err != nil {
+		return err
+	}
+	for _, v := range event.Violations {
+		if _, err := tx.Exec(`insert into violations (event_id, rule, mode, field_path, file_path, start, end, message) values (?, ?, ?, ?, ?, ?, ?, ?)`,
+			event.EventID, v.Rule, v.Mode, v.FieldPath, v.FilePath, v.Start, v.End, v.Message,
+		); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func boolInt(v bool) int {
+	if v {
+		return 1
+	}
+	return 0
+}
+
+func (s *sqliteEventSink) Close() error {
+	if s == nil || s.db == nil {
+		return nil
+	}
+	return s.db.Close()
+}
+
 func AttrsFromSlog(attrs []slog.Attr) map[string]any {
 	out := make(map[string]any, len(attrs))
 	for _, a := range attrs {
@@ -366,5 +645,4 @@ func flattenAttr(prefix string, a slog.Attr, out map[string]any) {
 	}
 }
 
-// Ensure context type is referenced (kept for future ctx-aware writes).
 var _ = context.Background

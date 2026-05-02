@@ -16,16 +16,11 @@ service AgentGateD {
   // The daemon cleans up the fake HOME and any associated runtime state.
   rpc ReleaseSession(ReleaseSessionRequest) returns (ReleaseSessionResponse);
 
-  // HookEvent forwards a Claude Code hook event to the daemon for processing.
-  // Replaces direct stdin-based hook handling for wrapper-launched sessions.
-  rpc HookEvent(HookEventRequest) returns (HookEventResponse);
+  // EvaluateHook forwards raw hook input to the daemon-owned enforcement engine.
+  rpc EvaluateHook(EvaluateHookRequest) returns (EvaluateHookResponse);
 
-  // Audit forwards a single audit log entry to the daemon. The daemon
-  // enqueues the entry to its per-conversation JSONL writer and returns
-  // immediately. Disk writes happen asynchronously on a worker goroutine.
-  // The call is lossy under heavy load. Entries may be dropped if the queue
-  // is full. The call never blocks the caller on disk I/O.
-  rpc Audit(AuditRequest) returns (AuditResponse);
+  // Status returns process and build metadata for the connected daemon.
+  rpc Status(StatusRequest) returns (StatusResponse);
 }
 
 message AcquireSessionRequest {
@@ -59,16 +54,23 @@ message ReleaseSessionRequest {
 
 message ReleaseSessionResponse {}
 
-message HookEventRequest {
-  // raw_json is the raw JSON payload from Claude Code (stdin of hook process).
+message EvaluateHookRequest {
+  // raw_json is the raw JSON payload read from hook stdin.
   bytes raw_json = 1;
 
-  // wrapper_id identifies which wrapper session this hook belongs to.
-  // The daemon uses this to look up session context.
+  // wrapper_id identifies which wrapper session this hook belongs to, when
+  // available.
   string wrapper_id = 2;
+
+  // provider_hint is a best-effort CLI/template hint such as "codex" or
+  // "gemini". Daemon-side detection may override it based on env/payload.
+  string provider_hint = 3;
+  string cwd = 4;
+  repeated string argv = 5;
+  map<string, string> env_fingerprint = 6;
 }
 
-message HookEventResponse {
+message EvaluateHookResponse {
   // exit_code is the code the hook process should exit with.
   // 0 = allow, 2 = block.
   int32 exit_code = 1;
@@ -80,28 +82,15 @@ message HookEventResponse {
   bytes stderr_data = 3;
 }
 
-message AuditRequest {
-  // system identifies the provider: claude, cursor, codex, gemini.
-  string system = 1;
+message StatusRequest {}
 
-  // session_id is the conversation identifier from the hook payload.
-  // The daemon groups all entries with the same (system, session_id) into
-  // one folder on disk.
-  string session_id = 2;
-
-  // event_name is the hook event name (PreToolUse, Stop, etc).
-  // The daemon routes each entry to the matching event_name.jsonl file.
-  string event_name = 3;
-
-  // level is one of debug, info, warn, error.
-  string level = 4;
-
-  // msg is the human-readable message for this entry.
-  string msg = 5;
-
-  // attrs_json is a UTF-8 JSON object containing structured attributes.
-  // The daemon merges these fields into the JSONL line at the top level.
-  bytes attrs_json = 6;
+message StatusResponse {
+  int64 pid = 1;
+  string executable_path = 2;
+  string socket_path = 3;
+  string version = 4;
+  string commit = 5;
+  string dirty = 6;
+  string build_hash = 7;
+  int32 active_sessions = 8;
 }
-
-message AuditResponse {}

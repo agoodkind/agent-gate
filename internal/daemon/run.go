@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"path/filepath"
+	"syscall"
 
 	"google.golang.org/grpc"
 
@@ -21,17 +23,25 @@ func Run(log *slog.Logger, cfg *config.Config) error {
 		return err
 	}
 
-	socketPath := config.DaemonSocketPath()
-
-	// Remove stale socket from a previous run.
-	if err := os.Remove(socketPath); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("failed to remove stale socket: %w", err)
-	}
-
-	listener, err := net.Listen("unix", socketPath)
+	lockPath := filepath.Join(config.RuntimeDir(), "daemon.process.lock")
+	lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
-		return fmt.Errorf("failed to listen on %s: %w", socketPath, err)
+		return fmt.Errorf("open daemon process lock: %w", err)
 	}
+	defer func() { _ = lockFile.Close() }()
+
+	if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		log.InfoContext(context.Background(), "daemon already running", "lock_path", lockPath)
+		return nil
+	}
+	defer func() { _ = syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN) }()
+
+	socketPath := config.DaemonSocketPath()
+	listener, err := daemonListener(socketPath)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = listener.Close() }()
 
 	srv, err := New(log, cfg)
 	if err != nil {
@@ -44,4 +54,15 @@ func Run(log *slog.Logger, cfg *config.Config) error {
 
 	log.InfoContext(context.Background(), "daemon listening", "socket", socketPath)
 	return grpcServer.Serve(listener)
+}
+
+func daemonListener(socketPath string) (net.Listener, error) {
+	if err := os.Remove(socketPath); err != nil && !os.IsNotExist(err) {
+		return nil, fmt.Errorf("failed to remove stale socket: %w", err)
+	}
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to listen on %s: %w", socketPath, err)
+	}
+	return listener, nil
 }

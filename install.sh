@@ -13,6 +13,8 @@
 # Flags:
 #   --bin-only          install the binary only, skip hook config updates
 #   --hooks-only        update hook configs only, skip binary download
+#   --service-only      install/start only the user daemon service
+#   --no-service        skip user daemon service setup
 #   --no-claude         skip Claude hook config update
 #   --no-codex          skip Codex hook config update
 #   --no-gemini         skip Gemini hook config update
@@ -37,16 +39,21 @@ BIN_DIR="${XDG_BIN_HOME:-$HOME/.local/bin}"
 VERSION=""
 DO_BIN=1
 DO_HOOKS=1
+DO_SERVICE=1
 DO_CLAUDE=1
 DO_CODEX=1
 DO_GEMINI=1
 DO_COPILOT=1
 TEMPLATES=""
+SERVICE_TEMPLATES=""
 
 # Resolve to a local templates dir when run from a checkout.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [[ -d "$SCRIPT_DIR/hooks" ]]; then
   TEMPLATES="$SCRIPT_DIR/hooks"
+fi
+if [[ -d "$SCRIPT_DIR/services" ]]; then
+  SERVICE_TEMPLATES="$SCRIPT_DIR/services"
 fi
 
 usage() {
@@ -60,8 +67,10 @@ die() {
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --bin-only)    DO_HOOKS=0 ;;
-    --hooks-only)  DO_BIN=0 ;;
+    --bin-only)    DO_HOOKS=0; DO_SERVICE=0 ;;
+    --hooks-only)  DO_BIN=0; DO_SERVICE=0 ;;
+    --service-only) DO_BIN=0; DO_HOOKS=0; DO_SERVICE=1 ;;
+    --no-service)  DO_SERVICE=0 ;;
     --no-claude)   DO_CLAUDE=0 ;;
     --no-codex)    DO_CODEX=0 ;;
     --no-gemini)   DO_GEMINI=0 ;;
@@ -113,6 +122,7 @@ install_bin() {
   local platform tag url tmpdir tarball
   platform="$(detect_platform)"
   tag="$(resolve_version)"
+  VERSION="$tag"
   [[ -n "$tag" ]] || die "could not resolve release tag (use --version)"
 
   url="https://github.com/$REPO/releases/download/$tag/agent-gate_${platform}.tar.gz"
@@ -197,12 +207,82 @@ install_hooks() {
   fi
 }
 
+state_dir() {
+  printf '%s/agent-gate' "${XDG_STATE_HOME:-$HOME/.local/state}"
+}
+
+stop_unmanaged_daemons() {
+  local pattern="^$BIN_DIR/agent-gate daemon$"
+  local pids
+  pids="$(pgrep -f "$pattern" || true)"
+  if [[ -n "$pids" ]]; then
+    printf '%s\n' "$pids" | xargs kill
+  fi
+}
+
+fetch_service_template() {
+  local platform="$1" name="$2"
+  if [[ -n "$SERVICE_TEMPLATES" && -f "$SERVICE_TEMPLATES/$platform/$name" ]]; then
+    cat "$SERVICE_TEMPLATES/$platform/$name"
+    return
+  fi
+  local ref="${VERSION:-main}"
+  local url="https://raw.githubusercontent.com/$REPO/$ref/services/$platform/$name"
+  curl -fsSL "$url" || die "fetch service template failed: $url"
+}
+
+install_service() {
+  local os_name
+  os_name="$(uname -s)"
+  case "$os_name" in
+    Darwin)
+      local label target domain rendered state
+      label="io.goodkind.agent-gate"
+      target="$HOME/Library/LaunchAgents/$label.plist"
+      domain="gui/$(id -u)"
+      state="$(state_dir)"
+      mkdir -p "$(dirname "$target")" "$state"
+      rendered="$(fetch_service_template launchd "$label.plist.templ" \
+        | sed "s#__AGENT_GATE_BIN__#$BIN_DIR/agent-gate#g; s#__AGENT_GATE_STATE_DIR__#$state#g; s#__AGENT_GATE_HOME__#$HOME#g")"
+      printf '%s\n' "$rendered" > "$target"
+      launchctl bootout "$domain" "$target" >/dev/null 2>&1 || true
+      stop_unmanaged_daemons
+      launchctl bootstrap "$domain" "$target" || die "launchctl bootstrap failed: $target"
+      launchctl enable "$domain/$label" || true
+      launchctl kickstart -k "$domain/$label" || die "launchctl kickstart failed: $label"
+      printf 'install.sh: installed launchd service %s\n' "$target"
+      ;;
+    Linux)
+      local target rendered
+      need systemctl
+      target="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/agent-gate.service"
+      mkdir -p "$(dirname "$target")"
+      rendered="$(fetch_service_template systemd agent-gate.service.templ \
+        | sed "s#__AGENT_GATE_BIN__#$BIN_DIR/agent-gate#g")"
+      printf '%s\n' "$rendered" > "$target"
+      systemctl --user daemon-reload
+      systemctl --user stop agent-gate.service >/dev/null 2>&1 || true
+      stop_unmanaged_daemons
+      systemctl --user enable --now agent-gate.service || die "systemctl --user enable --now failed"
+      systemctl --user restart agent-gate.service || die "systemctl --user restart failed"
+      printf 'install.sh: installed systemd user service %s\n' "$target"
+      ;;
+    *)
+      die "unsupported OS for service install: $os_name"
+      ;;
+  esac
+}
+
 if [[ "$DO_BIN" -eq 1 ]]; then
   install_bin
 fi
 
 if [[ "$DO_HOOKS" -eq 1 ]]; then
   install_hooks
+fi
+
+if [[ "$DO_SERVICE" -eq 1 ]]; then
+  install_service
 fi
 
 printf 'install.sh: done\n'

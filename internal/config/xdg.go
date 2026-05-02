@@ -73,6 +73,18 @@ func DefaultConversationsDir() string {
 	return filepath.Join(DefaultStateDir(), "conversations")
 }
 
+func DefaultAuditEventsDir() string {
+	return filepath.Join(DefaultStateDir(), "events")
+}
+
+func DefaultAuditPayloadsDir() string {
+	return filepath.Join(DefaultStateDir(), "payloads")
+}
+
+func DefaultAuditSQLitePath() string {
+	return filepath.Join(DefaultStateDir(), "sqlite", "audit.db")
+}
+
 // ProfilesConfigPath returns the path to profiles.toml in the XDG config directory.
 func ProfilesConfigPath() string {
 	return filepath.Join(DefaultConfigDir(), "profiles.toml")
