@@ -146,10 +146,6 @@ func matchRuleNames(violations []rules.MatchViolation) []string {
 	return names
 }
 
-func blockResponse(system HookSystem, eventName string, v *rules.Violation) (stdout, stderr []byte, exitCode int) {
-	return blockTextResponse(system, eventName, "agent-gate: ["+v.RuleName+"] "+v.Message)
-}
-
 func blockTextResponse(system HookSystem, eventName, text string) (stdout, stderr []byte, exitCode int) {
 	switch system {
 	case SystemCursor:

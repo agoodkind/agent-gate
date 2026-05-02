@@ -205,14 +205,13 @@ func openLog(component string) (*slog.Logger, func()) {
 	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
 		return slog.New(slog.NewJSONHandler(io.Discard, nil)), noClose
 	}
-	inner, closer, err := gklog.New(gklog.Config{
-		JSONLogFile:   logPath,
-		Rotation:      gklog.RotationConfig{MaxSizeMB: 5, MaxBackups: 0, MaxAgeDays: 0},
-		DisableStdout: true,
+	inner, closer := gklog.New(gklog.Config{
+		Handlers: []slog.Handler{
+			gklog.FileJSON(logPath, slog.LevelDebug, gklog.RotationConfig{
+				MaxSizeMB: 5, MaxBackups: 0, MaxAgeDays: 0,
+			}),
+		},
 	})
-	if err != nil {
-		return slog.New(slog.NewJSONHandler(io.Discard, nil)), noClose
-	}
 	return inner.With("component", component), func() {
 		if closer != nil {
 			_ = closer.Close()

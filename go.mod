@@ -6,7 +6,7 @@ require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/hashicorp/golang-lru/v2 v2.0.7
-	goodkind.io/gklog v0.0.0-20260421042800-8d0cf3e6c2c8
+	goodkind.io/gklog v0.2.1
 	google.golang.org/grpc v1.80.0
 	google.golang.org/protobuf v1.36.11
 )
