@@ -2,15 +2,132 @@ name: Release
 
 on:
   push:
-    branches: [main]
+    branches: [ main ]
 
 concurrency:
   group: release
   cancel-in-progress: true
 
+permissions:
+  contents: write
+
+env:
+  CGO_ENABLED: "1"
+  GOTOOLCHAIN: local
+
 jobs:
+  tag:
+    name: Prepare tag
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - id: tag
+        run: |
+          TS=$(date -u +%Y%m%d%H%M)
+          HEX=$(printf '%x' "$GITHUB_RUN_NUMBER")
+          SHA=$(git rev-parse --short HEAD)
+          TAG="${TS}-${HEX}-${SHA}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Release tag: $TAG"
+
+  build:
+    name: Build ${{ matrix.asset }}
+    needs: tag
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - asset: agent-gate_linux_amd64
+            runner: ubuntu-24.04
+            goos: linux
+            goarch: amd64
+          - asset: agent-gate_linux_arm64
+            runner: ubuntu-24.04-arm
+            goos: linux
+            goarch: arm64
+          - asset: agent-gate_darwin_amd64
+            runner: macos-15-intel
+            goos: darwin
+            goarch: amd64
+          - asset: agent-gate_darwin_arm64
+            runner: macos-14
+            goos: darwin
+            goarch: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: Install PCRE2 on Linux
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libpcre2-dev
+      - name: Install PCRE2 on macOS
+        if: runner.os == 'macOS'
+        run: |
+          if ! brew list pcre2 >/dev/null 2>&1; then
+            brew install pcre2
+          fi
+      - name: Build archive
+        env:
+          VERSION: ${{ needs.tag.outputs.tag }}
+          TARGET_GOOS: ${{ matrix.goos }}
+          TARGET_GOARCH: ${{ matrix.goarch }}
+          ASSET: ${{ matrix.asset }}
+        run: |
+          COMMIT=$(git rev-parse --short HEAD)
+          BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          mkdir -p "dist/$ASSET"
+          if [ "$TARGET_GOOS" = "$(go env GOOS)" ] && [ "$TARGET_GOARCH" = "$(go env GOARCH)" ]; then
+            GOOS="$TARGET_GOOS" GOARCH="$TARGET_GOARCH" go build \
+              -ldflags "-s -w -X goodkind.io/agent-gate/internal/version.Commit=$COMMIT -X goodkind.io/agent-gate/internal/version.Version=$VERSION -X goodkind.io/agent-gate/internal/version.Dirty=false -X goodkind.io/gklog/version.Commit=$COMMIT -X goodkind.io/gklog/version.Dirty=false -X goodkind.io/gklog/version.BuildTime=$BUILD_TIME -X goodkind.io/gklog/version.BinHash=" \
+              -o "dist/$ASSET/agent-gate" \
+              ./cmd/agent-gate
+          else
+            echo "unexpected non-native target: $TARGET_GOOS/$TARGET_GOARCH on $(go env GOOS)/$(go env GOARCH)" >&2
+            exit 1
+          fi
+          chmod 0755 "dist/$ASSET/agent-gate"
+          cp README.md "dist/$ASSET/README.md"
+          tar -czf "dist/$ASSET.tar.gz" -C "dist/$ASSET" agent-gate README.md
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: dist/${{ matrix.asset }}.tar.gz
+          if-no-files-found: error
+
   release:
-    uses: agoodkind/go-makefile/.github/workflows/_release.yml@main
-    permissions:
-      contents: write
-    secrets: inherit
+    name: Publish release
+    needs:
+      - tag
+      - build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Generate checksums
+        run: |
+          cd dist
+          sha256sum *.tar.gz > checksums.txt
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.tag.outputs.tag }}
+        run: |
+          gh release create "$TAG" dist/*.tar.gz dist/checksums.txt \
+            --target "$GITHUB_SHA" \
+            --title "agent-gate $TAG" \
+            --generate-notes

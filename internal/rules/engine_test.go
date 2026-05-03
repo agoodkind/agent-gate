@@ -279,6 +279,7 @@ func loadConditionRule(t *testing.T) config.Rule {
 }
 
 func TestEvaluate_MultiCondition_HomeCWD(t *testing.T) {
+	t.Setenv("HOME", "/Users/agoodkind")
 	rule := loadConditionRule(t)
 
 	homePayload := func(cmd string) map[string]any {
@@ -367,6 +368,7 @@ func TestEvaluate_MultiCondition_HomeCWD(t *testing.T) {
 
 // TestEvaluate_EffectiveCwd_StillHome verifies that cd back to home is still blocked.
 func TestEvaluate_EffectiveCwd_StillHome(t *testing.T) {
+	t.Setenv("HOME", "/Users/agoodkind")
 	rule := loadConditionRule(t)
 
 	cases := []struct {
