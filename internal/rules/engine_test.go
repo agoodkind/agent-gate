@@ -3,6 +3,7 @@ package rules_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"unicode"
 	"unicode/utf8"
@@ -426,7 +427,7 @@ func TestApplyCdChain(t *testing.T) {
 
 // emdashDashPattern is the Unicode dash class used by no-emdashes rules in these tests.
 const emdashDashPattern = `[\x{2010}-\x{2015}\x{2212}\x{2E3A}\x{2E3B}\x{FE31}\x{FE32}\x{FE58}\x{FE63}\x{FF0D}]`
-const doubleHyphenProsePattern = `(?m)(?:(?:` + "`" + `[^` + "`" + `\n]+` + "`" + `|\b(?!(?:bash|sh|zsh|fish|exec|command|env|xargs|sudo|doas|go|git|make|npm|pnpm|yarn|node|python|python3|ruby|perl|cargo|docker|kubectl|helm|terraform|ansible|rg|grep|sed|awk|jq|curl|ssh|scp|rsync)\b)[A-Za-z][A-Za-z0-9_./-]*)\s+--\s+[A-Za-z][A-Za-z0-9_./-]*|\b(?!(?:bash|sh|zsh|fish|exec|command|env|xargs|sudo|doas|go|git|make|npm|pnpm|yarn|node|python|python3|ruby|perl|cargo|docker|kubectl|helm|terraform|ansible|rg|grep|sed|awk|jq|curl|ssh|scp|rsync)\b)[A-Za-z][A-Za-z0-9_./-]*--[A-Za-z][A-Za-z0-9_./-]*)`
+const doubleHyphenProsePattern = `(?m)(?:(?:` + "`" + `[^` + "`" + `\n]+` + "`" + `|\b(?!(?:bash|sh|zsh|fish|exec|command|env|xargs|sudo|doas|go|git|make|npm|pnpm|yarn|node|python|python3|ruby|perl|cargo|docker|kubectl|helm|terraform|ansible|rg|grep|sed|awk|jq|curl|ssh|scp|rsync)\b)[A-Za-z][A-Za-z0-9_./-]*)\s+\K--(?=\s+[A-Za-z][A-Za-z0-9_./-]*)|\b(?!(?:bash|sh|zsh|fish|exec|command|env|xargs|sudo|doas|go|git|make|npm|pnpm|yarn|node|python|python3|ruby|perl|cargo|docker|kubectl|helm|terraform|ansible|rg|grep|sed|awk|jq|curl|ssh|scp|rsync)\b)[A-Za-z][A-Za-z0-9_./-]*\K--(?=[A-Za-z][A-Za-z0-9_./-]*))`
 
 func TestEmdashDashPatternMatchesU2011(t *testing.T) {
 	t.Helper()
@@ -789,6 +790,25 @@ func TestEvaluate_DoubleHyphenProseBlocked(t *testing.T) {
 				t.Fatal("expected violation, got nil")
 			}
 		})
+	}
+}
+
+func TestEvaluate_DoubleHyphenProseMatchSpan(t *testing.T) {
+	rule := doubleHyphenProseRule(t)
+	value := "// allocator is only used for temporary allocations -- all memory"
+	payload := map[string]any{
+		"tool_input": map[string]any{"content": value},
+	}
+
+	got := rules.EvaluateAll("claude", "PreToolUse", payload, []config.Rule{rule})
+	if len(got) != 1 {
+		t.Fatalf("EvaluateAll returned %d matches, want 1: %#v", len(got), got)
+	}
+
+	wantStart := strings.Index(value, "--")
+	wantEnd := wantStart + len("--")
+	if got[0].Start != wantStart || got[0].End != wantEnd {
+		t.Fatalf("match span = [%d,%d), want [%d,%d)", got[0].Start, got[0].End, wantStart, wantEnd)
 	}
 }
 

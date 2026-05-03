@@ -108,7 +108,7 @@ func TestEventLogger_WritesSQLiteAndDedups(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	var count int
 	if err := db.QueryRow("select count(*) from events").Scan(&count); err != nil {
 		t.Fatalf("count events: %v", err)
@@ -175,7 +175,7 @@ func readEvents(t *testing.T, dir string) []audit.Event {
 	if err != nil {
 		t.Fatalf("open events: %v", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	var out []audit.Event
 	scanner := bufio.NewScanner(f)

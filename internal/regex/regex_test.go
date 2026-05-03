@@ -51,6 +51,22 @@ func TestFindAllStringIndex(t *testing.T) {
 	}
 }
 
+func TestFindAllStringIndexHonorsKeepReset(t *testing.T) {
+	re := MustCompile(`\b[A-Za-z]+\s+\K--(?=\s+[A-Za-z]+)`)
+	subject := "word -- next"
+
+	got := re.FindAllStringIndex(subject, -1)
+	want := [][2]int{{5, 7}}
+	if len(got) != len(want) {
+		t.Fatalf("expected %d matches, got %#v", len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("match %d = %#v, want %#v", i, got[i], want[i])
+		}
+	}
+}
+
 func TestSplitCommandChainOperators(t *testing.T) {
 	re := MustCompile(`&&|\|\||;|\n`)
 	parts := re.Split("git status && git diff", -1)

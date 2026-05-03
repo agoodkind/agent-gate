@@ -389,19 +389,6 @@ func stringSliceAttr(attrs map[string]any, key string) []string {
 	}
 }
 
-func sanitize(s, fallback string) string {
-	if s == "" {
-		return fallback
-	}
-	s = strings.ReplaceAll(s, string(os.PathSeparator), "_")
-	s = strings.ReplaceAll(s, "/", "_")
-	s = strings.ReplaceAll(s, "..", "_")
-	if s == "" || s == "." {
-		return fallback
-	}
-	return s
-}
-
 type jsonlEventSink struct {
 	eventsDir        string
 	payloadsDir      string

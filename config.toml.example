@@ -132,7 +132,7 @@ gemini_events = [
   "Notification", "PreCompress",
 ]
 # All LLM-generated text fields except tool_input.prompt (handled by the next rule).
-# old_string excluded -- existing content doesn't trigger a block.
+# old_string is excluded because existing content does not trigger a block.
 field_paths = ["tool_input.content", "tool_input.new_string", "tool_input.command", "tool_input.description", "command", "assistant_message", "last_assistant_message", "text"]
 # U+2010..U+2015, U+2212, U+2E3A, U+2E3B, U+FE31, U+FE32, U+FE58, U+FE63, U+FF0D
 # All 30 Unicode Dash characters (Dash=Yes per PropList.txt) except U+002D
@@ -196,7 +196,7 @@ gemini_events = [
   "Notification", "PreCompress",
 ]
 field_paths = ["tool_input.content", "tool_input.new_string", "tool_input.description", "edits[*].new_string", "assistant_message", "last_assistant_message", "text"]
-pattern     = '(?m)(?:(?:`[^`\n]+`|\b(?!(?:bash|sh|zsh|fish|exec|command|env|xargs|sudo|doas|go|git|make|npm|pnpm|yarn|node|python|python3|ruby|perl|cargo|docker|kubectl|helm|terraform|ansible|rg|grep|sed|awk|jq|curl|ssh|scp|rsync)\b)[A-Za-z][A-Za-z0-9_./-]*)\s+--\s+[A-Za-z][A-Za-z0-9_./-]*|\b(?!(?:bash|sh|zsh|fish|exec|command|env|xargs|sudo|doas|go|git|make|npm|pnpm|yarn|node|python|python3|ruby|perl|cargo|docker|kubectl|helm|terraform|ansible|rg|grep|sed|awk|jq|curl|ssh|scp|rsync)\b)[A-Za-z][A-Za-z0-9_./-]*--[A-Za-z][A-Za-z0-9_./-]*)'
+pattern     = '(?m)(?:(?:`[^`\n]+`|\b(?!(?:bash|sh|zsh|fish|exec|command|env|xargs|sudo|doas|go|git|make|npm|pnpm|yarn|node|python|python3|ruby|perl|cargo|docker|kubectl|helm|terraform|ansible|rg|grep|sed|awk|jq|curl|ssh|scp|rsync)\b)[A-Za-z][A-Za-z0-9_./-]*)\s+\K--(?=\s+[A-Za-z][A-Za-z0-9_./-]*)|\b(?!(?:bash|sh|zsh|fish|exec|command|env|xargs|sudo|doas|go|git|make|npm|pnpm|yarn|node|python|python3|ruby|perl|cargo|docker|kubectl|helm|terraform|ansible|rg|grep|sed|awk|jq|curl|ssh|scp|rsync)\b)[A-Za-z][A-Za-z0-9_./-]*\K--(?=[A-Za-z][A-Za-z0-9_./-]*))'
 action      = "block"
 violation_message = "This output uses ASCII double-hyphen as a lazy prose dash. Rewrite the sentence without `--`; use separate sentences or punctuation that is not pretending to be an em dash. Command flags like `--help` and option separators like `exec -- input` are allowed in command contexts."
 

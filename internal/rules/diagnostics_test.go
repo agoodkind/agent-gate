@@ -88,3 +88,35 @@ func TestFormatViolationsLineNumberedLegend(t *testing.T) {
 		}
 	}
 }
+
+func TestFormatViolationsAlignsDoubleHyphenSpan(t *testing.T) {
+	value := "// allocator is only used for temporary allocations -- all memory"
+	start := strings.Index(value, "--")
+	if start < 0 {
+		t.Fatal("test fixture is missing double hyphen")
+	}
+
+	got := rules.FormatViolations([]rules.MatchViolation{
+		{
+			RuleName:  "no-double-hyphen-prose",
+			Message:   "ASCII double-hyphen is not permitted as a prose dash.",
+			FieldPath: "tool_input.content",
+			Value:     value,
+			Start:     start,
+			End:       start + len("--"),
+		},
+	})
+	wantMarker := "  | " + strings.Repeat(" ", start) + "^A"
+	for _, want := range []string{
+		"1 | " + value,
+		wantMarker,
+		"column: 53",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("diagnostic missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "^A-") {
+		t.Fatalf("diagnostic marker extended past the two-character span:\n%s", got)
+	}
+}

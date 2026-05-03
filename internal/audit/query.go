@@ -64,7 +64,7 @@ func querySQLite(cfg *config.Config, filter QueryFilter) ([]Event, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	where, args := queryWhere(filter)
 	limit := ""
@@ -81,7 +81,7 @@ func querySQLite(cfg *config.Config, filter QueryFilter) ([]Event, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var out []Event
 	for rows.Next() {
@@ -150,7 +150,7 @@ func sqliteViolations(db *sql.DB, eventID string) ([]Violation, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []Violation
 	for rows.Next() {
 		var v Violation
@@ -197,7 +197,7 @@ func scanEventFile(path string, filter QueryFilter) ([]Event, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
 	var out []Event

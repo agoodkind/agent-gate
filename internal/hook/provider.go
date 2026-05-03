@@ -21,8 +21,9 @@ func HandleWithEnv(ctx context.Context, raw RawPayload, rawBytes []byte, cfg *co
 	if sink == nil {
 		sink = audit.DiscardSink{}
 	}
-	raw = EnrichPayload(raw)
 	system := DetectWithEnv(raw, hint, getenv)
+	raw = NormalizePayload(system, raw)
+	raw = EnrichPayload(raw)
 	eventName := raw.EventName()
 
 	auditReceived(ctx, raw, rawBytes, system, eventName, sink)

@@ -99,6 +99,124 @@ func TestEnrichPayload_TranscriptNonMatchLeavesPayloadAlone(t *testing.T) {
 	}
 }
 
+func TestNormalizePayload_DispatchesByProvider(t *testing.T) {
+	raw := hook.RawPayload{
+		"tool_input": map[string]any{
+			"newString": "new text",
+		},
+	}
+
+	claudePayload := hook.NormalizePayload(hook.SystemClaude, raw)
+	claudeToolInput, ok := claudePayload["tool_input"].(map[string]any)
+	if !ok {
+		t.Fatalf("claude tool_input missing: %#v", claudePayload["tool_input"])
+	}
+	if _, ok := claudeToolInput["new_string"]; ok {
+		t.Fatalf("generic payload was normalized as VS Code: %#v", claudeToolInput)
+	}
+
+	vscodePayload := hook.NormalizePayload(hook.SystemVSCode, raw)
+	vscodeToolInput, ok := vscodePayload["tool_input"].(map[string]any)
+	if !ok {
+		t.Fatalf("vscode tool_input missing: %#v", vscodePayload["tool_input"])
+	}
+	if vscodeToolInput["new_string"] != "new text" {
+		t.Fatalf("vscode new_string = %#v, want new text", vscodeToolInput["new_string"])
+	}
+}
+
+func TestNormalizeVSCodePayload_EditToolInput(t *testing.T) {
+	raw := hook.RawPayload{
+		"hook_event_name": "PreToolUse",
+		"tool_name":       "replace_string_in_file",
+		"tool_input": map[string]any{
+			"filePath":  "/project/page.zig",
+			"oldString": "old text",
+			"newString": "new text",
+		},
+	}
+
+	got := hook.NormalizeVSCodePayload(raw)
+	ti, ok := got["tool_input"].(map[string]any)
+	if !ok {
+		t.Fatalf("tool_input missing: %#v", got["tool_input"])
+	}
+	if ti["file_path"] != "/project/page.zig" {
+		t.Fatalf("tool_input.file_path = %#v, want /project/page.zig", ti["file_path"])
+	}
+	if ti["old_string"] != "old text" {
+		t.Fatalf("tool_input.old_string = %#v, want old text", ti["old_string"])
+	}
+	if ti["new_string"] != "new text" {
+		t.Fatalf("tool_input.new_string = %#v, want new text", ti["new_string"])
+	}
+}
+
+func TestNormalizeVSCodePayload_MultiReplaceToolInput(t *testing.T) {
+	raw := hook.RawPayload{
+		"hook_event_name": "PreToolUse",
+		"tool_name":       "multi_replace_string_in_file",
+		"tool_input": map[string]any{
+			"replacements": []any{
+				map[string]any{
+					"filePath":  "/project/page.zig",
+					"oldString": "first old",
+					"newString": "first new",
+				},
+				map[string]any{
+					"filePath":  "/project/list.zig",
+					"oldString": "second old",
+					"newString": "second new",
+				},
+			},
+		},
+	}
+
+	got := hook.NormalizeVSCodePayload(raw)
+	ti, ok := got["tool_input"].(map[string]any)
+	if !ok {
+		t.Fatalf("tool_input missing: %#v", got["tool_input"])
+	}
+	if ti["new_string"] != "first new\nsecond new" {
+		t.Fatalf("tool_input.new_string = %#v, want joined new strings", ti["new_string"])
+	}
+	edits, ok := got["edits"].([]any)
+	if !ok || len(edits) != 2 {
+		t.Fatalf("edits = %#v, want two normalized edits", got["edits"])
+	}
+	secondEdit, ok := edits[1].(map[string]any)
+	if !ok {
+		t.Fatalf("second edit has unexpected shape: %#v", edits[1])
+	}
+	if secondEdit["new_string"] != "second new" {
+		t.Fatalf("second edit new_string = %#v, want second new", secondEdit["new_string"])
+	}
+}
+
+func TestNormalizeCopilotPayload_AddsAssistantMessageFromTranscript(t *testing.T) {
+	dir := t.TempDir()
+	transcript := filepath.Join(dir, "copilot.jsonl")
+	dash := string(rune(0x2014))
+	lines := strings.Join([]string{
+		`{"type":"assistant.message","data":{"content":"First response."}}`,
+		`{"type":"assistant.message","data":{"content":"Final response with em dash ` + dash + ` blocked."}}`,
+	}, "\n") + "\n"
+	if err := os.WriteFile(transcript, []byte(lines), 0o600); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
+
+	raw := hook.RawPayload{
+		"hook_event_name": "Stop",
+		"transcript_path": transcript,
+	}
+
+	got := hook.NormalizeCopilotPayload(raw)
+	want := "Final response with em dash " + dash + " blocked."
+	if got["last_assistant_message"] != want {
+		t.Fatalf("last_assistant_message = %#v, want %#v", got["last_assistant_message"], want)
+	}
+}
+
 func TestCodexBlockResponses(t *testing.T) {
 	got := string(hook.CodexBlock("PreToolUse", "r", "blocked"))
 	if !strings.Contains(got, `"permissionDecision":"deny"`) {
