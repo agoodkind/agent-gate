@@ -13,4 +13,4 @@
 
 ## Hook Inventory
 
-`.agent.md` is the hook inventory and install-template reference. Keep it focused on registered hook events and template behavior.
+`HOOKS.md` is the hook inventory and install-template reference. Keep it focused on registered hook events and template behavior.
