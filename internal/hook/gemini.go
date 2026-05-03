@@ -35,13 +35,12 @@ func CanBlockGemini(eventName string) bool {
 }
 
 type geminiResponse struct {
-	SystemMessage      string         `json:"systemMessage,omitempty"`
-	SuppressOutput     *bool          `json:"suppressOutput,omitempty"`
-	Continue           *bool          `json:"continue,omitempty"`
-	StopReason         string         `json:"stopReason,omitempty"`
-	Decision           string         `json:"decision,omitempty"`
-	Reason             string         `json:"reason,omitempty"`
-	HookSpecificOutput map[string]any `json:"hookSpecificOutput,omitempty"`
+	SystemMessage  string `json:"systemMessage,omitempty"`
+	SuppressOutput *bool  `json:"suppressOutput,omitempty"`
+	Continue       *bool  `json:"continue,omitempty"`
+	StopReason     string `json:"stopReason,omitempty"`
+	Decision       string `json:"decision,omitempty"`
+	Reason         string `json:"reason,omitempty"`
 }
 
 func GeminiAllow() []byte {
@@ -60,23 +59,18 @@ func GeminiBlockText(eventName, text string) []byte {
 	}
 
 	switch GeminiEvent(eventName) {
-	case GeminiAfterAgent:
-		resp.Reason = text
-	case GeminiAfterTool:
-		resp.Reason = text
-	case GeminiBeforeTool:
-		resp.Reason = text
-	case GeminiBeforeAgent:
-		resp.Reason = text
-	case GeminiBeforeModel:
-		resp.Reason = text
-	case GeminiAfterModel:
+	case GeminiAfterAgent,
+		GeminiAfterTool,
+		GeminiBeforeTool,
+		GeminiBeforeAgent,
+		GeminiBeforeModel,
+		GeminiAfterModel:
 		resp.Reason = text
 	default:
 		resp.Decision = ""
 		resp.Reason = ""
 	}
 
-	b, _ := json.Marshal(resp)
-	return append(b, '\n')
+	bytes, _ := json.Marshal(resp)
+	return append(bytes, '\n')
 }

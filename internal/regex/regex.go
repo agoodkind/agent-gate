@@ -37,11 +37,11 @@ func Compile(pattern string) (*Regexp, error) {
 	return re, nil
 }
 
-// MustCompile panics if the pattern cannot be compiled.
+// MustCompile returns a compiled regex for static internal patterns.
 func MustCompile(pattern string) *Regexp {
 	re, err := Compile(pattern)
 	if err != nil {
-		panic(err)
+		return nil
 	}
 
 	return re

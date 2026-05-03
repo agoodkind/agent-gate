@@ -7,12 +7,11 @@
 package daemonpb
 
 import (
+	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
+	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	reflect "reflect"
 	sync "sync"
 	unsafe "unsafe"
-
-	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
-	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 )
 
 const (
@@ -22,235 +21,23 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-type AcquireSessionRequest struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// session_name is the agent-gate session name (e.g. "my-feature").
-	// Empty for sessions not managed by agent-gate (bare claude invocations).
-	SessionName string `protobuf:"bytes,1,opt,name=session_name,json=sessionName,proto3" json:"session_name,omitempty"`
-	// wrapper_id is a unique ID for this wrapper process (e.g. PID as string).
-	WrapperId     string `protobuf:"bytes,2,opt,name=wrapper_id,json=wrapperId,proto3" json:"wrapper_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *AcquireSessionRequest) Reset() {
-	*x = AcquireSessionRequest{}
-	mi := &file_daemon_proto_msgTypes[0]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *AcquireSessionRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*AcquireSessionRequest) ProtoMessage() {}
-
-func (x *AcquireSessionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_daemon_proto_msgTypes[0]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use AcquireSessionRequest.ProtoReflect.Descriptor instead.
-func (*AcquireSessionRequest) Descriptor() ([]byte, []int) {
-	return file_daemon_proto_rawDescGZIP(), []int{0}
-}
-
-func (x *AcquireSessionRequest) GetSessionName() string {
-	if x != nil {
-		return x.SessionName
-	}
-	return ""
-}
-
-func (x *AcquireSessionRequest) GetWrapperId() string {
-	if x != nil {
-		return x.WrapperId
-	}
-	return ""
-}
-
-type AcquireSessionResponse struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// fake_home is the path to the per-process fake HOME directory.
-	// The wrapper launches claude with HOME=fake_home.
-	FakeHome string `protobuf:"bytes,1,opt,name=fake_home,json=fakeHome,proto3" json:"fake_home,omitempty"`
-	// real_claude is the path to the actual claude binary.
-	RealClaude string `protobuf:"bytes,2,opt,name=real_claude,json=realClaude,proto3" json:"real_claude,omitempty"`
-	// model is the resolved model for this session (from session metadata or global default).
-	Model string `protobuf:"bytes,3,opt,name=model,proto3" json:"model,omitempty"`
-	// settings_file is the path to the per-session settings.json (for --settings flag).
-	// Lives inside fake_home/.claude/settings.json.
-	SettingsFile  string `protobuf:"bytes,4,opt,name=settings_file,json=settingsFile,proto3" json:"settings_file,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *AcquireSessionResponse) Reset() {
-	*x = AcquireSessionResponse{}
-	mi := &file_daemon_proto_msgTypes[1]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *AcquireSessionResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*AcquireSessionResponse) ProtoMessage() {}
-
-func (x *AcquireSessionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_daemon_proto_msgTypes[1]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use AcquireSessionResponse.ProtoReflect.Descriptor instead.
-func (*AcquireSessionResponse) Descriptor() ([]byte, []int) {
-	return file_daemon_proto_rawDescGZIP(), []int{1}
-}
-
-func (x *AcquireSessionResponse) GetFakeHome() string {
-	if x != nil {
-		return x.FakeHome
-	}
-	return ""
-}
-
-func (x *AcquireSessionResponse) GetRealClaude() string {
-	if x != nil {
-		return x.RealClaude
-	}
-	return ""
-}
-
-func (x *AcquireSessionResponse) GetModel() string {
-	if x != nil {
-		return x.Model
-	}
-	return ""
-}
-
-func (x *AcquireSessionResponse) GetSettingsFile() string {
-	if x != nil {
-		return x.SettingsFile
-	}
-	return ""
-}
-
-type ReleaseSessionRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	WrapperId     string                 `protobuf:"bytes,1,opt,name=wrapper_id,json=wrapperId,proto3" json:"wrapper_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *ReleaseSessionRequest) Reset() {
-	*x = ReleaseSessionRequest{}
-	mi := &file_daemon_proto_msgTypes[2]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *ReleaseSessionRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ReleaseSessionRequest) ProtoMessage() {}
-
-func (x *ReleaseSessionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_daemon_proto_msgTypes[2]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ReleaseSessionRequest.ProtoReflect.Descriptor instead.
-func (*ReleaseSessionRequest) Descriptor() ([]byte, []int) {
-	return file_daemon_proto_rawDescGZIP(), []int{2}
-}
-
-func (x *ReleaseSessionRequest) GetWrapperId() string {
-	if x != nil {
-		return x.WrapperId
-	}
-	return ""
-}
-
-type ReleaseSessionResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *ReleaseSessionResponse) Reset() {
-	*x = ReleaseSessionResponse{}
-	mi := &file_daemon_proto_msgTypes[3]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *ReleaseSessionResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ReleaseSessionResponse) ProtoMessage() {}
-
-func (x *ReleaseSessionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_daemon_proto_msgTypes[3]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ReleaseSessionResponse.ProtoReflect.Descriptor instead.
-func (*ReleaseSessionResponse) Descriptor() ([]byte, []int) {
-	return file_daemon_proto_rawDescGZIP(), []int{3}
-}
-
 type EvaluateHookRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// raw_json is the raw JSON payload read from hook stdin.
 	RawJson []byte `protobuf:"bytes,1,opt,name=raw_json,json=rawJson,proto3" json:"raw_json,omitempty"`
-	// wrapper_id identifies which wrapper session this hook belongs to, when
-	// available.
-	WrapperId string `protobuf:"bytes,2,opt,name=wrapper_id,json=wrapperId,proto3" json:"wrapper_id,omitempty"`
 	// provider_hint is a best-effort CLI/template hint such as "codex" or
 	// "gemini". Daemon-side detection may override it based on env/payload.
-	ProviderHint   string            `protobuf:"bytes,3,opt,name=provider_hint,json=providerHint,proto3" json:"provider_hint,omitempty"`
-	Cwd            string            `protobuf:"bytes,4,opt,name=cwd,proto3" json:"cwd,omitempty"`
-	Argv           []string          `protobuf:"bytes,5,rep,name=argv,proto3" json:"argv,omitempty"`
-	EnvFingerprint map[string]string `protobuf:"bytes,6,rep,name=env_fingerprint,json=envFingerprint,proto3" json:"env_fingerprint,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	ProviderHint   string            `protobuf:"bytes,2,opt,name=provider_hint,json=providerHint,proto3" json:"provider_hint,omitempty"`
+	Cwd            string            `protobuf:"bytes,3,opt,name=cwd,proto3" json:"cwd,omitempty"`
+	Argv           []string          `protobuf:"bytes,4,rep,name=argv,proto3" json:"argv,omitempty"`
+	EnvFingerprint map[string]string `protobuf:"bytes,5,rep,name=env_fingerprint,json=envFingerprint,proto3" json:"env_fingerprint,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
 
 func (x *EvaluateHookRequest) Reset() {
 	*x = EvaluateHookRequest{}
-	mi := &file_daemon_proto_msgTypes[4]
+	mi := &file_daemon_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -262,7 +49,7 @@ func (x *EvaluateHookRequest) String() string {
 func (*EvaluateHookRequest) ProtoMessage() {}
 
 func (x *EvaluateHookRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_daemon_proto_msgTypes[4]
+	mi := &file_daemon_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -275,7 +62,7 @@ func (x *EvaluateHookRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EvaluateHookRequest.ProtoReflect.Descriptor instead.
 func (*EvaluateHookRequest) Descriptor() ([]byte, []int) {
-	return file_daemon_proto_rawDescGZIP(), []int{4}
+	return file_daemon_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *EvaluateHookRequest) GetRawJson() []byte {
@@ -283,13 +70,6 @@ func (x *EvaluateHookRequest) GetRawJson() []byte {
 		return x.RawJson
 	}
 	return nil
-}
-
-func (x *EvaluateHookRequest) GetWrapperId() string {
-	if x != nil {
-		return x.WrapperId
-	}
-	return ""
 }
 
 func (x *EvaluateHookRequest) GetProviderHint() string {
@@ -325,7 +105,7 @@ type EvaluateHookResponse struct {
 	// exit_code is the code the hook process should exit with.
 	// 0 = allow, 2 = block.
 	ExitCode int32 `protobuf:"varint,1,opt,name=exit_code,json=exitCode,proto3" json:"exit_code,omitempty"`
-	// stdout_data is written to hook process stdout (injected into Claude context).
+	// stdout_data is written to hook process stdout.
 	StdoutData []byte `protobuf:"bytes,2,opt,name=stdout_data,json=stdoutData,proto3" json:"stdout_data,omitempty"`
 	// stderr_data is written to hook process stderr.
 	StderrData    []byte `protobuf:"bytes,3,opt,name=stderr_data,json=stderrData,proto3" json:"stderr_data,omitempty"`
@@ -335,7 +115,7 @@ type EvaluateHookResponse struct {
 
 func (x *EvaluateHookResponse) Reset() {
 	*x = EvaluateHookResponse{}
-	mi := &file_daemon_proto_msgTypes[5]
+	mi := &file_daemon_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -347,7 +127,7 @@ func (x *EvaluateHookResponse) String() string {
 func (*EvaluateHookResponse) ProtoMessage() {}
 
 func (x *EvaluateHookResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_daemon_proto_msgTypes[5]
+	mi := &file_daemon_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -360,7 +140,7 @@ func (x *EvaluateHookResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EvaluateHookResponse.ProtoReflect.Descriptor instead.
 func (*EvaluateHookResponse) Descriptor() ([]byte, []int) {
-	return file_daemon_proto_rawDescGZIP(), []int{5}
+	return file_daemon_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *EvaluateHookResponse) GetExitCode() int32 {
@@ -392,7 +172,7 @@ type StatusRequest struct {
 
 func (x *StatusRequest) Reset() {
 	*x = StatusRequest{}
-	mi := &file_daemon_proto_msgTypes[6]
+	mi := &file_daemon_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -404,7 +184,7 @@ func (x *StatusRequest) String() string {
 func (*StatusRequest) ProtoMessage() {}
 
 func (x *StatusRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_daemon_proto_msgTypes[6]
+	mi := &file_daemon_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -417,7 +197,7 @@ func (x *StatusRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StatusRequest.ProtoReflect.Descriptor instead.
 func (*StatusRequest) Descriptor() ([]byte, []int) {
-	return file_daemon_proto_rawDescGZIP(), []int{6}
+	return file_daemon_proto_rawDescGZIP(), []int{2}
 }
 
 type StatusResponse struct {
@@ -429,14 +209,13 @@ type StatusResponse struct {
 	Commit         string                 `protobuf:"bytes,5,opt,name=commit,proto3" json:"commit,omitempty"`
 	Dirty          string                 `protobuf:"bytes,6,opt,name=dirty,proto3" json:"dirty,omitempty"`
 	BuildHash      string                 `protobuf:"bytes,7,opt,name=build_hash,json=buildHash,proto3" json:"build_hash,omitempty"`
-	ActiveSessions int32                  `protobuf:"varint,8,opt,name=active_sessions,json=activeSessions,proto3" json:"active_sessions,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
 
 func (x *StatusResponse) Reset() {
 	*x = StatusResponse{}
-	mi := &file_daemon_proto_msgTypes[7]
+	mi := &file_daemon_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -448,7 +227,7 @@ func (x *StatusResponse) String() string {
 func (*StatusResponse) ProtoMessage() {}
 
 func (x *StatusResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_daemon_proto_msgTypes[7]
+	mi := &file_daemon_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -461,7 +240,7 @@ func (x *StatusResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StatusResponse.ProtoReflect.Descriptor instead.
 func (*StatusResponse) Descriptor() ([]byte, []int) {
-	return file_daemon_proto_rawDescGZIP(), []int{7}
+	return file_daemon_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *StatusResponse) GetPid() int64 {
@@ -513,40 +292,17 @@ func (x *StatusResponse) GetBuildHash() string {
 	return ""
 }
 
-func (x *StatusResponse) GetActiveSessions() int32 {
-	if x != nil {
-		return x.ActiveSessions
-	}
-	return 0
-}
-
 var File_daemon_proto protoreflect.FileDescriptor
 
 const file_daemon_proto_rawDesc = "" +
 	"\n" +
-	"\fdaemon.proto\x12\tagentgate\"Y\n" +
-	"\x15AcquireSessionRequest\x12!\n" +
-	"\fsession_name\x18\x01 \x01(\tR\vsessionName\x12\x1d\n" +
-	"\n" +
-	"wrapper_id\x18\x02 \x01(\tR\twrapperId\"\x91\x01\n" +
-	"\x16AcquireSessionResponse\x12\x1b\n" +
-	"\tfake_home\x18\x01 \x01(\tR\bfakeHome\x12\x1f\n" +
-	"\vreal_claude\x18\x02 \x01(\tR\n" +
-	"realClaude\x12\x14\n" +
-	"\x05model\x18\x03 \x01(\tR\x05model\x12#\n" +
-	"\rsettings_file\x18\x04 \x01(\tR\fsettingsFile\"6\n" +
-	"\x15ReleaseSessionRequest\x12\x1d\n" +
-	"\n" +
-	"wrapper_id\x18\x01 \x01(\tR\twrapperId\"\x18\n" +
-	"\x16ReleaseSessionResponse\"\xba\x02\n" +
+	"\fdaemon.proto\x12\tagentgate\"\x9b\x02\n" +
 	"\x13EvaluateHookRequest\x12\x19\n" +
-	"\braw_json\x18\x01 \x01(\fR\arawJson\x12\x1d\n" +
-	"\n" +
-	"wrapper_id\x18\x02 \x01(\tR\twrapperId\x12#\n" +
-	"\rprovider_hint\x18\x03 \x01(\tR\fproviderHint\x12\x10\n" +
-	"\x03cwd\x18\x04 \x01(\tR\x03cwd\x12\x12\n" +
-	"\x04argv\x18\x05 \x03(\tR\x04argv\x12[\n" +
-	"\x0fenv_fingerprint\x18\x06 \x03(\v22.agentgate.EvaluateHookRequest.EnvFingerprintEntryR\x0eenvFingerprint\x1aA\n" +
+	"\braw_json\x18\x01 \x01(\fR\arawJson\x12#\n" +
+	"\rprovider_hint\x18\x02 \x01(\tR\fproviderHint\x12\x10\n" +
+	"\x03cwd\x18\x03 \x01(\tR\x03cwd\x12\x12\n" +
+	"\x04argv\x18\x04 \x03(\tR\x04argv\x12[\n" +
+	"\x0fenv_fingerprint\x18\x05 \x03(\v22.agentgate.EvaluateHookRequest.EnvFingerprintEntryR\x0eenvFingerprint\x1aA\n" +
 	"\x13EnvFingerprintEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"u\n" +
@@ -556,7 +312,7 @@ const file_daemon_proto_rawDesc = "" +
 	"stdoutData\x12\x1f\n" +
 	"\vstderr_data\x18\x03 \x01(\fR\n" +
 	"stderrData\"\x0f\n" +
-	"\rStatusRequest\"\xfc\x01\n" +
+	"\rStatusRequest\"\xd3\x01\n" +
 	"\x0eStatusResponse\x12\x10\n" +
 	"\x03pid\x18\x01 \x01(\x03R\x03pid\x12'\n" +
 	"\x0fexecutable_path\x18\x02 \x01(\tR\x0eexecutablePath\x12\x1f\n" +
@@ -566,12 +322,9 @@ const file_daemon_proto_rawDesc = "" +
 	"\x06commit\x18\x05 \x01(\tR\x06commit\x12\x14\n" +
 	"\x05dirty\x18\x06 \x01(\tR\x05dirty\x12\x1d\n" +
 	"\n" +
-	"build_hash\x18\a \x01(\tR\tbuildHash\x12'\n" +
-	"\x0factive_sessions\x18\b \x01(\x05R\x0eactiveSessions2\xca\x02\n" +
+	"build_hash\x18\a \x01(\tR\tbuildHash2\x9c\x01\n" +
 	"\n" +
-	"AgentGateD\x12U\n" +
-	"\x0eAcquireSession\x12 .agentgate.AcquireSessionRequest\x1a!.agentgate.AcquireSessionResponse\x12U\n" +
-	"\x0eReleaseSession\x12 .agentgate.ReleaseSessionRequest\x1a!.agentgate.ReleaseSessionResponse\x12O\n" +
+	"AgentGateD\x12O\n" +
 	"\fEvaluateHook\x12\x1e.agentgate.EvaluateHookRequest\x1a\x1f.agentgate.EvaluateHookResponse\x12=\n" +
 	"\x06Status\x12\x18.agentgate.StatusRequest\x1a\x19.agentgate.StatusResponseB%Z#goodkind.io/agent-gate/api/daemonpbb\x06proto3"
 
@@ -587,30 +340,22 @@ func file_daemon_proto_rawDescGZIP() []byte {
 	return file_daemon_proto_rawDescData
 }
 
-var file_daemon_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
+var file_daemon_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
 var file_daemon_proto_goTypes = []any{
-	(*AcquireSessionRequest)(nil),  // 0: agentgate.AcquireSessionRequest
-	(*AcquireSessionResponse)(nil), // 1: agentgate.AcquireSessionResponse
-	(*ReleaseSessionRequest)(nil),  // 2: agentgate.ReleaseSessionRequest
-	(*ReleaseSessionResponse)(nil), // 3: agentgate.ReleaseSessionResponse
-	(*EvaluateHookRequest)(nil),    // 4: agentgate.EvaluateHookRequest
-	(*EvaluateHookResponse)(nil),   // 5: agentgate.EvaluateHookResponse
-	(*StatusRequest)(nil),          // 6: agentgate.StatusRequest
-	(*StatusResponse)(nil),         // 7: agentgate.StatusResponse
-	nil,                            // 8: agentgate.EvaluateHookRequest.EnvFingerprintEntry
+	(*EvaluateHookRequest)(nil),  // 0: agentgate.EvaluateHookRequest
+	(*EvaluateHookResponse)(nil), // 1: agentgate.EvaluateHookResponse
+	(*StatusRequest)(nil),        // 2: agentgate.StatusRequest
+	(*StatusResponse)(nil),       // 3: agentgate.StatusResponse
+	nil,                          // 4: agentgate.EvaluateHookRequest.EnvFingerprintEntry
 }
 var file_daemon_proto_depIdxs = []int32{
-	8, // 0: agentgate.EvaluateHookRequest.env_fingerprint:type_name -> agentgate.EvaluateHookRequest.EnvFingerprintEntry
-	0, // 1: agentgate.AgentGateD.AcquireSession:input_type -> agentgate.AcquireSessionRequest
-	2, // 2: agentgate.AgentGateD.ReleaseSession:input_type -> agentgate.ReleaseSessionRequest
-	4, // 3: agentgate.AgentGateD.EvaluateHook:input_type -> agentgate.EvaluateHookRequest
-	6, // 4: agentgate.AgentGateD.Status:input_type -> agentgate.StatusRequest
-	1, // 5: agentgate.AgentGateD.AcquireSession:output_type -> agentgate.AcquireSessionResponse
-	3, // 6: agentgate.AgentGateD.ReleaseSession:output_type -> agentgate.ReleaseSessionResponse
-	5, // 7: agentgate.AgentGateD.EvaluateHook:output_type -> agentgate.EvaluateHookResponse
-	7, // 8: agentgate.AgentGateD.Status:output_type -> agentgate.StatusResponse
-	5, // [5:9] is the sub-list for method output_type
-	1, // [1:5] is the sub-list for method input_type
+	4, // 0: agentgate.EvaluateHookRequest.env_fingerprint:type_name -> agentgate.EvaluateHookRequest.EnvFingerprintEntry
+	0, // 1: agentgate.AgentGateD.EvaluateHook:input_type -> agentgate.EvaluateHookRequest
+	2, // 2: agentgate.AgentGateD.Status:input_type -> agentgate.StatusRequest
+	1, // 3: agentgate.AgentGateD.EvaluateHook:output_type -> agentgate.EvaluateHookResponse
+	3, // 4: agentgate.AgentGateD.Status:output_type -> agentgate.StatusResponse
+	3, // [3:5] is the sub-list for method output_type
+	1, // [1:3] is the sub-list for method input_type
 	1, // [1:1] is the sub-list for extension type_name
 	1, // [1:1] is the sub-list for extension extendee
 	0, // [0:1] is the sub-list for field type_name
@@ -627,7 +372,7 @@ func file_daemon_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_daemon_proto_rawDesc), len(file_daemon_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   9,
+			NumMessages:   5,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

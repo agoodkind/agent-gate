@@ -26,6 +26,7 @@ func Run(log *slog.Logger, cfg *config.Config) error {
 	lockPath := filepath.Join(config.RuntimeDir(), "daemon.process.lock")
 	lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
+		log.ErrorContext(context.Background(), "open daemon process lock failed", "path", lockPath, "err", err)
 		return fmt.Errorf("open daemon process lock: %w", err)
 	}
 	defer func() { _ = lockFile.Close() }()
@@ -45,9 +46,10 @@ func Run(log *slog.Logger, cfg *config.Config) error {
 
 	srv, err := New(log, cfg)
 	if err != nil {
+		log.ErrorContext(context.Background(), "create daemon server failed", "err", err)
 		return fmt.Errorf("failed to create daemon server: %w", err)
 	}
-	defer srv.Close()
+	defer func() { srv.Close() }()
 
 	grpcServer := grpc.NewServer()
 	daemonpb.RegisterAgentGateDServer(grpcServer, srv)
@@ -57,11 +59,14 @@ func Run(log *slog.Logger, cfg *config.Config) error {
 }
 
 func daemonListener(socketPath string) (net.Listener, error) {
+	log := slog.Default()
 	if err := os.Remove(socketPath); err != nil && !os.IsNotExist(err) {
+		log.ErrorContext(context.Background(), "remove stale daemon socket failed", "socket", socketPath, "err", err)
 		return nil, fmt.Errorf("failed to remove stale socket: %w", err)
 	}
 	listener, err := net.Listen("unix", socketPath)
 	if err != nil {
+		log.ErrorContext(context.Background(), "listen on daemon socket failed", "socket", socketPath, "err", err)
 		return nil, fmt.Errorf("failed to listen on %s: %w", socketPath, err)
 	}
 	return listener, nil

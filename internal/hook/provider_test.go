@@ -23,177 +23,59 @@ func TestCanBlock_NewProviders(t *testing.T) {
 		{hook.SystemGemini, "Notification", false},
 	}
 
-	for _, tc := range tests {
-		if got := hook.CanBlock(tc.system, tc.event); got != tc.want {
-			t.Fatalf("CanBlock(%q, %q) = %v, want %v", tc.system.String(), tc.event, got, tc.want)
+	for _, testCase := range tests {
+		if got := hook.CanBlock(testCase.system, testCase.event); got != testCase.want {
+			t.Fatalf("CanBlock(%q, %q) = %v, want %v", testCase.system.String(), testCase.event, got, testCase.want)
 		}
 	}
 }
 
-func TestEnrichPayload_UsesToolInputWorkdir(t *testing.T) {
-	raw := hook.RawPayload{
-		"cwd": "/chat",
-		"tool_input": map[string]any{
-			"command": "go test ./...",
-			"workdir": "/project",
-		},
+func TestParseHookPayload_UsesToolInputWorkdir(t *testing.T) {
+	payload, err := hook.ParseHookPayload(hook.SystemCodex, []byte(`{"hook_event_name":"PreToolUse","cwd":"/chat","tool_input":{"command":"go test ./...","workdir":"/project"}}`))
+	if err != nil {
+		t.Fatalf("ParseHookPayload: %v", err)
 	}
-
-	got := hook.EnrichPayload(raw)
-	if got["cwd"] != "/chat" {
-		t.Fatalf("cwd was overwritten: %#v", got)
+	fields := payload.Fields()
+	if fields.CWD != "/chat" {
+		t.Fatalf("cwd was overwritten: %#v", fields)
 	}
-	if got["effective_cwd"] != "/project" {
-		t.Fatalf("effective_cwd = %#v, want /project", got["effective_cwd"])
+	if fields.String(config.FieldEffectiveCWD) != "/project" {
+		t.Fatalf("effective_cwd = %#v, want /project", fields.String(config.FieldEffectiveCWD))
 	}
 }
 
-func TestEnrichPayload_UsesTranscriptFunctionCallWorkdir(t *testing.T) {
-	dir := t.TempDir()
-	transcript := filepath.Join(dir, "rollout.jsonl")
-	line := `{"type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"go test ./...\",\"workdir\":\"/project\"}","call_id":"call_123"}}` + "\n"
-	if err := os.WriteFile(transcript, []byte(line), 0o600); err != nil {
-		t.Fatalf("write transcript: %v", err)
+func TestVSCodePayload_EditToolInput(t *testing.T) {
+	payload, err := hook.ParseHookPayload(hook.SystemVSCode, []byte(`{"hook_event_name":"PreToolUse","tool_name":"replace_string_in_file","tool_input":{"filePath":"/project/page.zig","oldString":"old text","newString":"new text"}}`))
+	if err != nil {
+		t.Fatalf("ParseHookPayload: %v", err)
 	}
-
-	raw := hook.RawPayload{
-		"cwd":             "/chat",
-		"transcript_path": transcript,
-		"tool_use_id":     "call_123",
-		"tool_input":      map[string]any{"command": "go test ./..."},
+	fields := payload.Fields()
+	if fields.ToolInputFilePath != "/project/page.zig" {
+		t.Fatalf("tool_input.file_path = %#v, want /project/page.zig", fields.ToolInputFilePath)
 	}
-
-	got := hook.EnrichPayload(raw)
-	if got["cwd"] != "/chat" {
-		t.Fatalf("cwd was overwritten: %#v", got)
+	if fields.ToolInputOldString != "old text" {
+		t.Fatalf("tool_input.old_string = %#v, want old text", fields.ToolInputOldString)
 	}
-	if got["effective_cwd"] != "/project" {
-		t.Fatalf("effective_cwd = %#v, want /project", got["effective_cwd"])
-	}
-	ti, ok := got["tool_input"].(map[string]any)
-	if !ok {
-		t.Fatalf("tool_input missing: %#v", got["tool_input"])
-	}
-	if ti["workdir"] != "/project" {
-		t.Fatalf("tool_input.workdir = %#v, want /project", ti["workdir"])
+	if fields.ToolInputNewString != "new text" {
+		t.Fatalf("tool_input.new_string = %#v, want new text", fields.ToolInputNewString)
 	}
 }
 
-func TestEnrichPayload_TranscriptNonMatchLeavesPayloadAlone(t *testing.T) {
-	dir := t.TempDir()
-	transcript := filepath.Join(dir, "rollout.jsonl")
-	line := `{"type":"response_item","payload":{"type":"function_call","arguments":"{\"workdir\":\"/project\"}","call_id":"other"}}` + "\n"
-	if err := os.WriteFile(transcript, []byte(line), 0o600); err != nil {
-		t.Fatalf("write transcript: %v", err)
+func TestVSCodePayload_MultiReplaceToolInput(t *testing.T) {
+	payload, err := hook.ParseHookPayload(hook.SystemVSCode, []byte(`{"hook_event_name":"PreToolUse","tool_name":"multi_replace_string_in_file","tool_input":{"replacements":[{"filePath":"/project/page.zig","oldString":"first old","newString":"first new"},{"filePath":"/project/list.zig","oldString":"second old","newString":"second new"}]}}`))
+	if err != nil {
+		t.Fatalf("ParseHookPayload: %v", err)
 	}
-
-	raw := hook.RawPayload{
-		"cwd":             "/chat",
-		"transcript_path": transcript,
-		"tool_use_id":     "call_123",
+	fields := payload.Fields()
+	if fields.ToolInputNewString != "first new\nsecond new" {
+		t.Fatalf("tool_input.new_string = %#v, want joined new strings", fields.ToolInputNewString)
 	}
-
-	got := hook.EnrichPayload(raw)
-	if _, ok := got["effective_cwd"]; ok {
-		t.Fatalf("unexpected effective_cwd: %#v", got)
+	if len(fields.EditsNewString) != 2 || fields.EditsNewString[1] != "second new" {
+		t.Fatalf("edits new strings = %#v, want second new", fields.EditsNewString)
 	}
 }
 
-func TestNormalizePayload_DispatchesByProvider(t *testing.T) {
-	raw := hook.RawPayload{
-		"tool_input": map[string]any{
-			"newString": "new text",
-		},
-	}
-
-	claudePayload := hook.NormalizePayload(hook.SystemClaude, raw)
-	claudeToolInput, ok := claudePayload["tool_input"].(map[string]any)
-	if !ok {
-		t.Fatalf("claude tool_input missing: %#v", claudePayload["tool_input"])
-	}
-	if _, ok := claudeToolInput["new_string"]; ok {
-		t.Fatalf("generic payload was normalized as VS Code: %#v", claudeToolInput)
-	}
-
-	vscodePayload := hook.NormalizePayload(hook.SystemVSCode, raw)
-	vscodeToolInput, ok := vscodePayload["tool_input"].(map[string]any)
-	if !ok {
-		t.Fatalf("vscode tool_input missing: %#v", vscodePayload["tool_input"])
-	}
-	if vscodeToolInput["new_string"] != "new text" {
-		t.Fatalf("vscode new_string = %#v, want new text", vscodeToolInput["new_string"])
-	}
-}
-
-func TestNormalizeVSCodePayload_EditToolInput(t *testing.T) {
-	raw := hook.RawPayload{
-		"hook_event_name": "PreToolUse",
-		"tool_name":       "replace_string_in_file",
-		"tool_input": map[string]any{
-			"filePath":  "/project/page.zig",
-			"oldString": "old text",
-			"newString": "new text",
-		},
-	}
-
-	got := hook.NormalizeVSCodePayload(raw)
-	ti, ok := got["tool_input"].(map[string]any)
-	if !ok {
-		t.Fatalf("tool_input missing: %#v", got["tool_input"])
-	}
-	if ti["file_path"] != "/project/page.zig" {
-		t.Fatalf("tool_input.file_path = %#v, want /project/page.zig", ti["file_path"])
-	}
-	if ti["old_string"] != "old text" {
-		t.Fatalf("tool_input.old_string = %#v, want old text", ti["old_string"])
-	}
-	if ti["new_string"] != "new text" {
-		t.Fatalf("tool_input.new_string = %#v, want new text", ti["new_string"])
-	}
-}
-
-func TestNormalizeVSCodePayload_MultiReplaceToolInput(t *testing.T) {
-	raw := hook.RawPayload{
-		"hook_event_name": "PreToolUse",
-		"tool_name":       "multi_replace_string_in_file",
-		"tool_input": map[string]any{
-			"replacements": []any{
-				map[string]any{
-					"filePath":  "/project/page.zig",
-					"oldString": "first old",
-					"newString": "first new",
-				},
-				map[string]any{
-					"filePath":  "/project/list.zig",
-					"oldString": "second old",
-					"newString": "second new",
-				},
-			},
-		},
-	}
-
-	got := hook.NormalizeVSCodePayload(raw)
-	ti, ok := got["tool_input"].(map[string]any)
-	if !ok {
-		t.Fatalf("tool_input missing: %#v", got["tool_input"])
-	}
-	if ti["new_string"] != "first new\nsecond new" {
-		t.Fatalf("tool_input.new_string = %#v, want joined new strings", ti["new_string"])
-	}
-	edits, ok := got["edits"].([]any)
-	if !ok || len(edits) != 2 {
-		t.Fatalf("edits = %#v, want two normalized edits", got["edits"])
-	}
-	secondEdit, ok := edits[1].(map[string]any)
-	if !ok {
-		t.Fatalf("second edit has unexpected shape: %#v", edits[1])
-	}
-	if secondEdit["new_string"] != "second new" {
-		t.Fatalf("second edit new_string = %#v, want second new", secondEdit["new_string"])
-	}
-}
-
-func TestNormalizeCopilotPayload_AddsAssistantMessageFromTranscript(t *testing.T) {
+func TestCopilotPayload_AddsAssistantMessageFromTranscript(t *testing.T) {
 	dir := t.TempDir()
 	transcript := filepath.Join(dir, "copilot.jsonl")
 	dash := string(rune(0x2014))
@@ -205,15 +87,13 @@ func TestNormalizeCopilotPayload_AddsAssistantMessageFromTranscript(t *testing.T
 		t.Fatalf("write transcript: %v", err)
 	}
 
-	raw := hook.RawPayload{
-		"hook_event_name": "Stop",
-		"transcript_path": transcript,
+	payload, err := hook.ParseHookPayload(hook.SystemCopilot, []byte(`{"hook_event_name":"Stop","transcript_path":"`+transcript+`"}`))
+	if err != nil {
+		t.Fatalf("ParseHookPayload: %v", err)
 	}
-
-	got := hook.NormalizeCopilotPayload(raw)
 	want := "Final response with em dash " + dash + " blocked."
-	if got["last_assistant_message"] != want {
-		t.Fatalf("last_assistant_message = %#v, want %#v", got["last_assistant_message"], want)
+	if got := payload.Fields().LastAssistantMessage; got != want {
+		t.Fatalf("last_assistant_message = %#v, want %#v", got, want)
 	}
 }
 
@@ -269,16 +149,8 @@ func TestValidPaths_NewProviders(t *testing.T) {
 func TestValidateConfig_NewProviderSpecificEvents(t *testing.T) {
 	cfg := &config.Config{
 		Rules: []config.Rule{
-			{
-				Name:        "codex-tool-command",
-				CodexEvents: []string{"PreToolUse"},
-				FieldPaths:  []string{"tool_input.command"},
-			},
-			{
-				Name:         "gemini-tool-command",
-				GeminiEvents: []string{"BeforeTool"},
-				FieldPaths:   []string{"tool_input.command"},
-			},
+			{Name: "codex-tool-command", CodexEvents: []string{"PreToolUse"}, FieldPaths: []string{"tool_input.command"}},
+			{Name: "gemini-tool-command", GeminiEvents: []string{"BeforeTool"}, FieldPaths: []string{"tool_input.command"}},
 		},
 	}
 

@@ -5,17 +5,8 @@ package agentgate;
 option go_package = "goodkind.io/agent-gate/api/daemonpb";
 
 // AgentGateD is the agent-gate daemon service.
-// The claude wrapper and all hook processes connect here.
+// Hook processes connect here for daemon-owned enforcement.
 service AgentGateD {
-  // AcquireSession is called by the claude wrapper before launching claude.
-  // The daemon creates a fake HOME in XDG_RUNTIME_DIR, populates settings.json
-  // with the session model injected, and returns the path.
-  rpc AcquireSession(AcquireSessionRequest) returns (AcquireSessionResponse);
-
-  // ReleaseSession is called by the claude wrapper after claude exits.
-  // The daemon cleans up the fake HOME and any associated runtime state.
-  rpc ReleaseSession(ReleaseSessionRequest) returns (ReleaseSessionResponse);
-
   // EvaluateHook forwards raw hook input to the daemon-owned enforcement engine.
   rpc EvaluateHook(EvaluateHookRequest) returns (EvaluateHookResponse);
 
@@ -23,51 +14,16 @@ service AgentGateD {
   rpc Status(StatusRequest) returns (StatusResponse);
 }
 
-message AcquireSessionRequest {
-  // session_name is the agent-gate session name (e.g. "my-feature").
-  // Empty for sessions not managed by agent-gate (bare claude invocations).
-  string session_name = 1;
-
-  // wrapper_id is a unique ID for this wrapper process (e.g. PID as string).
-  string wrapper_id = 2;
-}
-
-message AcquireSessionResponse {
-  // fake_home is the path to the per-process fake HOME directory.
-  // The wrapper launches claude with HOME=fake_home.
-  string fake_home = 1;
-
-  // real_claude is the path to the actual claude binary.
-  string real_claude = 2;
-
-  // model is the resolved model for this session (from session metadata or global default).
-  string model = 3;
-
-  // settings_file is the path to the per-session settings.json (for --settings flag).
-  // Lives inside fake_home/.claude/settings.json.
-  string settings_file = 4;
-}
-
-message ReleaseSessionRequest {
-  string wrapper_id = 1;
-}
-
-message ReleaseSessionResponse {}
-
 message EvaluateHookRequest {
   // raw_json is the raw JSON payload read from hook stdin.
   bytes raw_json = 1;
 
-  // wrapper_id identifies which wrapper session this hook belongs to, when
-  // available.
-  string wrapper_id = 2;
-
   // provider_hint is a best-effort CLI/template hint such as "codex" or
   // "gemini". Daemon-side detection may override it based on env/payload.
-  string provider_hint = 3;
-  string cwd = 4;
-  repeated string argv = 5;
-  map<string, string> env_fingerprint = 6;
+  string provider_hint = 2;
+  string cwd = 3;
+  repeated string argv = 4;
+  map<string, string> env_fingerprint = 5;
 }
 
 message EvaluateHookResponse {
@@ -75,7 +31,7 @@ message EvaluateHookResponse {
   // 0 = allow, 2 = block.
   int32 exit_code = 1;
 
-  // stdout_data is written to hook process stdout (injected into Claude context).
+  // stdout_data is written to hook process stdout.
   bytes stdout_data = 2;
 
   // stderr_data is written to hook process stderr.
@@ -92,5 +48,4 @@ message StatusResponse {
   string commit = 5;
   string dirty = 6;
   string build_hash = 7;
-  int32 active_sessions = 8;
 }

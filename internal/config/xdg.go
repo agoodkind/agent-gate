@@ -3,8 +3,8 @@
 // Path resolution order for every configurable path:
 //
 //  1. Explicit value in TOML [paths] table (highest priority).
-//  2. Relevant XDG env var ($XDG_CONFIG_HOME, $XDG_STATE_HOME, $XDG_RUNTIME_DIR, …).
-//  3. XDG spec default (~/.config, ~/.local/state, …).
+//  2. Relevant XDG env var ($XDG_CONFIG_HOME, $XDG_STATE_HOME, $XDG_RUNTIME_DIR, ...).
+//  3. XDG spec default (~/.config, ~/.local/state, ...).
 //
 // The functions in this file implement steps 2 and 3.
 // Step 1 is applied by the methods on Config in config.go.
@@ -12,6 +12,7 @@ package config
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 )
@@ -51,9 +52,8 @@ func ConfigPath() string {
 //	$XDG_STATE_HOME/agent-gate    (if $XDG_STATE_HOME is set)
 //	~/.local/state/agent-gate      (XDG spec default)
 //
-// The audit log belongs in the state dir — not data dir — because the XDG spec
-// explicitly lists "actions history (logs, history, recently used files, ...)"
-// as XDG_STATE_HOME content.
+// The audit log belongs in the state dir because the XDG spec lists logs and
+// history as XDG_STATE_HOME content.
 func DefaultStateDir() string {
 	base := os.Getenv("XDG_STATE_HOME")
 	if base == "" {
@@ -94,7 +94,7 @@ func ProfilesConfigPath() string {
 //
 // Resolution:
 //
-//	$XDG_RUNTIME_DIR/agent-gate   (if $XDG_RUNTIME_DIR is set — tmpfs on Linux/systemd)
+//	$XDG_RUNTIME_DIR/agent-gate   (if $XDG_RUNTIME_DIR is set, tmpfs on Linux/systemd)
 //	$TMPDIR/agent-gate             (macOS fallback)
 //	/tmp/agent-gate                (final fallback)
 func RuntimeDir() string {
@@ -112,32 +112,13 @@ func DaemonSocketPath() string {
 	return filepath.Join(RuntimeDir(), "daemon.sock")
 }
 
-// SessionRuntimeDir returns the runtime directory for a specific wrapper session.
-// This is where the fake HOME lives for that claude process.
-func SessionRuntimeDir(wrapperID string) string {
-	return filepath.Join(RuntimeDir(), "sessions", wrapperID)
-}
-
-// FakeHomeDir returns the fake HOME directory path for a wrapper session.
-func FakeHomeDir(wrapperID string) string {
-	return filepath.Join(SessionRuntimeDir(wrapperID), "home")
-}
-
-// FakeClaudeDir returns the fake ~/.claude directory path for a wrapper session.
-func FakeClaudeDir(wrapperID string) string {
-	return filepath.Join(FakeHomeDir(wrapperID), ".claude")
-}
-
-// FakeSettingsPath returns the path to settings.json in the fake home.
-func FakeSettingsPath(wrapperID string) string {
-	return filepath.Join(FakeClaudeDir(wrapperID), "settings.json")
-}
-
 // EnsureRuntimeDir creates the agent-gate runtime directory with correct permissions.
 // XDG spec requires 0700 for XDG_RUNTIME_DIR contents.
 func EnsureRuntimeDir() error {
+	log := slog.Default()
 	dir := RuntimeDir()
 	if err := os.MkdirAll(dir, 0o700); err != nil {
+		log.Error("create runtime dir failed", "dir", dir, "err", err)
 		return fmt.Errorf("failed to create runtime dir %s: %w", dir, err)
 	}
 	return nil

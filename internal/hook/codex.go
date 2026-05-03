@@ -28,14 +28,26 @@ func CanBlockCodex(eventName string) bool {
 	return false
 }
 
+type CodexHookSpecificOutput struct {
+	HookEventName            string                  `json:"hookEventName,omitempty"`
+	PermissionDecision       string                  `json:"permissionDecision,omitempty"`
+	PermissionDecisionReason string                  `json:"permissionDecisionReason,omitempty"`
+	Decision                 CodexPermissionDecision `json:"decision,omitempty"`
+}
+
+type CodexPermissionDecision struct {
+	Behavior string `json:"behavior,omitempty"`
+	Message  string `json:"message,omitempty"`
+}
+
 type codexResponse struct {
-	Continue           *bool          `json:"continue,omitempty"`
-	StopReason         string         `json:"stopReason,omitempty"`
-	SystemMessage      string         `json:"systemMessage,omitempty"`
-	SuppressOutput     *bool          `json:"suppressOutput,omitempty"`
-	Decision           string         `json:"decision,omitempty"`
-	Reason             string         `json:"reason,omitempty"`
-	HookSpecificOutput map[string]any `json:"hookSpecificOutput,omitempty"`
+	Continue           *bool                   `json:"continue,omitempty"`
+	StopReason         string                  `json:"stopReason,omitempty"`
+	SystemMessage      string                  `json:"systemMessage,omitempty"`
+	SuppressOutput     *bool                   `json:"suppressOutput,omitempty"`
+	Decision           string                  `json:"decision,omitempty"`
+	Reason             string                  `json:"reason,omitempty"`
+	HookSpecificOutput CodexHookSpecificOutput `json:"hookSpecificOutput,omitempty"`
 }
 
 func CodexAllow() []byte {
@@ -53,17 +65,17 @@ func CodexBlockText(eventName, text string) []byte {
 	switch CodexEvent(eventName) {
 	case CodexPreToolUse:
 		resp.SystemMessage = text
-		resp.HookSpecificOutput = map[string]any{
-			"hookEventName":            "PreToolUse",
-			"permissionDecision":       "deny",
-			"permissionDecisionReason": text,
+		resp.HookSpecificOutput = CodexHookSpecificOutput{
+			HookEventName:            "PreToolUse",
+			PermissionDecision:       "deny",
+			PermissionDecisionReason: text,
 		}
 	case CodexPermissionRequest:
-		resp.HookSpecificOutput = map[string]any{
-			"hookEventName": "PermissionRequest",
-			"decision": map[string]any{
-				"behavior": "deny",
-				"message":  text,
+		resp.HookSpecificOutput = CodexHookSpecificOutput{
+			HookEventName: "PermissionRequest",
+			Decision: CodexPermissionDecision{
+				Behavior: "deny",
+				Message:  text,
 			},
 		}
 	case CodexPostToolUse:
@@ -80,6 +92,6 @@ func CodexBlockText(eventName, text string) []byte {
 		resp.Reason = text
 	}
 
-	b, _ := json.Marshal(resp)
-	return append(b, '\n')
+	bytes, _ := json.Marshal(resp)
+	return append(bytes, '\n')
 }

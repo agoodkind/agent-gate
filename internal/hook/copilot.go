@@ -6,41 +6,15 @@ import (
 	"os"
 )
 
-func NormalizeCopilotPayload(raw RawPayload) RawPayload {
-	normalized := NormalizeVSCodePayload(raw)
-	return enrichCopilotAssistantMessage(normalized)
-}
-
-func enrichCopilotAssistantMessage(raw RawPayload) RawPayload {
-	if raw.EventName() != string(ClaudeStop) {
-		return raw
-	}
-	if strField(raw, "assistant_message") != "" || strField(raw, "last_assistant_message") != "" || strField(raw, "text") != "" {
-		return raw
-	}
-	transcriptPath := strField(raw, "transcript_path")
-	if transcriptPath == "" {
-		return raw
-	}
-	assistantMessage := lastCopilotAssistantMessage(transcriptPath)
-	if assistantMessage == "" {
-		return raw
-	}
-
-	enriched := clonePayload(raw)
-	enriched["last_assistant_message"] = assistantMessage
-	return enriched
-}
-
 func lastCopilotAssistantMessage(transcriptPath string) string {
-	f, err := os.Open(transcriptPath)
+	file, err := os.Open(transcriptPath)
 	if err != nil {
 		return ""
 	}
-	defer func() { _ = f.Close() }()
+	defer func() { _ = file.Close() }()
 
 	var lastMessage string
-	scanner := bufio.NewScanner(f)
+	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
 	for scanner.Scan() {
 		if message := copilotAssistantMessageFromLine(scanner.Bytes()); message != "" {

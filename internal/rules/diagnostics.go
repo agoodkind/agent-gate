@@ -3,6 +3,7 @@ package rules
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 )
@@ -11,13 +12,11 @@ const maxDiagnosticMatches = 50
 
 type diagnosticOccurrence struct {
 	MatchViolation
-	Key         string
-	Line        int
-	Column      int
-	LineText    string
-	LineStart   int
-	RenderStart int
-	RenderWidth int
+	Key      string
+	Line     int
+	Column   int
+	LineText string
+	Match    string
 }
 
 // FormatViolations renders concrete matches as line-numbered diagnostics with
@@ -61,8 +60,13 @@ func writeSourceDiagnostics(b *strings.Builder, occurrences []diagnosticOccurren
 		byField[occ.FieldPath] = append(byField[occ.FieldPath], occ)
 	}
 
+	if len(fields) == 0 {
+		return
+	}
+
+	fmt.Fprintf(b, "\nMatches:\n")
 	for _, field := range fields {
-		fmt.Fprintf(b, "\n%s\n", field)
+		fmt.Fprintf(b, "- field: %s\n", field)
 		lines := byField[field]
 		sort.SliceStable(lines, func(i, j int) bool {
 			if lines[i].Line != lines[j].Line {
@@ -71,46 +75,21 @@ func writeSourceDiagnostics(b *strings.Builder, occurrences []diagnosticOccurren
 			return lines[i].Column < lines[j].Column
 		})
 
-		for _, group := range groupByLine(lines) {
-			writeLineGroup(b, group)
+		for _, occ := range lines {
+			writeOccurrence(b, occ)
 		}
 	}
 }
 
-func writeLineGroup(b *strings.Builder, group []diagnosticOccurrence) {
-	first := group[0]
-	lineText, offsetCols := clippedLine(first.LineText, group)
-	lineNoWidth := len(fmt.Sprint(first.Line))
-	fmt.Fprintf(b, "%*d | %s\n", lineNoWidth, first.Line, lineText)
-
-	annotations := make([]rune, visibleWidth(lineText))
-	for i := range annotations {
-		annotations[i] = ' '
+func writeOccurrence(b *strings.Builder, occ diagnosticOccurrence) {
+	fmt.Fprintf(b, "  - rule: %s\n", occ.Key)
+	if occ.FilePath != "" {
+		fmt.Fprintf(b, "    file: %s\n", occ.FilePath)
 	}
-	for _, occ := range group {
-		start := occ.RenderStart - offsetCols
-		if start < 0 {
-			start = 0
-		}
-		if start >= len(annotations) {
-			continue
-		}
-		marker := []rune("^" + occ.Key)
-		for i, r := range marker {
-			if start+i < len(annotations) {
-				annotations[start+i] = r
-			}
-		}
-		width := occ.RenderWidth
-		if width < len(marker) {
-			width = len(marker)
-		}
-		for i := len(marker); i < width && start+i < len(annotations); i++ {
-			annotations[start+i] = '-'
-		}
-	}
-
-	fmt.Fprintf(b, "%*s | %s\n", lineNoWidth, "", string(annotations))
+	fmt.Fprintf(b, "    line: %d\n", occ.Line)
+	fmt.Fprintf(b, "    column: %d\n", occ.Column)
+	fmt.Fprintf(b, "    match: %s\n", strconv.QuoteToASCII(occ.Match))
+	fmt.Fprintf(b, "    text: %s\n", strconv.QuoteToASCII(occ.LineText))
 }
 
 func writeLegend(b *strings.Builder, occurrences []diagnosticOccurrence) {
@@ -156,20 +135,13 @@ func occurrenceFor(v MatchViolation) diagnosticOccurrence {
 
 	prefix := lineText[:startInLine]
 	match := lineText[startInLine:endInLine]
-	renderStart := visibleWidth(prefix)
-	renderWidth := visibleWidth(match)
-	if renderWidth == 0 {
-		renderWidth = 1
-	}
 
 	return diagnosticOccurrence{
 		MatchViolation: v,
 		Line:           line,
 		Column:         utf8.RuneCountInString(prefix) + 1,
-		LineText:       visibleText(lineText),
-		LineStart:      lineStart,
-		RenderStart:    renderStart,
-		RenderWidth:    renderWidth,
+		LineText:       clippedLineText(visibleText(lineText), utf8.RuneCountInString(prefix), visibleWidth(match)),
+		Match:          visibleText(match),
 	}
 }
 
@@ -200,16 +172,33 @@ func lineForOffset(value string, offset int) (line int, lineStart int, text stri
 	return line, lineStart, value[lineStart:lineEnd]
 }
 
-func groupByLine(items []diagnosticOccurrence) [][]diagnosticOccurrence {
-	var groups [][]diagnosticOccurrence
-	for _, item := range items {
-		if len(groups) == 0 || groups[len(groups)-1][0].Line != item.Line {
-			groups = append(groups, []diagnosticOccurrence{item})
-			continue
-		}
-		groups[len(groups)-1] = append(groups[len(groups)-1], item)
+func clippedLineText(line string, matchStart int, matchWidth int) string {
+	const maxWidth = 120
+	lineRunes := []rune(line)
+	if len(lineRunes) <= maxWidth {
+		return line
 	}
-	return groups
+
+	if matchWidth < 1 {
+		matchWidth = 1
+	}
+	start := matchStart - 30
+	if start < 0 {
+		start = 0
+	}
+	end := matchStart + matchWidth + 30
+	if end > len(lineRunes) {
+		end = len(lineRunes)
+	}
+	prefix := ""
+	if start > 0 {
+		prefix = "..."
+	}
+	suffix := ""
+	if end < len(lineRunes) {
+		suffix = "..."
+	}
+	return prefix + string(lineRunes[start:end]) + suffix
 }
 
 func legendKeys(violations []MatchViolation) map[string]string {
@@ -239,43 +228,6 @@ func legendKey(i int) string {
 		i /= 26
 	}
 	return string(out)
-}
-
-func clippedLine(line string, group []diagnosticOccurrence) (string, int) {
-	const maxWidth = 120
-	if visibleWidth(line) <= maxWidth {
-		return line, 0
-	}
-
-	minStart := group[0].RenderStart
-	maxEnd := group[0].RenderStart + group[0].RenderWidth
-	for _, occ := range group[1:] {
-		if occ.RenderStart < minStart {
-			minStart = occ.RenderStart
-		}
-		if end := occ.RenderStart + occ.RenderWidth; end > maxEnd {
-			maxEnd = end
-		}
-	}
-
-	start := minStart - 30
-	if start < 0 {
-		start = 0
-	}
-	end := maxEnd + 30
-	lineRunes := []rune(line)
-	if end > len(lineRunes) {
-		end = len(lineRunes)
-	}
-	prefix := ""
-	if start > 0 {
-		prefix = "..."
-	}
-	suffix := ""
-	if end < len(lineRunes) {
-		suffix = "..."
-	}
-	return prefix + string(lineRunes[start:end]) + suffix, start - len(prefix)
 }
 
 func visibleText(s string) string {

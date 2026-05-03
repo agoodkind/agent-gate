@@ -13,21 +13,26 @@ import (
 // CLI subcommand classification (codex-hook, gemini-hook) and is consulted
 // by Detect only as a last resort. Real env or payload fingerprints
 // outrank it because subcommand arguments travel with copied configs.
-func Handle(ctx context.Context, raw RawPayload, rawBytes []byte, cfg *config.Config, sink audit.Sink, hint HookSystem) (stdout, stderr []byte, exitCode int) {
-	return HandleWithEnv(ctx, raw, rawBytes, cfg, sink, hint, nil)
+func Handle(ctx context.Context, rawBytes []byte, cfg *config.Config, sink audit.Sink, hint HookSystem) (stdout, stderr []byte, exitCode int) {
+	return HandleWithEnv(ctx, rawBytes, cfg, sink, hint, nil)
 }
 
-func HandleWithEnv(ctx context.Context, raw RawPayload, rawBytes []byte, cfg *config.Config, sink audit.Sink, hint HookSystem, getenv func(string) string) (stdout, stderr []byte, exitCode int) {
+func HandleWithEnv(ctx context.Context, rawBytes []byte, cfg *config.Config, sink audit.Sink, hint HookSystem, getenv func(string) string) (stdout, stderr []byte, exitCode int) {
 	if sink == nil {
 		sink = audit.DiscardSink{}
 	}
-	system := DetectWithEnv(raw, hint, getenv)
-	raw = NormalizePayload(system, raw)
-	raw = EnrichPayload(raw)
-	eventName := raw.EventName()
+	detectionPayload, err := ParseDetectionPayload(rawBytes)
+	if err != nil {
+		return nil, []byte("agent-gate: parse stdin JSON: " + err.Error() + "\n"), 2
+	}
+	system := DetectWithEnv(detectionPayload, hint, getenv)
+	payload, err := ParseHookPayload(system, rawBytes)
+	if err != nil {
+		return nil, []byte("agent-gate: parse typed hook JSON: " + err.Error() + "\n"), 2
+	}
 
-	auditReceived(ctx, raw, rawBytes, system, eventName, sink)
-	return enforce(ctx, raw, system, eventName, cfg, sink)
+	auditReceived(ctx, payload, rawBytes, sink)
+	return enforce(ctx, payload, cfg, sink)
 }
 
 // CanBlock returns true when the provider can meaningfully change the hook flow.
@@ -46,19 +51,21 @@ func CanBlock(system HookSystem, eventName string) bool {
 	}
 }
 
-func auditReceived(ctx context.Context, raw RawPayload, rawBytes []byte, system HookSystem, eventName string, sink audit.Sink) {
-	systemStr := system.String()
-	sessionID := raw.SessionID()
+func auditReceived(ctx context.Context, payload HookPayload, rawBytes []byte, sink audit.Sink) {
+	systemStr := payload.System.String()
+	eventName := payload.EventName()
+	sessionID := payload.SessionID()
+	fields := payload.Fields()
 
 	base := []slog.Attr{
 		slog.String("system", systemStr),
 		slog.String("event", eventName),
 		slog.String("session_id", sessionID),
-		slog.String("cwd", raw.CWD()),
-		slog.String("effective_cwd", strField(raw, "effective_cwd")),
+		slog.String("cwd", payload.CWD()),
+		slog.String("effective_cwd", fields.String(config.FieldEffectiveCWD)),
 	}
 
-	infoAttrs := audit.AttrsFromSlog(append(base, logAttrs(system, raw)...))
+	infoAttrs := audit.AttrsFromSlog(append(base, logAttrs(fields)...))
 	sink.Log(ctx, systemStr, sessionID, eventName, "info", "hook.received", infoAttrs)
 
 	debugAttrs := audit.AttrsFromSlog([]slog.Attr{
@@ -70,36 +77,30 @@ func auditReceived(ctx context.Context, raw RawPayload, rawBytes []byte, system 
 	sink.Log(ctx, systemStr, sessionID, eventName, "debug", "hook.raw_payload", debugAttrs)
 }
 
-func enforce(ctx context.Context, raw RawPayload, system HookSystem, eventName string, cfg *config.Config, sink audit.Sink) (stdout, stderr []byte, exitCode int) {
-	systemStr := system.String()
-	sessionID := raw.SessionID()
+func enforce(ctx context.Context, payload HookPayload, cfg *config.Config, sink audit.Sink) (stdout, stderr []byte, exitCode int) {
+	systemStr := payload.System.String()
+	eventName := payload.EventName()
+	sessionID := payload.SessionID()
+	fields := payload.Fields()
 	checked := rules.CheckedRuleNames(systemStr, eventName, cfg.Rules)
-	violations := rules.EvaluateAll(systemStr, eventName, map[string]any(raw), cfg.Rules)
+	violations := rules.EvaluateAll(systemStr, eventName, fields, cfg.Rules)
 	blockingViolations := blockingMatches(violations)
 	auditOnlyViolations := auditOnlyMatches(violations)
 
-	// Include enough identifying fields from the payload that two distinct
-	// tool calls in the same session produce different log lines. Without
-	// these the audit dedup cache would collapse legitimate repeat decisions
-	// ("allow" / "block") across separate tool invocations.
 	base := []slog.Attr{
 		slog.String("system", systemStr),
 		slog.String("event", eventName),
 		slog.String("session_id", sessionID),
-		slog.String("tool_use_id", strField(raw, "tool_use_id")),
-		slog.String("tool_name", strField(raw, "tool_name")),
-		slog.String("cwd", raw.CWD()),
-		slog.String("effective_cwd", strField(raw, "effective_cwd")),
+		slog.String("tool_use_id", fields.ToolUseID),
+		slog.String("tool_name", fields.ToolName),
+		slog.String("cwd", payload.CWD()),
+		slog.String("effective_cwd", fields.String(config.FieldEffectiveCWD)),
 		slog.Any("rules_checked", checked),
-	}
-	if ti, ok := raw["tool_input"].(map[string]any); ok {
-		base = append(base,
-			slog.String("ti_command", strFromMap(ti, "command")),
-			slog.String("ti_file_path", strFromMap(ti, "file_path")),
-		)
+		slog.String("ti_command", fields.ToolInputCommand),
+		slog.String("ti_file_path", fields.ToolInputFilePath),
 	}
 
-	if len(blockingViolations) > 0 && CanBlock(system, eventName) {
+	if len(blockingViolations) > 0 && CanBlock(payload.System, eventName) {
 		diagnostic := rules.FormatViolations(blockingViolations)
 		attrs := audit.AttrsFromSlog(append(base,
 			slog.String("decision", "block"),
@@ -107,7 +108,7 @@ func enforce(ctx context.Context, raw RawPayload, system HookSystem, eventName s
 			slog.String("violation_message", diagnostic),
 		))
 		sink.Log(ctx, systemStr, sessionID, eventName, "info", "hook.blocked", attrs)
-		return blockTextResponse(system, eventName, diagnostic)
+		return blockTextResponse(payload.System, eventName, diagnostic)
 	}
 
 	if len(auditOnlyViolations) > 0 {
@@ -125,14 +126,14 @@ func enforce(ctx context.Context, raw RawPayload, system HookSystem, eventName s
 		slog.String("violation_message", ""),
 	))
 	sink.Log(ctx, systemStr, sessionID, eventName, "info", "hook.allowed", allowAttrs)
-	return defaultAllow(system), nil, 0
+	return defaultAllow(payload.System), nil, 0
 }
 
 func blockingMatches(violations []rules.MatchViolation) []rules.MatchViolation {
 	out := make([]rules.MatchViolation, 0, len(violations))
-	for _, v := range violations {
-		if !v.AuditOnly {
-			out = append(out, v)
+	for _, violation := range violations {
+		if !violation.AuditOnly {
+			out = append(out, violation)
 		}
 	}
 	return out
@@ -140,9 +141,9 @@ func blockingMatches(violations []rules.MatchViolation) []rules.MatchViolation {
 
 func auditOnlyMatches(violations []rules.MatchViolation) []rules.MatchViolation {
 	out := make([]rules.MatchViolation, 0, len(violations))
-	for _, v := range violations {
-		if v.AuditOnly {
-			out = append(out, v)
+	for _, violation := range violations {
+		if violation.AuditOnly {
+			out = append(out, violation)
 		}
 	}
 	return out
@@ -151,12 +152,12 @@ func auditOnlyMatches(violations []rules.MatchViolation) []rules.MatchViolation 
 func matchRuleNames(violations []rules.MatchViolation) []string {
 	seen := make(map[string]bool)
 	var names []string
-	for _, v := range violations {
-		if seen[v.RuleName] {
+	for _, violation := range violations {
+		if seen[violation.RuleName] {
 			continue
 		}
-		seen[v.RuleName] = true
-		names = append(names, v.RuleName)
+		seen[violation.RuleName] = true
+		names = append(names, violation.RuleName)
 	}
 	return names
 }
@@ -187,17 +188,28 @@ func defaultAllow(system HookSystem) []byte {
 	}
 }
 
-func logAttrs(system HookSystem, raw RawPayload) []slog.Attr {
-	switch system {
-	case SystemClaude, SystemVSCode, SystemCopilot:
-		return claudeLogAttrs(raw)
-	case SystemCursor:
-		return cursorLogAttrs(raw)
-	case SystemCodex:
-		return codexLogAttrs(raw)
-	case SystemGemini:
-		return geminiLogAttrs(raw)
-	default:
-		return nil
+func logAttrs(fields rules.FieldSet) []slog.Attr {
+	return []slog.Attr{
+		slog.String("tool_name", fields.ToolName),
+		slog.String("tool_use_id", fields.ToolUseID),
+		slog.String("source", fields.Source),
+		slog.String("file_path", fields.FilePathValue()),
+		slog.String("model", fields.Model),
+		slog.String("permission_mode", fields.PermissionMode),
+		slog.String("agent_id", fields.AgentID),
+		slog.String("agent_type", fields.AgentType),
+		slog.String("ti_command", fields.ToolInputCommand),
+		slog.String("ti_file_path", fields.ToolInputFilePath),
+		slog.String("ti_description", truncate(fields.ToolInputDescription, 200)),
+		slog.String("ti_content_snippet", truncate(fields.ToolInputContent, 200)),
+		slog.String("ti_old_string_snippet", truncate(fields.ToolInputOldString, 200)),
+		slog.String("ti_new_string_snippet", truncate(fields.ToolInputNewString, 200)),
+		slog.String("ti_pattern", fields.ToolInputPattern),
+		slog.String("ti_url", fields.ToolInputURL),
+		slog.String("ti_query", fields.ToolInputQuery),
+		slog.String("prompt_snippet", truncate(fields.Prompt, 200)),
+		slog.String("message_snippet", truncate(fields.Message, 200)),
+		slog.String("reason", truncate(fields.Reason, 200)),
+		slog.String("last_assistant_message_snippet", truncate(fields.LastAssistantMessage, 200)),
 	}
 }

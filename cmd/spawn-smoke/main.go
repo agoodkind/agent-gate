@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -73,22 +74,35 @@ type padScenario struct {
 }
 
 func main() {
-	cfg := parseFlags()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	logger.Debug("spawn smoke run starting")
+	os.Exit(run(logger))
+}
 
-	inputFilePath, inputMode, inputBytes, cleanup, err := loadInput(cfg)
+func run(logger *slog.Logger) int {
+	cfg, err := parseFlags()
 	if err != nil {
-		fatalf("%v", err)
+		logger.Error("invalid spawn smoke flags", slog.Any("err", err))
+		return 2
+	}
+
+	inputFilePath, inputMode, inputBytes, cleanup, err := loadInput(cfg, logger)
+	if err != nil {
+		logger.Error("load spawn smoke input failed", slog.Any("err", err))
+		return 2
 	}
 	defer cleanup()
 
-	targetBinary, err := resolveTargetBinary(cfg.targetBinary)
+	targetBinary, err := resolveTargetBinary(cfg.targetBinary, logger)
 	if err != nil {
-		fatalf("%v", err)
+		logger.Error("resolve spawn smoke target failed", slog.Any("err", err))
+		return 2
 	}
 
-	payloadBytes, err := buildPayload(cfg.payloadKind, string(inputBytes))
+	payloadBytes, err := buildPayload(cfg.payloadKind, string(inputBytes), logger)
 	if err != nil {
-		fatalf("%v", err)
+		logger.Error("build spawn smoke payload failed", slog.Any("err", err))
+		return 2
 	}
 
 	out := report{
@@ -145,14 +159,27 @@ func main() {
 		))
 	}
 
+	logger.Info("spawn smoke run completed",
+		slog.String("target_binary", out.TargetBinary),
+		slog.String("input_mode", out.InputMode),
+		slog.Int("input_bytes", out.InputBytes),
+		slog.String("payload_kind", out.PayloadKind),
+		slog.Int("payload_bytes", out.PayloadBytes),
+		slog.Bool("baseline_ok", out.Baseline.OK),
+		slog.Int("probe_count", len(out.Probes)),
+	)
+
 	encoder := json.NewEncoder(os.Stdout)
 	encoder.SetIndent("", "  ")
 	if err := encoder.Encode(out); err != nil {
-		fatalf("encode report: %v", err)
+		logger.Error("encode spawn smoke report failed", slog.Any("err", err))
+		return 2
 	}
+
+	return 0
 }
 
-func parseFlags() config {
+func parseFlags() (config, error) {
 	cfg := config{}
 
 	defaultTarget := filepath.Join(os.Getenv("HOME"), ".local", "bin", "agent-gate")
@@ -171,28 +198,32 @@ func parseFlags() config {
 	flag.Parse()
 
 	if cfg.inputFile == "" && cfg.generateBytes <= 0 {
-		fatalf("missing input source: set -input-file or -generate-bytes")
+		return config{}, errors.New("missing input source: set -input-file or -generate-bytes")
 	}
 	if cfg.inputFile != "" && cfg.generateBytes > 0 {
-		fatalf("choose only one input source: -input-file or -generate-bytes")
+		return config{}, errors.New("choose only one input source: -input-file or -generate-bytes")
 	}
 	if cfg.generateBytes < 0 {
-		fatalf("-generate-bytes must be zero or positive")
+		return config{}, errors.New("-generate-bytes must be zero or positive")
 	}
 	if cfg.probeUpperBound <= 0 {
-		fatalf("-probe-upper-bound must be positive")
+		return config{}, errors.New("-probe-upper-bound must be positive")
 	}
 	if cfg.probeStep <= 0 {
-		fatalf("-probe-step must be positive")
+		return config{}, errors.New("-probe-step must be positive")
 	}
 
-	return cfg
+	return cfg, nil
 }
 
-func loadInput(cfg config) (string, string, []byte, func(), error) {
+func loadInput(cfg config, logger *slog.Logger) (string, string, []byte, func(), error) {
 	if cfg.inputFile != "" {
 		inputBytes, err := os.ReadFile(cfg.inputFile)
 		if err != nil {
+			logger.Error("read spawn smoke input file failed",
+				slog.String("input_file", cfg.inputFile),
+				slog.Any("err", err),
+			)
 			return "", "", nil, func() {}, fmt.Errorf("read input file: %w", err)
 		}
 		return cfg.inputFile, "file", inputBytes, func() {}, nil
@@ -200,6 +231,7 @@ func loadInput(cfg config) (string, string, []byte, func(), error) {
 
 	tempDir, err := os.MkdirTemp("", "agent-gate-spawn-smoke-")
 	if err != nil {
+		logger.Error("create spawn smoke temp dir failed", slog.Any("err", err))
 		return "", "", nil, func() {}, fmt.Errorf("create temp dir: %w", err)
 	}
 
@@ -207,6 +239,11 @@ func loadInput(cfg config) (string, string, []byte, func(), error) {
 	inputBytes := []byte(generateLoremText(cfg.generateBytes))
 	if err := os.WriteFile(inputPath, inputBytes, 0o600); err != nil {
 		_ = os.RemoveAll(tempDir)
+		logger.Error("write generated spawn smoke input failed",
+			slog.String("input_file", inputPath),
+			slog.Int("generate_bytes", cfg.generateBytes),
+			slog.Any("err", err),
+		)
 		return "", "", nil, func() {}, fmt.Errorf("write generated input file: %w", err)
 	}
 
@@ -217,13 +254,17 @@ func loadInput(cfg config) (string, string, []byte, func(), error) {
 	return inputPath, "generated", inputBytes, cleanup, nil
 }
 
-func resolveTargetBinary(target string) (string, error) {
+func resolveTargetBinary(target string, logger *slog.Logger) (string, error) {
 	if target == "" {
 		return "", errors.New("target binary path is empty")
 	}
 
 	info, err := os.Stat(target)
 	if err != nil {
+		logger.Error("stat spawn smoke target binary failed",
+			slog.String("target_binary", target),
+			slog.Any("err", err),
+		)
 		return "", fmt.Errorf("stat target binary %q: %w", target, err)
 	}
 	if info.IsDir() {
@@ -233,7 +274,7 @@ func resolveTargetBinary(target string) (string, error) {
 	return target, nil
 }
 
-func buildPayload(payloadKind string, largeText string) ([]byte, error) {
+func buildPayload(payloadKind string, largeText string, logger *slog.Logger) ([]byte, error) {
 	base := map[string]any{
 		"conversation_id": "spawn-smoke-conversation",
 		"generation_id":   "spawn-smoke-generation",
@@ -270,6 +311,10 @@ func buildPayload(payloadKind string, largeText string) ([]byte, error) {
 
 	payloadBytes, err := json.Marshal(base)
 	if err != nil {
+		logger.Error("marshal spawn smoke payload failed",
+			slog.String("payload_kind", payloadKind),
+			slog.Any("err", err),
+		)
 		return nil, fmt.Errorf("marshal %s payload: %w", payloadKind, err)
 	}
 
@@ -356,7 +401,7 @@ func probeLimit(
 }
 
 func runScenario(targetBinary string, payloadBytes []byte, scenario padScenario) runResult {
-	started := time.Now()
+	started := scenarioStartTime()
 
 	args := []string{}
 	if scenario.argvPadBytes > 0 {
@@ -403,6 +448,10 @@ func runScenario(targetBinary string, payloadBytes []byte, scenario padScenario)
 
 	result.ErrorKind = "start_error"
 	return result
+}
+
+func scenarioStartTime() time.Time {
+	return time.Now()
 }
 
 func isE2BIG(err error) bool {
@@ -452,9 +501,4 @@ func generateLoremText(targetBytes int) string {
 	}
 
 	return text[:targetBytes]
-}
-
-func fatalf(format string, args ...any) {
-	fmt.Fprintf(os.Stderr, format+"\n", args...)
-	os.Exit(2)
 }

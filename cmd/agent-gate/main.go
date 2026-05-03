@@ -8,7 +8,6 @@ import (
 	"io"
 	"log/slog"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -21,17 +20,26 @@ import (
 	"goodkind.io/gklog"
 )
 
+func writeUserf(writer io.Writer, format string, args ...any) {
+	_, _ = fmt.Fprintf(writer, format, args...)
+}
+
+func writeUserLine(writer io.Writer, line string) {
+	_, _ = io.WriteString(writer, line+"\n")
+}
+
 // printVersion writes the build metadata used in log entries to stdout.
 // Output mirrors the slog attrs from internal/version.Attrs so that what
 // appears in audit logs is exactly what `agent-gate version` reports.
-func printVersion() {
-	fmt.Printf("version:   %s\n", version.Version)
-	fmt.Printf("commit:    %s\n", version.Commit)
-	fmt.Printf("dirty:     %s\n", version.Dirty)
-	fmt.Printf("buildHash: %s\n", version.BuildHash())
+func printVersion(writer io.Writer) {
+	writeUserf(writer, "version:   %s\n", version.Version)
+	writeUserf(writer, "commit:    %s\n", version.Commit)
+	writeUserf(writer, "dirty:     %s\n", version.Dirty)
+	writeUserf(writer, "buildHash: %s\n", version.BuildHash())
 }
 
 func main() {
+	slog.New(slog.NewJSONHandler(io.Discard, nil)).Info("agent-gate invocation", "argc", len(os.Args))
 	// Fail closed: any unrecovered panic exits 2, blocking the pending action.
 	defer func() {
 		if r := recover(); r != nil {
@@ -39,12 +47,6 @@ func main() {
 			os.Exit(2)
 		}
 	}()
-
-	// When installed as "claude" (symlink or rename), act as a transparent
-	// wrapper that enforces per-process model isolation via the daemon.
-	if filepath.Base(os.Args[0]) == "claude" {
-		os.Exit(runClaudeWrapper())
-	}
 
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
@@ -64,8 +66,10 @@ func main() {
 			os.Exit(runHook(hook.SystemGemini))
 		case "logs":
 			os.Exit(runLogs(os.Args[2:]))
+		case "config":
+			os.Exit(runConfig(os.Args[2:]))
 		case "version", "--version", "-v":
-			printVersion()
+			printVersion(os.Stdout)
 			return
 		}
 	}
@@ -90,78 +94,11 @@ func main() {
 	os.Exit(runHook(hook.SystemUnknown))
 }
 
-// runClaudeWrapper connects to the daemon, acquires a per-session settings
-// file, then execs the real claude with --settings pointing at it.
-// On exit, releases the session so the daemon cleans up.
-func runClaudeWrapper() int {
-	log, closeLog := openLog("wrapper")
-	defer closeLog()
-	ctx := gklog.WithLogger(context.Background(), log)
-	wrapperID := fmt.Sprintf("%d", os.Getpid())
-
-	cwd, _ := os.Getwd()
-	log.DebugContext(ctx, "wrapper starting", "pid", wrapperID, "cwd", cwd, "args", os.Args[1:])
-
-	client, err := connectDaemon(ctx)
-	if err != nil {
-		log.ErrorContext(ctx, "daemon unavailable", "err", err)
-		return 1
-	}
-	defer func() {
-		if err := client.Close(); err != nil {
-			log.WarnContext(ctx, "close client", "err", err)
-		}
-	}()
-
-	sessionName := os.Getenv("AGENT_GATE_SESSION_NAME")
-
-	resp, err := client.AcquireSession(wrapperID, sessionName)
-	if err != nil {
-		log.ErrorContext(ctx, "acquire session failed", "err", err)
-		return 1
-	}
-
-	defer func() {
-		if err := client.ReleaseSession(wrapperID); err != nil {
-			log.WarnContext(ctx, "release session", "err", err)
-		}
-	}()
-
-	args := append([]string{}, os.Args[1:]...)
-	if resp.SettingsFile != "" && !containsFlag(args, "--settings") {
-		args = append([]string{"--settings", resp.SettingsFile}, args...)
-	}
-
-	log.InfoContext(ctx, "launching claude",
-		"claude_bin", resp.RealClaude,
-		"model", resp.Model,
-		"settings", resp.SettingsFile,
-		"cwd", cwd,
-		"args", args,
-	)
-
-	claudeCmd := exec.Command(resp.RealClaude, args...)
-	claudeCmd.Dir = cwd
-	claudeCmd.Stdin = os.Stdin
-	claudeCmd.Stdout = os.Stdout
-	claudeCmd.Stderr = os.Stderr
-	claudeCmd.Env = append(os.Environ(), "AGENT_GATE_WRAPPER_ID="+wrapperID)
-
-	if err := claudeCmd.Run(); err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			log.InfoContext(ctx, "claude exited", "code", exitErr.ExitCode())
-			return exitErr.ExitCode()
-		}
-		log.ErrorContext(ctx, "claude exec failed", "err", err)
-		return 1
-	}
-	log.InfoContext(ctx, "claude exited", "code", 0)
-	return 0
-}
-
 func connectDaemon(ctx context.Context) (*daemon.Client, error) {
-	if _, statErr := os.Stat(config.DaemonSocketPath()); statErr != nil {
-		return nil, fmt.Errorf("daemon socket unavailable at %s: %w", config.DaemonSocketPath(), statErr)
+	socketPath := config.DaemonSocketPath()
+	if _, statErr := os.Stat(socketPath); statErr != nil {
+		slog.WarnContext(ctx, "daemon socket unavailable", slog.String("socket_path", socketPath), slog.Any("err", statErr))
+		return nil, fmt.Errorf("daemon socket unavailable at %s: %w", socketPath, statErr)
 	}
 	return daemon.Connect(ctx)
 }
@@ -179,20 +116,32 @@ func runDaemonStatus() int {
 		fmt.Fprintf(os.Stderr, "agent-gate: daemon status failed: %v\n", err)
 		return 1
 	}
-	fmt.Printf("pid:              %d\n", resp.Pid)
-	fmt.Printf("executable:       %s\n", resp.ExecutablePath)
-	fmt.Printf("socket:           %s\n", resp.SocketPath)
-	fmt.Printf("active_sessions:  %d\n", resp.ActiveSessions)
-	fmt.Printf("version:          %s\n", resp.Version)
-	fmt.Printf("commit:           %s\n", resp.Commit)
-	fmt.Printf("dirty:            %s\n", resp.Dirty)
-	fmt.Printf("buildHash:        %s\n", resp.BuildHash)
+	writeUserf(os.Stdout, "pid:              %d\n", resp.Pid)
+	writeUserf(os.Stdout, "executable:       %s\n", resp.ExecutablePath)
+	writeUserf(os.Stdout, "socket:           %s\n", resp.SocketPath)
+	writeUserf(os.Stdout, "version:          %s\n", resp.Version)
+	writeUserf(os.Stdout, "commit:           %s\n", resp.Commit)
+	writeUserf(os.Stdout, "dirty:            %s\n", resp.Dirty)
+	writeUserf(os.Stdout, "buildHash:        %s\n", resp.BuildHash)
+	return 0
+}
+
+func runConfig(args []string) int {
+	if len(args) != 1 || args[0] != "check" {
+		fmt.Fprintln(os.Stderr, "usage: agent-gate config check")
+		return 2
+	}
+	if _, err := config.Load(); err != nil {
+		fmt.Fprintf(os.Stderr, "agent-gate: config check failed: %v\n", err)
+		return 1
+	}
+	writeUserLine(os.Stdout, "agent-gate: config ok")
 	return 0
 }
 
 // openLog returns a slog.Logger that writes JSON to the unified XDG state
 // log file at ~/.local/state/agent-gate/agent-gate.jsonl, with rotation.
-// The component field distinguishes daemon vs wrapper entries.
+// The component field distinguishes daemon and hook-related log entries.
 // The returned function closes the rotating log writer; call it before exit.
 func openLog(component string) (*slog.Logger, func()) {
 	logPath := filepath.Join(config.DefaultStateDir(), "agent-gate.jsonl")
@@ -212,16 +161,6 @@ func openLog(component string) (*slog.Logger, func()) {
 			_ = closer.Close()
 		}
 	}
-}
-
-// containsFlag reports whether args contains the given flag string.
-func containsFlag(args []string, flag string) bool {
-	for _, a := range args {
-		if a == flag {
-			return true
-		}
-	}
-	return false
 }
 
 func runLogs(args []string) int {
@@ -294,8 +233,8 @@ func parseSince(s string) (time.Time, error) {
 }
 
 func printEventTable(source string, events []audit.Event) {
-	fmt.Printf("source=%s rows=%d\n", source, len(events))
-	fmt.Printf("%-25s  %-8s  %-12s  %-12s  %-9s  %-24s  %s\n", "time", "system", "decision", "event", "tool", "rules", "command")
+	writeUserf(os.Stdout, "source=%s rows=%d\n", source, len(events))
+	writeUserf(os.Stdout, "%-25s  %-8s  %-12s  %-12s  %-9s  %-24s  %s\n", "time", "system", "decision", "event", "tool", "rules", "command")
 	for _, event := range events {
 		rules := "-"
 		if len(event.Decision.RulesMatched) > 0 {
@@ -305,7 +244,7 @@ func printEventTable(source string, events []audit.Event) {
 		if len(cmd) > 80 {
 			cmd = cmd[:77] + "..."
 		}
-		fmt.Printf("%-25s  %-8s  %-12s  %-12s  %-9s  %-24s  %s\n",
+		writeUserf(os.Stdout, "%-25s  %-8s  %-12s  %-12s  %-9s  %-24s  %s\n",
 			event.Time,
 			event.System,
 			event.Decision.Kind,
@@ -333,7 +272,7 @@ func runHook(systemHint hook.HookSystem) int {
 	defer func() { _ = client.Close() }()
 
 	cwd, _ := os.Getwd()
-	resp, err := client.EvaluateHook(data, systemHint.String(), os.Getenv("AGENT_GATE_WRAPPER_ID"), cwd, os.Args, envFingerprint())
+	resp, err := client.EvaluateHook(data, systemHint.String(), cwd, os.Args, envFingerprint())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent-gate: daemon EvaluateHook failed: %v\n", err)
 		return 2

@@ -23,8 +23,8 @@ func TestEvaluateAllCollectsConcreteMatches(t *testing.T) {
 		[]string{"assistant_message"},
 		"dev null redirection is blocked.",
 	)
-	payload := map[string]any{
-		"assistant_message": "alpha xx\nrun tests >/dev/null\nx marks",
+	payload := rules.FieldSet{
+		AssistantMessage: "alpha xx\nrun tests >/dev/null\nx marks",
 	}
 
 	got := rules.EvaluateAll("codex", "Stop", payload, []config.Rule{ruleA, ruleB})
@@ -72,10 +72,10 @@ func TestFormatViolationsLineNumberedLegend(t *testing.T) {
 	got := rules.FormatViolations(violations)
 	for _, want := range []string{
 		"agent-gate blocked 3 violations:",
-		"1 | alpha xx",
-		"  |       ^A",
-		"2 | run tests >/dev/null",
-		"  |           ^B-------",
+		"Matches:\n- field: assistant_message",
+		"  - rule: A\n    line: 1\n    column: 7\n    match: \"xx\"\n    text: \"alpha xx\"",
+		"  - rule: B\n    line: 2\n    column: 11\n    match: \">/dev/null\"\n    text: \"run tests >/dev/null\"",
+		"  - rule: A\n    file: /tmp/example.txt\n    line: 3\n    column: 1\n    match: \"x\"\n    text: \"x marks\"",
 		"A = no-x",
 		"message: letter x is blocked.",
 		"file: /tmp/example.txt",
@@ -87,9 +87,14 @@ func TestFormatViolationsLineNumberedLegend(t *testing.T) {
 			t.Fatalf("diagnostic missing %q:\n%s", want, got)
 		}
 	}
+	for _, blocked := range []string{"```", "^A", "^B"} {
+		if strings.Contains(got, blocked) {
+			t.Fatalf("diagnostic contains width-dependent marker %q:\n%s", blocked, got)
+		}
+	}
 }
 
-func TestFormatViolationsAlignsCaptureGroupSpan(t *testing.T) {
+func TestFormatViolationsReportsCaptureGroupSpan(t *testing.T) {
 	value := "prefix bad suffix"
 	start := strings.Index(value, "bad")
 	if start < 0 {
@@ -107,8 +112,8 @@ func TestFormatViolationsAlignsCaptureGroupSpan(t *testing.T) {
 		},
 	})
 	for _, want := range []string{
-		"1 | prefix bad suffix",
-		"  |        ^A-",
+		"match: \"bad\"",
+		"text: \"prefix bad suffix\"",
 		"A = capture-only",
 		"message: capture is blocked.",
 		"line: 1",
@@ -120,7 +125,7 @@ func TestFormatViolationsAlignsCaptureGroupSpan(t *testing.T) {
 	}
 }
 
-func TestFormatViolationsAlignsDoubleHyphenSpan(t *testing.T) {
+func TestFormatViolationsReportsDoubleHyphenSpan(t *testing.T) {
 	doubleHyphen := strings.Repeat("-", 2)
 	value := "// allocator is only used for temporary allocations " + doubleHyphen + " all memory"
 	start := strings.Index(value, doubleHyphen)
@@ -138,17 +143,73 @@ func TestFormatViolationsAlignsDoubleHyphenSpan(t *testing.T) {
 			End:       start + len(doubleHyphen),
 		},
 	})
-	wantMarker := "  | " + strings.Repeat(" ", start) + "^A"
 	for _, want := range []string{
-		"1 | " + value,
-		wantMarker,
+		"- field: tool_input.content",
+		"match: \"--\"",
+		"text: \"" + value + "\"",
+		"A = no-double-hyphen-prose",
 		"column: 53",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("diagnostic missing %q:\n%s", want, got)
 		}
 	}
-	if strings.Contains(got, "^A-") {
-		t.Fatalf("diagnostic marker extended past the two-character span:\n%s", got)
+}
+
+func TestFormatViolationsQuotesBacktickRunsWithoutFence(t *testing.T) {
+	value := "blocked ``` value"
+	start := strings.Index(value, "```")
+	if start < 0 {
+		t.Fatal("test fixture is missing backtick run")
+	}
+
+	got := rules.FormatViolations([]rules.MatchViolation{
+		{
+			RuleName:  "no-backticks",
+			Message:   "backticks are blocked.",
+			FieldPath: "assistant_message",
+			Value:     value,
+			Start:     start,
+			End:       start + len("```"),
+		},
+	})
+	for _, want := range []string{
+		"match: \"```\"",
+		"text: \"blocked ``` value\"",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("diagnostic missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "```text") {
+		t.Fatalf("diagnostic contains markdown fence:\n%s", got)
+	}
+}
+
+func TestFormatViolationsQuotesUnicodeAsASCII(t *testing.T) {
+	value := "emdash validation: " + string(rune(0x2014))
+	start := strings.Index(value, string(rune(0x2014)))
+	if start < 0 {
+		t.Fatal("test fixture is missing unicode dash")
+	}
+
+	got := rules.FormatViolations([]rules.MatchViolation{
+		{
+			RuleName:  "no-emdashes",
+			Message:   "typographic dash is blocked.",
+			FieldPath: "tool_input.content",
+			Value:     value,
+			Start:     start,
+			End:       start + len(string(rune(0x2014))),
+		},
+	})
+	for _, want := range []string{
+		`match: "\u2014"`,
+		`text: "emdash validation: \u2014"`,
+		"column: 20",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("diagnostic missing %q:\n%s", want, got)
+		}
 	}
 }

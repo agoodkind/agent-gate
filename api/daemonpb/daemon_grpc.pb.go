@@ -8,7 +8,6 @@ package daemonpb
 
 import (
 	context "context"
-
 	grpc "google.golang.org/grpc"
 	codes "google.golang.org/grpc/codes"
 	status "google.golang.org/grpc/status"
@@ -20,10 +19,8 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	AgentGateD_AcquireSession_FullMethodName = "/agentgate.AgentGateD/AcquireSession"
-	AgentGateD_ReleaseSession_FullMethodName = "/agentgate.AgentGateD/ReleaseSession"
-	AgentGateD_EvaluateHook_FullMethodName   = "/agentgate.AgentGateD/EvaluateHook"
-	AgentGateD_Status_FullMethodName         = "/agentgate.AgentGateD/Status"
+	AgentGateD_EvaluateHook_FullMethodName = "/agentgate.AgentGateD/EvaluateHook"
+	AgentGateD_Status_FullMethodName       = "/agentgate.AgentGateD/Status"
 )
 
 // AgentGateDClient is the client API for AgentGateD service.
@@ -31,15 +28,8 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
 // AgentGateD is the agent-gate daemon service.
-// The claude wrapper and all hook processes connect here.
+// Hook processes connect here for daemon-owned enforcement.
 type AgentGateDClient interface {
-	// AcquireSession is called by the claude wrapper before launching claude.
-	// The daemon creates a fake HOME in XDG_RUNTIME_DIR, populates settings.json
-	// with the session model injected, and returns the path.
-	AcquireSession(ctx context.Context, in *AcquireSessionRequest, opts ...grpc.CallOption) (*AcquireSessionResponse, error)
-	// ReleaseSession is called by the claude wrapper after claude exits.
-	// The daemon cleans up the fake HOME and any associated runtime state.
-	ReleaseSession(ctx context.Context, in *ReleaseSessionRequest, opts ...grpc.CallOption) (*ReleaseSessionResponse, error)
 	// EvaluateHook forwards raw hook input to the daemon-owned enforcement engine.
 	EvaluateHook(ctx context.Context, in *EvaluateHookRequest, opts ...grpc.CallOption) (*EvaluateHookResponse, error)
 	// Status returns process and build metadata for the connected daemon.
@@ -52,26 +42,6 @@ type agentGateDClient struct {
 
 func NewAgentGateDClient(cc grpc.ClientConnInterface) AgentGateDClient {
 	return &agentGateDClient{cc}
-}
-
-func (c *agentGateDClient) AcquireSession(ctx context.Context, in *AcquireSessionRequest, opts ...grpc.CallOption) (*AcquireSessionResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(AcquireSessionResponse)
-	err := c.cc.Invoke(ctx, AgentGateD_AcquireSession_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *agentGateDClient) ReleaseSession(ctx context.Context, in *ReleaseSessionRequest, opts ...grpc.CallOption) (*ReleaseSessionResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ReleaseSessionResponse)
-	err := c.cc.Invoke(ctx, AgentGateD_ReleaseSession_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
 }
 
 func (c *agentGateDClient) EvaluateHook(ctx context.Context, in *EvaluateHookRequest, opts ...grpc.CallOption) (*EvaluateHookResponse, error) {
@@ -99,15 +69,8 @@ func (c *agentGateDClient) Status(ctx context.Context, in *StatusRequest, opts .
 // for forward compatibility.
 //
 // AgentGateD is the agent-gate daemon service.
-// The claude wrapper and all hook processes connect here.
+// Hook processes connect here for daemon-owned enforcement.
 type AgentGateDServer interface {
-	// AcquireSession is called by the claude wrapper before launching claude.
-	// The daemon creates a fake HOME in XDG_RUNTIME_DIR, populates settings.json
-	// with the session model injected, and returns the path.
-	AcquireSession(context.Context, *AcquireSessionRequest) (*AcquireSessionResponse, error)
-	// ReleaseSession is called by the claude wrapper after claude exits.
-	// The daemon cleans up the fake HOME and any associated runtime state.
-	ReleaseSession(context.Context, *ReleaseSessionRequest) (*ReleaseSessionResponse, error)
 	// EvaluateHook forwards raw hook input to the daemon-owned enforcement engine.
 	EvaluateHook(context.Context, *EvaluateHookRequest) (*EvaluateHookResponse, error)
 	// Status returns process and build metadata for the connected daemon.
@@ -122,12 +85,6 @@ type AgentGateDServer interface {
 // pointer dereference when methods are called.
 type UnimplementedAgentGateDServer struct{}
 
-func (UnimplementedAgentGateDServer) AcquireSession(context.Context, *AcquireSessionRequest) (*AcquireSessionResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method AcquireSession not implemented")
-}
-func (UnimplementedAgentGateDServer) ReleaseSession(context.Context, *ReleaseSessionRequest) (*ReleaseSessionResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method ReleaseSession not implemented")
-}
 func (UnimplementedAgentGateDServer) EvaluateHook(context.Context, *EvaluateHookRequest) (*EvaluateHookResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method EvaluateHook not implemented")
 }
@@ -153,42 +110,6 @@ func RegisterAgentGateDServer(s grpc.ServiceRegistrar, srv AgentGateDServer) {
 		t.testEmbeddedByValue()
 	}
 	s.RegisterService(&AgentGateD_ServiceDesc, srv)
-}
-
-func _AgentGateD_AcquireSession_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(AcquireSessionRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(AgentGateDServer).AcquireSession(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: AgentGateD_AcquireSession_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(AgentGateDServer).AcquireSession(ctx, req.(*AcquireSessionRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _AgentGateD_ReleaseSession_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ReleaseSessionRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(AgentGateDServer).ReleaseSession(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: AgentGateD_ReleaseSession_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(AgentGateDServer).ReleaseSession(ctx, req.(*ReleaseSessionRequest))
-	}
-	return interceptor(ctx, in, info, handler)
 }
 
 func _AgentGateD_EvaluateHook_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -234,14 +155,6 @@ var AgentGateD_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "agentgate.AgentGateD",
 	HandlerType: (*AgentGateDServer)(nil),
 	Methods: []grpc.MethodDesc{
-		{
-			MethodName: "AcquireSession",
-			Handler:    _AgentGateD_AcquireSession_Handler,
-		},
-		{
-			MethodName: "ReleaseSession",
-			Handler:    _AgentGateD_ReleaseSession_Handler,
-		},
 		{
 			MethodName: "EvaluateHook",
 			Handler:    _AgentGateD_EvaluateHook_Handler,

@@ -138,11 +138,19 @@ func NewEventLogger(cfg *config.Config, log *slog.Logger) (*EventLogger, error) 
 	}
 
 	el.wg.Add(1)
-	go el.worker()
+	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				el.log.Error("audit worker panic recovered", slog.Any("err", recovered))
+			}
+			el.wg.Done()
+		}()
+		el.worker()
+	}()
 	return el, nil
 }
 
-func (el *EventLogger) Log(system, sessionID, eventName, level, msg string, attrs map[string]any) {
+func (el *EventLogger) Log(system, sessionID, eventName, level, msg string, attrs Attrs) {
 	if el == nil || !el.shouldLog(level) {
 		return
 	}
@@ -161,7 +169,10 @@ func (el *EventLogger) Log(system, sessionID, eventName, level, msg string, attr
 	el.dedup.Add(fingerprint, struct{}{})
 	event.EventID = "evt_" + fingerprint[:32]
 
-	rawPayload, _ := attrs["raw_payload"].(string)
+	rawPayload := ""
+	if value, ok := attrs["raw_payload"]; ok {
+		rawPayload = value.String()
+	}
 	if rawPayload != "" && el.rawHash {
 		event.RawPayloadHash = payloadHash(rawPayload)
 	}
@@ -197,7 +208,6 @@ func (el *EventLogger) Close() error {
 }
 
 func (el *EventLogger) worker() {
-	defer el.wg.Done()
 	for {
 		el.mu.Lock()
 		for len(el.queue) == 0 && !el.stopping {
@@ -233,8 +243,22 @@ func (el *EventLogger) worker() {
 	}
 }
 
-func normalizeEvent(system, sessionID, eventName, level, msg string, attrs map[string]any) Event {
-	now := time.Now().UTC().Format(time.RFC3339Nano)
+var systemAuditClock auditClock = realAuditClock{}
+
+type auditClock interface {
+	Now() time.Time
+}
+
+type realAuditClock struct{}
+
+var realAuditNow = time.Now
+
+func (realAuditClock) Now() time.Time {
+	return realAuditNow()
+}
+
+func normalizeEvent(system, sessionID, eventName, level, msg string, attrs Attrs) Event {
+	now := auditNow().UTC().Format(time.RFC3339Nano)
 	event := Event{
 		SchemaVersion: schemaVersion,
 		Time:          now,
@@ -272,6 +296,10 @@ func normalizeEvent(system, sessionID, eventName, level, msg string, attrs map[s
 	return event
 }
 
+func auditNow() time.Time {
+	return systemAuditClock.Now()
+}
+
 func decisionFromMessage(msg string) string {
 	switch msg {
 	case "hook.allowed":
@@ -285,7 +313,7 @@ func decisionFromMessage(msg string) string {
 	}
 }
 
-func violationsFromAttrs(rules []string, decision string, attrs map[string]any) []Violation {
+func violationsFromAttrs(rules []string, decision string, attrs Attrs) []Violation {
 	if len(rules) == 0 {
 		return nil
 	}
@@ -301,33 +329,32 @@ func violationsFromAttrs(rules []string, decision string, attrs map[string]any) 
 	return out
 }
 
-func dedupFingerprint(event Event, attrs map[string]any) string {
-	stable := make(map[string]any, len(attrs)+12)
-	for k, v := range attrs {
-		if k == "time" {
+func dedupFingerprint(event Event, attrs Attrs) string {
+	stable := make(Attrs, len(attrs)+12)
+	for key, value := range attrs {
+		if key == "time" {
 			continue
 		}
-		stable[k] = v
+		stable[key] = value
 	}
-	stable["system"] = event.System
-	stable["session_id"] = event.SessionID
-	stable["event"] = event.EventName
-	stable["level"] = event.Level
-	stable["msg"] = event.Message
+	stable["system"] = NewStringValue(event.System)
+	stable["session_id"] = NewStringValue(event.SessionID)
+	stable["event"] = NewStringValue(event.EventName)
+	stable["level"] = NewStringValue(event.Level)
+	stable["msg"] = NewStringValue(event.Message)
 
 	keys := make([]string, 0, len(stable))
-	for k := range stable {
-		keys = append(keys, k)
+	for key := range stable {
+		keys = append(keys, key)
 	}
 	sort.Strings(keys)
 
 	h := sha256.New()
-	for _, k := range keys {
-		_, _ = h.Write([]byte(k))
+	for _, key := range keys {
+		_, _ = h.Write([]byte(key))
 		_, _ = h.Write([]byte{'='})
-		if b, err := json.Marshal(stable[k]); err == nil {
-			_, _ = h.Write(b)
-		}
+		bytes := stable[key].JSONBytes()
+		_, _ = h.Write(bytes)
 		_, _ = h.Write([]byte{0})
 	}
 	return hex.EncodeToString(h.Sum(nil))
@@ -350,17 +377,19 @@ func parseLevel(s string) slog.Level {
 	}
 }
 
-func stringAttr(attrs map[string]any, key, fallback string) string {
+func stringAttr(attrs Attrs, key, fallback string) string {
 	if attrs == nil {
 		return fallback
 	}
-	if v, ok := attrs[key].(string); ok && v != "" {
-		return v
+	if value, ok := attrs[key]; ok {
+		if v := value.String(); v != "" {
+			return v
+		}
 	}
 	return fallback
 }
 
-func firstStringAttr(attrs map[string]any, keys ...string) string {
+func firstStringAttr(attrs Attrs, keys ...string) string {
 	for _, key := range keys {
 		if v := stringAttr(attrs, key, ""); v != "" {
 			return v
@@ -369,24 +398,15 @@ func firstStringAttr(attrs map[string]any, keys ...string) string {
 	return ""
 }
 
-func stringSliceAttr(attrs map[string]any, key string) []string {
+func stringSliceAttr(attrs Attrs, key string) []string {
 	if attrs == nil {
 		return nil
 	}
-	switch v := attrs[key].(type) {
-	case []string:
-		return append([]string(nil), v...)
-	case []any:
-		out := make([]string, 0, len(v))
-		for _, item := range v {
-			if s, ok := item.(string); ok && s != "" {
-				out = append(out, s)
-			}
-		}
-		return out
-	default:
+	value, ok := attrs[key]
+	if !ok {
 		return nil
 	}
+	return value.Strings()
 }
 
 type jsonlEventSink struct {
@@ -397,11 +417,22 @@ type jsonlEventSink struct {
 }
 
 func newJSONLEventSink(eventsDir, payloadsDir string, writeRawPayloads bool, log *slog.Logger) (*jsonlEventSink, error) {
+	if log == nil {
+		log = slog.Default()
+	}
 	if err := os.MkdirAll(eventsDir, 0o755); err != nil {
+		log.Error("create audit events dir failed",
+			slog.String("events_dir", eventsDir),
+			slog.Any("err", err),
+		)
 		return nil, fmt.Errorf("create audit events dir %s: %w", eventsDir, err)
 	}
 	if writeRawPayloads {
 		if err := os.MkdirAll(payloadsDir, 0o755); err != nil {
+			log.Error("create audit payloads dir failed",
+				slog.String("payloads_dir", payloadsDir),
+				slog.Any("err", err),
+			)
 			return nil, fmt.Errorf("create audit payloads dir %s: %w", payloadsDir, err)
 		}
 	}
@@ -409,6 +440,10 @@ func newJSONLEventSink(eventsDir, payloadsDir string, writeRawPayloads bool, log
 		_ = f.Close()
 	})
 	if err != nil {
+		log.Error("create audit event lru failed",
+			slog.Int("cache_size", eventLogCacheSize),
+			slog.Any("err", err),
+		)
 		return nil, fmt.Errorf("create audit event lru: %w", err)
 	}
 	return &jsonlEventSink{eventsDir: eventsDir, payloadsDir: payloadsDir, writeRawPayloads: writeRawPayloads, cache: cache}, nil
@@ -608,27 +643,42 @@ func (s *sqliteEventSink) Close() error {
 	return s.db.Close()
 }
 
-func AttrsFromSlog(attrs []slog.Attr) map[string]any {
-	out := make(map[string]any, len(attrs))
+func AttrsFromSlog(attrs []slog.Attr) Attrs {
+	out := make(Attrs, len(attrs))
 	for _, a := range attrs {
 		flattenAttr("", a, out)
 	}
 	return out
 }
 
-func flattenAttr(prefix string, a slog.Attr, out map[string]any) {
-	key := a.Key
+func flattenAttr(prefix string, attr slog.Attr, out Attrs) {
+	key := attr.Key
 	if prefix != "" {
 		key = prefix + "." + key
 	}
-	v := a.Value.Resolve()
-	switch v.Kind() {
+	value := attr.Value.Resolve()
+	switch value.Kind() {
 	case slog.KindGroup:
-		for _, sub := range v.Group() {
+		for _, sub := range value.Group() {
 			flattenAttr(key, sub, out)
 		}
-	default:
-		out[key] = v.Any()
+	case slog.KindString:
+		out[key] = NewStringValue(value.String())
+	case slog.KindBool:
+		out[key] = NewBoolValue(value.Bool())
+	case slog.KindInt64:
+		out[key] = NewIntValue(value.Int64())
+	case slog.KindUint64:
+		out[key] = NewIntValue(int64(value.Uint64()))
+	case slog.KindFloat64:
+		out[key] = NewFloatValue(value.Float64())
+	case slog.KindAny:
+		switch stringsValue := value.Any().(type) {
+		case []string:
+			out[key] = NewStringSliceValue(stringsValue)
+		case []Violation:
+			out[key] = NewViolationSliceValue(stringsValue)
+		}
 	}
 }
 

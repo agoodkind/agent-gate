@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 
 	"github.com/BurntSushi/toml"
@@ -89,6 +90,7 @@ type Condition struct {
 
 	compiled    *regex.Regexp
 	compiledNot *regex.Regexp
+	selectors   []FieldSelectorSpec
 }
 
 // CompiledPattern returns the pre-compiled regex for Pattern.
@@ -97,13 +99,17 @@ func (c *Condition) CompiledPattern() *regex.Regexp { return c.compiled }
 // CompiledNotPattern returns the pre-compiled regex for NotPattern, or nil if unset.
 func (c *Condition) CompiledNotPattern() *regex.Regexp { return c.compiledNot }
 
+func (c *Condition) Selectors() []FieldSelectorSpec { return c.selectors }
+
 // NewCondition constructs a Condition with pre-compiled regexes.
 // Intended for tests and programmatic rule construction.
 func NewCondition(fieldPaths []string, pattern, notPattern string) (Condition, error) {
-	c := Condition{Kind: "regex", FieldPaths: fieldPaths, Pattern: pattern, NotPattern: notPattern}
+	log := slog.Default()
+	c := Condition{Kind: "regex", FieldPaths: fieldPaths, Pattern: pattern, NotPattern: notPattern, selectors: CompileFieldSelectorSpecs(fieldPaths)}
 	if pattern != "" {
 		re, err := regex.Compile(pattern)
 		if err != nil {
+			log.Error("compile condition pattern failed", "pattern", pattern, "err", err)
 			return Condition{}, fmt.Errorf("compile pattern %q: %w", pattern, err)
 		}
 		c.compiled = re
@@ -111,6 +117,7 @@ func NewCondition(fieldPaths []string, pattern, notPattern string) (Condition, e
 	if notPattern != "" {
 		re, err := regex.Compile(notPattern)
 		if err != nil {
+			log.Error("compile condition not_pattern failed", "not_pattern", notPattern, "err", err)
 			return Condition{}, fmt.Errorf("compile not_pattern %q: %w", notPattern, err)
 		}
 		c.compiledNot = re
@@ -161,7 +168,8 @@ type Rule struct {
 	// AuditOnly logs the violation without blocking when true.
 	AuditOnly bool `toml:"audit_only"`
 
-	compiled *regex.Regexp
+	compiled  *regex.Regexp
+	selectors []FieldSelectorSpec
 }
 
 // Compiled returns the pre-compiled regex for the top-level Pattern.
@@ -169,6 +177,8 @@ type Rule struct {
 func (r *Rule) Compiled() *regex.Regexp {
 	return r.compiled
 }
+
+func (r *Rule) Selectors() []FieldSelectorSpec { return r.selectors }
 
 // NewSimpleRule constructs a simple (no conditions) Rule with a pre-compiled
 // regex. Intended for tests and programmatic rule construction.
@@ -181,6 +191,7 @@ func NewSimpleRule(name, pattern string, compiled *regex.Regexp, events, fieldPa
 		Action:           action,
 		ViolationMessage: violationMessage,
 		compiled:         compiled,
+		selectors:        CompileFieldSelectorSpecs(fieldPaths),
 	}
 }
 
@@ -268,19 +279,31 @@ func (c *Config) AuditQueryPrefer() string {
 }
 
 // Load reads the config file at the XDG config path.
-// If no file exists, it writes a default config and loads that.
+// If no file exists, it returns a zero-value config with default paths.
 // All rule patterns are compiled to regexes before returning.
 func Load() (*Config, error) {
-	path := ConfigPath()
+	return loadPath(ConfigPath(), false)
+}
 
+// LoadExisting reads an existing config file and compiles all rule patterns.
+func LoadExisting(path string) (*Config, error) {
+	return loadPath(path, true)
+}
+
+func loadPath(path string, requireExisting bool) (*Config, error) {
+	log := slog.Default()
 	var cfg Config
 
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		// No config file: return zero-value config (no rules, default paths).
-		return &cfg, nil
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) && !requireExisting {
+			return &cfg, nil
+		}
+		log.Error("stat config failed", "path", path, "err", err)
+		return nil, fmt.Errorf("stat config %s: %w", path, err)
 	}
 
 	if _, err := toml.DecodeFile(path, &cfg); err != nil {
+		log.Error("decode config failed", "path", path, "err", err)
 		return nil, fmt.Errorf("decode config %s: %w", path, err)
 	}
 
@@ -290,6 +313,7 @@ func Load() (*Config, error) {
 		if len(r.Conditions) > 0 {
 			for j := range r.Conditions {
 				c := &r.Conditions[j]
+				c.selectors = CompileFieldSelectorSpecs(c.FieldPaths)
 				if c.Kind == "" {
 					c.Kind = "regex"
 				}
@@ -301,6 +325,7 @@ func Load() (*Config, error) {
 				if c.Pattern != "" {
 					re, err := regex.Compile(c.Pattern)
 					if err != nil {
+						log.Error("compile rule condition pattern failed", "rule", r.Name, "condition_index", j, "pattern", c.Pattern, "err", err)
 						return nil, fmt.Errorf("rule %q condition %d: compile pattern %q: %w", r.Name, j, c.Pattern, err)
 					}
 					c.compiled = re
@@ -311,14 +336,17 @@ func Load() (*Config, error) {
 				if c.NotPattern != "" {
 					re, err := regex.Compile(c.NotPattern)
 					if err != nil {
+						log.Error("compile rule condition not_pattern failed", "rule", r.Name, "condition_index", j, "not_pattern", c.NotPattern, "err", err)
 						return nil, fmt.Errorf("rule %q condition %d: compile not_pattern %q: %w", r.Name, j, c.NotPattern, err)
 					}
 					c.compiledNot = re
 				}
 			}
 		} else {
+			r.selectors = CompileFieldSelectorSpecs(r.FieldPaths)
 			re, err := regex.Compile(r.Pattern)
 			if err != nil {
+				log.Error("compile rule pattern failed", "rule", r.Name, "pattern", r.Pattern, "err", err)
 				return nil, fmt.Errorf("rule %q: compile pattern %q: %w", r.Name, r.Pattern, err)
 			}
 			r.compiled = re

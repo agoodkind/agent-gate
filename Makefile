@@ -38,6 +38,8 @@ LDFLAGS := -X $(VPKG).Commit=$(GIT_COMMIT) \
            -X $(GKLOG_VPKG).BuildTime=$(BUILD_TIME) \
            -X $(GKLOG_VPKG).BinHash=
 
+STATICCHECK_EXTRA_FLAGS = $(STATICCHECK_EXTRA_CORE_FLAGS) $(STATICCHECK_EXTRA_STRICT_FLAGS)
+
 # Auto-download go.mk if missing. On success, update the local cache.
 # On failure, fall back to the last known good cache. If neither exists, fail.
 # GNU Make re-reads after building an included file, so any target works
@@ -143,6 +145,8 @@ deploy-bin:
 		codesign --force --sign "$(CODESIGN_IDENTITY)" --identifier "$(BUNDLE_ID)" --options runtime --timestamp=none --entitlements "$(ENTITLEMENTS)" "$$tmp"; \
 		codesign --verify --verbose=2 "$$tmp"; \
 	fi; \
+	"$$tmp" version >/dev/null; \
+	"$$tmp" config check >/dev/null; \
 	cp -f "$$tmp" "$$out"; \
 	chmod 0755 "$$out"; \
 	test -s "$$out"; \

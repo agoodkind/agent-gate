@@ -13,6 +13,63 @@ import (
 	"goodkind.io/agent-gate/internal/rules"
 )
 
+func testFields(payload map[string]any) rules.FieldSet {
+	fields := rules.FieldSet{}
+	if value, ok := payload["cwd"].(string); ok {
+		fields.CWD = value
+	}
+	if value, ok := payload["effective_cwd"].(string); ok {
+		fields.EffectiveCWD = value
+	}
+	if value, ok := payload["command"].(string); ok {
+		fields.Command = value
+	}
+	if value, ok := payload["assistant_message"].(string); ok {
+		fields.AssistantMessage = value
+	}
+	if value, ok := payload["last_assistant_message"].(string); ok {
+		fields.LastAssistantMessage = value
+	}
+	if value, ok := payload["text"].(string); ok {
+		fields.Text = value
+	}
+	if value, ok := payload["tool_name"].(string); ok {
+		fields.ToolName = value
+	}
+	if value, ok := payload["tool_input"].(map[string]any); ok {
+		fields.ToolInputCommand = testString(value, "command")
+		fields.ToolInputContent = testString(value, "content")
+		fields.ToolInputNewString = testString(value, "new_string")
+		fields.ToolInputOldString = testString(value, "old_string")
+		fields.ToolInputPrompt = testString(value, "prompt")
+		fields.ToolInputDescription = testString(value, "description")
+		fields.ToolInputWorkdir = testString(value, "workdir")
+	}
+	if edits, ok := payload["edits"].([]any); ok {
+		for _, edit := range edits {
+			editFields, ok := edit.(map[string]any)
+			if !ok {
+				continue
+			}
+			fields.EditsNewString = append(fields.EditsNewString, testString(editFields, "new_string"))
+			fields.EditsOldString = append(fields.EditsOldString, testString(editFields, "old_string"))
+		}
+	}
+	return fields
+}
+
+func testString(values map[string]any, key string) string {
+	value, ok := values[key].(string)
+	if !ok {
+		return ""
+	}
+	return value
+}
+
+func testDoubleHyphen() string {
+	return strings.Repeat("-", 2)
+}
+
 // systemFor infers "claude" or "cursor" from a PascalCase/camelCase event name.
 func systemFor(event string) string {
 	r, _ := utf8.DecodeRuneInString(event)
@@ -106,7 +163,7 @@ func TestEvaluate_RedirectionBlocked(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			v := rules.Evaluate(systemFor(tc.event), tc.event, tc.payload, []config.Rule{rule})
+			v := rules.Evaluate(systemFor(tc.event), tc.event, testFields(tc.payload), []config.Rule{rule})
 			if v == nil {
 				t.Errorf("expected violation for command %q, got nil", tc.payload)
 			}
@@ -162,7 +219,7 @@ func TestEvaluate_CleanCommandAllowed(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			v := rules.Evaluate(systemFor(tc.event), tc.event, tc.payload, []config.Rule{rule})
+			v := rules.Evaluate(systemFor(tc.event), tc.event, testFields(tc.payload), []config.Rule{rule})
 			if v != nil {
 				t.Errorf("expected no violation, got rule %q: %s", v.RuleName, v.Message)
 			}
@@ -176,9 +233,7 @@ func TestEvaluate_EventFilter(t *testing.T) {
 
 	// A redirect in a PostToolUse payload should not fire the rule
 	// because PostToolUse is not in the rule's events list.
-	v := rules.Evaluate("claude", "PostToolUse", map[string]any{
-		"tool_input": map[string]any{"command": "ls 2>/dev/null"},
-	}, []config.Rule{rule})
+	v := rules.Evaluate("claude", "PostToolUse", rules.FieldSet{ToolInputCommand: "ls 2>/dev/null"}, []config.Rule{rule})
 
 	if v != nil {
 		t.Errorf("rule fired for non-matching event PostToolUse, expected nil")
@@ -190,41 +245,24 @@ func TestEvaluate_EmptyEventList(t *testing.T) {
 	rule := loadRule(t, "catch-all", `forbidden`, nil,
 		[]string{"command"}, "forbidden keyword")
 
-	v := rules.Evaluate("unknown", "AnyEvent", map[string]any{
-		"command": "do something forbidden here",
-	}, []config.Rule{rule})
+	v := rules.Evaluate("unknown", "AnyEvent", rules.FieldSet{Command: "do something forbidden here"}, []config.Rule{rule})
 
 	if v == nil {
 		t.Error("expected violation for catch-all rule, got nil")
 	}
 }
 
-// TestEvaluate_DotPathExtraction verifies nested field access works correctly.
-func TestEvaluate_DotPathExtraction(t *testing.T) {
+// TestEvaluate_UnknownFieldSelector verifies unknown selectors are ignored.
+func TestEvaluate_UnknownFieldSelector(t *testing.T) {
 	rule := loadRule(t, "deep-path", `secret`,
 		[]string{"PreToolUse"},
 		[]string{"a.b.c"},
 		"found it",
 	)
 
-	// Deeply nested match.
-	v := rules.Evaluate("claude", "PreToolUse", map[string]any{
-		"a": map[string]any{
-			"b": map[string]any{
-				"c": "contains secret value",
-			},
-		},
-	}, []config.Rule{rule})
-	if v == nil {
-		t.Error("expected violation for deeply nested field, got nil")
-	}
-
-	// Field missing entirely should not fire.
-	v = rules.Evaluate("claude", "PreToolUse", map[string]any{
-		"a": map[string]any{"b": map[string]any{}},
-	}, []config.Rule{rule})
+	v := rules.Evaluate("claude", "PreToolUse", rules.FieldSet{}, []config.Rule{rule})
 	if v != nil {
-		t.Errorf("expected nil for missing field, got violation %q", v.RuleName)
+		t.Errorf("expected nil for unknown selector, got violation %q", v.RuleName)
 	}
 }
 
@@ -264,7 +302,7 @@ func loadConditionRule(t *testing.T) config.Rule {
 	cmdCond, err := config.NewCondition(
 		[]string{"cmd_segments"},
 		`(?m)^git\s+(add|commit|push|reset|rm|mv|rebase|merge|stash|clean|restore|switch|tag)`,
-		`(\s-C\s[/~.]|\s--git-dir=|\s--work-tree=)`,
+		`(\s-C\s[/~.]|\s + testDoubleHyphen() + git-dir=|\s + testDoubleHyphen() + work-tree=)`,
 	)
 	if err != nil {
 		t.Fatalf("compile cmd condition: %v", err)
@@ -282,10 +320,10 @@ func TestEvaluate_MultiCondition_HomeCWD(t *testing.T) {
 	t.Setenv("HOME", "/Users/agoodkind")
 	rule := loadConditionRule(t)
 
-	homePayload := func(cmd string) map[string]any {
-		return map[string]any{
-			"cwd":        "/Users/agoodkind",
-			"tool_input": map[string]any{"command": cmd},
+	homePayload := func(cmd string) rules.FieldSet {
+		return rules.FieldSet{
+			CWD:              "/Users/agoodkind",
+			ToolInputCommand: cmd,
 		}
 	}
 
@@ -358,7 +396,7 @@ func TestEvaluate_MultiCondition_HomeCWD(t *testing.T) {
 	}
 	for _, tc := range allowed {
 		t.Run("allowed/"+tc.name, func(t *testing.T) {
-			v := rules.Evaluate("claude", "PreToolUse", tc.payload, []config.Rule{rule})
+			v := rules.Evaluate("claude", "PreToolUse", testFields(tc.payload), []config.Rule{rule})
 			if v != nil {
 				t.Errorf("expected allow, got block: %s", v.Message)
 			}
@@ -390,7 +428,7 @@ func TestEvaluate_EffectiveCwd_StillHome(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			v := rules.Evaluate("claude", "PreToolUse", tc.payload, []config.Rule{rule})
+			v := rules.Evaluate("claude", "PreToolUse", testFields(tc.payload), []config.Rule{rule})
 			if v == nil {
 				t.Errorf("expected block (effective cwd is still home), got nil")
 			}
@@ -430,7 +468,7 @@ func TestApplyCdChain(t *testing.T) {
 // emdashDashPattern is the Unicode dash class used by no-emdashes rules in these tests.
 const (
 	emdashDashPattern        = `[\x{2010}-\x{2015}\x{2212}\x{2E3A}\x{2E3B}\x{FE31}\x{FE32}\x{FE58}\x{FE63}\x{FF0D}]`
-	doubleHyphenProsePattern = `(?m)(?|(?:` + "`" + `[^` + "`" + `\n]+` + "`" + `|\b(?!(?:bash|sh|zsh|fish|exec|command|env|xargs|sudo|doas|go|git|make|npm|pnpm|yarn|node|python|python3|ruby|perl|cargo|docker|kubectl|helm|terraform|ansible|rg|grep|sed|awk|jq|curl|ssh|scp|rsync)\b)[A-Za-z][A-Za-z0-9_./-]*)\s+(--)(?=\s+[A-Za-z][A-Za-z0-9_./-]*)|\b(?!(?:bash|sh|zsh|fish|exec|command|env|xargs|sudo|doas|go|git|make|npm|pnpm|yarn|node|python|python3|ruby|perl|cargo|docker|kubectl|helm|terraform|ansible|rg|grep|sed|awk|jq|curl|ssh|scp|rsync)\b)[A-Za-z][A-Za-z0-9_./-]*(--)(?=[A-Za-z][A-Za-z0-9_./-]*))`
+	doubleHyphenProsePattern = `(?m)(?|(?:` + "`" + `[^` + "`" + `\n]+` + "`" + `|\b(?!(?:bash|sh|zsh|fish|exec|command|env|xargs|sudo|doas|go|git|make|npm|pnpm|yarn|node|python|python3|ruby|perl|cargo|docker|kubectl|helm|terraform|ansible|rg|grep|sed|awk|jq|curl|ssh|scp|rsync)\b)[A-Za-z][A-Za-z0-9_./-]*)\s+(--)(?=\s+[A-Za-z][A-Za-z0-9_./-]*)(?![^\n]*\s--[A-Za-z0-9_][A-Za-z0-9_-]*(?:=|\b))|(?<!-)\b(?!(?:bash|sh|zsh|fish|exec|command|env|xargs|sudo|doas|go|git|make|npm|pnpm|yarn|node|python|python3|ruby|perl|cargo|docker|kubectl|helm|terraform|ansible|rg|grep|sed|awk|jq|curl|ssh|scp|rsync)\b)[A-Za-z][A-Za-z0-9_./-]*(--)(?=[A-Za-z][A-Za-z0-9_./-]*))`
 )
 
 func TestEmdashDashPatternMatchesU2011(t *testing.T) {
@@ -630,7 +668,7 @@ func TestEvaluate_EmdashBlocked(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			v := rules.Evaluate(systemFor(tc.event), tc.event, tc.payload, rulesSlice)
+			v := rules.Evaluate(systemFor(tc.event), tc.event, testFields(tc.payload), rulesSlice)
 			if v == nil {
 				t.Error("expected violation, got nil")
 			}
@@ -721,7 +759,7 @@ func TestEvaluate_EmdashAllowed(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			v := rules.Evaluate(systemFor(tc.event), tc.event, tc.payload, rulesSlice)
+			v := rules.Evaluate(systemFor(tc.event), tc.event, testFields(tc.payload), rulesSlice)
 			if v != nil {
 				t.Errorf("expected no violation, got rule %q: %s", v.RuleName, v.Message)
 			}
@@ -756,7 +794,7 @@ func TestEvaluateAllUsesDiagnosticGroupSpan(t *testing.T) {
 		"assistant_message": value,
 	}
 
-	got := rules.EvaluateAll("claude", "Stop", payload, []config.Rule{rule})
+	got := rules.EvaluateAll("claude", "Stop", testFields(payload), []config.Rule{rule})
 	if len(got) != 1 {
 		t.Fatalf("EvaluateAll returned %d matches, want 1: %#v", len(got), got)
 	}
@@ -790,7 +828,7 @@ func TestEvaluateAllUsesConditionDiagnosticGroupSpan(t *testing.T) {
 		"assistant_message": value,
 	}
 
-	got := rules.EvaluateAll("claude", "Stop", payload, []config.Rule{rule})
+	got := rules.EvaluateAll("claude", "Stop", testFields(payload), []config.Rule{rule})
 	if len(got) != 1 {
 		t.Fatalf("EvaluateAll returned %d matches, want 1: %#v", len(got), got)
 	}
@@ -813,28 +851,28 @@ func TestEvaluate_DoubleHyphenProseBlocked(t *testing.T) {
 			name:  "spaced lazy em dash",
 			event: "PreToolUse",
 			payload: map[string]any{
-				"tool_input": map[string]any{"new_string": "Word -- word"},
+				"tool_input": map[string]any{"new_string": "Word " + testDoubleHyphen() + " word"},
 			},
 		},
 		{
 			name:  "unspaced lazy em dash",
 			event: "PreToolUse",
 			payload: map[string]any{
-				"tool_input": map[string]any{"new_string": "Word--word"},
+				"tool_input": map[string]any{"new_string": "Word" + testDoubleHyphen() + "word"},
 			},
 		},
 		{
 			name:  "backticked command label in prose",
 			event: "PreToolUse",
 			payload: map[string]any{
-				"tool_input": map[string]any{"new_string": "`mwan cutover` -- deprecated migration/rollback tooling"},
+				"tool_input": map[string]any{"new_string": "`mwan cutover` " + testDoubleHyphen() + " deprecated migration/rollback tooling"},
 			},
 		},
 		{
 			name:  "assistant response prose",
 			event: "Stop",
 			payload: map[string]any{
-				"assistant_message": "This works -- but it should be rewritten.",
+				"assistant_message": "This works " + testDoubleHyphen() + " but it should be rewritten.",
 			},
 		},
 		{
@@ -843,7 +881,7 @@ func TestEvaluate_DoubleHyphenProseBlocked(t *testing.T) {
 			payload: map[string]any{
 				"edits": []any{
 					map[string]any{"new_string": "Clean"},
-					map[string]any{"new_string": "Old text -- new text"},
+					map[string]any{"new_string": "Old text " + testDoubleHyphen() + " new text"},
 				},
 			},
 		},
@@ -851,7 +889,7 @@ func TestEvaluate_DoubleHyphenProseBlocked(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			v := rules.Evaluate(systemFor(tc.event), tc.event, tc.payload, []config.Rule{rule})
+			v := rules.Evaluate(systemFor(tc.event), tc.event, testFields(tc.payload), []config.Rule{rule})
 			if v == nil {
 				t.Fatal("expected violation, got nil")
 			}
@@ -861,18 +899,18 @@ func TestEvaluate_DoubleHyphenProseBlocked(t *testing.T) {
 
 func TestEvaluate_DoubleHyphenProseMatchSpan(t *testing.T) {
 	rule := doubleHyphenProseRule(t)
-	value := "// allocator is only used for temporary allocations -- all memory"
+	value := "// allocator is only used for temporary allocations " + testDoubleHyphen() + " all memory"
 	payload := map[string]any{
 		"tool_input": map[string]any{"content": value},
 	}
 
-	got := rules.EvaluateAll("claude", "PreToolUse", payload, []config.Rule{rule})
+	got := rules.EvaluateAll("claude", "PreToolUse", testFields(payload), []config.Rule{rule})
 	if len(got) != 1 {
 		t.Fatalf("EvaluateAll returned %d matches, want 1: %#v", len(got), got)
 	}
 
-	wantStart := strings.Index(value, "--")
-	wantEnd := wantStart + len("--")
+	wantStart := strings.Index(value, testDoubleHyphen())
+	wantEnd := wantStart + len(testDoubleHyphen())
 	if got[0].Start != wantStart || got[0].End != wantEnd {
 		t.Fatalf("match span = [%d,%d), want [%d,%d)", got[0].Start, got[0].End, wantStart, wantEnd)
 	}
@@ -917,7 +955,7 @@ func TestEvaluate_DoubleHyphenProseAllowed(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			v := rules.Evaluate(systemFor(tc.event), tc.event, tc.payload, []config.Rule{rule})
+			v := rules.Evaluate(systemFor(tc.event), tc.event, testFields(tc.payload), []config.Rule{rule})
 			if v != nil {
 				t.Fatalf("expected allow, got %s", v.RuleName)
 			}
@@ -976,7 +1014,7 @@ func TestNavigatePath_ArrayWildcard(t *testing.T) {
 
 	for _, tc := range blocked {
 		t.Run("blocked/"+tc.name, func(t *testing.T) {
-			v := rules.Evaluate("cursor", "afterFileEdit", tc.payload, []config.Rule{rule})
+			v := rules.Evaluate("cursor", "afterFileEdit", testFields(tc.payload), []config.Rule{rule})
 			if v == nil {
 				t.Error("expected violation, got nil")
 			}
@@ -1012,7 +1050,7 @@ func TestNavigatePath_ArrayWildcard(t *testing.T) {
 
 	for _, tc := range allowed {
 		t.Run("allowed/"+tc.name, func(t *testing.T) {
-			v := rules.Evaluate("cursor", "afterFileEdit", tc.payload, []config.Rule{rule})
+			v := rules.Evaluate("cursor", "afterFileEdit", testFields(tc.payload), []config.Rule{rule})
 			if v != nil {
 				t.Errorf("expected no violation, got rule %q: %s", v.RuleName, v.Message)
 			}
@@ -1061,7 +1099,7 @@ func TestCmdSegments(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := rules.CmdSegments(tc.payload)
+			got := rules.CmdSegments(testFields(tc.payload))
 			if got != tc.want {
 				t.Errorf("CmdSegments() = %q, want %q", got, tc.want)
 			}
@@ -1331,7 +1369,7 @@ func TestEvaluate_CommandAndProjectConditions_GoThroughMake(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			v := rules.Evaluate(tc.system, tc.event, tc.payload, []config.Rule{rule})
+			v := rules.Evaluate(tc.system, tc.event, testFields(tc.payload), []config.Rule{rule})
 			if got := v != nil; got != tc.want {
 				t.Fatalf("blocked = %v, want %v; violation = %#v", got, tc.want, v)
 			}
@@ -1347,10 +1385,7 @@ func TestEvaluate_CommandAndProjectConditions_OrderIndependent(t *testing.T) {
 	rule := makeGoThroughMakeRule()
 	rule.Conditions[0], rule.Conditions[1] = rule.Conditions[1], rule.Conditions[0]
 
-	v := rules.Evaluate("claude", "PreToolUse", map[string]any{
-		"cwd":        t.TempDir(),
-		"tool_input": map[string]any{"command": "cd " + root + " && go test ./..."},
-	}, []config.Rule{rule})
+	v := rules.Evaluate("claude", "PreToolUse", rules.FieldSet{CWD: t.TempDir(), ToolInputCommand: "cd " + root + " && go test ./..."}, []config.Rule{rule})
 
 	if v == nil {
 		t.Fatal("expected project condition to use matched command cwd regardless of condition order")
@@ -1361,10 +1396,7 @@ func TestEvaluate_ProjectCondition_AllowsWhenProjectDoesNotSupportMake(t *testin
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "go.mod"), "module example.test/project\n")
 
-	v := rules.Evaluate("claude", "PreToolUse", map[string]any{
-		"cwd":        root,
-		"tool_input": map[string]any{"command": "go test ./..."},
-	}, []config.Rule{makeGoThroughMakeRule()})
+	v := rules.Evaluate("claude", "PreToolUse", rules.FieldSet{CWD: root, ToolInputCommand: "go test ./..."}, []config.Rule{makeGoThroughMakeRule()})
 
 	if v != nil {
 		t.Fatalf("expected allow without Makefile, got %s", v.Message)
@@ -1375,10 +1407,7 @@ func TestEvaluate_ProjectCondition_AllowsOutsideMarkedProject(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "Makefile"), "test:\n\tgo test ./...\n")
 
-	v := rules.Evaluate("claude", "PreToolUse", map[string]any{
-		"cwd":        root,
-		"tool_input": map[string]any{"command": "go test ./..."},
-	}, []config.Rule{makeGoThroughMakeRule()})
+	v := rules.Evaluate("claude", "PreToolUse", rules.FieldSet{CWD: root, ToolInputCommand: "go test ./..."}, []config.Rule{makeGoThroughMakeRule()})
 
 	if v != nil {
 		t.Fatalf("expected allow outside Go module, got %s", v.Message)

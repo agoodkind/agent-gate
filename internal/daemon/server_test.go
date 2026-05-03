@@ -1,9 +1,11 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -13,6 +15,18 @@ import (
 )
 
 func boolPtr(v bool) *bool { return &v }
+
+func newDiscardLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil))
+}
+
+func setDaemonTestDirs(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+	t.Setenv("XDG_RUNTIME_DIR", filepath.Join(dir, "runtime"))
+}
 
 func daemonTestConfig(t *testing.T) *config.Config {
 	t.Helper()
@@ -60,7 +74,8 @@ func emdashDaemonTestConfig(t *testing.T) *config.Config {
 }
 
 func TestEvaluateHook_DaemonOwnsEnforcement(t *testing.T) {
-	srv, err := New(slog.Default(), daemonTestConfig(t))
+	setDaemonTestDirs(t)
+	srv, err := New(newDiscardLogger(), daemonTestConfig(t))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -83,7 +98,8 @@ func TestEvaluateHook_DaemonOwnsEnforcement(t *testing.T) {
 }
 
 func TestEvaluateHook_InvalidJSONFailsClosed(t *testing.T) {
-	srv, err := New(slog.Default(), daemonTestConfig(t))
+	setDaemonTestDirs(t)
+	srv, err := New(newDiscardLogger(), daemonTestConfig(t))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -102,7 +118,8 @@ func TestEvaluateHook_InvalidJSONFailsClosed(t *testing.T) {
 }
 
 func TestEvaluateHook_BlocksCopilotVSCodeReplaceStringNewString(t *testing.T) {
-	srv, err := New(slog.Default(), emdashDaemonTestConfig(t))
+	setDaemonTestDirs(t)
+	srv, err := New(newDiscardLogger(), emdashDaemonTestConfig(t))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -128,7 +145,8 @@ func TestEvaluateHook_BlocksCopilotVSCodeReplaceStringNewString(t *testing.T) {
 }
 
 func TestEvaluateHook_BlocksCopilotVSCodeMultiReplaceNewString(t *testing.T) {
-	srv, err := New(slog.Default(), emdashDaemonTestConfig(t))
+	setDaemonTestDirs(t)
+	srv, err := New(newDiscardLogger(), emdashDaemonTestConfig(t))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -154,6 +172,7 @@ func TestEvaluateHook_BlocksCopilotVSCodeMultiReplaceNewString(t *testing.T) {
 }
 
 func TestEvaluateHook_CopilotStopTranscriptAssistantTextIsEvaluated(t *testing.T) {
+	setDaemonTestDirs(t)
 	dir := t.TempDir()
 	transcript := dir + "/copilot.jsonl"
 	dash := string(rune(0x2014))
@@ -165,7 +184,7 @@ func TestEvaluateHook_CopilotStopTranscriptAssistantTextIsEvaluated(t *testing.T
 		t.Fatalf("write transcript: %v", err)
 	}
 
-	srv, err := New(slog.Default(), emdashDaemonTestConfig(t))
+	srv, err := New(newDiscardLogger(), emdashDaemonTestConfig(t))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -190,7 +209,8 @@ func TestEvaluateHook_CopilotStopTranscriptAssistantTextIsEvaluated(t *testing.T
 }
 
 func TestStatusReportsProcessMetadata(t *testing.T) {
-	srv, err := New(slog.Default(), daemonTestConfig(t))
+	setDaemonTestDirs(t)
+	srv, err := New(newDiscardLogger(), daemonTestConfig(t))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -205,5 +225,175 @@ func TestStatusReportsProcessMetadata(t *testing.T) {
 	}
 	if resp.ExecutablePath == "" || resp.SocketPath == "" {
 		t.Fatalf("status missing metadata: %+v", resp)
+	}
+}
+
+func TestReloadConfigValidSwap(t *testing.T) {
+	setDaemonTestDirs(t)
+	configPath := config.ConfigPath()
+	writeConfig(t, configPath, `
+[audit]
+enabled = false
+
+[[rules]]
+name = "block-alpha"
+codex_events = ["PreToolUse"]
+field_paths = ["tool_input.command"]
+pattern = "alpha"
+action = "block"
+violation_message = "alpha blocked"
+`)
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	srv, err := New(newDiscardLogger(), cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer srv.Close()
+
+	assertCommandDecision(t, srv, "alpha", 0, "block-alpha")
+	assertCommandDecision(t, srv, "beta", 0, "")
+
+	writeConfig(t, configPath, `
+[audit]
+enabled = false
+
+[[rules]]
+name = "block-beta"
+codex_events = ["PreToolUse"]
+field_paths = ["tool_input.command"]
+pattern = "beta"
+action = "block"
+violation_message = "beta blocked"
+`)
+	if err := srv.reloadConfig(context.Background()); err != nil {
+		t.Fatalf("reloadConfig: %v", err)
+	}
+
+	assertCommandDecision(t, srv, "alpha", 0, "")
+	assertCommandDecision(t, srv, "beta", 0, "block-beta")
+}
+
+func TestReloadConfigInvalidKeepsPreviousConfig(t *testing.T) {
+	setDaemonTestDirs(t)
+	configPath := config.ConfigPath()
+	writeConfig(t, configPath, `
+[audit]
+enabled = false
+
+[[rules]]
+name = "block-alpha"
+codex_events = ["PreToolUse"]
+field_paths = ["tool_input.command"]
+pattern = "alpha"
+action = "block"
+violation_message = "alpha blocked"
+`)
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	srv, err := New(newDiscardLogger(), cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer srv.Close()
+
+	writeConfig(t, configPath, `
+[audit]
+enabled = false
+
+[[rules]]
+name = "invalid-regex"
+codex_events = ["PreToolUse"]
+field_paths = ["tool_input.command"]
+pattern = "["
+action = "block"
+violation_message = "invalid"
+`)
+	if err := srv.reloadConfig(context.Background()); err == nil {
+		t.Fatal("reloadConfig succeeded, want error")
+	}
+
+	assertCommandDecision(t, srv, "alpha", 0, "block-alpha")
+	assertCommandDecision(t, srv, "beta", 0, "")
+}
+
+func TestReloadConfigMissingFileKeepsPreviousConfig(t *testing.T) {
+	setDaemonTestDirs(t)
+	configPath := config.ConfigPath()
+	writeConfig(t, configPath, `
+[audit]
+enabled = false
+
+[[rules]]
+name = "block-alpha"
+codex_events = ["PreToolUse"]
+field_paths = ["tool_input.command"]
+pattern = "alpha"
+action = "block"
+violation_message = "alpha blocked"
+`)
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	srv, err := New(newDiscardLogger(), cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer srv.Close()
+
+	if err := os.Remove(configPath); err != nil {
+		t.Fatalf("remove config: %v", err)
+	}
+	if err := srv.reloadConfig(context.Background()); err == nil {
+		t.Fatal("reloadConfig succeeded, want error")
+	}
+
+	assertCommandDecision(t, srv, "alpha", 0, "block-alpha")
+	assertCommandDecision(t, srv, "beta", 0, "")
+}
+
+func writeConfig(t *testing.T, path string, body string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+}
+
+func assertCommandDecision(t *testing.T, srv *Server, command string, exitCode int32, ruleName string) {
+	t.Helper()
+	resp, err := srv.EvaluateHook(context.Background(), &daemonpb.EvaluateHookRequest{
+		RawJson:      []byte(`{"session_id":"s1","hook_event_name":"PreToolUse","tool_name":"Shell","tool_input":{"command":"` + command + `"}}`),
+		ProviderHint: "codex",
+		Cwd:          t.TempDir(),
+		EnvFingerprint: map[string]string{
+			"CODEX_THREAD_ID": "test-thread",
+		},
+	})
+	if err != nil {
+		t.Fatalf("EvaluateHook: %v", err)
+	}
+	if resp.ExitCode != exitCode {
+		t.Fatalf("exit_code = %d, want %d", resp.ExitCode, exitCode)
+	}
+	stdout := string(resp.StdoutData)
+	if ruleName == "" {
+		if strings.Contains(stdout, `"permissionDecision":"deny"`) {
+			t.Fatalf("stdout has deny response: %s", stdout)
+		}
+		return
+	}
+	if !strings.Contains(stdout, `"permissionDecision":"deny"`) || !strings.Contains(stdout, ruleName) {
+		t.Fatalf("stdout missing deny response for %q: %s", ruleName, stdout)
 	}
 }

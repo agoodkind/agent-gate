@@ -380,8 +380,12 @@ func ValidateConfig(cfg *config.Config) []error {
 		}
 
 		// For each field_path, verify it is valid for at least one applicable event.
-		for _, fp := range allPaths {
-			if slices.Contains(virtualFields, fp) {
+		for _, fieldPath := range allPaths {
+			if config.CompileFieldSelector(fieldPath) == config.FieldSelectorInvalid {
+				errs = append(errs, fmt.Errorf("rule %q: field_path %q has no typed selector", r.Name, fieldPath))
+				continue
+			}
+			if slices.Contains(virtualFields, fieldPath) {
 				continue // virtual fields are always valid
 			}
 			valid := false
@@ -390,13 +394,13 @@ func ValidateConfig(cfg *config.Config) []error {
 				if schema == nil {
 					continue
 				}
-				if schema[fp] {
+				if schema[fieldPath] {
 					valid = true
 					break
 				}
 			}
 			if !valid {
-				errs = append(errs, fmt.Errorf("rule %q: field_path %q is not valid for any applicable event", r.Name, fp))
+				errs = append(errs, fmt.Errorf("rule %q: field_path %q is not valid for any applicable event", r.Name, fieldPath))
 			}
 		}
 	}

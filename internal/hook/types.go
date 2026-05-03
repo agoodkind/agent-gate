@@ -72,28 +72,3 @@ func (d Decision) String() string {
 	}
 	return "allow"
 }
-
-// RawPayload is the decoded JSON from stdin kept as a generic map.
-// Both Claude and Cursor send JSON on stdin; all field access goes through this type.
-type RawPayload map[string]any
-
-// EventName extracts hook_event_name from the payload.
-func (p RawPayload) EventName() string {
-	v, _ := p["hook_event_name"].(string)
-	return v
-}
-
-// SessionID returns session_id (Claude) or conversation_id (Cursor).
-func (p RawPayload) SessionID() string {
-	if v, ok := p["session_id"].(string); ok && v != "" {
-		return v
-	}
-	v, _ := p["conversation_id"].(string)
-	return v
-}
-
-// CWD returns the working directory from the payload.
-func (p RawPayload) CWD() string {
-	v, _ := p["cwd"].(string)
-	return v
-}

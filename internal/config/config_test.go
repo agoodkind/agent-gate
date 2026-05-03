@@ -71,6 +71,19 @@ diagnostic_group = 1
 	}
 }
 
+func TestLoadExistingRequiresFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "agent-gate", "config.toml")
+
+	_, err := config.LoadExisting(path)
+	if err == nil {
+		t.Fatal("LoadExisting() returned nil error for missing config")
+	}
+	if !strings.Contains(err.Error(), "stat config") {
+		t.Fatalf("LoadExisting() error = %v", err)
+	}
+}
+
 func setConfigHome(t *testing.T, contents string) {
 	t.Helper()
 	dir := t.TempDir()

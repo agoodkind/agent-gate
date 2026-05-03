@@ -46,11 +46,11 @@ func TestEventLogger_WritesJSONLAndPayloadSidecar(t *testing.T) {
 		t.Fatalf("NewEventLogger: %v", err)
 	}
 
-	logger.Log("claude", "session-1", "PreToolUse", "debug", "hook.raw_payload", map[string]any{
-		"system":      "claude",
-		"session_id":  "session-1",
-		"event":       "PreToolUse",
-		"raw_payload": `{"hello":"world"}`,
+	logger.Log("claude", "session-1", "PreToolUse", "debug", "hook.raw_payload", audit.Attrs{
+		"system":      audit.NewStringValue("claude"),
+		"session_id":  audit.NewStringValue("session-1"),
+		"event":       audit.NewStringValue("PreToolUse"),
+		"raw_payload": audit.NewStringValue(`{"hello":"world"}`),
 	})
 	if err := logger.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
@@ -80,15 +80,15 @@ func TestEventLogger_WritesSQLiteAndDedups(t *testing.T) {
 		t.Fatalf("NewEventLogger: %v", err)
 	}
 
-	attrs := map[string]any{
-		"system":         "claude",
-		"session_id":     "session-1",
-		"event":          "PreToolUse",
-		"tool_name":      "Bash",
-		"tool_use_id":    "toolu_1",
-		"decision":       "block",
-		"blocking_rules": []any{"use-make-not-go-direct"},
-		"ti_command":     "go build ./...",
+	attrs := audit.Attrs{
+		"system":         audit.NewStringValue("claude"),
+		"session_id":     audit.NewStringValue("session-1"),
+		"event":          audit.NewStringValue("PreToolUse"),
+		"tool_name":      audit.NewStringValue("Bash"),
+		"tool_use_id":    audit.NewStringValue("toolu_1"),
+		"decision":       audit.NewStringValue("block"),
+		"blocking_rules": audit.NewStringSliceValue([]string{"use-make-not-go-direct"}),
+		"ti_command":     audit.NewStringValue("go build ./..."),
 	}
 	logger.Log("claude", "session-1", "PreToolUse", "info", "hook.blocked", attrs)
 	logger.Log("claude", "session-1", "PreToolUse", "info", "hook.blocked", attrs)
@@ -130,13 +130,13 @@ func TestQuery_JSONLFallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewEventLogger: %v", err)
 	}
-	logger.Log("claude", "session-1", "PreToolUse", "info", "hook.blocked", map[string]any{
-		"system":         "claude",
-		"session_id":     "session-1",
-		"event":          "PreToolUse",
-		"tool_name":      "Bash",
-		"decision":       "block",
-		"blocking_rules": []any{"use-make-not-go-direct"},
+	logger.Log("claude", "session-1", "PreToolUse", "info", "hook.blocked", audit.Attrs{
+		"system":         audit.NewStringValue("claude"),
+		"session_id":     audit.NewStringValue("session-1"),
+		"event":          audit.NewStringValue("PreToolUse"),
+		"tool_name":      audit.NewStringValue("Bash"),
+		"decision":       audit.NewStringValue("block"),
+		"blocking_rules": audit.NewStringSliceValue([]string{"use-make-not-go-direct"}),
 	})
 	if err := logger.Close(); err != nil {
 		t.Fatalf("Close: %v", err)

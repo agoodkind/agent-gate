@@ -31,14 +31,9 @@ type MatchViolation struct {
 }
 
 // Evaluate iterates over all rules and returns the first Violation whose
-// pattern matches a field extracted from payload, or nil if no rule fires.
-//
-// system is "claude", "cursor", or "unknown".
-// eventName is the raw hook_event_name string from the payload.
-// payload is the full decoded JSON as a map (same value that was read from stdin).
-// rules is the compiled rule list from config.Load().
-func Evaluate(system, eventName string, payload map[string]any, rules []config.Rule) *Violation {
-	violations := EvaluateAll(system, eventName, payload, rules)
+// pattern matches a typed field selected from payload, or nil if no rule fires.
+func Evaluate(system, eventName string, fields FieldSet, rules []config.Rule) *Violation {
+	violations := EvaluateAll(system, eventName, fields, rules)
 	if len(violations) == 0 {
 		return nil
 	}
@@ -51,7 +46,7 @@ func Evaluate(system, eventName string, payload map[string]any, rules []config.R
 }
 
 // EvaluateAll returns every concrete regex match for every applicable rule.
-func EvaluateAll(system, eventName string, payload map[string]any, rules []config.Rule) []MatchViolation {
+func EvaluateAll(system, eventName string, fields FieldSet, rules []config.Rule) []MatchViolation {
 	var violations []MatchViolation
 	for i := range rules {
 		rule := &rules[i]
@@ -59,18 +54,18 @@ func EvaluateAll(system, eventName string, payload map[string]any, rules []confi
 			continue
 		}
 		if len(rule.Conditions) > 0 {
-			if allConditionsMatch(payload, rule.Conditions) {
-				violations = append(violations, conditionViolations(payload, rule)...)
+			if allConditionsMatch(fields, rule.Conditions) {
+				violations = append(violations, conditionViolations(fields, rule)...)
 			}
 			continue
 		}
 
-		violations = append(violations, fieldViolations(payload, rule, rule.FieldPaths, rule.Compiled(), rule.DiagnosticGroup)...)
+		violations = append(violations, fieldViolations(fields, rule, rule.Selectors(), rule.Compiled(), rule.DiagnosticGroup)...)
 	}
 	return violations
 }
 
-func conditionViolations(payload map[string]any, rule *config.Rule) []MatchViolation {
+func conditionViolations(fields FieldSet, rule *config.Rule) []MatchViolation {
 	var violations []MatchViolation
 	for i := range rule.Conditions {
 		c := &rule.Conditions[i]
@@ -80,26 +75,21 @@ func conditionViolations(payload map[string]any, rule *config.Rule) []MatchViola
 		if c.CompiledPattern() == nil {
 			continue
 		}
-		violations = append(violations, fieldViolations(payload, rule, c.FieldPaths, c.CompiledPattern(), c.DiagnosticGroup)...)
+		violations = append(violations, fieldViolations(fields, rule, c.Selectors(), c.CompiledPattern(), c.DiagnosticGroup)...)
 	}
 	if len(violations) == 0 {
-		violations = append(violations, conditionFallbackViolation(payload, rule))
+		violations = append(violations, conditionFallbackViolation(fields, rule))
 	}
 	return violations
 }
 
-func conditionFallbackViolation(payload map[string]any, rule *config.Rule) MatchViolation {
+func conditionFallbackViolation(fields FieldSet, rule *config.Rule) MatchViolation {
 	fieldPath := "payload"
 	value := rule.Name
 	for i := range rule.Conditions {
-		for _, path := range rule.Conditions[i].FieldPaths {
-			if v := extractField(payload, []string{path}); v != "" {
-				fieldPath = path
-				value = v
-				break
-			}
-		}
-		if fieldPath != "payload" {
+		if path, extracted := extractField(fields, rule.Conditions[i].Selectors()); extracted != "" {
+			fieldPath = path
+			value = extracted
 			break
 		}
 	}
@@ -112,21 +102,22 @@ func conditionFallbackViolation(payload map[string]any, rule *config.Rule) Match
 		Message:   rule.ViolationMessage,
 		AuditOnly: rule.AuditOnly,
 		FieldPath: fieldPath,
-		FilePath:  payloadFilePath(payload),
+		FilePath:  fields.FilePathValue(),
 		Value:     value,
 		Start:     0,
 		End:       end,
 	}
 }
 
-func fieldViolations(payload map[string]any, rule *config.Rule, paths []string, re interface {
+type regexMatcher interface {
 	FindAllStringGroupIndex(string, int, uint32) [][2]int
-}, diagnosticGroup int,
-) []MatchViolation {
+}
+
+func fieldViolations(fields FieldSet, rule *config.Rule, selectors []config.FieldSelectorSpec, re regexMatcher, diagnosticGroup int) []MatchViolation {
 	var violations []MatchViolation
-	filePath := payloadFilePath(payload)
-	for _, path := range paths {
-		value := extractField(payload, []string{path})
+	filePath := fields.FilePathValue()
+	for _, selector := range selectors {
+		value := fields.String(selector.Selector)
 		if value == "" {
 			continue
 		}
@@ -135,7 +126,7 @@ func fieldViolations(payload map[string]any, rule *config.Rule, paths []string, 
 				RuleName:  rule.Name,
 				Message:   rule.ViolationMessage,
 				AuditOnly: rule.AuditOnly,
-				FieldPath: path,
+				FieldPath: selector.Path,
 				FilePath:  filePath,
 				Value:     value,
 				Start:     idx[0],
@@ -146,15 +137,6 @@ func fieldViolations(payload map[string]any, rule *config.Rule, paths []string, 
 	return violations
 }
 
-func payloadFilePath(payload map[string]any) string {
-	for _, path := range []string{"file_path", "path", "tool_input.file_path", "tool_input.path"} {
-		if v := extractField(payload, []string{path}); v != "" {
-			return v
-		}
-	}
-	return ""
-}
-
 // allConditionsMatch returns true when every condition in the slice matches
 // the payload (AND semantics). A condition matches when:
 //   - Its Pattern is set and matches the extracted field value, AND
@@ -162,14 +144,14 @@ func payloadFilePath(payload map[string]any) string {
 //
 // Empty extracted values are handled only by Pattern and NotPattern, so optional
 // fields (for example tool_name when absent) can use not_pattern alone.
-func allConditionsMatch(payload map[string]any, conditions []config.Condition) bool {
+func allConditionsMatch(fields FieldSet, conditions []config.Condition) bool {
 	ctx := conditionContext{}
 	for i := range conditions {
 		c := &conditions[i]
 		if conditionKind(c) != "command" {
 			continue
 		}
-		cwds, ok := commandConditionCwds(payload, c)
+		cwds, ok := commandConditionCwds(fields, c)
 		if !ok {
 			return false
 		}
@@ -180,13 +162,13 @@ func allConditionsMatch(payload map[string]any, conditions []config.Condition) b
 		c := &conditions[i]
 		switch conditionKind(c) {
 		case "regex":
-			if !regexConditionMatch(payload, c) {
+			if !regexConditionMatch(fields, c) {
 				return false
 			}
 		case "command":
 			continue
 		case "project":
-			if !projectConditionMatch(payload, c, ctx) {
+			if !projectConditionMatch(fields, c, ctx) {
 				return false
 			}
 		default:
@@ -207,8 +189,8 @@ func conditionKind(c *config.Condition) string {
 	return c.Kind
 }
 
-func regexConditionMatch(payload map[string]any, c *config.Condition) bool {
-	value := extractField(payload, c.FieldPaths)
+func regexConditionMatch(fields FieldSet, c *config.Condition) bool {
+	_, value := extractField(fields, c.Selectors())
 	if c.CompiledPattern() != nil && !c.CompiledPattern().MatchString(value) {
 		return false
 	}
@@ -218,9 +200,9 @@ func regexConditionMatch(payload map[string]any, c *config.Condition) bool {
 	return true
 }
 
-func commandConditionCwds(payload map[string]any, c *config.Condition) ([]string, bool) {
+func commandConditionCwds(fields FieldSet, c *config.Condition) ([]string, bool) {
 	var matches []string
-	for _, segment := range commandSegmentsWithCwd(payload) {
+	for _, segment := range commandSegmentsWithCwd(fields) {
 		fields := shellFields(segment.command)
 		if c.StripEnv {
 			fields = trimEnvAssignments(fields)
@@ -354,10 +336,10 @@ func resolvePath(cwd, path string) string {
 	}
 }
 
-func projectConditionMatch(payload map[string]any, c *config.Condition, ctx conditionContext) bool {
+func projectConditionMatch(fields FieldSet, c *config.Condition, ctx conditionContext) bool {
 	cwds := ctx.commandCwds
 	if len(cwds) == 0 {
-		if cwd := effectiveCwd(payload); cwd != "" {
+		if cwd := fields.String(config.FieldEffectiveCWD); cwd != "" {
 			cwds = []string{cwd}
 		}
 	}
@@ -401,13 +383,13 @@ type commandSegment struct {
 	cwd     string
 }
 
-func commandSegmentsWithCwd(payload map[string]any) []commandSegment {
-	cwd := baseCwd(payload)
+func commandSegmentsWithCwd(fields FieldSet) []commandSegment {
+	cwd := fields.BaseCWD()
 	if cwd == "" {
 		return nil
 	}
 
-	cmd := extractField(payload, []string{"tool_input.command", "command"})
+	cmd := fields.CommandValue()
 	if cmd == "" {
 		return nil
 	}
@@ -627,137 +609,9 @@ func systemSpecificEvents(rule *config.Rule, system string) []string {
 	}
 }
 
-// extractField walks each dot-path in paths against the nested map and returns
-// the first non-empty string value found. Returns "" if no path resolves.
-//
-// Two virtual field names are handled specially:
-//
-//   - "effective_cwd": simulates cd chains to compute the working directory
-//     active when commands execute.
-//
-//   - "cmd_segments": splits the command on shell chain operators and returns
-//     all segments joined by newlines, enabling (?m)^ patterns.
-//
-// Example: path "tool_input.command" on {"tool_input": {"command": "ls"}}
-// returns "ls".
-func extractField(payload map[string]any, paths []string) string {
-	for _, path := range paths {
-		switch path {
-		case "effective_cwd":
-			if v := effectiveCwd(payload); v != "" {
-				return v
-			}
-		case "cmd_segments":
-			if v := cmdSegments(payload); v != "" {
-				return v
-			}
-		default:
-			parts := strings.Split(path, ".")
-			if v := navigatePath(payload, parts); v != "" {
-				return v
-			}
-		}
-	}
-	return ""
-}
-
-// cmdSegments splits a shell command on chain operators (&&, ||, ;, newline)
-// and returns all non-empty segments joined by newlines. Rules can then use
-// (?m)^ in their pattern to match against each segment independently.
-//
-// This is a general-purpose primitive with no knowledge of specific commands.
-// The rule author decides what to match within the segments.
-//
-// Example: "git status && git commit -m msg"
-// returns  "git status\ngit commit -m msg"
-//
-// Example: "git log --grep=\"git commit\""
-// returns  "git log --grep=\"git commit\""   (no splitting; no chain operators)
-// CmdSegments is exported for direct testing.
-func CmdSegments(payload map[string]any) string { return cmdSegments(payload) }
-
-func cmdSegments(payload map[string]any) string {
-	cmd := extractField(payload, []string{"tool_input.command", "command"})
-	if cmd == "" {
-		return ""
-	}
-	var segs []string
-	for _, seg := range cmdChainRe.Split(cmd, -1) {
-		seg = strings.TrimSpace(seg)
-		if seg != "" {
-			segs = append(segs, seg)
-		}
-	}
-	return strings.Join(segs, "\n")
-}
-
-// navigatePath recursively descends into nested maps following parts.
-// Returns the string value at the leaf, or "" if the path does not exist
-// or the leaf is not a string.
-//
-// A path segment ending in "[*]" (e.g. "edits[*]") selects all elements of
-// an array at that key. The remaining sub-path is extracted from each element
-// and the results are joined with newlines so that a single MatchString call
-// covers every array entry.
-func navigatePath(node map[string]any, parts []string) string {
-	if len(parts) == 0 || node == nil {
-		return ""
-	}
-
-	segment := parts[0]
-
-	// Array wildcard: segment like "edits[*]"
-	if strings.HasSuffix(segment, "[*]") {
-		key := segment[:len(segment)-3]
-		val, ok := node[key]
-		if !ok {
-			return ""
-		}
-		arr, ok := val.([]any)
-		if !ok {
-			return ""
-		}
-		if len(parts) == 1 {
-			// Collect string elements directly.
-			var collected []string
-			for _, elem := range arr {
-				if s, ok := elem.(string); ok && s != "" {
-					collected = append(collected, s)
-				}
-			}
-			return strings.Join(collected, "\n")
-		}
-		// Recurse into each array element map with the remaining path.
-		var collected []string
-		for _, elem := range arr {
-			m, ok := elem.(map[string]any)
-			if !ok {
-				continue
-			}
-			if v := navigatePath(m, parts[1:]); v != "" {
-				collected = append(collected, v)
-			}
-		}
-		return strings.Join(collected, "\n")
-	}
-
-	val, ok := node[segment]
-	if !ok {
-		return ""
-	}
-
-	// Leaf node: expect a string.
-	if len(parts) == 1 {
-		s, _ := val.(string)
-		return s
-	}
-
-	// Intermediate node: expect a nested map.
-	nested, ok := val.(map[string]any)
-	if !ok {
-		return ""
-	}
-	return navigatePath(nested, parts[1:])
+// extractField returns the first non-empty value selected by a compiled field selector.
+func extractField(fields FieldSet, selectors []config.FieldSelectorSpec) (string, string) {
+	return fields.FirstString(selectors)
 }
 
 // cmdChainRe splits a shell command on common chain and sequence operators.
@@ -767,57 +621,8 @@ var cmdChainRe = regex.MustCompile(`&&|\|\||;|\n`)
 // Requires cd at the start of the segment (after trimming whitespace).
 var cdCommandRe = regex.MustCompile(`^cd\s+(.+)$`)
 
-// effectiveCwd computes the working directory active when commands in a shell
-// chain execute, by simulating cd operations. It starts from the payload cwd
-// and applies any cd commands found in the command string in order.
-//
-// This allows rules to detect the actual working directory at execution time
-// rather than just the shell's cwd at hook invocation. For example:
-//
-//	cwd=/home/user  command="cd /project && git commit"
-//	=> effective_cwd="/project"  (correctly not blocked)
-//
-//	cwd=/home/user  command="git commit"
-//	=> effective_cwd="/home/user"  (correctly blocked)
-func effectiveCwd(payload map[string]any) string {
-	cwd := baseCwd(payload)
-	if cwd == "" {
-		return ""
-	}
-
-	// extractField is safe to call here because it only recurses for
-	// "effective_cwd" paths, and we pass plain dot-paths below.
-	cmd := extractField(payload, []string{"tool_input.command", "command"})
-	if cmd == "" {
-		return cwd
-	}
-
-	home, err := os.UserHomeDir()
-	if err != nil {
-		home = cwd // best effort
-	}
-
-	return ApplyCdChain(cwd, home, cmd)
-}
-
-func baseCwd(payload map[string]any) string {
-	for _, path := range []string{
-		"effective_cwd",
-		"tool_input.workdir",
-		"tool_input.working_directory",
-		"tool_input.cwd",
-		"tool_input.directory",
-		"workdir",
-		"working_directory",
-		"directory",
-		"cwd",
-	} {
-		parts := strings.Split(path, ".")
-		if v := navigatePath(payload, parts); v != "" {
-			return v
-		}
-	}
-	return ""
+func osUserHomeDir() (string, error) {
+	return os.UserHomeDir()
 }
 
 // ApplyCdChain walks the segments of a shell command chain in order, applying
