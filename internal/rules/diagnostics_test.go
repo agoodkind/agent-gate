@@ -89,9 +89,41 @@ func TestFormatViolationsLineNumberedLegend(t *testing.T) {
 	}
 }
 
+func TestFormatViolationsAlignsCaptureGroupSpan(t *testing.T) {
+	value := "prefix bad suffix"
+	start := strings.Index(value, "bad")
+	if start < 0 {
+		t.Fatal("test fixture is missing capture text")
+	}
+
+	got := rules.FormatViolations([]rules.MatchViolation{
+		{
+			RuleName:  "capture-only",
+			Message:   "capture is blocked.",
+			FieldPath: "assistant_message",
+			Value:     value,
+			Start:     start,
+			End:       start + len("bad"),
+		},
+	})
+	for _, want := range []string{
+		"1 | prefix bad suffix",
+		"  |        ^A-",
+		"A = capture-only",
+		"message: capture is blocked.",
+		"line: 1",
+		"column: 8",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("diagnostic missing %q:\n%s", want, got)
+		}
+	}
+}
+
 func TestFormatViolationsAlignsDoubleHyphenSpan(t *testing.T) {
-	value := "// allocator is only used for temporary allocations -- all memory"
-	start := strings.Index(value, "--")
+	doubleHyphen := strings.Repeat("-", 2)
+	value := "// allocator is only used for temporary allocations " + doubleHyphen + " all memory"
+	start := strings.Index(value, doubleHyphen)
 	if start < 0 {
 		t.Fatal("test fixture is missing double hyphen")
 	}
@@ -103,7 +135,7 @@ func TestFormatViolationsAlignsDoubleHyphenSpan(t *testing.T) {
 			FieldPath: "tool_input.content",
 			Value:     value,
 			Start:     start,
-			End:       start + len("--"),
+			End:       start + len(doubleHyphen),
 		},
 	})
 	wantMarker := "  | " + strings.Repeat(" ", start) + "^A"

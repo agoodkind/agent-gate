@@ -72,6 +72,12 @@ func (r *Regexp) MatchString(s string) bool {
 // FindAllStringIndex returns byte offsets for all non-overlapping matches.
 // It follows regexp.Regexp.FindAllStringIndex closely enough for diagnostics.
 func (r *Regexp) FindAllStringIndex(s string, n int) [][2]int {
+	return r.FindAllStringGroupIndex(s, n, 0)
+}
+
+// FindAllStringGroupIndex returns byte offsets for one capture group in every
+// non-overlapping match. Group 0 is the full match.
+func (r *Regexp) FindAllStringGroupIndex(s string, n int, group uint32) [][2]int {
 	if n == 0 || r == nil || r.handle == nil {
 		return nil
 	}
@@ -84,28 +90,46 @@ func (r *Regexp) FindAllStringIndex(s string, n int) [][2]int {
 			break
 		}
 
-		start, end, unset, ok := HandleGroupBounds(r.handle, 0)
-		if !ok || unset || start < offset || end < start || end > len(s) {
+		matchStart, matchEnd, matchUnset, ok := HandleGroupBounds(r.handle, 0)
+		if !ok || matchUnset || matchStart < offset || matchEnd < matchStart || matchEnd > len(s) {
 			break
 		}
 
-		out = append(out, [2]int{start, end})
-		if start == end {
-			if end == len(s) {
-				break
-			}
-			_, width := utf8.DecodeRuneInString(s[end:])
-			if width == 0 {
-				width = 1
-			}
-			offset = end + width
-			continue
+		start, end, unset, ok := HandleGroupBounds(r.handle, group)
+		if ok && !unset && start >= matchStart && end >= start && end <= len(s) {
+			out = append(out, [2]int{start, end})
 		}
 
-		offset = end
+		nextOffset, ok := nextMatchOffset(s, matchStart, matchEnd)
+		if !ok {
+			break
+		}
+		offset = nextOffset
 	}
 
 	return out
+}
+
+// CaptureCount returns the number of capturing subpatterns in the compiled regex.
+func (r *Regexp) CaptureCount() uint32 {
+	if r == nil || r.handle == nil {
+		return 0
+	}
+	return HandleCaptureCount(r.handle)
+}
+
+func nextMatchOffset(s string, start int, end int) (int, bool) {
+	if start != end {
+		return end, true
+	}
+	if end == len(s) {
+		return end, false
+	}
+	_, width := utf8.DecodeRuneInString(s[end:])
+	if width == 0 {
+		width = 1
+	}
+	return end + width, true
 }
 
 // Split behaves like regexp.Regexp.Split for the methods needed by this project.

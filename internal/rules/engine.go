@@ -65,7 +65,7 @@ func EvaluateAll(system, eventName string, payload map[string]any, rules []confi
 			continue
 		}
 
-		violations = append(violations, fieldViolations(payload, rule, rule.FieldPaths, rule.Compiled())...)
+		violations = append(violations, fieldViolations(payload, rule, rule.FieldPaths, rule.Compiled(), rule.DiagnosticGroup)...)
 	}
 	return violations
 }
@@ -80,7 +80,7 @@ func conditionViolations(payload map[string]any, rule *config.Rule) []MatchViola
 		if c.CompiledPattern() == nil {
 			continue
 		}
-		violations = append(violations, fieldViolations(payload, rule, c.FieldPaths, c.CompiledPattern())...)
+		violations = append(violations, fieldViolations(payload, rule, c.FieldPaths, c.CompiledPattern(), c.DiagnosticGroup)...)
 	}
 	if len(violations) == 0 {
 		violations = append(violations, conditionFallbackViolation(payload, rule))
@@ -120,8 +120,9 @@ func conditionFallbackViolation(payload map[string]any, rule *config.Rule) Match
 }
 
 func fieldViolations(payload map[string]any, rule *config.Rule, paths []string, re interface {
-	FindAllStringIndex(string, int) [][2]int
-}) []MatchViolation {
+	FindAllStringGroupIndex(string, int, uint32) [][2]int
+}, diagnosticGroup int,
+) []MatchViolation {
 	var violations []MatchViolation
 	filePath := payloadFilePath(payload)
 	for _, path := range paths {
@@ -129,7 +130,7 @@ func fieldViolations(payload map[string]any, rule *config.Rule, paths []string, 
 		if value == "" {
 			continue
 		}
-		for _, idx := range re.FindAllStringIndex(value, -1) {
+		for _, idx := range re.FindAllStringGroupIndex(value, -1, uint32(diagnosticGroup)) {
 			violations = append(violations, MatchViolation{
 				RuleName:  rule.Name,
 				Message:   rule.ViolationMessage,

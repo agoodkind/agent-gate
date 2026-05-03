@@ -68,6 +68,9 @@ type Condition struct {
 	// NotPattern, if set, must NOT match the extracted field value. For command
 	// conditions, this is applied to the same normalized command tail.
 	NotPattern string `toml:"not_pattern"`
+	// DiagnosticGroup selects which capture group supplies diagnostic spans.
+	// Zero means the full match.
+	DiagnosticGroup int `toml:"diagnostic_group"`
 
 	// Command condition fields.
 	Argv0       string   `toml:"argv0"`
@@ -115,6 +118,22 @@ func NewCondition(fieldPaths []string, pattern, notPattern string) (Condition, e
 	return c, nil
 }
 
+func validateDiagnosticGroup(context string, group int, re *regex.Regexp) error {
+	if group < 0 {
+		return fmt.Errorf("%s: diagnostic_group must be non-negative", context)
+	}
+	if group == 0 {
+		return nil
+	}
+	if re == nil {
+		return fmt.Errorf("%s: diagnostic_group requires a pattern", context)
+	}
+	if uint32(group) > re.CaptureCount() {
+		return fmt.Errorf("%s: diagnostic_group %d exceeds capture count %d", context, group, re.CaptureCount())
+	}
+	return nil
+}
+
 // Rule defines a single enforcement rule decoded from a [[rules]] TOML table.
 //
 // A rule fires when:
@@ -136,6 +155,9 @@ type Rule struct {
 	Pattern          string   `toml:"pattern"`
 	Action           string   `toml:"action"`
 	ViolationMessage string   `toml:"violation_message"`
+	// DiagnosticGroup selects which capture group supplies diagnostic spans.
+	// Zero means the full match.
+	DiagnosticGroup int `toml:"diagnostic_group"`
 	// AuditOnly logs the violation without blocking when true.
 	AuditOnly bool `toml:"audit_only"`
 
@@ -283,6 +305,9 @@ func Load() (*Config, error) {
 					}
 					c.compiled = re
 				}
+				if err := validateDiagnosticGroup(fmt.Sprintf("rule %q condition %d", r.Name, j), c.DiagnosticGroup, c.compiled); err != nil {
+					return nil, err
+				}
 				if c.NotPattern != "" {
 					re, err := regex.Compile(c.NotPattern)
 					if err != nil {
@@ -297,6 +322,9 @@ func Load() (*Config, error) {
 				return nil, fmt.Errorf("rule %q: compile pattern %q: %w", r.Name, r.Pattern, err)
 			}
 			r.compiled = re
+			if err := validateDiagnosticGroup(fmt.Sprintf("rule %q", r.Name), r.DiagnosticGroup, r.compiled); err != nil {
+				return nil, err
+			}
 		}
 	}
 

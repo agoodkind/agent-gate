@@ -67,6 +67,37 @@ func TestFindAllStringIndexHonorsKeepReset(t *testing.T) {
 	}
 }
 
+func TestFindAllStringGroupIndex(t *testing.T) {
+	re := MustCompile(`prefix (bad) suffix`)
+	subject := "prefix bad suffix and prefix bad suffix"
+
+	got := re.FindAllStringGroupIndex(subject, -1, 1)
+	want := [][2]int{{7, 10}, {29, 32}}
+	if len(got) != len(want) {
+		t.Fatalf("expected %d matches, got %#v", len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("match %d = %#v, want %#v", i, got[i], want[i])
+		}
+	}
+}
+
+func TestFindAllStringGroupIndexSkipsUnsetGroup(t *testing.T) {
+	re := MustCompile(`(a)|(b)`)
+
+	got := re.FindAllStringGroupIndex("ab", -1, 2)
+	want := [][2]int{{1, 2}}
+	if len(got) != len(want) {
+		t.Fatalf("expected %d matches, got %#v", len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("match %d = %#v, want %#v", i, got[i], want[i])
+		}
+	}
+}
+
 func TestSplitCommandChainOperators(t *testing.T) {
 	re := MustCompile(`&&|\|\||;|\n`)
 	parts := re.Split("git status && git diff", -1)

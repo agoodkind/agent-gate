@@ -135,9 +135,11 @@ var claudeToolInputPaths = []string{
 	"tool_input.pattern",
 }
 
-var claudeSchema map[ClaudeEvent]EventSchema
-var codexSchema map[CodexEvent]EventSchema
-var geminiSchema map[GeminiEvent]EventSchema
+var (
+	claudeSchema map[ClaudeEvent]EventSchema
+	codexSchema  map[CodexEvent]EventSchema
+	geminiSchema map[GeminiEvent]EventSchema
+)
 
 func init() {
 	claudeToolUseBase := append(claudeEnvelope,
