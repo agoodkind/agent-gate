@@ -29,6 +29,9 @@ const (
 	schemaVersion     = 1
 )
 
+// EventLogger is the audit event sink shared by the daemon and the CLI.
+// It owns a dedup cache, a worker goroutine that flushes batched writes,
+// and zero or more configured outputs (JSONL, SQLite).
 type EventLogger struct {
 	minLevel slog.Level
 	dedup    *expirable.LRU[string, struct{}]
@@ -49,6 +52,8 @@ type eventWrite struct {
 	rawPayload string
 }
 
+// Event is one normalized audit record. It is the canonical schema written
+// to all configured outputs.
 type Event struct {
 	EventID        string      `json:"event_id"`
 	SchemaVersion  int         `json:"schema_version"`
@@ -67,6 +72,7 @@ type Event struct {
 	RawPayloadHash string      `json:"raw_payload_hash,omitempty"`
 }
 
+// Operation captures the working-directory and command context of an event.
 type Operation struct {
 	CWD          string `json:"cwd,omitempty"`
 	EffectiveCWD string `json:"effective_cwd,omitempty"`
@@ -74,6 +80,7 @@ type Operation struct {
 	FilePath     string `json:"file_path,omitempty"`
 }
 
+// Decision captures the rule-engine verdict for an event.
 type Decision struct {
 	Kind         string   `json:"kind,omitempty"`
 	CanBlock     bool     `json:"can_block,omitempty"`
@@ -81,6 +88,7 @@ type Decision struct {
 	RulesMatched []string `json:"rules_matched,omitempty"`
 }
 
+// Violation describes a single rule match recorded against an event.
 type Violation struct {
 	Rule      string `json:"rule"`
 	Mode      string `json:"mode"`
@@ -96,6 +104,9 @@ type eventSink interface {
 	Close() error
 }
 
+// NewEventLogger constructs an [EventLogger] from the given configuration.
+// The returned logger owns a background worker; callers must invoke
+// [EventLogger.Close] to flush and shut down cleanly.
 func NewEventLogger(cfg *config.Config, log *slog.Logger) (*EventLogger, error) {
 	if log == nil {
 		log = slog.Default()
@@ -150,6 +161,9 @@ func NewEventLogger(cfg *config.Config, log *slog.Logger) (*EventLogger, error) 
 	return el, nil
 }
 
+// Log enqueues a normalized audit event for asynchronous write to all
+// configured outputs. Calls return without waiting for I/O; the call is
+// also a no-op when the receiver is nil or the level is filtered out.
 func (el *EventLogger) Log(system, sessionID, eventName, level, msg string, attrs Attrs) {
 	if el == nil || !el.shouldLog(level) {
 		return
@@ -187,6 +201,8 @@ func (el *EventLogger) Log(system, sessionID, eventName, level, msg string, attr
 	el.mu.Unlock()
 }
 
+// Close stops the background worker, drains the queue to all configured
+// outputs, and releases their resources. Close is idempotent.
 func (el *EventLogger) Close() error {
 	if el == nil {
 		return nil
@@ -460,7 +476,7 @@ func (s *jsonlEventSink) Write(event Event, rawPayload string) error {
 
 	line, err := json.Marshal(event)
 	if err != nil {
-		return err
+		return fmt.Errorf("marshal audit event: %w", err)
 	}
 	line = append(line, '\n')
 
@@ -468,21 +484,26 @@ func (s *jsonlEventSink) Write(event Event, rawPayload string) error {
 	if err != nil {
 		return err
 	}
-	_, err = f.Write(line)
-	return err
+	if _, err := f.Write(line); err != nil {
+		return fmt.Errorf("write audit event line: %w", err)
+	}
+	return nil
 }
 
 func (s *jsonlEventSink) writePayload(rawPayload string) (string, error) {
 	hash := strings.TrimPrefix(payloadHash(rawPayload), "sha256:")
 	dir := filepath.Join(s.payloadsDir, "sha256", hash[:2], hash[2:4])
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", err
+		return "", fmt.Errorf("create audit payload dir %s: %w", dir, err)
 	}
 	path := filepath.Join(dir, hash+".json")
 	if _, err := os.Stat(path); err == nil {
 		return "sha256:" + hash, nil
 	}
-	return "sha256:" + hash, os.WriteFile(path, []byte(rawPayload), 0o600)
+	if err := os.WriteFile(path, []byte(rawPayload), 0o600); err != nil {
+		return "sha256:" + hash, fmt.Errorf("write audit payload %s: %w", path, err)
+	}
+	return "sha256:" + hash, nil
 }
 
 func payloadHash(rawPayload string) string {
@@ -497,12 +518,12 @@ func (s *jsonlEventSink) fileFor(ts string) (*os.File, error) {
 	}
 	dir := filepath.Join(s.eventsDir, day[:4], day[5:7], day[8:10])
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("create audit events dir %s: %w", dir, err)
 	}
 	path := filepath.Join(dir, "events.jsonl")
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("open audit events file %s: %w", path, err)
 	}
 	s.cache.Add(day, f)
 	return f, nil
@@ -522,11 +543,11 @@ type sqliteEventSink struct {
 
 func newSQLiteEventSink(path string) (*sqliteEventSink, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("create audit sqlite dir: %w", err)
 	}
 	db, err := sql.Open("sqlite3", path)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("open audit sqlite db: %w", err)
 	}
 	s := &sqliteEventSink{db: db}
 	if err := s.init(); err != nil {
@@ -587,46 +608,56 @@ func (s *sqliteEventSink) init() error {
 		`create index if not exists violations_mode_idx on violations(mode)`,
 	}
 	for _, stmt := range stmts {
-		if _, err := s.db.Exec(stmt); err != nil {
-			return err
+		if _, err := s.db.ExecContext(context.Background(), stmt); err != nil {
+			return fmt.Errorf("init audit sqlite schema: %w", err)
 		}
 	}
 	return nil
 }
 
 func (s *sqliteEventSink) Write(event Event, _ string) error {
-	checked, _ := json.Marshal(event.Decision.RulesChecked)
-	matched, _ := json.Marshal(event.Decision.RulesMatched)
-	tx, err := s.db.Begin()
+	ctx := context.Background()
+	checked, err := json.Marshal(event.Decision.RulesChecked)
 	if err != nil {
-		return err
+		return fmt.Errorf("marshal rules_checked: %w", err)
+	}
+	matched, err := json.Marshal(event.Decision.RulesMatched)
+	if err != nil {
+		return fmt.Errorf("marshal rules_matched: %w", err)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin audit tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if _, err := tx.Exec(`insert or ignore into events values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	if _, err := tx.ExecContext(ctx, `insert or ignore into events values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		event.EventID, event.SchemaVersion, event.Time, event.Level, event.Message, event.System,
 		event.SessionID, event.TurnID, event.EventName, event.ToolUseID, event.ToolName, event.RawPayloadHash,
 	); err != nil {
-		return err
+		return fmt.Errorf("insert audit event: %w", err)
 	}
-	if _, err := tx.Exec(`insert or ignore into operations values (?, ?, ?, ?, ?)`,
+	if _, err := tx.ExecContext(ctx, `insert or ignore into operations values (?, ?, ?, ?, ?)`,
 		event.EventID, event.Operation.CWD, event.Operation.EffectiveCWD, event.Operation.Command, event.Operation.FilePath,
 	); err != nil {
-		return err
+		return fmt.Errorf("insert audit operation: %w", err)
 	}
-	if _, err := tx.Exec(`insert or ignore into decisions values (?, ?, ?, ?, ?)`,
+	if _, err := tx.ExecContext(ctx, `insert or ignore into decisions values (?, ?, ?, ?, ?)`,
 		event.EventID, event.Decision.Kind, boolInt(event.Decision.CanBlock), string(checked), string(matched),
 	); err != nil {
-		return err
+		return fmt.Errorf("insert audit decision: %w", err)
 	}
 	for _, v := range event.Violations {
-		if _, err := tx.Exec(`insert into violations (event_id, rule, mode, field_path, file_path, start, end, message) values (?, ?, ?, ?, ?, ?, ?, ?)`,
+		if _, err := tx.ExecContext(ctx, `insert into violations (event_id, rule, mode, field_path, file_path, start, end, message) values (?, ?, ?, ?, ?, ?, ?, ?)`,
 			event.EventID, v.Rule, v.Mode, v.FieldPath, v.FilePath, v.Start, v.End, v.Message,
 		); err != nil {
-			return err
+			return fmt.Errorf("insert audit violation: %w", err)
 		}
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit audit tx: %w", err)
+	}
+	return nil
 }
 
 func boolInt(v bool) int {
@@ -640,9 +671,14 @@ func (s *sqliteEventSink) Close() error {
 	if s == nil || s.db == nil {
 		return nil
 	}
-	return s.db.Close()
+	if err := s.db.Close(); err != nil {
+		return fmt.Errorf("close audit sqlite db: %w", err)
+	}
+	return nil
 }
 
+// AttrsFromSlog flattens a slice of [slog.Attr] into the audit attribute
+// map, recursing into [slog.KindGroup] values to produce dotted keys.
 func AttrsFromSlog(attrs []slog.Attr) Attrs {
 	out := make(Attrs, len(attrs))
 	for _, a := range attrs {
