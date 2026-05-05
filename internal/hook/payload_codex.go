@@ -35,15 +35,18 @@ type CodexPreToolUsePayload struct {
 	ToolUseID string         `json:"tool_use_id"`
 	ToolInput CodexToolInput `json:"tool_input"`
 }
-type CodexPermissionRequestPayload CodexPreToolUsePayload
-type CodexPostToolUsePayload struct {
-	CodexEnvelope
-	TurnID       string         `json:"turn_id"`
-	ToolName     string         `json:"tool_name"`
-	ToolUseID    string         `json:"tool_use_id"`
-	ToolInput    CodexToolInput `json:"tool_input"`
-	ToolResponse TextOrObject   `json:"tool_response"`
-}
+type (
+	CodexPermissionRequestPayload CodexPreToolUsePayload
+	CodexPostToolUsePayload       struct {
+		CodexEnvelope
+		TurnID       string         `json:"turn_id"`
+		ToolName     string         `json:"tool_name"`
+		ToolUseID    string         `json:"tool_use_id"`
+		ToolInput    CodexToolInput `json:"tool_input"`
+		ToolResponse TextOrObject   `json:"tool_response"`
+	}
+)
+
 type CodexUserPromptSubmitPayload struct {
 	CodexEnvelope
 	TurnID string `json:"turn_id"`
@@ -81,24 +84,29 @@ func (p CodexSessionStartPayload) Fields() rules.FieldSet {
 	fields.Source = p.Source
 	return fields
 }
+
 func (p CodexPreToolUsePayload) Fields() rules.FieldSet {
 	return codexToolFields(p.baseFields(), p.TurnID, p.ToolName, p.ToolUseID, p.ToolInput)
 }
+
 func (p CodexPermissionRequestPayload) Fields() rules.FieldSet {
 	payload := CodexPreToolUsePayload(p)
 	return payload.Fields()
 }
+
 func (p CodexPostToolUsePayload) Fields() rules.FieldSet {
 	fields := codexToolFields(p.baseFields(), p.TurnID, p.ToolName, p.ToolUseID, p.ToolInput)
 	fields.ToolResponse = p.ToolResponse.String()
 	return fields
 }
+
 func (p CodexUserPromptSubmitPayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.TurnID = p.TurnID
 	fields.Prompt = p.Prompt
 	return fields
 }
+
 func (p CodexStopPayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.TurnID = p.TurnID

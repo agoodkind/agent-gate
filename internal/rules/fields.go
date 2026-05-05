@@ -111,195 +111,112 @@ func (fields FieldSet) FirstString(selectors []config.FieldSelectorSpec) (string
 	return "", ""
 }
 
+// fieldStringAccessors maps each [config.FieldSelector] to a function that
+// extracts the corresponding string view from a [FieldSet]. The map is
+// populated at init time so [FieldSet.String] becomes a table lookup
+// rather than a giant switch.
+var fieldStringAccessors = map[config.FieldSelector]func(FieldSet) string{
+	config.FieldHookEventName:             func(f FieldSet) string { return f.HookEventName },
+	config.FieldSessionID:                 func(f FieldSet) string { return f.SessionID },
+	config.FieldConversationID:            func(f FieldSet) string { return f.ConversationID },
+	config.FieldGenerationID:              func(f FieldSet) string { return f.GenerationID },
+	config.FieldModel:                     func(f FieldSet) string { return f.Model },
+	config.FieldCursorVersion:             func(f FieldSet) string { return f.CursorVersion },
+	config.FieldUserEmail:                 func(f FieldSet) string { return f.UserEmail },
+	config.FieldTranscriptPath:            func(f FieldSet) string { return f.TranscriptPath },
+	config.FieldCWD:                       func(f FieldSet) string { return f.CWD },
+	config.FieldEffectiveCWD:              func(f FieldSet) string { return f.effectiveCWD() },
+	config.FieldCmdSegments:               func(f FieldSet) string { return f.CmdSegments() },
+	config.FieldPermissionMode:            func(f FieldSet) string { return f.PermissionMode },
+	config.FieldAgentID:                   func(f FieldSet) string { return f.AgentID },
+	config.FieldAgentType:                 func(f FieldSet) string { return f.AgentType },
+	config.FieldTurnID:                    func(f FieldSet) string { return f.TurnID },
+	config.FieldToolName:                  func(f FieldSet) string { return f.ToolName },
+	config.FieldToolUseID:                 func(f FieldSet) string { return f.ToolUseID },
+	config.FieldToolInputCommand:          func(f FieldSet) string { return f.ToolInputCommand },
+	config.FieldToolInputFilePath:         func(f FieldSet) string { return f.ToolInputFilePath },
+	config.FieldToolInputContent:          func(f FieldSet) string { return f.ToolInputContent },
+	config.FieldToolInputOldString:        func(f FieldSet) string { return f.ToolInputOldString },
+	config.FieldToolInputNewString:        func(f FieldSet) string { return f.ToolInputNewString },
+	config.FieldToolInputDescription:      func(f FieldSet) string { return f.ToolInputDescription },
+	config.FieldToolInputPrompt:           func(f FieldSet) string { return f.ToolInputPrompt },
+	config.FieldToolInputPattern:          func(f FieldSet) string { return f.ToolInputPattern },
+	config.FieldToolInputPath:             func(f FieldSet) string { return f.ToolInputPath },
+	config.FieldToolInputURL:              func(f FieldSet) string { return f.ToolInputURL },
+	config.FieldToolInputQuery:            func(f FieldSet) string { return f.ToolInputQuery },
+	config.FieldToolInputWorkdir:          func(f FieldSet) string { return f.ToolInputWorkdir },
+	config.FieldToolInputWorkingDirectory: func(f FieldSet) string { return f.ToolInputWorkingDir },
+	config.FieldToolInputCWD:              func(f FieldSet) string { return f.ToolInputCWD },
+	config.FieldToolInputDirectory:        func(f FieldSet) string { return f.ToolInputDirectory },
+	config.FieldFilePath:                  func(f FieldSet) string { return f.FilePath },
+	config.FieldPath:                      func(f FieldSet) string { return f.Path },
+	config.FieldCommand:                   func(f FieldSet) string { return f.Command },
+	config.FieldOutput:                    func(f FieldSet) string { return f.Output },
+	config.FieldToolOutput:                func(f FieldSet) string { return f.ToolOutput },
+	config.FieldToolResponse:              func(f FieldSet) string { return f.ToolResponse },
+	config.FieldPrompt:                    func(f FieldSet) string { return f.Prompt },
+	config.FieldText:                      func(f FieldSet) string { return f.Text },
+	config.FieldAssistantMessage:          func(f FieldSet) string { return f.AssistantMessage },
+	config.FieldLastAssistantMessage:      func(f FieldSet) string { return f.LastAssistantMessage },
+	config.FieldStatus:                    func(f FieldSet) string { return f.Status },
+	config.FieldReason:                    func(f FieldSet) string { return f.Reason },
+	config.FieldError:                     func(f FieldSet) string { return f.Error },
+	config.FieldErrorType:                 func(f FieldSet) string { return f.ErrorType },
+	config.FieldErrorMessage:              func(f FieldSet) string { return f.ErrorMessage },
+	config.FieldFailureType:               func(f FieldSet) string { return f.FailureType },
+	config.FieldSource:                    func(f FieldSet) string { return f.Source },
+	config.FieldNotificationType:          func(f FieldSet) string { return f.NotificationType },
+	config.FieldMessage:                   func(f FieldSet) string { return f.Message },
+	config.FieldTitle:                     func(f FieldSet) string { return f.Title },
+	config.FieldTrigger:                   func(f FieldSet) string { return f.Trigger },
+	config.FieldCustomInstructions:        func(f FieldSet) string { return f.CustomInstructions },
+	config.FieldCompactSummary:            func(f FieldSet) string { return f.CompactSummary },
+	config.FieldMemoryType:                func(f FieldSet) string { return f.MemoryType },
+	config.FieldLoadReason:                func(f FieldSet) string { return f.LoadReason },
+	config.FieldTriggerFilePath:           func(f FieldSet) string { return f.TriggerFilePath },
+	config.FieldParentFilePath:            func(f FieldSet) string { return f.ParentFilePath },
+	config.FieldOldCWD:                    func(f FieldSet) string { return f.OldCWD },
+	config.FieldNewCWD:                    func(f FieldSet) string { return f.NewCWD },
+	config.FieldEvent:                     func(f FieldSet) string { return f.Event },
+	config.FieldName:                      func(f FieldSet) string { return f.Name },
+	config.FieldWorktreePath:              func(f FieldSet) string { return f.WorktreePath },
+	config.FieldMCPServerName:             func(f FieldSet) string { return f.MCPServerName },
+	config.FieldURL:                       func(f FieldSet) string { return f.URL },
+	config.FieldTimestamp:                 func(f FieldSet) string { return f.Timestamp },
+	config.FieldSessionTitle:              func(f FieldSet) string { return f.SessionTitle },
+	config.FieldIsInterrupt:               func(f FieldSet) string { return f.IsInterrupt },
+	config.FieldErrorDetails:              func(f FieldSet) string { return f.ErrorDetails },
+	config.FieldMode:                      func(f FieldSet) string { return f.Mode },
+	config.FieldAction:                    func(f FieldSet) string { return f.Action },
+	config.FieldElicitationID:             func(f FieldSet) string { return f.ElicitationID },
+	config.FieldTaskID:                    func(f FieldSet) string { return f.TaskID },
+	config.FieldTaskSubject:               func(f FieldSet) string { return f.TaskSubject },
+	config.FieldTaskDescription:           func(f FieldSet) string { return f.TaskDescription },
+	config.FieldTeammateName:              func(f FieldSet) string { return f.TeammateName },
+	config.FieldTeamName:                  func(f FieldSet) string { return f.TeamName },
+	config.FieldStopHookActive:            func(f FieldSet) string { return f.StopHookActive },
+	config.FieldAgentTranscriptPath:       func(f FieldSet) string { return f.AgentTranscriptPath },
+	config.FieldOriginalRequestName:       func(f FieldSet) string { return f.OriginalRequestName },
+	config.FieldMCPContext:                func(f FieldSet) string { return f.MCPContext },
+	config.FieldPromptResponse:            func(f FieldSet) string { return f.PromptResponse },
+	config.FieldLLMRequest:                func(f FieldSet) string { return f.LLMRequest },
+	config.FieldLLMResponse:               func(f FieldSet) string { return f.LLMResponse },
+	config.FieldDetails:                   func(f FieldSet) string { return f.Details },
+	config.FieldEditsOldString:            func(f FieldSet) string { return strings.Join(f.EditsOldString, "\n") },
+	config.FieldEditsNewString:            func(f FieldSet) string { return strings.Join(f.EditsNewString, "\n") },
+	config.FieldEditsOldLine:              func(f FieldSet) string { return strings.Join(f.EditsOldLine, "\n") },
+	config.FieldEditsNewLine:              func(f FieldSet) string { return strings.Join(f.EditsNewLine, "\n") },
+	config.FieldAttachmentsFilePath:       func(f FieldSet) string { return strings.Join(f.AttachmentsFilePath, "\n") },
+	config.FieldAttachmentsType:           func(f FieldSet) string { return strings.Join(f.AttachmentsType, "\n") },
+}
+
+// String returns the string view of fields selected by the given
+// [config.FieldSelector]. Unknown selectors yield the empty string.
 func (fields FieldSet) String(selector config.FieldSelector) string {
-	switch selector {
-	case config.FieldHookEventName:
-		return fields.HookEventName
-	case config.FieldSessionID:
-		return fields.SessionID
-	case config.FieldConversationID:
-		return fields.ConversationID
-	case config.FieldGenerationID:
-		return fields.GenerationID
-	case config.FieldModel:
-		return fields.Model
-	case config.FieldCursorVersion:
-		return fields.CursorVersion
-	case config.FieldUserEmail:
-		return fields.UserEmail
-	case config.FieldTranscriptPath:
-		return fields.TranscriptPath
-	case config.FieldCWD:
-		return fields.CWD
-	case config.FieldEffectiveCWD:
-		return fields.effectiveCWD()
-	case config.FieldCmdSegments:
-		return fields.CmdSegments()
-	case config.FieldPermissionMode:
-		return fields.PermissionMode
-	case config.FieldAgentID:
-		return fields.AgentID
-	case config.FieldAgentType:
-		return fields.AgentType
-	case config.FieldTurnID:
-		return fields.TurnID
-	case config.FieldToolName:
-		return fields.ToolName
-	case config.FieldToolUseID:
-		return fields.ToolUseID
-	case config.FieldToolInputCommand:
-		return fields.ToolInputCommand
-	case config.FieldToolInputFilePath:
-		return fields.ToolInputFilePath
-	case config.FieldToolInputContent:
-		return fields.ToolInputContent
-	case config.FieldToolInputOldString:
-		return fields.ToolInputOldString
-	case config.FieldToolInputNewString:
-		return fields.ToolInputNewString
-	case config.FieldToolInputDescription:
-		return fields.ToolInputDescription
-	case config.FieldToolInputPrompt:
-		return fields.ToolInputPrompt
-	case config.FieldToolInputPattern:
-		return fields.ToolInputPattern
-	case config.FieldToolInputPath:
-		return fields.ToolInputPath
-	case config.FieldToolInputURL:
-		return fields.ToolInputURL
-	case config.FieldToolInputQuery:
-		return fields.ToolInputQuery
-	case config.FieldToolInputWorkdir:
-		return fields.ToolInputWorkdir
-	case config.FieldToolInputWorkingDirectory:
-		return fields.ToolInputWorkingDir
-	case config.FieldToolInputCWD:
-		return fields.ToolInputCWD
-	case config.FieldToolInputDirectory:
-		return fields.ToolInputDirectory
-	case config.FieldFilePath:
-		return fields.FilePath
-	case config.FieldPath:
-		return fields.Path
-	case config.FieldCommand:
-		return fields.Command
-	case config.FieldOutput:
-		return fields.Output
-	case config.FieldToolOutput:
-		return fields.ToolOutput
-	case config.FieldToolResponse:
-		return fields.ToolResponse
-	case config.FieldPrompt:
-		return fields.Prompt
-	case config.FieldText:
-		return fields.Text
-	case config.FieldAssistantMessage:
-		return fields.AssistantMessage
-	case config.FieldLastAssistantMessage:
-		return fields.LastAssistantMessage
-	case config.FieldStatus:
-		return fields.Status
-	case config.FieldReason:
-		return fields.Reason
-	case config.FieldError:
-		return fields.Error
-	case config.FieldErrorType:
-		return fields.ErrorType
-	case config.FieldErrorMessage:
-		return fields.ErrorMessage
-	case config.FieldFailureType:
-		return fields.FailureType
-	case config.FieldSource:
-		return fields.Source
-	case config.FieldNotificationType:
-		return fields.NotificationType
-	case config.FieldMessage:
-		return fields.Message
-	case config.FieldTitle:
-		return fields.Title
-	case config.FieldTrigger:
-		return fields.Trigger
-	case config.FieldCustomInstructions:
-		return fields.CustomInstructions
-	case config.FieldCompactSummary:
-		return fields.CompactSummary
-	case config.FieldMemoryType:
-		return fields.MemoryType
-	case config.FieldLoadReason:
-		return fields.LoadReason
-	case config.FieldTriggerFilePath:
-		return fields.TriggerFilePath
-	case config.FieldParentFilePath:
-		return fields.ParentFilePath
-	case config.FieldOldCWD:
-		return fields.OldCWD
-	case config.FieldNewCWD:
-		return fields.NewCWD
-	case config.FieldEvent:
-		return fields.Event
-	case config.FieldName:
-		return fields.Name
-	case config.FieldWorktreePath:
-		return fields.WorktreePath
-	case config.FieldMCPServerName:
-		return fields.MCPServerName
-	case config.FieldURL:
-		return fields.URL
-	case config.FieldTimestamp:
-		return fields.Timestamp
-	case config.FieldSessionTitle:
-		return fields.SessionTitle
-	case config.FieldIsInterrupt:
-		return fields.IsInterrupt
-	case config.FieldErrorDetails:
-		return fields.ErrorDetails
-	case config.FieldMode:
-		return fields.Mode
-	case config.FieldAction:
-		return fields.Action
-	case config.FieldElicitationID:
-		return fields.ElicitationID
-	case config.FieldTaskID:
-		return fields.TaskID
-	case config.FieldTaskSubject:
-		return fields.TaskSubject
-	case config.FieldTaskDescription:
-		return fields.TaskDescription
-	case config.FieldTeammateName:
-		return fields.TeammateName
-	case config.FieldTeamName:
-		return fields.TeamName
-	case config.FieldStopHookActive:
-		return fields.StopHookActive
-	case config.FieldAgentTranscriptPath:
-		return fields.AgentTranscriptPath
-	case config.FieldOriginalRequestName:
-		return fields.OriginalRequestName
-	case config.FieldMCPContext:
-		return fields.MCPContext
-	case config.FieldPromptResponse:
-		return fields.PromptResponse
-	case config.FieldLLMRequest:
-		return fields.LLMRequest
-	case config.FieldLLMResponse:
-		return fields.LLMResponse
-	case config.FieldDetails:
-		return fields.Details
-	case config.FieldEditsOldString:
-		return strings.Join(fields.EditsOldString, "\n")
-	case config.FieldEditsNewString:
-		return strings.Join(fields.EditsNewString, "\n")
-	case config.FieldEditsOldLine:
-		return strings.Join(fields.EditsOldLine, "\n")
-	case config.FieldEditsNewLine:
-		return strings.Join(fields.EditsNewLine, "\n")
-	case config.FieldAttachmentsFilePath:
-		return strings.Join(fields.AttachmentsFilePath, "\n")
-	case config.FieldAttachmentsType:
-		return strings.Join(fields.AttachmentsType, "\n")
-	default:
-		return ""
+	if accessor, ok := fieldStringAccessors[selector]; ok {
+		return accessor(fields)
 	}
+	return ""
 }
 
 func (fields FieldSet) CommandValue() string {

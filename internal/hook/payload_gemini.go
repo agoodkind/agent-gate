@@ -53,12 +53,15 @@ type GeminiBeforeModelPayload struct {
 	GeminiEnvelope
 	LLMRequest LLMRequest `json:"llm_request"`
 }
-type GeminiBeforeToolSelectionPayload GeminiBeforeModelPayload
-type GeminiAfterModelPayload struct {
-	GeminiEnvelope
-	LLMRequest  LLMRequest  `json:"llm_request"`
-	LLMResponse LLMResponse `json:"llm_response"`
-}
+type (
+	GeminiBeforeToolSelectionPayload GeminiBeforeModelPayload
+	GeminiAfterModelPayload          struct {
+		GeminiEnvelope
+		LLMRequest  LLMRequest  `json:"llm_request"`
+		LLMResponse LLMResponse `json:"llm_response"`
+	}
+)
+
 type GeminiSessionStartPayload struct {
 	GeminiEnvelope
 	Source string `json:"source"`
@@ -100,16 +103,19 @@ func geminiToolFields(base rules.FieldSet, toolName string, originalRequestName 
 func (p GeminiBeforeToolPayload) Fields() rules.FieldSet {
 	return geminiToolFields(p.baseFields(), p.ToolName, p.OriginalRequestName, p.MCPContext, p.ToolInput)
 }
+
 func (p GeminiAfterToolPayload) Fields() rules.FieldSet {
 	fields := geminiToolFields(p.baseFields(), p.ToolName, p.OriginalRequestName, p.MCPContext, p.ToolInput)
 	fields.ToolResponse = p.ToolResponse.String()
 	return fields
 }
+
 func (p GeminiBeforeAgentPayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.Prompt = p.Prompt
 	return fields
 }
+
 func (p GeminiAfterAgentPayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.Prompt = p.Prompt
@@ -117,31 +123,37 @@ func (p GeminiAfterAgentPayload) Fields() rules.FieldSet {
 	fields.StopHookActive = boolString(p.StopHookActive)
 	return fields
 }
+
 func (p GeminiBeforeModelPayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.LLMRequest = p.LLMRequest.Text
 	return fields
 }
+
 func (p GeminiBeforeToolSelectionPayload) Fields() rules.FieldSet {
 	payload := GeminiBeforeModelPayload(p)
 	return payload.Fields()
 }
+
 func (p GeminiAfterModelPayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.LLMRequest = p.LLMRequest.Text
 	fields.LLMResponse = p.LLMResponse.Text
 	return fields
 }
+
 func (p GeminiSessionStartPayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.Source = p.Source
 	return fields
 }
+
 func (p GeminiSessionEndPayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.Reason = p.Reason
 	return fields
 }
+
 func (p GeminiNotificationPayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.NotificationType = p.NotificationType
@@ -149,6 +161,7 @@ func (p GeminiNotificationPayload) Fields() rules.FieldSet {
 	fields.Details = p.Details
 	return fields
 }
+
 func (p GeminiPreCompressPayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.Trigger = p.Trigger

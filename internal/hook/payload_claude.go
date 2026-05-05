@@ -99,13 +99,16 @@ type ClaudeStopFailurePayload struct {
 	ErrorDetails         string `json:"error_details"`
 	LastAssistantMessage string `json:"last_assistant_message"`
 }
-type ClaudeSubagentStartPayload struct{ ClaudeEnvelope }
-type ClaudeSubagentStopPayload struct {
-	ClaudeEnvelope
-	StopHookActive       bool   `json:"stop_hook_active"`
-	AgentTranscriptPath  string `json:"agent_transcript_path"`
-	LastAssistantMessage string `json:"last_assistant_message"`
-}
+type (
+	ClaudeSubagentStartPayload struct{ ClaudeEnvelope }
+	ClaudeSubagentStopPayload  struct {
+		ClaudeEnvelope
+		StopHookActive       bool   `json:"stop_hook_active"`
+		AgentTranscriptPath  string `json:"agent_transcript_path"`
+		LastAssistantMessage string `json:"last_assistant_message"`
+	}
+)
+
 type ClaudeTaskCreatedPayload struct {
 	ClaudeEnvelope
 	TaskID          string `json:"task_id"`
@@ -114,13 +117,16 @@ type ClaudeTaskCreatedPayload struct {
 	TeammateName    string `json:"teammate_name"`
 	TeamName        string `json:"team_name"`
 }
-type ClaudeTaskCompletedPayload ClaudeTaskCreatedPayload
-type ClaudeNotificationPayload struct {
-	ClaudeEnvelope
-	NotificationType string `json:"notification_type"`
-	Message          string `json:"message"`
-	Title            string `json:"title"`
-}
+type (
+	ClaudeTaskCompletedPayload ClaudeTaskCreatedPayload
+	ClaudeNotificationPayload  struct {
+		ClaudeEnvelope
+		NotificationType string `json:"notification_type"`
+		Message          string `json:"message"`
+		Title            string `json:"title"`
+	}
+)
+
 type ClaudePreCompactPayload struct {
 	ClaudeEnvelope
 	Trigger            string `json:"trigger"`
@@ -207,24 +213,29 @@ func (p ClaudeSessionStartPayload) Fields() rules.FieldSet {
 	fields.Source = p.Source
 	return fields
 }
+
 func (p ClaudeSessionEndPayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.Reason = p.Reason
 	return fields
 }
+
 func (p ClaudeSetupPayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.Trigger = p.Trigger
 	return fields
 }
+
 func (p ClaudePreToolUsePayload) Fields() rules.FieldSet {
 	return claudeToolFields(p.baseFields(), p.ToolName, p.ToolUseID, p.ToolInput)
 }
+
 func (p ClaudePostToolUsePayload) Fields() rules.FieldSet {
 	fields := claudeToolFields(p.baseFields(), p.ToolName, p.ToolUseID, p.ToolInput)
 	fields.ToolResponse = p.ToolResponse.String()
 	return fields
 }
+
 func (p ClaudePostToolUseFailurePayload) Fields() rules.FieldSet {
 	fields := claudeToolFields(p.baseFields(), p.ToolName, p.ToolUseID, p.ToolInput)
 	fields.Error = p.Error
@@ -232,26 +243,31 @@ func (p ClaudePostToolUseFailurePayload) Fields() rules.FieldSet {
 	fields.IsInterrupt = boolString(p.IsInterrupt)
 	return fields
 }
+
 func (p ClaudePermissionRequestPayload) Fields() rules.FieldSet {
 	return claudeToolFields(p.baseFields(), p.ToolName, p.ToolUseID, p.ToolInput)
 }
+
 func (p ClaudePermissionDeniedPayload) Fields() rules.FieldSet {
 	fields := claudeToolFields(p.baseFields(), p.ToolName, p.ToolUseID, p.ToolInput)
 	fields.Reason = p.Reason
 	return fields
 }
+
 func (p ClaudeUserPromptSubmitPayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.Prompt = p.Prompt
 	fields.SessionTitle = p.SessionTitle
 	return fields
 }
+
 func (p ClaudeStopPayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.StopHookActive = boolString(p.StopHookActive)
 	fields.LastAssistantMessage = p.LastAssistantOutput.String()
 	return fields
 }
+
 func (p ClaudeStopFailurePayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.Error = p.Error
@@ -267,6 +283,7 @@ func (p ClaudeSubagentStopPayload) Fields() rules.FieldSet {
 	fields.LastAssistantMessage = p.LastAssistantMessage
 	return fields
 }
+
 func (p ClaudeTaskCreatedPayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.TaskID = p.TaskID
@@ -276,9 +293,11 @@ func (p ClaudeTaskCreatedPayload) Fields() rules.FieldSet {
 	fields.TeamName = p.TeamName
 	return fields
 }
+
 func (p ClaudeTaskCompletedPayload) Fields() rules.FieldSet {
 	return ClaudeTaskCreatedPayload(p).Fields()
 }
+
 func (p ClaudeNotificationPayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.NotificationType = p.NotificationType
@@ -286,18 +305,21 @@ func (p ClaudeNotificationPayload) Fields() rules.FieldSet {
 	fields.Title = p.Title
 	return fields
 }
+
 func (p ClaudePreCompactPayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.Trigger = p.Trigger
 	fields.CustomInstructions = p.CustomInstructions
 	return fields
 }
+
 func (p ClaudePostCompactPayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.Trigger = p.Trigger
 	fields.CompactSummary = p.CompactSummary
 	return fields
 }
+
 func (p ClaudeInstructionsLoadedPayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.FilePath = p.FilePath
@@ -307,34 +329,40 @@ func (p ClaudeInstructionsLoadedPayload) Fields() rules.FieldSet {
 	fields.ParentFilePath = p.ParentFilePath
 	return fields
 }
+
 func (p ClaudeConfigChangePayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.Source = p.Source
 	fields.FilePath = p.FilePath
 	return fields
 }
+
 func (p ClaudeCwdChangedPayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.OldCWD = p.OldCWD
 	fields.NewCWD = p.NewCWD
 	return fields
 }
+
 func (p ClaudeFileChangedPayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.FilePath = p.FilePath
 	fields.Event = p.Event
 	return fields
 }
+
 func (p ClaudeWorktreeCreatePayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.Name = p.Name
 	return fields
 }
+
 func (p ClaudeWorktreeRemovePayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.WorktreePath = p.WorktreePath
 	return fields
 }
+
 func (p ClaudeElicitationPayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.MCPServerName = p.MCPServerName
@@ -345,6 +373,7 @@ func (p ClaudeElicitationPayload) Fields() rules.FieldSet {
 	fields.ElicitationID = p.ElicitationID
 	return fields
 }
+
 func (p ClaudeElicitationResultPayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.MCPServerName = p.MCPServerName
@@ -353,6 +382,7 @@ func (p ClaudeElicitationResultPayload) Fields() rules.FieldSet {
 	fields.Action = p.Action
 	return fields
 }
+
 func (p ClaudeTeammateIdlePayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.TeammateName = p.TeammateName
