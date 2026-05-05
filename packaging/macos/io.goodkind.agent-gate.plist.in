@@ -7,15 +7,15 @@
   <string>io.goodkind.agent-gate</string>
   <key>ProgramArguments</key>
   <array>
-    <string>__AGENT_GATE_BIN__</string>
+    <string>@@BIN_PATH@@</string>
     <string>daemon</string>
   </array>
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key>
-    <string>__AGENT_GATE_HOME__/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <string>@@HOME@@/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
     <key>HOME</key>
-    <string>__AGENT_GATE_HOME__</string>
+    <string>@@HOME@@</string>
   </dict>
   <key>RunAtLoad</key>
   <true/>
@@ -24,8 +24,8 @@
   <key>ThrottleInterval</key>
   <integer>5</integer>
   <key>StandardOutPath</key>
-  <string>__AGENT_GATE_STATE_DIR__/agent-gate.launchd.log</string>
+  <string>@@LOG_PATH@@</string>
   <key>StandardErrorPath</key>
-  <string>__AGENT_GATE_STATE_DIR__/agent-gate.launchd.err</string>
+  <string>@@LOG_PATH@@</string>
 </dict>
 </plist>

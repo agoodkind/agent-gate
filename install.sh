@@ -222,12 +222,19 @@ stop_unmanaged_daemons() {
 
 fetch_service_template() {
   local platform="$1" name="$2"
-  if [[ -n "$SERVICE_TEMPLATES" && -f "$SERVICE_TEMPLATES/$platform/$name" ]]; then
-    cat "$SERVICE_TEMPLATES/$platform/$name"
+  # Map go-service.mk platform name to packaging directory: launchd -> macos.
+  local pkg_dir
+  case "$platform" in
+    launchd) pkg_dir="macos" ;;
+    systemd) pkg_dir="systemd" ;;
+    *)       pkg_dir="$platform" ;;
+  esac
+  if [[ -n "$SERVICE_TEMPLATES" && -f "$SERVICE_TEMPLATES/$pkg_dir/$name" ]]; then
+    cat "$SERVICE_TEMPLATES/$pkg_dir/$name"
     return
   fi
   local ref="${VERSION:-main}"
-  local url="https://raw.githubusercontent.com/$REPO/$ref/services/$platform/$name"
+  local url="https://raw.githubusercontent.com/$REPO/$ref/packaging/$pkg_dir/$name"
   curl -fsSL "$url" || die "fetch service template failed: $url"
 }
 
@@ -236,14 +243,15 @@ install_service() {
   os_name="$(uname -s)"
   case "$os_name" in
     Darwin)
-      local label target domain rendered state
+      local label target domain rendered state log_path
       label="io.goodkind.agent-gate"
       target="$HOME/Library/LaunchAgents/$label.plist"
       domain="gui/$(id -u)"
       state="$(state_dir)"
+      log_path="$state/agent-gate.log"
       mkdir -p "$(dirname "$target")" "$state"
-      rendered="$(fetch_service_template launchd "$label.plist.templ" \
-        | sed "s#__AGENT_GATE_BIN__#$BIN_DIR/agent-gate#g; s#__AGENT_GATE_STATE_DIR__#$state#g; s#__AGENT_GATE_HOME__#$HOME#g")"
+      rendered="$(fetch_service_template launchd "$label.plist.in" \
+        | sed "s#@@BIN_PATH@@#$BIN_DIR/agent-gate#g; s#@@HOME@@#$HOME#g; s#@@LOG_PATH@@#$log_path#g")"
       printf '%s\n' "$rendered" > "$target"
       launchctl bootout "$domain" "$target" >/dev/null 2>&1 || true
       stop_unmanaged_daemons
@@ -257,8 +265,8 @@ install_service() {
       need systemctl
       target="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/agent-gate.service"
       mkdir -p "$(dirname "$target")"
-      rendered="$(fetch_service_template systemd agent-gate.service.templ \
-        | sed "s#__AGENT_GATE_BIN__#$BIN_DIR/agent-gate#g")"
+      rendered="$(fetch_service_template systemd agent-gate.service.in \
+        | sed "s#@@BIN_PATH@@#$BIN_DIR/agent-gate#g")"
       printf '%s\n' "$rendered" > "$target"
       systemctl --user daemon-reload
       systemctl --user stop agent-gate.service >/dev/null 2>&1 || true

@@ -23,8 +23,14 @@ GKLOG_VPKG := goodkind.io/gklog/version
 # CGO=1 for the daemon's runtime requirements.
 export CGO_ENABLED := 1
 
+# Daemon identity. go-service.mk reads these at parse time, so they must be
+# set BEFORE -include $(GO_MK).
+LAUNCHD_LABEL := io.goodkind.agent-gate
+SYSTEMD_UNIT  := agent-gate.service
+LOG_PATH      := $(or $(XDG_STATE_HOME),$(HOME)/.local/state)/agent-gate/agent-gate.log
+
 # Pipeline modules
-GO_MK_MODULES := go-build.mk go-release.mk
+GO_MK_MODULES := go-build.mk go-release.mk go-service.mk
 
 GO_MK_BOOTSTRAP := $(shell \
 	mkdir -p "$(dir $(GO_MK))" "$(dir $(GO_MK_CACHE))"; \
@@ -68,20 +74,15 @@ $(GO_MK):
 # Project-local
 # ---------------------------------------------------------------------------
 
-# Daemon labels. These are referenced by daemon-* targets below and (today)
-# by install.sh. Once go-service.mk is wired up they will drive its
-# render+bootstrap flow as well.
-LAUNCHD_LABEL  := io.goodkind.agent-gate
-LAUNCHD_PLIST  := $(HOME)/Library/LaunchAgents/$(LAUNCHD_LABEL).plist
-LAUNCHD_DOMAIN := gui/$(shell id -u)
-SYSTEMD_UNIT   := agent-gate.service
+# Daemon control comes from go-service.mk: service-install, service-uninstall,
+# service-restart, service-status. Templates live at packaging/{macos,systemd}/.
 
 BUNDLE_ID    ?= io.goodkind.agent-gate
 ENTITLEMENTS := packaging/macos/agent-gate.entitlements
 CODESIGN_IDENTITY := $(or $(CERT_ID),$(shell if [ "$$(uname -s)" = "Darwin" ]; then security find-identity -v -p codesigning 2>/dev/null | awk '/Developer ID Application/ { print $$2; exit }'; fi))
 
 .PHONY: proto smoke-build install-release install-release-bin install-release-hooks install-release-service \
-        daemon-start daemon-stop daemon-restart daemon-status spawn-smoke
+        daemon-status spawn-smoke
 
 proto:
 	buf generate
@@ -121,27 +122,9 @@ install-release-hooks:
 install-release-service:
 	./install.sh --service-only --bin-dir $(INSTALL_DIR) $(ARGS)
 
-# Daemon control. install.sh handles the actual plist/unit render + load;
-# these are runtime control wrappers.
-daemon-start: install-release-service
-
-daemon-stop:
-	@if [ "$$(uname -s)" = "Darwin" ]; then \
-		launchctl bootout $(LAUNCHD_DOMAIN) "$(LAUNCHD_PLIST)" >/dev/null 2>&1 || true; \
-		echo "daemon stopped: $(LAUNCHD_LABEL)"; \
-	elif [ "$$(uname -s)" = "Linux" ]; then \
-		systemctl --user stop $(SYSTEMD_UNIT); \
-	else \
-		echo "unsupported OS: $$(uname -s)" >&2; exit 1; \
-	fi
-
-daemon-restart:
-	@if [ "$$(uname -s)" = "Darwin" ] || [ "$$(uname -s)" = "Linux" ]; then \
-		./install.sh --service-only --bin-dir $(INSTALL_DIR) $(ARGS); \
-	else \
-		echo "unsupported OS: $$(uname -s)" >&2; exit 1; \
-	fi
-
+# daemon-status calls the agent-gate CLI's own status subcommand, which is
+# richer than launchctl/systemctl status. service-status from go-service.mk
+# is also available for the platform-level view.
 daemon-status:
 	$(INSTALL_BIN) daemon status
 
