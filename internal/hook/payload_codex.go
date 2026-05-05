@@ -15,13 +15,13 @@ func (e CodexEnvelope) SessionID() string { return e.Session }
 func (e CodexEnvelope) CWD() string       { return e.Cwd }
 
 func (e CodexEnvelope) baseFields() rules.FieldSet {
-	return rules.FieldSet{
-		HookEventName:  string(e.HookEvent),
-		SessionID:      e.Session,
-		TranscriptPath: e.TranscriptPath,
-		CWD:            e.Cwd,
-		Model:          e.Model,
-	}
+	var fields rules.FieldSet
+	fields.HookEventName = string(e.HookEvent)
+	fields.SessionID = e.Session
+	fields.TranscriptPath = e.TranscriptPath
+	fields.CWD = e.Cwd
+	fields.Model = e.Model
+	return fields
 }
 
 type CodexSessionStartPayload struct {

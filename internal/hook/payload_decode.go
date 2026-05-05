@@ -23,20 +23,19 @@ func (p VSCodePayload) EventName() string { return string(p.HookEvent) }
 func (p VSCodePayload) SessionID() string { return p.Session }
 func (p VSCodePayload) CWD() string       { return p.Cwd }
 func (p VSCodePayload) Fields() rules.FieldSet {
-	fields := rules.FieldSet{
-		HookEventName:        string(p.HookEvent),
-		SessionID:            p.Session,
-		TranscriptPath:       p.TranscriptPath,
-		CWD:                  p.Cwd,
-		ToolName:             p.ToolName,
-		ToolUseID:            p.ToolUseID,
-		ToolInputFilePath:    p.ToolInput.FilePath,
-		ToolInputCommand:     p.ToolInput.Command,
-		ToolInputContent:     p.ToolInput.Content,
-		ToolInputPrompt:      p.ToolInput.Prompt,
-		LastAssistantMessage: p.LastAssistant,
-		Text:                 p.Text,
-	}
+	var fields rules.FieldSet
+	fields.HookEventName = string(p.HookEvent)
+	fields.SessionID = p.Session
+	fields.TranscriptPath = p.TranscriptPath
+	fields.CWD = p.Cwd
+	fields.ToolName = p.ToolName
+	fields.ToolUseID = p.ToolUseID
+	fields.ToolInputFilePath = p.ToolInput.FilePath
+	fields.ToolInputCommand = p.ToolInput.Command
+	fields.ToolInputContent = p.ToolInput.Content
+	fields.ToolInputPrompt = p.ToolInput.Prompt
+	fields.LastAssistantMessage = p.LastAssistant
+	fields.Text = p.Text
 	fields.ToolInputOldString = strings.Join(p.ToolInput.NormalizedOldStrings(), "\n")
 	fields.ToolInputNewString = strings.Join(p.ToolInput.NormalizedNewStrings(), "\n")
 	fields.EditsOldString = p.ToolInput.NormalizedOldStrings()

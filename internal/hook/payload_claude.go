@@ -20,18 +20,18 @@ func (e ClaudeEnvelope) SessionID() string { return e.Session }
 func (e ClaudeEnvelope) CWD() string       { return e.Cwd }
 
 func (e ClaudeEnvelope) baseFields() rules.FieldSet {
-	return rules.FieldSet{
-		HookEventName:  string(e.HookEvent),
-		SessionID:      e.Session,
-		TranscriptPath: e.TranscriptPath,
-		CWD:            e.Cwd,
-		PermissionMode: e.PermissionMode,
-		AgentID:        e.AgentID,
-		AgentType:      e.AgentType,
-		Model:          e.Model,
-		TurnID:         e.TurnID,
-		Timestamp:      e.Timestamp,
-	}
+	var fields rules.FieldSet
+	fields.HookEventName = string(e.HookEvent)
+	fields.SessionID = e.Session
+	fields.TranscriptPath = e.TranscriptPath
+	fields.CWD = e.Cwd
+	fields.PermissionMode = e.PermissionMode
+	fields.AgentID = e.AgentID
+	fields.AgentType = e.AgentType
+	fields.Model = e.Model
+	fields.TurnID = e.TurnID
+	fields.Timestamp = e.Timestamp
+	return fields
 }
 
 type ClaudeSessionStartPayload struct {

@@ -8,13 +8,21 @@ package hook
 // misattributed.
 type HookSystem int
 
+// HookSystem variants. Each constant tags a single detected agent host.
 const (
+	// SystemUnknown means detection ran but no agent host matched.
 	SystemUnknown HookSystem = iota
+	// SystemClaude identifies the Anthropic Claude CLI/desktop host.
 	SystemClaude
+	// SystemCursor identifies the Cursor IDE host.
 	SystemCursor
+	// SystemCodex identifies the OpenAI Codex CLI host.
 	SystemCodex
+	// SystemGemini identifies the Google Gemini CLI host.
 	SystemGemini
+	// SystemVSCode identifies the VS Code editor host.
 	SystemVSCode
+	// SystemCopilot identifies the GitHub Copilot host.
 	SystemCopilot
 )
 
@@ -38,6 +46,8 @@ func (s HookSystem) String() string {
 	}
 }
 
+// SystemFromString parses the lowercase label produced by [HookSystem.String].
+// Unknown labels yield [SystemUnknown].
 func SystemFromString(s string) HookSystem {
 	switch s {
 	case "claude":
@@ -60,8 +70,11 @@ func SystemFromString(s string) HookSystem {
 // Decision is the outcome of processing a hook event.
 type Decision int
 
+// Decision variants.
 const (
+	// DecisionAllow lets the hook event proceed.
 	DecisionAllow Decision = iota
+	// DecisionBlock denies the hook event.
 	DecisionBlock
 )
 

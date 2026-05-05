@@ -101,6 +101,9 @@ type FieldSet struct {
 	AttachmentsType      []string
 }
 
+// FirstString returns the user-facing path and value of the first selector
+// in selectors that resolves to a non-empty string. Both return values are
+// the empty string when no selector matches.
 func (fields FieldSet) FirstString(selectors []config.FieldSelectorSpec) (string, string) {
 	for _, selector := range selectors {
 		value := fields.String(selector.Selector)
@@ -219,6 +222,8 @@ func (fields FieldSet) String(selector config.FieldSelector) string {
 	return ""
 }
 
+// CommandValue returns the most specific command string available, preferring
+// the explicit tool input command over the generic command field.
 func (fields FieldSet) CommandValue() string {
 	if fields.ToolInputCommand != "" {
 		return fields.ToolInputCommand
@@ -226,6 +231,8 @@ func (fields FieldSet) CommandValue() string {
 	return fields.Command
 }
 
+// FilePathValue returns the first non-empty file path candidate from the
+// payload, walking explicit fields before tool input fallbacks.
 func (fields FieldSet) FilePathValue() string {
 	for _, value := range []string{fields.FilePath, fields.Path, fields.ToolInputFilePath, fields.ToolInputPath} {
 		if value != "" {
@@ -235,6 +242,8 @@ func (fields FieldSet) FilePathValue() string {
 	return ""
 }
 
+// BaseCWD returns the most specific working directory candidate from the
+// payload before any cd-chain rewriting is applied.
 func (fields FieldSet) BaseCWD() string {
 	for _, value := range []string{
 		fields.EffectiveCWD,
@@ -251,8 +260,10 @@ func (fields FieldSet) BaseCWD() string {
 	return ""
 }
 
+// CmdSegments is a free-function alias for [FieldSet.CmdSegments].
 func CmdSegments(fields FieldSet) string { return fields.CmdSegments() }
 
+// CmdSegments splits the command into newline-joined chained segments.
 func (fields FieldSet) CmdSegments() string {
 	command := fields.CommandValue()
 	if command == "" {

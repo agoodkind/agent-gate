@@ -15,13 +15,13 @@ func (e GeminiEnvelope) SessionID() string { return e.Session }
 func (e GeminiEnvelope) CWD() string       { return e.Cwd }
 
 func (e GeminiEnvelope) baseFields() rules.FieldSet {
-	return rules.FieldSet{
-		HookEventName:  string(e.HookEvent),
-		SessionID:      e.Session,
-		TranscriptPath: e.TranscriptPath,
-		CWD:            e.Cwd,
-		Timestamp:      e.Timestamp,
-	}
+	var fields rules.FieldSet
+	fields.HookEventName = string(e.HookEvent)
+	fields.SessionID = e.Session
+	fields.TranscriptPath = e.TranscriptPath
+	fields.CWD = e.Cwd
+	fields.Timestamp = e.Timestamp
+	return fields
 }
 
 type GeminiBeforeToolPayload struct {
