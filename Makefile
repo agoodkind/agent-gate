@@ -1,61 +1,62 @@
-GO_MK_URL   := https://raw.githubusercontent.com/agoodkind/go-makefile/main/go.mk
-GO_MK       := .make/go.mk
-GO_MK_CACHE := $(or $(XDG_CACHE_HOME),$(HOME)/.cache)/go-makefile/go.mk
+# agent-gate Makefile.
+# Build/lint/release pipeline lives in go-makefile and is fetched at runtime.
+# Daemon install is currently still driven by install.sh; go-service.mk wiring
+# is a planned follow-up (the existing service templates use a __VAR__ marker
+# scheme + STATE_DIR pattern that the canonical module does not yet support).
+
+GO_MK_URL     := https://raw.githubusercontent.com/agoodkind/go-makefile/main/go.mk
+GO_MK_API_URL := https://api.github.com/repos/agoodkind/go-makefile/contents/go.mk?ref=main
+GO_MK         := .make/go.mk
+GO_MK_CACHE   := $(or $(XDG_CACHE_HOME),$(HOME)/.cache)/go-makefile/go.mk
+# Dev override: GO_MK_DEV_DIR=$HOME/Sites/go-makefile to iterate locally.
+GO_MK_DEV_DIR ?=
 
 # Optional local overrides (signing identity, never committed). Copy config.mk.example.
 -include config.mk
 
-BINARY := agent-gate
-CMD    := ./cmd/$(BINARY)
-VPKG   := goodkind.io/agent-gate/internal/version
+# Identity
+BINARY     := agent-gate
+CMD        := ./cmd/$(BINARY)
+VPKG       := goodkind.io/agent-gate/internal/version
 GKLOG_VPKG := goodkind.io/gklog/version
 
-DIST_DIR    := dist
-DIST_BIN    := $(DIST_DIR)/$(BINARY)
+# CGO=1 for the daemon's runtime requirements.
+export CGO_ENABLED := 1
 
-# XDG_BIN_HOME is the spec-aligned per-user binary dir. The XDG spec
-# defaults to ~/.local/bin when unset.
-INSTALL_DIR := $(or $(XDG_BIN_HOME),$(HOME)/.local/bin)
-INSTALL_BIN := $(INSTALL_DIR)/$(BINARY)
-LAUNCHD_LABEL := io.goodkind.agent-gate
-LAUNCHD_PLIST := $(HOME)/Library/LaunchAgents/$(LAUNCHD_LABEL).plist
-LAUNCHD_DOMAIN := gui/$(shell id -u)
-SYSTEMD_UNIT := agent-gate.service
-BUNDLE_ID ?= io.goodkind.agent-gate
-ENTITLEMENTS := packaging/macos/agent-gate.entitlements
-CODESIGN_IDENTITY := $(or $(CERT_ID),$(shell if [ "$$(uname -s)" = "Darwin" ]; then security find-identity -v -p codesigning 2>/dev/null | awk '/Developer ID Application/ { print $$2; exit }'; fi))
+# Pipeline modules
+GO_MK_MODULES := go-build.mk go-release.mk
 
-GIT_COMMIT  := $(shell git rev-parse --short HEAD)
-GIT_VERSION := $(shell git describe --tags --always --dirty)
-GIT_DIRTY   := $(shell git diff --quiet && echo false || echo true)
-BUILD_TIME  := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+GO_MK_BOOTSTRAP := $(shell \
+	mkdir -p "$(dir $(GO_MK))" "$(dir $(GO_MK_CACHE))"; \
+	if [ -n "$(GO_MK_DEV_DIR)" ] && [ -f "$(GO_MK_DEV_DIR)/go.mk" ]; then \
+		cp "$(GO_MK_DEV_DIR)/go.mk" "$(GO_MK)"; \
+		printf '%s\n' "go.mk: using dev override $(GO_MK_DEV_DIR)/go.mk" >&2; \
+	else \
+		tmp="$(GO_MK).tmp"; \
+		if curl -fsSL -H "Accept: application/vnd.github.raw" --connect-timeout 5 --max-time 10 "$(GO_MK_API_URL)" -o "$$tmp" || curl -fsSL --connect-timeout 5 --max-time 10 "$(GO_MK_URL)?v=$$(date +%s)" -o "$$tmp" || curl -fsSL --connect-timeout 5 --max-time 10 "$(GO_MK_URL)" -o "$$tmp"; then \
+			mv "$$tmp" "$(GO_MK)"; \
+			cp "$(GO_MK)" "$(GO_MK_CACHE)"; \
+		elif [ -f "$(GO_MK_CACHE)" ]; then \
+			rm -f "$$tmp"; \
+			cp "$(GO_MK_CACHE)" "$(GO_MK)"; \
+		elif [ ! -f "$(GO_MK)" ]; then \
+			rm -f "$$tmp"; \
+			printf '%s\n' "error: go.mk fetch failed and no cache available" >&2; \
+		fi; \
+	fi)
 
-LDFLAGS := -X $(VPKG).Commit=$(GIT_COMMIT) \
-           -X $(VPKG).Version=$(GIT_VERSION) \
-           -X $(VPKG).Dirty=$(GIT_DIRTY) \
-           -X $(GKLOG_VPKG).Commit=$(GIT_COMMIT) \
-           -X $(GKLOG_VPKG).Dirty=$(GIT_DIRTY) \
-           -X $(GKLOG_VPKG).BuildTime=$(BUILD_TIME) \
-           -X $(GKLOG_VPKG).BinHash=
-
-STATICCHECK_EXTRA_FLAGS = $(STATICCHECK_EXTRA_CORE_FLAGS) $(STATICCHECK_EXTRA_STRICT_FLAGS)
-
-# Auto-download go.mk if missing. On success, update the local cache.
-# On failure, fall back to the last known good cache. If neither exists, fail.
-# GNU Make re-reads after building an included file, so any target works
-# on a fresh clone without a separate bootstrap step.
-# BINARY and CMD are defined above so go.mk's 'ifndef CMD' sees us as a
-# binary project and skips its default library-style 'build' recipe.
 $(GO_MK):
-	@[ -f "$@" ] && exit 0; \
-	mkdir -p $(dir $@); \
-	if curl -fsSL --connect-timeout 5 --max-time 10 "$(GO_MK_URL)" -o "$@"; then \
+	@mkdir -p $(dir $@)
+	@if [ -n "$(GO_MK_DEV_DIR)" ] && [ -f "$(GO_MK_DEV_DIR)/go.mk" ]; then \
+		cp "$(GO_MK_DEV_DIR)/go.mk" "$@"; \
+		echo "go.mk: using dev override $(GO_MK_DEV_DIR)/go.mk" >&2; \
+	elif curl -fsSL -H "Accept: application/vnd.github.raw" --connect-timeout 5 --max-time 10 "$(GO_MK_API_URL)" -o "$@" || curl -fsSL --connect-timeout 5 --max-time 10 "$(GO_MK_URL)?v=$$(date +%s)" -o "$@" || curl -fsSL --connect-timeout 5 --max-time 10 "$(GO_MK_URL)" -o "$@"; then \
 		mkdir -p "$(dir $(GO_MK_CACHE))" && cp "$@" "$(GO_MK_CACHE)"; \
 	elif [ -f "$(GO_MK_CACHE)" ]; then \
-		echo "warning: go.mk fetch failed, using cached version"; \
+		echo "warning: go.mk fetch failed, using cached version" >&2; \
 		cp "$(GO_MK_CACHE)" "$@"; \
 	else \
-		echo "error: go.mk fetch failed and no cache available"; \
+		echo "error: go.mk fetch failed and no cache available" >&2; \
 		exit 1; \
 	fi
 
@@ -63,37 +64,41 @@ $(GO_MK):
 
 .DEFAULT_GOAL := check
 
-.PHONY: proto build smoke-build install install-bin install-hooks install-service uninstall deploy deploy-bin daemon-start daemon-stop daemon-restart daemon-status clean spawn-smoke
+# ---------------------------------------------------------------------------
+# Project-local
+# ---------------------------------------------------------------------------
+
+# Daemon labels. These are referenced by daemon-* targets below and (today)
+# by install.sh. Once go-service.mk is wired up they will drive its
+# render+bootstrap flow as well.
+LAUNCHD_LABEL  := io.goodkind.agent-gate
+LAUNCHD_PLIST  := $(HOME)/Library/LaunchAgents/$(LAUNCHD_LABEL).plist
+LAUNCHD_DOMAIN := gui/$(shell id -u)
+SYSTEMD_UNIT   := agent-gate.service
+
+BUNDLE_ID    ?= io.goodkind.agent-gate
+ENTITLEMENTS := packaging/macos/agent-gate.entitlements
+CODESIGN_IDENTITY := $(or $(CERT_ID),$(shell if [ "$$(uname -s)" = "Darwin" ]; then security find-identity -v -p codesigning 2>/dev/null | awk '/Developer ID Application/ { print $$2; exit }'; fi))
+
+.PHONY: proto smoke-build install-release install-release-bin install-release-hooks install-release-service \
+        daemon-start daemon-stop daemon-restart daemon-status spawn-smoke
 
 proto:
 	buf generate
 
-# build compiles a local dev binary to dist/agent-gate. Used for iteration.
-# `make install` does NOT use this output: it pulls the latest release.
-build:
-	@mkdir -p $(DIST_DIR)
-	go build -ldflags "$(LDFLAGS)" -o $(DIST_BIN) $(CMD)
-	@if [ "$$(uname -s)" = "Darwin" ]; then \
-		if [ -z "$(CODESIGN_IDENTITY)" ]; then \
-			echo "No Developer ID Application signing identity found."; \
-			echo "Set CERT_ID in config.mk or install a Developer ID Application certificate."; \
-			exit 1; \
-		fi; \
-		echo "Signing $(DIST_BIN) with $(CODESIGN_IDENTITY)..."; \
-		codesign --force --sign "$(CODESIGN_IDENTITY)" --identifier "$(BUNDLE_ID)" --options runtime --timestamp=none --entitlements "$(ENTITLEMENTS)" "$(DIST_BIN)"; \
-		codesign --verify --verbose=2 "$(DIST_BIN)"; \
-	fi
-	@echo "built: $(DIST_BIN)"
-
+# smoke-build produces a stamped + signed binary at $(OUT) (default
+# .make/smoke/agent-gate) for smoke tests. Distinct from `make build` which
+# is the canonical dev build.
 smoke-build:
 	@out="$${OUT:-.make/smoke/agent-gate}"; \
 	version="$${VERSION:-smoke}"; \
 	commit="$${COMMIT:-smoke}"; \
+	build_time="$$(date -u +%Y-%m-%dT%H:%M:%SZ)"; \
 	mkdir -p "$$(dirname "$$out")"; \
-	go build -ldflags "-X $(VPKG).Commit=$$commit -X $(VPKG).Version=$$version -X $(VPKG).Dirty=true -X $(GKLOG_VPKG).Commit=$$commit -X $(GKLOG_VPKG).Dirty=true -X $(GKLOG_VPKG).BuildTime=$(BUILD_TIME) -X $(GKLOG_VPKG).BinHash=" -o "$$out" $(CMD); \
+	go build -ldflags "-X $(VPKG).Commit=$$commit -X $(VPKG).Version=$$version -X $(VPKG).Dirty=true -X $(GKLOG_VPKG).Commit=$$commit -X $(GKLOG_VPKG).Dirty=true -X $(GKLOG_VPKG).BuildTime=$$build_time -X $(GKLOG_VPKG).BinHash=" -o "$$out" $(CMD); \
 	if [ "$$(uname -s)" = "Darwin" ]; then \
 		if [ -z "$(CODESIGN_IDENTITY)" ]; then \
-			echo "No Developer ID Application signing identity found."; \
+			echo "No Developer ID Application signing identity found." >&2; \
 			exit 1; \
 		fi; \
 		codesign --force --sign "$(CODESIGN_IDENTITY)" --identifier "$(BUNDLE_ID)" --options runtime --timestamp=none --entitlements "$(ENTITLEMENTS)" "$$out"; \
@@ -101,59 +106,24 @@ smoke-build:
 	fi; \
 	echo "smoke-built: $$out"
 
-# install runs install.sh which downloads the latest release for the host
-# platform and wires hooks into Claude, Codex, and Gemini configs. Override
-# behavior with flags, e.g. `make install ARGS=--bin-only`.
-install:
+# install-release fetches the latest release via install.sh. Distinct from
+# canonical `make install` which atomically copies the locally-built binary
+# into $XDG_BIN_HOME.
+install-release:
 	./install.sh $(ARGS)
 
-install-bin:
+install-release-bin:
 	./install.sh --bin-only $(ARGS)
 
-install-hooks:
+install-release-hooks:
 	./install.sh --hooks-only $(ARGS)
 
-install-service:
+install-release-service:
 	./install.sh --service-only --bin-dir $(INSTALL_DIR) $(ARGS)
 
-uninstall:
-	@rm -f $(INSTALL_BIN)
-	@echo "removed: $(INSTALL_BIN)"
-
-# deploy builds the current working tree directly to the active per-user
-# install path and restarts the user service under its native supervisor.
-# This is intended for local iteration, unlike `make install` which downloads
-# the latest release.
-deploy: deploy-bin daemon-restart
-
-deploy-bin:
-	@mkdir -p $(INSTALL_DIR)
-	@tmp="$$(mktemp -t agent-gate-install.XXXXXX)"; \
-	out="$(INSTALL_BIN).new.$$$$"; \
-	trap 'rm -f "$$tmp" "$$out"' EXIT; \
-	set -e; \
-	go build -ldflags "$(LDFLAGS)" -o "$$tmp" $(CMD); \
-	test -s "$$tmp"; \
-	chmod 0755 "$$tmp"; \
-	if [ "$$(uname -s)" = "Darwin" ]; then \
-		if [ -z "$(CODESIGN_IDENTITY)" ]; then \
-			echo "No Developer ID Application signing identity found."; \
-			echo "Set CERT_ID in config.mk or install a Developer ID Application certificate."; \
-			exit 1; \
-		fi; \
-		echo "Signing install build with $(CODESIGN_IDENTITY)..."; \
-		codesign --force --sign "$(CODESIGN_IDENTITY)" --identifier "$(BUNDLE_ID)" --options runtime --timestamp=none --entitlements "$(ENTITLEMENTS)" "$$tmp"; \
-		codesign --verify --verbose=2 "$$tmp"; \
-	fi; \
-	"$$tmp" version >/dev/null; \
-	"$$tmp" config check >/dev/null; \
-	cp -f "$$tmp" "$$out"; \
-	chmod 0755 "$$out"; \
-	test -s "$$out"; \
-	mv -f "$$out" "$(INSTALL_BIN)"
-	@echo "deployed: $(INSTALL_BIN)"
-
-daemon-start: install-service
+# Daemon control. install.sh handles the actual plist/unit render + load;
+# these are runtime control wrappers.
+daemon-start: install-release-service
 
 daemon-stop:
 	@if [ "$$(uname -s)" = "Darwin" ]; then \
@@ -162,24 +132,18 @@ daemon-stop:
 	elif [ "$$(uname -s)" = "Linux" ]; then \
 		systemctl --user stop $(SYSTEMD_UNIT); \
 	else \
-		echo "unsupported OS: $$(uname -s)"; exit 1; \
+		echo "unsupported OS: $$(uname -s)" >&2; exit 1; \
 	fi
 
 daemon-restart:
-	@if [ "$$(uname -s)" = "Darwin" ]; then \
-		./install.sh --service-only --bin-dir $(INSTALL_DIR) $(ARGS); \
-	elif [ "$$(uname -s)" = "Linux" ]; then \
+	@if [ "$$(uname -s)" = "Darwin" ] || [ "$$(uname -s)" = "Linux" ]; then \
 		./install.sh --service-only --bin-dir $(INSTALL_DIR) $(ARGS); \
 	else \
-		echo "unsupported OS: $$(uname -s)"; exit 1; \
+		echo "unsupported OS: $$(uname -s)" >&2; exit 1; \
 	fi
 
 daemon-status:
 	$(INSTALL_BIN) daemon status
-
-clean:
-	rm -rf $(DIST_DIR)
-	rm -f $(BINARY)
 
 spawn-smoke:
 	go run ./cmd/spawn-smoke -input-file "$(INPUT)" $(ARGS)

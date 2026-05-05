@@ -1,1 +1,8 @@
-# staticcheck-extra: generated_at=2026-05-03T22:47:21Z
+# staticcheck-extra: generated_at=2026-05-05T02:24:52Z
+cmd/agent-gate/main.go:23:58: do not use any; define a deeply enumerated named type	# staticcheck-extra:first_added=2026-05-05T02:24:52Z last_seen=2026-05-05T02:24:52Z
+internal/audit/query.go:110:48: do not use any; define a deeply enumerated named type	# staticcheck-extra:first_added=2026-05-05T02:24:52Z last_seen=2026-05-05T02:24:52Z
+internal/daemon/server.go:100:66: nolint comment suppresses linter findings inline; document exceptions in the staticcheck-extra baseline or a golangci-lint issue-exclusion rule instead	# staticcheck-extra:first_added=2026-05-05T02:24:52Z last_seen=2026-05-05T02:24:52Z
+internal/daemon/server.go:49:62: nolint comment suppresses linter findings inline; document exceptions in the staticcheck-extra baseline or a golangci-lint issue-exclusion rule instead	# staticcheck-extra:first_added=2026-05-05T02:24:52Z last_seen=2026-05-05T02:24:52Z
+internal/daemon/server.go:54:68: nolint comment suppresses linter findings inline; document exceptions in the staticcheck-extra baseline or a golangci-lint issue-exclusion rule instead	# staticcheck-extra:first_added=2026-05-05T02:24:52Z last_seen=2026-05-05T02:24:52Z
+internal/daemon/server.go:90:65: nolint comment suppresses linter findings inline; document exceptions in the staticcheck-extra baseline or a golangci-lint issue-exclusion rule instead	# staticcheck-extra:first_added=2026-05-05T02:24:52Z last_seen=2026-05-05T02:24:52Z
+internal/daemon/server.go:96:79: nolint comment suppresses linter findings inline; document exceptions in the staticcheck-extra baseline or a golangci-lint issue-exclusion rule instead	# staticcheck-extra:first_added=2026-05-05T02:24:52Z last_seen=2026-05-05T02:24:52Z
