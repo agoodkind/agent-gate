@@ -43,22 +43,33 @@ func New(log *slog.Logger, cfg *config.Config) (*Server, error) {
 		log = slog.Default()
 	}
 	if cfg == nil {
-		cfg = &config.Config{}
+		cfg = &config.Config{
+			Log:   config.Log{},
+			Audit: config.Audit{Enabled: nil, Level: "", Outputs: config.AuditOutput{}, Query: config.AuditQuery{}},
+			Paths: config.Paths{},
+			Rules: nil,
+		}
 	}
 	if errs := hook.ValidateConfig(cfg); len(errs) > 0 {
-		return nil, fmt.Errorf("invalid hook config: %v", errs[0]) //nolint:wrapped_error_without_slog
+		log.Error("invalid hook config", slog.Any("err", errs[0]))
+		return nil, fmt.Errorf("invalid hook config: %w", errs[0])
 	}
 
 	eventLogger, err := audit.NewEventLogger(cfg, log)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create event logger: %w", err) //nolint:wrapped_error_without_slog
+		log.Error("failed to create event logger", slog.Any("err", err))
+		return nil, fmt.Errorf("create event logger: %w", err)
 	}
 
 	s := &Server{
-		log:         log,
-		cfg:         cfg,
-		eventLogger: eventLogger,
-		configPath:  config.ConfigPath(),
+		UnimplementedAgentGateDServer: daemonpb.UnimplementedAgentGateDServer{},
+		log:                           log,
+		cfgMu:                         sync.RWMutex{},
+		cfg:                           cfg,
+		eventLogger:                   eventLogger,
+		configWatcher:                 nil,
+		configPath:                    config.ConfigPath(),
+		closing:                       false,
 	}
 	if err := s.startConfigWatcher(); err != nil {
 		_ = eventLogger.Close()
@@ -87,17 +98,20 @@ func (s *Server) Close() {
 func (s *Server) startConfigWatcher() error {
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
-		return fmt.Errorf("failed to create config watcher: %w", err) //nolint:wrapped_error_without_slog
+		s.log.Error("create config watcher failed", slog.Any("err", err))
+		return fmt.Errorf("create config watcher: %w", err)
 	}
 
 	configDir := filepath.Dir(s.configPath)
 	if err := os.MkdirAll(configDir, 0o700); err != nil {
+		s.log.Error("create config directory failed", slog.String("dir", configDir), slog.Any("err", err))
 		_ = watcher.Close()
-		return fmt.Errorf("failed to create config directory for watcher: %w", err) //nolint:wrapped_error_without_slog
+		return fmt.Errorf("create config directory %s: %w", configDir, err)
 	}
 	if err := watcher.Add(configDir); err != nil {
+		s.log.Error("watch config directory failed", slog.String("dir", configDir), slog.Any("err", err))
 		_ = watcher.Close()
-		return fmt.Errorf("failed to watch config directory: %w", err) //nolint:wrapped_error_without_slog
+		return fmt.Errorf("watch config directory %s: %w", configDir, err)
 	}
 
 	s.configWatcher = watcher
@@ -206,16 +220,17 @@ func (s *Server) reloadConfig(ctx context.Context) error {
 
 // EvaluateHook processes a hook event through daemon-owned enforcement.
 func (s *Server) EvaluateHook(ctx context.Context, req *daemonpb.EvaluateHookRequest) (*daemonpb.EvaluateHookResponse, error) {
-	rawJSON := req.RawJson
-	if req.Cwd != "" {
-		rawJSON = injectCWD(rawJSON, req.Cwd)
+	rawJSON := req.GetRawJson()
+	if cwd := req.GetCwd(); cwd != "" {
+		rawJSON = injectCWD(rawJSON, cwd)
 	}
 
+	envFingerprint := req.GetEnvFingerprint()
 	getenv := func(key string) string {
-		if req.EnvFingerprint == nil {
+		if envFingerprint == nil {
 			return ""
 		}
-		return req.EnvFingerprint[key]
+		return envFingerprint[key]
 	}
 
 	s.cfgMu.RLock()
@@ -223,12 +238,27 @@ func (s *Server) EvaluateHook(ctx context.Context, req *daemonpb.EvaluateHookReq
 	cfg := s.cfg
 	eventLogger := s.eventLogger
 	sink := audit.NewLocalSink(eventLogger)
-	stdout, stderr, exitCode := hook.HandleWithEnv(ctx, rawJSON, cfg, sink, hook.SystemFromString(req.ProviderHint), getenv)
+	stdout, stderr, exitCode := hook.HandleWithEnv(ctx, rawJSON, cfg, sink, hook.SystemFromString(req.GetProviderHint()), getenv)
 	return &daemonpb.EvaluateHookResponse{
-		ExitCode:   int32(exitCode),
+		ExitCode:   clampExitCode(exitCode),
 		StdoutData: stdout,
 		StderrData: stderr,
 	}, nil
+}
+
+// clampExitCode reduces an int exit code to the int32 range expected by the
+// gRPC response. Process exit codes are conventionally in [0,255] so the
+// clamp is a defense-in-depth check rather than a correctness fix.
+func clampExitCode(exitCode int) int32 {
+	const maxInt32 = int(^uint32(0) >> 1)
+	const minInt32 = -maxInt32 - 1
+	if exitCode > maxInt32 {
+		return int32(maxInt32)
+	}
+	if exitCode < minInt32 {
+		return int32(minInt32)
+	}
+	return int32(exitCode)
 }
 
 func injectCWD(rawJSON []byte, cwd string) []byte {
@@ -247,9 +277,12 @@ func escapeJSONString(value string) string {
 	return replacer.Replace(value)
 }
 
-func (s *Server) Status(ctx context.Context, _ *daemonpb.StatusRequest) (*daemonpb.StatusResponse, error) {
+// Status implements the AgentGateD Status RPC and returns a snapshot of
+// daemon-side identifying information.
+func (s *Server) Status(_ context.Context, _ *daemonpb.StatusRequest) (*daemonpb.StatusResponse, error) {
 	exe, err := os.Executable()
 	if err != nil {
+		s.log.Error("resolve executable failed", slog.Any("err", err))
 		return nil, status.Errorf(codes.Internal, "resolve executable: %v", err)
 	}
 	return &daemonpb.StatusResponse{

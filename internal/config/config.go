@@ -24,11 +24,13 @@ type Audit struct {
 	Query   AuditQuery  `toml:"query"`
 }
 
+// AuditOutput selects which audit destinations are active.
 type AuditOutput struct {
 	JSONL  AuditJSONLOutput  `toml:"jsonl"`
 	SQLite AuditSQLiteOutput `toml:"sqlite"`
 }
 
+// AuditJSONLOutput configures the JSONL file audit sink.
 type AuditJSONLOutput struct {
 	Enabled          *bool  `toml:"enabled"`
 	EventsDir        string `toml:"events_dir"`
@@ -36,11 +38,13 @@ type AuditJSONLOutput struct {
 	WriteRawPayloads *bool  `toml:"write_raw_payloads"`
 }
 
+// AuditSQLiteOutput configures the SQLite audit sink.
 type AuditSQLiteOutput struct {
 	Enabled *bool  `toml:"enabled"`
 	Path    string `toml:"path"`
 }
 
+// AuditQuery configures the audit query subsystem.
 type AuditQuery struct {
 	Prefer string `toml:"prefer"`
 }
@@ -99,6 +103,7 @@ func (c *Condition) CompiledPattern() *regex.Regexp { return c.compiled }
 // CompiledNotPattern returns the pre-compiled regex for NotPattern, or nil if unset.
 func (c *Condition) CompiledNotPattern() *regex.Regexp { return c.compiledNot }
 
+// Selectors returns the compiled [FieldSelectorSpec] list for the condition.
 func (c *Condition) Selectors() []FieldSelectorSpec { return c.selectors }
 
 // NewCondition constructs a Condition with pre-compiled regexes.
@@ -135,7 +140,7 @@ func validateDiagnosticGroup(context string, group int, re *regex.Regexp) error 
 	if re == nil {
 		return fmt.Errorf("%s: diagnostic_group requires a pattern", context)
 	}
-	if uint32(group) > re.CaptureCount() {
+	if group > int(re.CaptureCount()) {
 		return fmt.Errorf("%s: diagnostic_group %d exceeds capture count %d", context, group, re.CaptureCount())
 	}
 	return nil
@@ -178,6 +183,7 @@ func (r *Rule) Compiled() *regex.Regexp {
 	return r.compiled
 }
 
+// Selectors returns the compiled [FieldSelectorSpec] list for the rule.
 func (r *Rule) Selectors() []FieldSelectorSpec { return r.selectors }
 
 // NewSimpleRule constructs a simple (no conditions) Rule with a pre-compiled
@@ -212,6 +218,7 @@ func (c *Config) ConversationsDir() string {
 	return DefaultConversationsDir()
 }
 
+// AuditEnabled reports whether audit logging is enabled. Default is true.
 func (c *Config) AuditEnabled() bool {
 	if c != nil && c.Audit.Enabled != nil {
 		return *c.Audit.Enabled
@@ -219,6 +226,8 @@ func (c *Config) AuditEnabled() bool {
 	return true
 }
 
+// AuditLevel returns the configured minimum audit log level, falling back
+// to the global log level when audit-specific level is unset.
 func (c *Config) AuditLevel() string {
 	if c != nil && c.Audit.Level != "" {
 		return c.Audit.Level
@@ -229,6 +238,7 @@ func (c *Config) AuditLevel() string {
 	return ""
 }
 
+// AuditJSONLEnabled reports whether the JSONL audit sink is enabled.
 func (c *Config) AuditJSONLEnabled() bool {
 	if c != nil && c.Audit.Outputs.JSONL.Enabled != nil {
 		return *c.Audit.Outputs.JSONL.Enabled
@@ -236,6 +246,7 @@ func (c *Config) AuditJSONLEnabled() bool {
 	return true
 }
 
+// AuditSQLiteEnabled reports whether the SQLite audit sink is enabled.
 func (c *Config) AuditSQLiteEnabled() bool {
 	if c != nil && c.Audit.Outputs.SQLite.Enabled != nil {
 		return *c.Audit.Outputs.SQLite.Enabled
@@ -243,6 +254,8 @@ func (c *Config) AuditSQLiteEnabled() bool {
 	return false
 }
 
+// AuditWriteRawPayloads reports whether the JSONL sink should persist the
+// original raw hook payload as a content-addressed blob.
 func (c *Config) AuditWriteRawPayloads() bool {
 	if c != nil && c.Audit.Outputs.JSONL.WriteRawPayloads != nil {
 		return *c.Audit.Outputs.JSONL.WriteRawPayloads
@@ -250,6 +263,7 @@ func (c *Config) AuditWriteRawPayloads() bool {
 	return true
 }
 
+// AuditEventsDir returns the resolved JSONL audit events directory.
 func (c *Config) AuditEventsDir() string {
 	if c != nil && c.Audit.Outputs.JSONL.EventsDir != "" {
 		return c.Audit.Outputs.JSONL.EventsDir
@@ -257,6 +271,7 @@ func (c *Config) AuditEventsDir() string {
 	return DefaultAuditEventsDir()
 }
 
+// AuditPayloadsDir returns the resolved raw-payload directory.
 func (c *Config) AuditPayloadsDir() string {
 	if c != nil && c.Audit.Outputs.JSONL.PayloadsDir != "" {
 		return c.Audit.Outputs.JSONL.PayloadsDir
@@ -264,6 +279,7 @@ func (c *Config) AuditPayloadsDir() string {
 	return DefaultAuditPayloadsDir()
 }
 
+// AuditSQLitePath returns the resolved SQLite database path.
 func (c *Config) AuditSQLitePath() string {
 	if c != nil && c.Audit.Outputs.SQLite.Path != "" {
 		return c.Audit.Outputs.SQLite.Path
@@ -271,6 +287,7 @@ func (c *Config) AuditSQLitePath() string {
 	return DefaultAuditSQLitePath()
 }
 
+// AuditQueryPrefer returns the configured preferred audit query backend.
 func (c *Config) AuditQueryPrefer() string {
 	if c != nil && c.Audit.Query.Prefer != "" {
 		return c.Audit.Query.Prefer

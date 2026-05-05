@@ -2,6 +2,7 @@ package audit
 
 import (
 	"bufio"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -17,6 +18,7 @@ import (
 	"goodkind.io/agent-gate/internal/config"
 )
 
+// QueryFilter narrows the set of audit events returned by [Query].
 type QueryFilter struct {
 	Since     time.Time
 	Until     time.Time
@@ -29,6 +31,10 @@ type QueryFilter struct {
 	Limit     int
 }
 
+// Query returns audit events matching filter, choosing between the SQLite
+// and JSONL backends based on configuration. The returned source name is
+// either "sqlite" or "jsonl" so callers can surface which path served the
+// query.
 func Query(cfg *config.Config, filter QueryFilter) ([]Event, string, error) {
 	prefer := "sqlite"
 	if cfg != nil {
@@ -53,16 +59,17 @@ func queryJSONLWithSource(cfg *config.Config, filter QueryFilter) ([]Event, stri
 }
 
 func querySQLite(cfg *config.Config, filter QueryFilter) ([]Event, error) {
+	ctx := context.Background()
 	path := config.DefaultAuditSQLitePath()
 	if cfg != nil {
 		path = cfg.AuditSQLitePath()
 	}
 	if _, err := os.Stat(path); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("stat audit sqlite path: %w", err)
 	}
 	db, err := sql.Open("sqlite3", path)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("open audit sqlite db: %w", err)
 	}
 	defer func() { _ = db.Close() }()
 
@@ -71,15 +78,19 @@ func querySQLite(cfg *config.Config, filter QueryFilter) ([]Event, error) {
 	if filter.Limit > 0 {
 		limit = fmt.Sprintf(" limit %d", filter.Limit)
 	}
-	rows, err := db.Query(`select e.event_id, e.schema_version, e.time, e.level, e.message, e.system, e.session_id, e.turn_id, e.event_name, e.tool_use_id, e.tool_name, e.raw_payload_hash,
+	const baseQuery = `select e.event_id, e.schema_version, e.time, e.level, e.message, e.system, e.session_id, e.turn_id, e.event_name, e.tool_use_id, e.tool_name, e.raw_payload_hash,
 		coalesce(o.cwd, ''), coalesce(o.effective_cwd, ''), coalesce(o.command, ''), coalesce(o.file_path, ''),
 		coalesce(d.kind, ''), coalesce(d.can_block, 0), coalesce(d.rules_checked_json, '[]'), coalesce(d.rules_matched_json, '[]')
 		from events e
 		left join operations o on o.event_id = e.event_id
 		left join decisions d on d.event_id = e.event_id
-		`+where+` order by e.time desc`+limit, args...)
+		`
+	// where + limit are derived from a closed enum filter and a positive int;
+	// they cannot carry user-supplied SQL fragments, so concatenation is safe
+	// here. Placeholders are still used for filter values via args.
+	rows, err := db.QueryContext(ctx, baseQuery+where+` order by e.time desc`+limit, args...)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("query audit events: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -92,19 +103,22 @@ func querySQLite(cfg *config.Config, filter QueryFilter) ([]Event, error) {
 			&event.System, &event.SessionID, &event.TurnID, &event.EventName, &event.ToolUseID, &event.ToolName, &event.RawPayloadHash,
 			&event.Operation.CWD, &event.Operation.EffectiveCWD, &event.Operation.Command, &event.Operation.FilePath,
 			&event.Decision.Kind, &canBlock, &checked, &matched); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("scan audit event row: %w", err)
 		}
 		event.Decision.CanBlock = canBlock != 0
 		_ = json.Unmarshal([]byte(checked), &event.Decision.RulesChecked)
 		_ = json.Unmarshal([]byte(matched), &event.Decision.RulesMatched)
-		violations, err := sqliteViolations(db, event.EventID)
+		violations, err := sqliteViolations(ctx, db, event.EventID)
 		if err != nil {
 			return nil, err
 		}
 		event.Violations = violations
 		out = append(out, event)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate audit events: %w", err)
+	}
+	return out, nil
 }
 
 func queryWhere(filter QueryFilter) (string, []any) {
@@ -145,21 +159,24 @@ func queryWhere(filter QueryFilter) (string, []any) {
 	return "where " + strings.Join(clauses, " and "), args
 }
 
-func sqliteViolations(db *sql.DB, eventID string) ([]Violation, error) {
-	rows, err := db.Query(`select rule, mode, field_path, file_path, start, end, message from violations where event_id = ? order by id`, eventID)
+func sqliteViolations(ctx context.Context, db *sql.DB, eventID string) ([]Violation, error) {
+	rows, err := db.QueryContext(ctx, `select rule, mode, field_path, file_path, start, end, message from violations where event_id = ? order by id`, eventID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("query audit violations: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 	var out []Violation
 	for rows.Next() {
 		var v Violation
 		if err := rows.Scan(&v.Rule, &v.Mode, &v.FieldPath, &v.FilePath, &v.Start, &v.End, &v.Message); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("scan audit violation row: %w", err)
 		}
 		out = append(out, v)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate audit violations: %w", err)
+	}
+	return out, nil
 }
 
 func queryJSONL(cfg *config.Config, filter QueryFilter) ([]Event, error) {
@@ -168,7 +185,7 @@ func queryJSONL(cfg *config.Config, filter QueryFilter) ([]Event, error) {
 		dir = cfg.AuditEventsDir()
 	}
 	if _, err := os.Stat(dir); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("stat audit events dir: %w", err)
 	}
 	var out []Event
 	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
@@ -183,7 +200,7 @@ func queryJSONL(cfg *config.Config, filter QueryFilter) ([]Event, error) {
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("walk audit events dir: %w", err)
 	}
 	sortEventsDesc(out)
 	if filter.Limit > 0 && len(out) > filter.Limit {
@@ -195,7 +212,7 @@ func queryJSONL(cfg *config.Config, filter QueryFilter) ([]Event, error) {
 func scanEventFile(path string, filter QueryFilter) ([]Event, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("open audit events file: %w", err)
 	}
 	defer func() { _ = f.Close() }()
 	scanner := bufio.NewScanner(f)
@@ -204,13 +221,16 @@ func scanEventFile(path string, filter QueryFilter) ([]Event, error) {
 	for scanner.Scan() {
 		var event Event
 		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("decode audit event: %w", err)
 		}
 		if eventMatches(event, filter) {
 			out = append(out, event)
 		}
 	}
-	return out, scanner.Err()
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("scan audit events file: %w", err)
+	}
+	return out, nil
 }
 
 func eventMatches(event Event, filter QueryFilter) bool {
