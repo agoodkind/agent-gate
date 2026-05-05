@@ -13,7 +13,7 @@ func TestDaemonListenerCreatesSocketPath(t *testing.T) {
 	}
 	defer func() { _ = os.RemoveAll(dir) }()
 	socketPath := filepath.Join(dir, "daemon.sock")
-	lis, err := daemonListener(socketPath)
+	lis, err := daemonListener(t.Context(), socketPath)
 	if err != nil {
 		t.Fatalf("daemonListener: %v", err)
 	}

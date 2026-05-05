@@ -53,7 +53,10 @@ func Connect(ctx context.Context) (*Client, error) {
 
 // Close closes the gRPC connection.
 func (c *Client) Close() error {
-	return c.conn.Close()
+	if err := c.conn.Close(); err != nil {
+		return fmt.Errorf("close daemon client: %w", err)
+	}
+	return nil
 }
 
 // EvaluateHook forwards raw hook input to daemon-owned enforcement.
@@ -61,17 +64,26 @@ func (c *Client) EvaluateHook(rawJSON []byte, providerHint, cwd string, argv []s
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	return c.rpc.EvaluateHook(ctx, &daemonpb.EvaluateHookRequest{
+	resp, err := c.rpc.EvaluateHook(ctx, &daemonpb.EvaluateHookRequest{
 		RawJson:        rawJSON,
 		ProviderHint:   providerHint,
 		Cwd:            cwd,
 		Argv:           argv,
 		EnvFingerprint: env,
 	})
+	if err != nil {
+		return nil, fmt.Errorf("daemon EvaluateHook rpc: %w", err)
+	}
+	return resp, nil
 }
 
+// Status fetches the daemon's identifying information via the Status RPC.
 func (c *Client) Status() (*daemonpb.StatusResponse, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	return c.rpc.Status(ctx, &daemonpb.StatusRequest{})
+	resp, err := c.rpc.Status(ctx, &daemonpb.StatusRequest{})
+	if err != nil {
+		return nil, fmt.Errorf("daemon Status rpc: %w", err)
+	}
+	return resp, nil
 }

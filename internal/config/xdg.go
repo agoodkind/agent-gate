@@ -1,13 +1,15 @@
-// Package config resolves XDG base directories and loads agent-gate's TOML config.
+// Package config resolves XDG base directories and loads agent-gate's
+// TOML config.
 //
 // Path resolution order for every configurable path:
 //
 //  1. Explicit value in TOML [paths] table (highest priority).
-//  2. Relevant XDG env var ($XDG_CONFIG_HOME, $XDG_STATE_HOME, $XDG_RUNTIME_DIR, ...).
+//  2. Relevant XDG env var ($XDG_CONFIG_HOME, $XDG_STATE_HOME,
+//     $XDG_RUNTIME_DIR, ...).
 //  3. XDG spec default (~/.config, ~/.local/state, ...).
 //
-// The functions in this file implement steps 2 and 3.
-// Step 1 is applied by the methods on Config in config.go.
+// The functions in this file implement steps 2 and 3. Step 1 is applied
+// by the methods on Config in config.go.
 package config
 
 import (
@@ -40,8 +42,8 @@ func DefaultConfigDir() string {
 	return filepath.Join(base, appName)
 }
 
-// ConfigPath returns the full path to config.toml derived from XDG env vars.
-func ConfigPath() string {
+// Path returns the full path to config.toml derived from XDG env vars.
+func Path() string {
 	return filepath.Join(DefaultConfigDir(), "config.toml")
 }
 
@@ -73,19 +75,25 @@ func DefaultConversationsDir() string {
 	return filepath.Join(DefaultStateDir(), "conversations")
 }
 
+// DefaultAuditEventsDir returns the XDG-derived directory for JSONL audit
+// events.
 func DefaultAuditEventsDir() string {
 	return filepath.Join(DefaultStateDir(), "events")
 }
 
+// DefaultAuditPayloadsDir returns the XDG-derived directory for raw hook
+// payload blobs.
 func DefaultAuditPayloadsDir() string {
 	return filepath.Join(DefaultStateDir(), "payloads")
 }
 
+// DefaultAuditSQLitePath returns the XDG-derived path to the audit
+// SQLite database.
 func DefaultAuditSQLitePath() string {
 	return filepath.Join(DefaultStateDir(), "sqlite", "audit.db")
 }
 
-// ProfilesConfigPath returns the path to profiles.toml in the XDG config directory.
+// ProfilesConfigPath returns the path to profiles.toml in the XDG config dir.
 func ProfilesConfigPath() string {
 	return filepath.Join(DefaultConfigDir(), "profiles.toml")
 }
@@ -112,8 +120,8 @@ func DaemonSocketPath() string {
 	return filepath.Join(RuntimeDir(), "daemon.sock")
 }
 
-// EnsureRuntimeDir creates the agent-gate runtime directory with correct permissions.
-// XDG spec requires 0700 for XDG_RUNTIME_DIR contents.
+// EnsureRuntimeDir creates the agent-gate runtime directory with the
+// permissions required by the XDG spec (0700 for XDG_RUNTIME_DIR).
 func EnsureRuntimeDir() error {
 	log := slog.Default()
 	dir := RuntimeDir()

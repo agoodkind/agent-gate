@@ -1,3 +1,5 @@
+// Package version exposes build identifiers (commit, version, dirty,
+// build hash) populated via -ldflags at link time.
 package version
 
 import (
@@ -15,7 +17,8 @@ var (
 	Dirty   = "false"
 )
 
-// BuildHash computes the SHA-256 of the running binary, truncated to 12 hex chars.
+// BuildHash computes the SHA-256 of the running binary, truncated to
+// 12 hex characters.
 func BuildHash() string {
 	exe, err := os.Executable()
 	if err != nil {

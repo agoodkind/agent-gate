@@ -299,7 +299,7 @@ func (c *Config) AuditQueryPrefer() string {
 // If no file exists, it returns a zero-value config with default paths.
 // All rule patterns are compiled to regexes before returning.
 func Load() (*Config, error) {
-	return loadPath(ConfigPath(), false)
+	return loadPath(Path(), false)
 }
 
 // LoadExisting reads an existing config file and compiles all rule patterns.

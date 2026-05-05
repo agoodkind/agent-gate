@@ -17,6 +17,9 @@ func Handle(ctx context.Context, rawBytes []byte, cfg *config.Config, sink audit
 	return HandleWithEnv(ctx, rawBytes, cfg, sink, hint, nil)
 }
 
+// HandleWithEnv is the parent of [Handle] that lets callers (notably the
+// daemon) inject a custom getenv function. The detection layer consults
+// getenv to derive provider hints from environment variables.
 func HandleWithEnv(ctx context.Context, rawBytes []byte, cfg *config.Config, sink audit.Sink, hint HookSystem, getenv func(string) string) (stdout, stderr []byte, exitCode int) {
 	if sink == nil {
 		sink = audit.DiscardSink{}
@@ -46,6 +49,8 @@ func CanBlock(system HookSystem, eventName string) bool {
 		return CanBlockCodex(eventName)
 	case SystemGemini:
 		return CanBlockGemini(eventName)
+	case SystemUnknown:
+		return false
 	default:
 		return false
 	}
@@ -170,6 +175,8 @@ func blockTextResponse(system HookSystem, eventName, text string) (stdout, stder
 		return CodexBlockText(eventName, text), nil, 0
 	case SystemGemini:
 		return GeminiBlockText(eventName, text), nil, 0
+	case SystemUnknown, SystemClaude, SystemVSCode, SystemCopilot:
+		return ClaudeAllow(), ClaudeBlockText(text), 2
 	default:
 		return ClaudeAllow(), ClaudeBlockText(text), 2
 	}
@@ -183,6 +190,8 @@ func defaultAllow(system HookSystem) []byte {
 		return CodexAllow()
 	case SystemGemini:
 		return GeminiAllow()
+	case SystemUnknown, SystemClaude, SystemVSCode, SystemCopilot:
+		return ClaudeAllow()
 	default:
 		return ClaudeAllow()
 	}

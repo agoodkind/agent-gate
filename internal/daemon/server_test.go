@@ -230,7 +230,7 @@ func TestStatusReportsProcessMetadata(t *testing.T) {
 
 func TestReloadConfigValidSwap(t *testing.T) {
 	setDaemonTestDirs(t)
-	configPath := config.ConfigPath()
+	configPath := config.Path()
 	writeConfig(t, configPath, `
 [audit]
 enabled = false
@@ -279,7 +279,7 @@ violation_message = "beta blocked"
 
 func TestReloadConfigInvalidKeepsPreviousConfig(t *testing.T) {
 	setDaemonTestDirs(t)
-	configPath := config.ConfigPath()
+	configPath := config.Path()
 	writeConfig(t, configPath, `
 [audit]
 enabled = false
@@ -325,7 +325,7 @@ violation_message = "invalid"
 
 func TestReloadConfigMissingFileKeepsPreviousConfig(t *testing.T) {
 	setDaemonTestDirs(t)
-	configPath := config.ConfigPath()
+	configPath := config.Path()
 	writeConfig(t, configPath, `
 [audit]
 enabled = false

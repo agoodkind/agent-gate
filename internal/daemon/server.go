@@ -68,7 +68,7 @@ func New(log *slog.Logger, cfg *config.Config) (*Server, error) {
 		cfg:                           cfg,
 		eventLogger:                   eventLogger,
 		configWatcher:                 nil,
-		configPath:                    config.ConfigPath(),
+		configPath:                    config.Path(),
 		closing:                       false,
 	}
 	if err := s.startConfigWatcher(); err != nil {
