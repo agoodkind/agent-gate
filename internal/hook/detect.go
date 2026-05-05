@@ -1,13 +1,19 @@
+// Package hook decodes hook payloads emitted by supported agent hosts
+// (Claude, Cursor, Codex, Gemini, VS Code, Copilot) into a closed set of
+// typed events that the rules engine can evaluate.
 package hook
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"strings"
 	"unicode"
 	"unicode/utf8"
 )
 
+// DetectionPayload is the shallow envelope used to identify which agent
+// host produced a hook payload before the full schema is resolved.
 type DetectionPayload struct {
 	HookEventName  string   `json:"hook_event_name"`
 	CursorVersion  string   `json:"cursor_version"`
@@ -21,10 +27,13 @@ type DetectionPayload struct {
 	AgentType      string   `json:"agent_type"`
 }
 
+// ParseDetectionPayload decodes a [DetectionPayload] from raw JSON bytes.
 func ParseDetectionPayload(rawBytes []byte) (DetectionPayload, error) {
 	var payload DetectionPayload
-	err := json.Unmarshal(rawBytes, &payload)
-	return payload, err
+	if err := json.Unmarshal(rawBytes, &payload); err != nil {
+		return payload, fmt.Errorf("decode detection payload: %w", err)
+	}
+	return payload, nil
 }
 
 // Detect determines which tool invoked agent-gate by running a priority
