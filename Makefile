@@ -7,9 +7,8 @@
 #
 # agent-gate Makefile.
 # Build/lint/release pipeline lives in go-makefile and is fetched at runtime.
-# Daemon install is currently still driven by install.sh; go-service.mk wiring
-# is a planned follow-up (the existing service templates use a __VAR__ marker
-# scheme + STATE_DIR pattern that the canonical module does not yet support).
+# Local daemon deployment uses the shared build/sign/install path, then restarts
+# the service through go-service.mk.
 
 # Optional local overrides (signing identity, never committed). Copy config.mk.example.
 -include config.mk
@@ -28,6 +27,8 @@ export CGO_ENABLED := 1
 LAUNCHD_LABEL := io.goodkind.agent-gate
 SYSTEMD_UNIT  := agent-gate.service
 LOG_PATH      := $(or $(XDG_STATE_HOME),$(HOME)/.local/state)/agent-gate/agent-gate.log
+BUNDLE_ID             ?= io.goodkind.agent-gate
+CODESIGN_ENTITLEMENTS := packaging/macos/agent-gate.entitlements
 
 # Pipeline modules
 GO_MK_MODULES := go-build.mk go-release.mk go-service.mk
@@ -43,56 +44,42 @@ include bootstrap.mk
 # Daemon control comes from go-service.mk: service-install, service-uninstall,
 # service-restart, service-status. Templates live at packaging/{macos,systemd}/.
 
-BUNDLE_ID    ?= io.goodkind.agent-gate
-ENTITLEMENTS := packaging/macos/agent-gate.entitlements
-CODESIGN_IDENTITY := $(or $(CERT_ID),$(shell if [ "$$(uname -s)" = "Darwin" ]; then security find-identity -v -p codesigning 2>/dev/null | awk '/Developer ID Application/ { print $$2; exit }'; fi))
-
-.PHONY: proto smoke-build install-release install-release-bin install-release-hooks install-release-service \
-        daemon-status spawn-smoke
+.PHONY: proto smoke-build deploy daemon-wait daemon-status spawn-smoke
 
 proto:
 	buf generate
 
-# smoke-build produces a stamped + signed binary at $(OUT) (default
-# .make/smoke/agent-gate) for smoke tests. Distinct from `make build` which
-# is the canonical dev build.
+# smoke-build produces a signed binary at $(OUT) (default .make/smoke/agent-gate)
+# through the shared go-build.mk build/sign path.
 smoke-build:
 	@out="$${OUT:-.make/smoke/agent-gate}"; \
-	version="$${VERSION:-smoke}"; \
-	commit="$${COMMIT:-smoke}"; \
-	build_time="$$(date -u +%Y-%m-%dT%H:%M:%SZ)"; \
-	mkdir -p "$$(dirname "$$out")"; \
-	go build -ldflags "-X $(VPKG).Commit=$$commit -X $(VPKG).Version=$$version -X $(VPKG).Dirty=true -X $(GKLOG_VPKG).Commit=$$commit -X $(GKLOG_VPKG).Dirty=true -X $(GKLOG_VPKG).BuildTime=$$build_time -X $(GKLOG_VPKG).BinHash=" -o "$$out" $(CMD); \
-	if [ "$$(uname -s)" = "Darwin" ]; then \
-		if [ -z "$(CODESIGN_IDENTITY)" ]; then \
-			echo "No Developer ID Application signing identity found." >&2; \
-			exit 1; \
-		fi; \
-		codesign --force --sign "$(CODESIGN_IDENTITY)" --identifier "$(BUNDLE_ID)" --options runtime --timestamp=none --entitlements "$(ENTITLEMENTS)" "$$out"; \
-		codesign --verify --verbose=2 "$$out"; \
+	dist_dir="$$(dirname "$$out")"; \
+	$(MAKE) BUILD_CHECKS=false DIST_DIR="$$dist_dir" build; \
+	if [ "$$out" != "$$dist_dir/$(BINARY)" ]; then \
+		cp -f "$$dist_dir/$(BINARY)" "$$out"; \
 	fi; \
 	echo "smoke-built: $$out"
 
-# install-release fetches the latest release via install.sh. Distinct from
-# canonical `make install` which atomically copies the locally-built binary
-# into $XDG_BIN_HOME.
-install-release:
-	./install.sh $(ARGS)
-
-install-release-bin:
-	./install.sh --bin-only $(ARGS)
-
-install-release-hooks:
-	./install.sh --hooks-only $(ARGS)
-
-install-release-service:
-	./install.sh --service-only --bin-dir $(INSTALL_DIR) $(ARGS)
+deploy:
+	$(MAKE) BUILD_CHECKS=false install
+	$(MAKE) service-restart
+	$(MAKE) daemon-wait
+	$(MAKE) daemon-status
 
 # daemon-status calls the agent-gate CLI's own status subcommand, which is
 # richer than launchctl/systemctl status. service-status from go-service.mk
 # is also available for the platform-level view.
 daemon-status:
 	$(INSTALL_BIN) daemon status
+
+daemon-wait:
+	@for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do \
+		if "$(INSTALL_BIN)" daemon status >/dev/null 2>&1; then \
+			exit 0; \
+		fi; \
+		sleep 0.25; \
+	done; \
+	"$(INSTALL_BIN)" daemon status
 
 spawn-smoke:
 	go run ./cmd/spawn-smoke -input-file "$(INPUT)" $(ARGS)

@@ -31,12 +31,15 @@ func (e CursorEnvelope) baseFields() rules.FieldSet {
 	}
 }
 
-type CursorSessionStartPayload struct{ CursorEnvelope }
-type CursorSessionEndPayload struct {
-	CursorEnvelope
-	Reason      string `json:"reason"`
-	FinalStatus string `json:"final_status"`
-}
+type (
+	CursorSessionStartPayload struct{ CursorEnvelope }
+	CursorSessionEndPayload   struct {
+		CursorEnvelope
+		Reason      string `json:"reason"`
+		FinalStatus string `json:"final_status"`
+	}
+)
+
 type CursorPreToolUsePayload struct {
 	CursorEnvelope
 	ToolName  string          `json:"tool_name"`
@@ -222,14 +225,17 @@ func (p CursorSessionEndPayload) Fields() rules.FieldSet {
 	fields.Status = p.FinalStatus
 	return fields
 }
+
 func (p CursorPreToolUsePayload) Fields() rules.FieldSet {
 	return cursorToolFields(p.baseFields(), p.ToolName, p.ToolUseID, p.ToolInput, p.Cwd)
 }
+
 func (p CursorPostToolUsePayload) Fields() rules.FieldSet {
 	fields := cursorToolFields(p.baseFields(), p.ToolName, p.ToolUseID, p.ToolInput, p.Cwd)
 	fields.ToolOutput = p.ToolOutput
 	return fields
 }
+
 func (p CursorPostToolUseFailurePayload) Fields() rules.FieldSet {
 	fields := cursorToolFields(p.baseFields(), p.ToolName, p.ToolUseID, p.ToolInput, p.Cwd)
 	fields.ErrorMessage = p.ErrorMessage
@@ -237,12 +243,14 @@ func (p CursorPostToolUseFailurePayload) Fields() rules.FieldSet {
 	fields.IsInterrupt = boolString(p.IsInterrupt)
 	return fields
 }
+
 func (p CursorBeforeShellExecutionPayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.Command = p.Command
 	fields.CWD = p.Cwd
 	return fields
 }
+
 func (p CursorAfterShellExecutionPayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.Command = p.Command
@@ -250,26 +258,31 @@ func (p CursorAfterShellExecutionPayload) Fields() rules.FieldSet {
 	fields.Output = p.Output
 	return fields
 }
+
 func (p CursorBeforeMCPExecutionPayload) Fields() rules.FieldSet {
 	return cursorToolFields(p.baseFields(), p.ToolName, p.ToolUseID, p.ToolInput, p.Cwd)
 }
+
 func (p CursorAfterMCPExecutionPayload) Fields() rules.FieldSet {
 	fields := cursorToolFields(p.baseFields(), p.ToolName, p.ToolUseID, p.ToolInput, p.Cwd)
 	fields.ToolOutput = p.ToolOutput
 	return fields
 }
+
 func (p CursorBeforeReadFilePayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.FilePath = p.FilePath
 	fields.CWD = p.Cwd
 	return fields
 }
+
 func (p CursorBeforeTabFileReadPayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.FilePath = p.FilePath
 	fields.CWD = p.Cwd
 	return fields
 }
+
 func (p CursorAfterFileEditPayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.FilePath = p.FilePath
@@ -279,9 +292,11 @@ func (p CursorAfterFileEditPayload) Fields() rules.FieldSet {
 	fields.EditsNewLine = cursorEditStrings(p.Edits, func(edit Edit) string { return edit.NewLine })
 	return fields
 }
+
 func (p CursorAfterTabFileEditPayload) Fields() rules.FieldSet {
-	return CursorAfterFileEditPayload{CursorEnvelope: p.CursorEnvelope, FilePath: p.FilePath, Edits: p.Edits}.Fields()
+	return CursorAfterFileEditPayload(p).Fields()
 }
+
 func (p CursorBeforeSubmitPromptPayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.Prompt = p.Prompt
@@ -291,6 +306,7 @@ func (p CursorBeforeSubmitPromptPayload) Fields() rules.FieldSet {
 	fields.AttachmentsType = cursorAttachmentStrings(p.Attachments, func(attachment Attachment) string { return attachment.Type })
 	return fields
 }
+
 func (p CursorSubagentStartPayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.TaskID = p.SubagentID
@@ -298,6 +314,7 @@ func (p CursorSubagentStartPayload) Fields() rules.FieldSet {
 	fields.AgentType = p.SubagentType
 	return fields
 }
+
 func (p CursorSubagentStopPayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.TaskID = p.SubagentID
@@ -307,22 +324,26 @@ func (p CursorSubagentStopPayload) Fields() rules.FieldSet {
 	fields.AgentTranscriptPath = p.AgentTranscriptPath.String()
 	return fields
 }
+
 func (p CursorPreCompactPayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.Trigger = p.Trigger
 	return fields
 }
+
 func (p CursorStopPayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.Status = p.Status
 	return fields
 }
+
 func (p CursorAfterAgentResponsePayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.Text = p.Text
 	fields.AssistantMessage = p.AssistantMessage
 	return fields
 }
+
 func (p CursorAfterAgentThoughtPayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.Text = p.Text
