@@ -222,6 +222,58 @@ type CursorToolInput struct {
 	Limit             int            `json:"limit"`
 }
 
+// UnmarshalJSON accepts both the normal object-shaped Cursor tool_input and
+// the one-off string-shaped form Cursor can emit around MCP tool execution.
+//
+// This is deliberately broader than the struct tags imply. Cursor's
+// beforeMCPExecution hook has been observed blocking before rule evaluation
+// with:
+//
+//	json: cannot unmarshal string into Go struct field
+//	CursorBeforeMCPExecutionPayload.tool_input of type hook.CursorToolInput
+//
+// That failure happens in the hook boundary, so agent-gate cannot apply rules
+// or return the normal allow/deny response. Treating string tool_input values
+// as a compatibility input keeps the hook transport alive. If the string is a
+// JSON object, we decode it into the same typed fields used for normal Cursor
+// payloads. If it is plain text, or if the JSON-object-looking string is
+// malformed, we preserve the original value as tool_input.content so existing
+// generic content rules can still inspect it without adding a new selector.
+func (input *CursorToolInput) UnmarshalJSON(data []byte) error {
+	text := strings.TrimSpace(string(data))
+	if text == "null" {
+		var empty CursorToolInput
+		*input = empty
+		return nil
+	}
+
+	type cursorToolInput CursorToolInput
+	var decoded cursorToolInput
+	if err := json.Unmarshal(data, &decoded); err == nil {
+		*input = CursorToolInput(decoded)
+		return nil
+	}
+
+	var value string
+	if err := json.Unmarshal(data, &value); err != nil {
+		return fmt.Errorf("decode cursor tool input: %w", err)
+	}
+
+	objectText := strings.TrimSpace(value)
+	if strings.HasPrefix(objectText, "{") && strings.HasSuffix(objectText, "}") {
+		var nested cursorToolInput
+		if err := json.Unmarshal([]byte(objectText), &nested); err == nil {
+			*input = CursorToolInput(nested)
+			return nil
+		}
+	}
+
+	var fallback CursorToolInput
+	fallback.Content = value
+	*input = fallback
+	return nil
+}
+
 // GeminiToolInput is the union of Gemini tool input fields.
 type GeminiToolInput struct {
 	FilePath    string `json:"file_path"`

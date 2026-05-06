@@ -3,6 +3,7 @@ package hook_test
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -41,6 +42,75 @@ func TestParseHookPayload_UsesToolInputWorkdir(t *testing.T) {
 	}
 	if fields.String(config.FieldEffectiveCWD) != "/project" {
 		t.Fatalf("effective_cwd = %#v, want /project", fields.String(config.FieldEffectiveCWD))
+	}
+}
+
+func TestCursorBeforeMCPExecution_ObjectToolInput(t *testing.T) {
+	rawJSON := []byte(`{"hook_event_name":"beforeMCPExecution","session_id":"s1","tool_name":"mcp__docker__logs","tool_use_id":"call_1","cwd":"/repo","tool_input":{"command":"docker logs api","query":"errors"}}`)
+	payload, err := hook.ParseHookPayload(hook.SystemCursor, rawJSON)
+	if err != nil {
+		t.Fatalf("ParseHookPayload: %v", err)
+	}
+	fields := payload.Fields()
+	if fields.ToolInputCommand != "docker logs api" {
+		t.Fatalf("tool_input.command = %#v, want docker logs api", fields.ToolInputCommand)
+	}
+	if fields.ToolInputQuery != "errors" {
+		t.Fatalf("tool_input.query = %#v, want errors", fields.ToolInputQuery)
+	}
+}
+
+func TestCursorBeforeMCPExecution_StringToolInput(t *testing.T) {
+	rawJSON := []byte(`{"hook_event_name":"beforeMCPExecution","session_id":"s1","tool_name":"mcp__docker__logs","tool_use_id":"call_1","cwd":"/repo","tool_input":"docker logs api"}`)
+	payload, err := hook.ParseHookPayload(hook.SystemCursor, rawJSON)
+	if err != nil {
+		t.Fatalf("ParseHookPayload: %v", err)
+	}
+	if got := payload.Fields().ToolInputContent; got != "docker logs api" {
+		t.Fatalf("tool_input.content = %#v, want docker logs api", got)
+	}
+}
+
+func TestCursorBeforeMCPExecution_JSONStringToolInput(t *testing.T) {
+	toolInput := strconv.Quote(`{"command":"docker logs api","query":"errors"}`)
+	rawJSON := []byte(`{"hook_event_name":"beforeMCPExecution","session_id":"s1","tool_name":"mcp__docker__logs","tool_use_id":"call_1","cwd":"/repo","tool_input":` + toolInput + `}`)
+	payload, err := hook.ParseHookPayload(hook.SystemCursor, rawJSON)
+	if err != nil {
+		t.Fatalf("ParseHookPayload: %v", err)
+	}
+	fields := payload.Fields()
+	if fields.ToolInputCommand != "docker logs api" {
+		t.Fatalf("tool_input.command = %#v, want docker logs api", fields.ToolInputCommand)
+	}
+	if fields.ToolInputQuery != "errors" {
+		t.Fatalf("tool_input.query = %#v, want errors", fields.ToolInputQuery)
+	}
+}
+
+func TestCursorBeforeMCPExecution_MalformedJSONStringToolInput(t *testing.T) {
+	toolInput := strconv.Quote(`{"command":"docker logs api"`)
+	rawJSON := []byte(`{"hook_event_name":"beforeMCPExecution","session_id":"s1","tool_name":"mcp__docker__logs","tool_use_id":"call_1","cwd":"/repo","tool_input":` + toolInput + `}`)
+	payload, err := hook.ParseHookPayload(hook.SystemCursor, rawJSON)
+	if err != nil {
+		t.Fatalf("ParseHookPayload: %v", err)
+	}
+	if got := payload.Fields().ToolInputContent; got != `{"command":"docker logs api"` {
+		t.Fatalf("tool_input.content = %#v, want malformed JSON string", got)
+	}
+}
+
+func TestCursorAfterMCPExecution_StringToolInput(t *testing.T) {
+	rawJSON := []byte(`{"hook_event_name":"afterMCPExecution","session_id":"s1","tool_name":"mcp__docker__logs","tool_use_id":"call_1","cwd":"/repo","tool_input":"docker logs api","tool_output":"ok"}`)
+	payload, err := hook.ParseHookPayload(hook.SystemCursor, rawJSON)
+	if err != nil {
+		t.Fatalf("ParseHookPayload: %v", err)
+	}
+	fields := payload.Fields()
+	if fields.ToolInputContent != "docker logs api" {
+		t.Fatalf("tool_input.content = %#v, want docker logs api", fields.ToolInputContent)
+	}
+	if fields.ToolOutput != "ok" {
+		t.Fatalf("tool_output = %#v, want ok", fields.ToolOutput)
 	}
 }
 
