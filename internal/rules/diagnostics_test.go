@@ -72,22 +72,18 @@ func TestFormatViolationsLineNumberedLegend(t *testing.T) {
 	got := rules.FormatViolations(violations)
 	for _, want := range []string{
 		"agent-gate blocked 3 violations:",
+		"Rules:\n- A = no-x\n  message: letter x is blocked.",
+		"- B = no-dev-null\n  message: dev null redirection is blocked.",
 		"Matches:\n- field: assistant_message",
 		"  - rule: A\n    line: 1\n    column: 7\n    match: \"xx\"\n    text: \"alpha xx\"",
 		"  - rule: B\n    line: 2\n    column: 11\n    match: \">/dev/null\"\n    text: \"run tests >/dev/null\"",
 		"  - rule: A\n    file: /tmp/example.txt\n    line: 3\n    column: 1\n    match: \"x\"\n    text: \"x marks\"",
-		"A = no-x",
-		"message: letter x is blocked.",
-		"file: /tmp/example.txt",
-		"line: 3",
-		"column: 1",
-		"B = no-dev-null",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("diagnostic missing %q:\n%s", want, got)
 		}
 	}
-	for _, blocked := range []string{"```", "^A", "^B"} {
+	for _, blocked := range []string{"```", "^A", "^B", "occurrences:"} {
 		if strings.Contains(got, blocked) {
 			t.Fatalf("diagnostic contains width-dependent marker %q:\n%s", blocked, got)
 		}

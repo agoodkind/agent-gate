@@ -42,11 +42,11 @@ func FormatViolations(violations []MatchViolation) string {
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "agent-gate blocked %d %s:\n", len(violations)+omitted, plural(len(violations)+omitted, "violation", "violations"))
+	writeLegend(&b, occurrences)
 	writeSourceDiagnostics(&b, occurrences)
 	if omitted > 0 {
 		fmt.Fprintf(&b, "\n... %d more %s omitted\n", omitted, plural(omitted, "violation", "violations"))
 	}
-	writeLegend(&b, occurrences)
 	return strings.TrimRight(b.String(), "\n")
 }
 
@@ -104,21 +104,14 @@ func writeLegend(b *strings.Builder, occurrences []diagnosticOccurrence) {
 		order = append(order, occ)
 	}
 
+	if len(order) == 0 {
+		return
+	}
+
+	fmt.Fprintf(b, "\nRules:\n")
 	for _, occ := range order {
-		fmt.Fprintf(b, "\n%s = %s\n", occ.Key, occ.RuleName)
-		fmt.Fprintf(b, "    message: %s\n", occ.Message)
-		fmt.Fprintf(b, "    occurrences:\n")
-		for _, item := range occurrences {
-			if item.Key != occ.Key {
-				continue
-			}
-			fmt.Fprintf(b, "      - field: %s\n", item.FieldPath)
-			if item.FilePath != "" {
-				fmt.Fprintf(b, "        file: %s\n", item.FilePath)
-			}
-			fmt.Fprintf(b, "        line: %d\n", item.Line)
-			fmt.Fprintf(b, "        column: %d\n", item.Column)
-		}
+		fmt.Fprintf(b, "- %s = %s\n", occ.Key, occ.RuleName)
+		fmt.Fprintf(b, "  message: %s\n", occ.Message)
 	}
 }
 
