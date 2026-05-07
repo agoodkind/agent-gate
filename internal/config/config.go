@@ -4,9 +4,19 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"runtime"
+	"time"
 
 	"github.com/BurntSushi/toml"
 	"goodkind.io/agent-gate/internal/regex"
+)
+
+const (
+	defaultHookMinimumHotConcurrency = 4
+	defaultHookHotConcurrencyFactor  = 4
+	defaultHookHotQueueWait          = 25 * time.Millisecond
+	defaultHookDeferredQueueLimit    = 8192
+	defaultHookDeferredWorkers       = 1
 )
 
 // Log holds logging configuration decoded from the [log] TOML table.
@@ -47,6 +57,19 @@ type AuditSQLiteOutput struct {
 // AuditQuery configures the audit query subsystem.
 type AuditQuery struct {
 	Prefer string `toml:"prefer"`
+}
+
+// Performance holds optional tuning for latency-sensitive paths.
+type Performance struct {
+	Hook HookPerformance `toml:"hook"`
+}
+
+// HookPerformance tunes the daemon-owned hook evaluation pipeline.
+type HookPerformance struct {
+	HotConcurrency     int `toml:"hot_concurrency"`
+	HotQueueWaitMS     int `toml:"hot_queue_wait_ms"`
+	DeferredQueueLimit int `toml:"deferred_queue_limit"`
+	DeferredWorkers    int `toml:"deferred_workers"`
 }
 
 // Paths holds optional explicit path overrides from the [paths] TOML table.
@@ -213,10 +236,11 @@ func NewSimpleRule(name, pattern string, compiled *regex.Regexp, events, fieldPa
 
 // Config is the top-level configuration structure.
 type Config struct {
-	Log   Log    `toml:"log"`
-	Audit Audit  `toml:"audit"`
-	Paths Paths  `toml:"paths"`
-	Rules []Rule `toml:"rules"`
+	Log         Log         `toml:"log"`
+	Audit       Audit       `toml:"audit"`
+	Paths       Paths       `toml:"paths"`
+	Performance Performance `toml:"performance"`
+	Rules       []Rule      `toml:"rules"`
 }
 
 // ConversationsDir returns the resolved base directory for per-conversation
@@ -303,6 +327,43 @@ func (c *Config) AuditQueryPrefer() string {
 		return c.Audit.Query.Prefer
 	}
 	return "sqlite"
+}
+
+// HookHotConcurrency returns the daemon admission limit for synchronous hook
+// evaluation.
+func (c *Config) HookHotConcurrency() int {
+	if c != nil && c.Performance.Hook.HotConcurrency > 0 {
+		return c.Performance.Hook.HotConcurrency
+	}
+	limit := runtime.GOMAXPROCS(0) * defaultHookHotConcurrencyFactor
+	if limit < defaultHookMinimumHotConcurrency {
+		return defaultHookMinimumHotConcurrency
+	}
+	return limit
+}
+
+// HookHotQueueWait returns the maximum time a hook waits for a hot-path slot.
+func (c *Config) HookHotQueueWait() time.Duration {
+	if c != nil && c.Performance.Hook.HotQueueWaitMS > 0 {
+		return time.Duration(c.Performance.Hook.HotQueueWaitMS) * time.Millisecond
+	}
+	return defaultHookHotQueueWait
+}
+
+// HookDeferredQueueLimit returns the bounded queue size for cool audit work.
+func (c *Config) HookDeferredQueueLimit() int {
+	if c != nil && c.Performance.Hook.DeferredQueueLimit > 0 {
+		return c.Performance.Hook.DeferredQueueLimit
+	}
+	return defaultHookDeferredQueueLimit
+}
+
+// HookDeferredWorkers returns the number of workers that process cool audit work.
+func (c *Config) HookDeferredWorkers() int {
+	if c != nil && c.Performance.Hook.DeferredWorkers > 0 {
+		return c.Performance.Hook.DeferredWorkers
+	}
+	return defaultHookDeferredWorkers
 }
 
 // Load reads the config file at the XDG config path.

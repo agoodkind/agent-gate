@@ -235,13 +235,3 @@ func (s *LocalSink) Close() error {
 	}
 	return s.logger.Close()
 }
-
-// DiscardSink drops all entries. Useful as a safe fallback when no sink is
-// configured.
-type DiscardSink struct{}
-
-// Log is a no-op.
-func (DiscardSink) Log(context.Context, string, string, string, string, string, Attrs) {}
-
-// Close is a no-op.
-func (DiscardSink) Close() error { return nil }

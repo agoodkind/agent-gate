@@ -14,6 +14,7 @@ import (
 
 	"goodkind.io/agent-gate/api/daemonpb"
 	"goodkind.io/agent-gate/internal/config"
+	"goodkind.io/agent-gate/internal/hook"
 	"goodkind.io/agent-gate/internal/regex"
 )
 
@@ -128,9 +129,8 @@ func TestEvaluateHook_OverloadFailsOpen(t *testing.T) {
 	}
 	defer srv.Close()
 
-	srv.evaluateSlots = make(chan struct{}, 1)
-	srv.evaluateSlots <- struct{}{}
-	srv.evaluateQueueWait = time.Millisecond
+	snapshot := setEvaluateAdmissionForTest(t, srv, 1, time.Millisecond)
+	snapshot.evaluateSlots <- struct{}{}
 
 	start := time.Now()
 	resp, err := srv.EvaluateHook(context.Background(), &daemonpb.EvaluateHookRequest{
@@ -160,8 +160,7 @@ func TestEvaluateHook_ConcurrentBurstCompletes(t *testing.T) {
 	}
 	defer srv.Close()
 
-	srv.evaluateSlots = make(chan struct{}, 4)
-	srv.evaluateQueueWait = 50 * time.Millisecond
+	setEvaluateAdmissionForTest(t, srv, 4, 50*time.Millisecond)
 
 	const requestCount = 64
 	cwd := t.TempDir()
@@ -195,6 +194,82 @@ func TestEvaluateHook_ConcurrentBurstCompletes(t *testing.T) {
 			t.Fatalf("concurrent EvaluateHook: %v", err)
 		}
 	}
+}
+
+func TestHotPathBlocksBeforeDeferredQueue(t *testing.T) {
+	setDaemonTestDirs(t)
+	srv, err := New(newDiscardLogger(), daemonTestConfig(t))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer srv.Close()
+
+	replaceDeferredAuditForTest(t, srv, 1, 0)
+	fillDeferredAuditQueue(t, srv)
+
+	resp, err := srv.EvaluateHook(context.Background(), &daemonpb.EvaluateHookRequest{
+		RawJson:      []byte(`{"session_id":"s1","hook_event_name":"PreToolUse","tool_name":"Shell","tool_input":{"command":"go test ./..."}}`),
+		ProviderHint: "codex",
+		Cwd:          t.TempDir(),
+		EnvFingerprint: map[string]string{
+			"CODEX_THREAD_ID": "test-thread",
+		},
+	})
+	if err != nil {
+		t.Fatalf("EvaluateHook: %v", err)
+	}
+	if got := string(resp.StdoutData); !strings.Contains(got, `"permissionDecision":"deny"`) || !strings.Contains(got, "no-broad-go-test") {
+		t.Fatalf("stdout missing Codex deny response with full deferred queue: %s", got)
+	}
+}
+
+func TestHotPathAllowedWhenDeferredQueueFull(t *testing.T) {
+	setDaemonTestDirs(t)
+	srv, err := New(newDiscardLogger(), daemonTestConfig(t))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer srv.Close()
+
+	replaceDeferredAuditForTest(t, srv, 1, 0)
+	fillDeferredAuditQueue(t, srv)
+
+	start := time.Now()
+	resp, err := srv.EvaluateHook(context.Background(), &daemonpb.EvaluateHookRequest{
+		RawJson:      []byte(`{"session_id":"s1","hook_event_name":"PreToolUse","tool_name":"Shell","tool_input":{"command":"echo ok"}}`),
+		ProviderHint: "codex",
+		Cwd:          t.TempDir(),
+		EnvFingerprint: map[string]string{
+			"CODEX_THREAD_ID": "test-thread",
+		},
+	})
+	if err != nil {
+		t.Fatalf("EvaluateHook: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 100*time.Millisecond {
+		t.Fatalf("EvaluateHook with full deferred queue took %s, want quick allow", elapsed)
+	}
+	if resp.ExitCode != 0 {
+		t.Fatalf("exit_code = %d, want 0", resp.ExitCode)
+	}
+	if strings.Contains(string(resp.StdoutData), `"permissionDecision":"deny"`) {
+		t.Fatalf("stdout has deny response: %s", string(resp.StdoutData))
+	}
+}
+
+func TestPolicyBlockDoesNotFailOpenWhenHotSlotsAvailable(t *testing.T) {
+	setDaemonTestDirs(t)
+	srv, err := New(newDiscardLogger(), daemonTestConfig(t))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer srv.Close()
+
+	setEvaluateAdmissionForTest(t, srv, 1, time.Millisecond)
+	replaceDeferredAuditForTest(t, srv, 1, 0)
+	fillDeferredAuditQueue(t, srv)
+
+	assertCommandDecision(t, srv, "go test ./...", 0, "no-broad-go-test")
 }
 
 func TestEvaluateHook_BlocksCopilotVSCodeReplaceStringNewString(t *testing.T) {
@@ -475,5 +550,54 @@ func assertCommandDecision(t *testing.T, srv *Server, command string, exitCode i
 	}
 	if !strings.Contains(stdout, `"permissionDecision":"deny"`) || !strings.Contains(stdout, ruleName) {
 		t.Fatalf("stdout missing deny response for %q: %s", ruleName, stdout)
+	}
+}
+
+func setEvaluateAdmissionForTest(t testing.TB, srv *Server, concurrency int, wait time.Duration) *runtimeSnapshot {
+	t.Helper()
+	snapshot := srv.runtime.Load()
+	if snapshot == nil {
+		t.Fatal("runtime snapshot is nil")
+	}
+	snapshot.evaluateSlots = make(chan struct{}, concurrency)
+	snapshot.evaluateQueueWait = wait
+	return snapshot
+}
+
+func replaceDeferredAuditForTest(t testing.TB, srv *Server, queueLimit int, workers int) {
+	t.Helper()
+	snapshot := srv.runtime.Load()
+	if snapshot == nil {
+		t.Fatal("runtime snapshot is nil")
+	}
+	if snapshot.deferredAudit != nil {
+		snapshot.deferredAudit.Close()
+	}
+	snapshot.deferredAudit = hook.NewDeferredAuditQueue(
+		context.Background(),
+		nil,
+		hook.DeferredAuditQueueOptions{
+			QueueLimit: queueLimit,
+			Workers:    workers,
+			Log:        newDiscardLogger(),
+		},
+	)
+}
+
+func fillDeferredAuditQueue(t testing.TB, srv *Server) {
+	t.Helper()
+	resp, err := srv.EvaluateHook(context.Background(), &daemonpb.EvaluateHookRequest{
+		RawJson:      []byte(`{"session_id":"s1","hook_event_name":"PreToolUse","tool_name":"Shell","tool_input":{"command":"echo first"}}`),
+		ProviderHint: "codex",
+		Cwd:          t.TempDir(),
+		EnvFingerprint: map[string]string{
+			"CODEX_THREAD_ID": "test-thread",
+		},
+	})
+	if err != nil {
+		t.Fatalf("EvaluateHook: %v", err)
+	}
+	if resp.ExitCode != 0 {
+		t.Fatalf("exit_code = %d, want 0", resp.ExitCode)
 	}
 }

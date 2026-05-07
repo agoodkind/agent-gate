@@ -2,6 +2,7 @@ package audit_test
 
 import (
 	"bufio"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"os"
@@ -41,7 +42,7 @@ func testConfig(t *testing.T, sqlite bool) *config.Config {
 
 func TestEventLogger_WritesJSONLAndPayloadSidecar(t *testing.T) {
 	cfg := testConfig(t, false)
-	logger, err := audit.NewEventLogger(cfg, nil)
+	logger, err := audit.NewEventLoggerContext(context.Background(), cfg, nil)
 	if err != nil {
 		t.Fatalf("NewEventLogger: %v", err)
 	}
@@ -75,7 +76,7 @@ func TestEventLogger_WritesJSONLAndPayloadSidecar(t *testing.T) {
 
 func TestEventLogger_WritesSQLiteAndDedups(t *testing.T) {
 	cfg := testConfig(t, true)
-	logger, err := audit.NewEventLogger(cfg, nil)
+	logger, err := audit.NewEventLoggerContext(context.Background(), cfg, nil)
 	if err != nil {
 		t.Fatalf("NewEventLogger: %v", err)
 	}
@@ -126,7 +127,7 @@ func TestEventLogger_WritesSQLiteAndDedups(t *testing.T) {
 
 func TestQuery_JSONLFallback(t *testing.T) {
 	cfg := testConfig(t, false)
-	logger, err := audit.NewEventLogger(cfg, nil)
+	logger, err := audit.NewEventLoggerContext(context.Background(), cfg, nil)
 	if err != nil {
 		t.Fatalf("NewEventLogger: %v", err)
 	}

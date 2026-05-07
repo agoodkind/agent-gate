@@ -133,13 +133,6 @@ type eventSink interface {
 	Close() error
 }
 
-// NewEventLogger constructs an [EventLogger] from the given configuration.
-// The returned logger owns a background worker; callers must invoke
-// [EventLogger.Close] to flush and shut down cleanly.
-func NewEventLogger(cfg *config.Config, log *slog.Logger) (*EventLogger, error) {
-	return NewEventLoggerContext(context.Background(), cfg, log)
-}
-
 // NewEventLoggerContext constructs an [EventLogger] using ctx for setup I/O.
 func NewEventLoggerContext(ctx context.Context, cfg *config.Config, log *slog.Logger) (*EventLogger, error) {
 	return NewEventLoggerWithOptions(ctx, cfg, log, LoggerOptions{QueueLimit: 0})
@@ -192,6 +185,11 @@ func NewEventLoggerWithOptions(ctx context.Context, cfg *config.Config, log *slo
 		}()
 	}
 	return el, nil
+}
+
+// Enabled reports whether the logger has at least one active output.
+func (el *EventLogger) Enabled() bool {
+	return el != nil && el.enabled
 }
 
 func (el *EventLogger) configureOutputs(ctx context.Context, cfg *config.Config, log *slog.Logger) error {

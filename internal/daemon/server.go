@@ -7,9 +7,9 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
@@ -26,11 +26,16 @@ import (
 const configReloadDebounce = 200 * time.Millisecond
 
 const (
-	evaluateHookMinimumConcurrency = 4
-	evaluateHookConcurrencyFactor  = 4
-	evaluateHookQueueWait          = 25 * time.Millisecond
-	overloadLogInterval            = 5 * time.Second
+	overloadLogInterval = 5 * time.Second
 )
+
+type runtimeSnapshot struct {
+	cfg               *config.Config
+	eventLogger       *audit.EventLogger
+	deferredAudit     *hook.DeferredAuditQueue
+	evaluateSlots     chan struct{}
+	evaluateQueueWait time.Duration
+}
 
 // Server implements the AgentGateD gRPC service.
 type Server struct {
@@ -38,14 +43,11 @@ type Server struct {
 
 	log           *slog.Logger
 	cfgMu         sync.RWMutex
-	cfg           *config.Config
-	eventLogger   *audit.EventLogger
+	runtime       atomic.Pointer[runtimeSnapshot]
 	configWatcher *fsnotify.Watcher
 	configPath    string
 	closing       bool
 
-	evaluateSlots       chan struct{}
-	evaluateQueueWait   time.Duration
 	overloadLogMu       sync.Mutex
 	lastOverloadLogTime time.Time
 }
@@ -60,6 +62,14 @@ func New(log *slog.Logger, cfg *config.Config) (*Server, error) {
 			Log:   config.Log{},
 			Audit: config.Audit{Enabled: nil, Level: "", Outputs: config.AuditOutput{}, Query: config.AuditQuery{}},
 			Paths: config.Paths{},
+			Performance: config.Performance{
+				Hook: config.HookPerformance{
+					HotConcurrency:     0,
+					HotQueueWaitMS:     0,
+					DeferredQueueLimit: 0,
+					DeferredWorkers:    0,
+				},
+			},
 			Rules: nil,
 		}
 	}
@@ -68,55 +78,87 @@ func New(log *slog.Logger, cfg *config.Config) (*Server, error) {
 		return nil, fmt.Errorf("invalid hook config: %w", errs[0])
 	}
 
-	eventLogger, err := audit.NewEventLogger(cfg, log)
+	snapshot, err := newRuntimeSnapshot(context.Background(), cfg, log)
 	if err != nil {
-		log.Error("failed to create event logger", slog.Any("err", err))
-		return nil, fmt.Errorf("create event logger: %w", err)
+		log.Error("failed to create runtime snapshot", slog.Any("err", err))
+		return nil, err
 	}
 
 	s := &Server{
 		UnimplementedAgentGateDServer: daemonpb.UnimplementedAgentGateDServer{},
 		log:                           log,
 		cfgMu:                         sync.RWMutex{},
-		cfg:                           cfg,
-		eventLogger:                   eventLogger,
+		runtime:                       atomic.Pointer[runtimeSnapshot]{},
 		configWatcher:                 nil,
 		configPath:                    config.Path(),
 		closing:                       false,
-		evaluateSlots:                 make(chan struct{}, defaultEvaluateHookConcurrency()),
-		evaluateQueueWait:             evaluateHookQueueWait,
 		overloadLogMu:                 sync.Mutex{},
 		lastOverloadLogTime:           time.Time{},
 	}
+	s.runtime.Store(snapshot)
 	if err := s.startConfigWatcher(); err != nil {
-		_ = eventLogger.Close()
+		snapshot.close(context.Background(), log)
 		return nil, err
 	}
 	return s, nil
 }
 
-func defaultEvaluateHookConcurrency() int {
-	limit := runtime.GOMAXPROCS(0) * evaluateHookConcurrencyFactor
-	if limit < evaluateHookMinimumConcurrency {
-		return evaluateHookMinimumConcurrency
+func newRuntimeSnapshot(ctx context.Context, cfg *config.Config, log *slog.Logger) (*runtimeSnapshot, error) {
+	eventLogger, err := audit.NewEventLoggerContext(ctx, cfg, log)
+	if err != nil {
+		if log != nil {
+			log.WarnContext(ctx, "create event logger failed", "err", err)
+		}
+		return nil, fmt.Errorf("create event logger: %w", err)
 	}
-	return limit
+
+	var deferredAudit *hook.DeferredAuditQueue
+	if eventLogger.Enabled() {
+		deferredAudit = hook.NewDeferredAuditQueue(
+			ctx,
+			audit.NewLocalSink(eventLogger),
+			hook.DeferredAuditQueueOptions{
+				QueueLimit: cfg.HookDeferredQueueLimit(),
+				Workers:    cfg.HookDeferredWorkers(),
+				Log:        log,
+			},
+		)
+	}
+
+	return &runtimeSnapshot{
+		cfg:               cfg,
+		eventLogger:       eventLogger,
+		deferredAudit:     deferredAudit,
+		evaluateSlots:     make(chan struct{}, cfg.HookHotConcurrency()),
+		evaluateQueueWait: cfg.HookHotQueueWait(),
+	}, nil
+}
+
+func (s *runtimeSnapshot) close(ctx context.Context, log *slog.Logger) {
+	if s == nil {
+		return
+	}
+	if s.deferredAudit != nil {
+		s.deferredAudit.Close()
+	}
+	if s.eventLogger != nil {
+		if err := s.eventLogger.Close(); err != nil && log != nil {
+			log.WarnContext(ctx, "audit logger close failed", "err", err)
+		}
+	}
 }
 
 // Close shuts down daemon-owned resources.
 func (s *Server) Close() {
 	s.cfgMu.Lock()
 	s.closing = true
-	eventLogger := s.eventLogger
-	s.eventLogger = nil
+	snapshot := s.runtime.Swap(nil)
 	s.cfgMu.Unlock()
 
 	if s.configWatcher != nil {
 		_ = s.configWatcher.Close()
 	}
-	if eventLogger != nil {
-		_ = eventLogger.Close()
-	}
+	snapshot.close(context.Background(), s.log)
 	s.log.InfoContext(context.Background(), "daemon closed")
 }
 
@@ -212,44 +254,45 @@ func resetTimer(timer *time.Timer, duration time.Duration) {
 func (s *Server) reloadConfig(ctx context.Context) error {
 	candidate, err := config.LoadExisting(s.configPath)
 	if err != nil {
+		s.log.WarnContext(ctx, "config load or compile failed", "path", s.configPath, "err", err)
 		return fmt.Errorf("config load or compile failed: %w", err)
 	}
 	if errs := hook.ValidateConfig(candidate); len(errs) > 0 {
+		s.log.WarnContext(ctx, "hook config validation failed", "path", s.configPath, "err", errs[0])
 		return fmt.Errorf("hook config validation failed: %w", errs[0])
 	}
 
-	newEventLogger, err := audit.NewEventLoggerContext(ctx, candidate, s.log)
+	newSnapshot, err := newRuntimeSnapshot(ctx, candidate, s.log)
 	if err != nil {
-		return fmt.Errorf("failed to create event logger for reloaded config: %w", err)
+		s.log.WarnContext(ctx, "create runtime snapshot for reloaded config failed", "path", s.configPath, "err", err)
+		return fmt.Errorf("failed to create runtime snapshot for reloaded config: %w", err)
 	}
 
 	s.cfgMu.Lock()
 	if s.closing {
 		s.cfgMu.Unlock()
-		_ = newEventLogger.Close()
+		newSnapshot.close(ctx, s.log)
 		return nil
 	}
-	oldEventLogger := s.eventLogger
-	s.cfg = candidate
-	s.eventLogger = newEventLogger
+	oldSnapshot := s.runtime.Swap(newSnapshot)
 	s.cfgMu.Unlock()
 
-	if oldEventLogger != nil {
-		if err := oldEventLogger.Close(); err != nil {
-			s.log.WarnContext(ctx, "old audit logger close failed after config reload", "err", err)
-		}
-	}
+	oldSnapshot.close(ctx, s.log)
 	s.log.InfoContext(ctx, "config reloaded", "path", s.configPath, "rules", len(candidate.Rules), "audit_enabled", candidate.AuditEnabled())
 	return nil
 }
 
 // EvaluateHook processes a hook event through daemon-owned enforcement.
 func (s *Server) EvaluateHook(ctx context.Context, req *daemonpb.EvaluateHookRequest) (*daemonpb.EvaluateHookResponse, error) {
-	if !s.acquireEvaluateSlot(ctx) {
-		s.logEvaluateOverload(ctx)
+	snapshot := s.runtime.Load()
+	if snapshot == nil {
 		return failOpenEvaluateHookResponse(), nil
 	}
-	defer s.releaseEvaluateSlot()
+	if !s.acquireEvaluateSlot(ctx, snapshot) {
+		s.logEvaluateOverload(ctx, snapshot)
+		return failOpenEvaluateHookResponse(), nil
+	}
+	defer s.releaseEvaluateSlot(snapshot)
 
 	rawJSON := req.GetRawJson()
 	if cwd := req.GetCwd(); cwd != "" {
@@ -264,50 +307,48 @@ func (s *Server) EvaluateHook(ctx context.Context, req *daemonpb.EvaluateHookReq
 		return envFingerprint[key]
 	}
 
-	s.cfgMu.RLock()
-	defer s.cfgMu.RUnlock()
-	cfg := s.cfg
-	eventLogger := s.eventLogger
-	sink := audit.NewLocalSink(eventLogger)
-	stdout, stderr, exitCode := hook.HandleWithEnv(ctx, rawJSON, cfg, sink, hook.SystemFromString(req.GetProviderHint()), getenv)
+	result := hook.EvaluateHot(rawJSON, snapshot.cfg, hook.SystemFromString(req.GetProviderHint()), getenv)
+	if result.Deferred.Valid && snapshot.deferredAudit != nil {
+		snapshot.deferredAudit.Enqueue(result.Deferred)
+	}
 	return &daemonpb.EvaluateHookResponse{
-		ExitCode:   clampExitCode(exitCode),
-		StdoutData: stdout,
-		StderrData: stderr,
+		ExitCode:   clampExitCode(result.ExitCode),
+		StdoutData: result.Stdout,
+		StderrData: result.Stderr,
 	}, nil
 }
 
-func (s *Server) acquireEvaluateSlot(ctx context.Context) bool {
-	if s == nil || s.evaluateSlots == nil {
+func (s *Server) acquireEvaluateSlot(ctx context.Context, snapshot *runtimeSnapshot) bool {
+	if s == nil || snapshot == nil || snapshot.evaluateSlots == nil {
 		return true
 	}
 	select {
-	case s.evaluateSlots <- struct{}{}:
+	case snapshot.evaluateSlots <- struct{}{}:
 		return true
 	default:
 	}
 
 	waitCtx := ctx
 	cancel := func() {}
-	if s.evaluateQueueWait > 0 {
-		waitCtx, cancel = context.WithTimeout(ctx, s.evaluateQueueWait)
+	if snapshot.evaluateQueueWait > 0 {
+		waitCtx, cancel = context.WithTimeout(ctx, snapshot.evaluateQueueWait)
 	}
 	defer cancel()
 
 	select {
-	case s.evaluateSlots <- struct{}{}:
+	case snapshot.evaluateSlots <- struct{}{}:
 		return true
 	case <-waitCtx.Done():
 		return false
 	}
 }
 
-func (s *Server) releaseEvaluateSlot() {
-	if s == nil || s.evaluateSlots == nil {
+func (s *Server) releaseEvaluateSlot(snapshot *runtimeSnapshot) {
+	if s == nil || snapshot == nil || snapshot.evaluateSlots == nil {
 		return
 	}
 	select {
-	case <-s.evaluateSlots:
+	case <-snapshot.evaluateSlots:
 	default:
 	}
 }
@@ -322,8 +363,8 @@ func failOpenEvaluateHookResponse() *daemonpb.EvaluateHookResponse {
 
 var auditNow = time.Now
 
-func (s *Server) logEvaluateOverload(ctx context.Context) {
-	if s == nil || s.log == nil {
+func (s *Server) logEvaluateOverload(ctx context.Context, snapshot *runtimeSnapshot) {
+	if s == nil || s.log == nil || snapshot == nil {
 		return
 	}
 	now := auditNow()
@@ -336,8 +377,8 @@ func (s *Server) logEvaluateOverload(ctx context.Context) {
 	s.overloadLogMu.Unlock()
 
 	s.log.WarnContext(ctx, "evaluate hook overloaded; failing open",
-		"max_concurrency", cap(s.evaluateSlots),
-		"queue_wait_ms", s.evaluateQueueWait.Milliseconds(),
+		"max_concurrency", cap(snapshot.evaluateSlots),
+		"queue_wait_ms", snapshot.evaluateQueueWait.Milliseconds(),
 	)
 }
 
