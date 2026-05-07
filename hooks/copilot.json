@@ -6,7 +6,8 @@
           "type": "command",
           "command": "__AGENT_GATE_BIN__"
         }
-      ]
+      ],
+      "failClosed": false
     }
   ],
   "SessionEnd": [
@@ -16,7 +17,8 @@
           "type": "command",
           "command": "__AGENT_GATE_BIN__"
         }
-      ]
+      ],
+      "failClosed": false
     }
   ],
   "UserPromptSubmit": [
@@ -26,7 +28,8 @@
           "type": "command",
           "command": "__AGENT_GATE_BIN__"
         }
-      ]
+      ],
+      "failClosed": false
     }
   ],
   "PreToolUse": [
@@ -37,7 +40,8 @@
           "type": "command",
           "command": "__AGENT_GATE_BIN__"
         }
-      ]
+      ],
+      "failClosed": false
     }
   ],
   "PostToolUse": [
@@ -48,7 +52,8 @@
           "type": "command",
           "command": "__AGENT_GATE_BIN__"
         }
-      ]
+      ],
+      "failClosed": false
     }
   ],
   "PreCompact": [
@@ -58,7 +63,8 @@
           "type": "command",
           "command": "__AGENT_GATE_BIN__"
         }
-      ]
+      ],
+      "failClosed": false
     }
   ],
   "PostCompact": [
@@ -68,7 +74,8 @@
           "type": "command",
           "command": "__AGENT_GATE_BIN__"
         }
-      ]
+      ],
+      "failClosed": false
     }
   ],
   "Notification": [
@@ -78,7 +85,8 @@
           "type": "command",
           "command": "__AGENT_GATE_BIN__"
         }
-      ]
+      ],
+      "failClosed": false
     }
   ],
   "Stop": [
@@ -88,7 +96,8 @@
           "type": "command",
           "command": "__AGENT_GATE_BIN__"
         }
-      ]
+      ],
+      "failClosed": false
     }
   ]
 }

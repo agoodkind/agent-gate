@@ -6,6 +6,7 @@ package hook
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 	"unicode"
@@ -31,6 +32,7 @@ type DetectionPayload struct {
 func ParseDetectionPayload(rawBytes []byte) (DetectionPayload, error) {
 	var payload DetectionPayload
 	if err := json.Unmarshal(rawBytes, &payload); err != nil {
+		slog.Warn("decode detection payload failed", slog.Any("err", err))
 		return payload, fmt.Errorf("decode detection payload: %w", err)
 	}
 	return payload, nil
@@ -117,16 +119,20 @@ func hasGeminiEnv(getenv func(string) string) bool {
 }
 
 func hasGeminiEvent(p DetectionPayload) bool {
-	switch p.HookEventName {
-	case "BeforeTool",
-		"AfterTool",
-		"BeforeAgent",
-		"AfterAgent",
-		"BeforeModel",
-		"AfterModel",
-		"BeforeToolSelection",
-		"PreCompress":
+	switch GeminiEvent(p.HookEventName) {
+	case GeminiBeforeTool,
+		GeminiAfterTool,
+		GeminiBeforeAgent,
+		GeminiAfterAgent,
+		GeminiBeforeModel,
+		GeminiAfterModel,
+		GeminiBeforeToolSelection,
+		GeminiPreCompress:
 		return true
+	case GeminiSessionStart,
+		GeminiSessionEnd,
+		GeminiNotification:
+		return false
 	}
 	return false
 }

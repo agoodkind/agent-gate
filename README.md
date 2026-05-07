@@ -69,8 +69,10 @@ limits are available at runtime.
 
 The daemon is the source of truth for enforcement. Hook invocations only
 read stdin, forward raw bytes and a small provider hint over gRPC, mirror
-the daemon response, and exit. If the daemon is unavailable, hooks fail
-closed with exit code 2.
+the daemon response, and exit. If stdin, daemon availability, RPC, or hook
+entrypoint failures prevent daemon evaluation, hooks fail open with the
+hinted provider's allow response and exit code 0. When no provider hint is
+available, hooks use a generic empty success response.
 
 The installer manages a per-user service:
 
@@ -287,19 +289,25 @@ agent-gate logs query --system claude --decision block
 agent-gate logs query --rule use-make-not-go-direct --since 24h --json
 ```
 
-## Fail-closed behavior
+## Fail-open behavior
 
-`agent-gate` blocks on failure rather than allowing through:
+`agent-gate` fails open for its own availability, transport, and internal
+hook-entrypoint failures:
 
-- A deferred `recover()` in `main` catches any panic and exits 2.
-- All internal errors exit 2.
-- Cursor hooks use `failClosed: true`.
-- For Claude Code, exit code 2 surfaces the stderr message to the LLM.
+- Stdin read failures emit the hinted provider allow shape and exit 0.
+- Daemon unavailable and daemon RPC failures emit the hinted provider allow shape and exit 0.
+- Hook invocation panics are recovered and emit the hinted provider allow shape and exit 0.
+- Unknown providers emit empty stdout and exit 0 because no provider-specific allow schema is known.
+- Provider templates that support the field use `failClosed: false`.
+
+This fail-open behavior only covers agent-gate failures. If the daemon
+successfully evaluates a hook and returns a policy block, the hook process
+mirrors the daemon stdout, stderr, and exit code exactly.
 
 ## Project layout
 
 ```
-cmd/agent-gate/main.go          entry point, panic recovery, stdin read, dispatch
+cmd/agent-gate/main.go          entry point, hook fail-open recovery, stdin read, dispatch
 internal/version/version.go     build metadata (commit, version, buildHash, dirty via ldflags)
 internal/config/config.go       TOML structs, Load(), audit path resolution
 internal/config/xdg.go          XDG path resolution
@@ -316,6 +324,7 @@ internal/hook/gemini.go         Gemini CLI events and response helpers
 internal/hook/vscode.go         VS Code payload adapter
 internal/hook/copilot.go        Copilot payload and transcript adapter
 internal/hook/provider.go       provider-aware orchestration and dispatch
+internal/hook/response_boundary.go provider-neutral response boundary
 internal/hook/handler.go        provider-specific audit attribute extraction
 internal/runtime/*.go           provider runtime adapter scaffolding (Claude active, others stubbed)
 internal/rules/engine.go        dot-path field extraction, regex rule evaluation

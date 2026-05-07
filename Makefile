@@ -44,7 +44,7 @@ include bootstrap.mk
 # Daemon control comes from go-service.mk: service-install, service-uninstall,
 # service-restart, service-status. Templates live at packaging/{macos,systemd}/.
 
-.PHONY: proto smoke-build deploy daemon-wait daemon-status spawn-smoke
+.PHONY: proto smoke-build deploy deploy-service daemon-wait daemon-status spawn-smoke
 
 proto:
 	buf generate
@@ -62,9 +62,19 @@ smoke-build:
 
 deploy:
 	$(MAKE) BUILD_CHECKS=false install
-	$(MAKE) service-restart
+	$(MAKE) deploy-service
 	$(MAKE) daemon-wait
 	$(MAKE) daemon-status
+
+deploy-service:
+	@$(MAKE) service-restart || { \
+		echo "service restart failed; installing user service"; \
+		$(MAKE) service-install; \
+		if [ "$$(uname)" = "Darwin" ]; then \
+			launchctl enable "$(LAUNCHD_DOMAIN)/$(LAUNCHD_LABEL)" || true; \
+		fi; \
+		$(MAKE) service-restart; \
+	}
 
 # daemon-status calls the agent-gate CLI's own status subcommand, which is
 # richer than launchctl/systemctl status. service-status from go-service.mk

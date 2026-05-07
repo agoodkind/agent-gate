@@ -6,7 +6,8 @@
           "type": "command",
           "command": "__AGENT_GATE_BIN__"
         }
-      ]
+      ],
+      "failClosed": false
     }
   ],
   "CwdChanged": [
@@ -16,7 +17,8 @@
           "type": "command",
           "command": "__AGENT_GATE_BIN__"
         }
-      ]
+      ],
+      "failClosed": false
     }
   ],
   "Elicitation": [
@@ -26,7 +28,8 @@
           "type": "command",
           "command": "__AGENT_GATE_BIN__"
         }
-      ]
+      ],
+      "failClosed": false
     }
   ],
   "ElicitationResult": [
@@ -36,7 +39,8 @@
           "type": "command",
           "command": "__AGENT_GATE_BIN__"
         }
-      ]
+      ],
+      "failClosed": false
     }
   ],
   "FileChanged": [
@@ -46,7 +50,8 @@
           "type": "command",
           "command": "__AGENT_GATE_BIN__"
         }
-      ]
+      ],
+      "failClosed": false
     }
   ],
   "InstructionsLoaded": [
@@ -56,7 +61,8 @@
           "type": "command",
           "command": "__AGENT_GATE_BIN__"
         }
-      ]
+      ],
+      "failClosed": false
     }
   ],
   "Notification": [
@@ -66,7 +72,8 @@
           "type": "command",
           "command": "__AGENT_GATE_BIN__"
         }
-      ]
+      ],
+      "failClosed": false
     }
   ],
   "PermissionDenied": [
@@ -77,7 +84,8 @@
           "type": "command",
           "command": "__AGENT_GATE_BIN__"
         }
-      ]
+      ],
+      "failClosed": false
     }
   ],
   "PermissionRequest": [
@@ -88,7 +96,8 @@
           "type": "command",
           "command": "__AGENT_GATE_BIN__"
         }
-      ]
+      ],
+      "failClosed": false
     }
   ],
   "PostCompact": [
@@ -98,7 +107,8 @@
           "type": "command",
           "command": "__AGENT_GATE_BIN__"
         }
-      ]
+      ],
+      "failClosed": false
     }
   ],
   "PostToolUse": [
@@ -109,7 +119,8 @@
           "type": "command",
           "command": "__AGENT_GATE_BIN__"
         }
-      ]
+      ],
+      "failClosed": false
     }
   ],
   "PostToolUseFailure": [
@@ -120,7 +131,8 @@
           "type": "command",
           "command": "__AGENT_GATE_BIN__"
         }
-      ]
+      ],
+      "failClosed": false
     }
   ],
   "PreCompact": [
@@ -130,7 +142,8 @@
           "type": "command",
           "command": "__AGENT_GATE_BIN__"
         }
-      ]
+      ],
+      "failClosed": false
     }
   ],
   "PreToolUse": [
@@ -141,7 +154,8 @@
           "type": "command",
           "command": "__AGENT_GATE_BIN__"
         }
-      ]
+      ],
+      "failClosed": false
     }
   ],
   "SessionEnd": [
@@ -151,7 +165,8 @@
           "type": "command",
           "command": "__AGENT_GATE_BIN__"
         }
-      ]
+      ],
+      "failClosed": false
     }
   ],
   "SessionStart": [
@@ -161,7 +176,8 @@
           "type": "command",
           "command": "__AGENT_GATE_BIN__"
         }
-      ]
+      ],
+      "failClosed": false
     },
     {
       "hooks": [
@@ -169,7 +185,8 @@
           "type": "command",
           "command": "/Users/agoodkind/.local/bin/clyde hook sessionstart"
         }
-      ]
+      ],
+      "failClosed": false
     }
   ],
   "Stop": [
@@ -179,7 +196,8 @@
           "type": "command",
           "command": "__AGENT_GATE_BIN__"
         }
-      ]
+      ],
+      "failClosed": false
     }
   ],
   "StopFailure": [
@@ -189,7 +207,8 @@
           "type": "command",
           "command": "__AGENT_GATE_BIN__"
         }
-      ]
+      ],
+      "failClosed": false
     }
   ],
   "SubagentStart": [
@@ -199,7 +218,8 @@
           "type": "command",
           "command": "__AGENT_GATE_BIN__"
         }
-      ]
+      ],
+      "failClosed": false
     }
   ],
   "SubagentStop": [
@@ -209,7 +229,8 @@
           "type": "command",
           "command": "__AGENT_GATE_BIN__"
         }
-      ]
+      ],
+      "failClosed": false
     }
   ],
   "TaskCompleted": [
@@ -219,7 +240,8 @@
           "type": "command",
           "command": "__AGENT_GATE_BIN__"
         }
-      ]
+      ],
+      "failClosed": false
     }
   ],
   "TaskCreated": [
@@ -229,7 +251,8 @@
           "type": "command",
           "command": "__AGENT_GATE_BIN__"
         }
-      ]
+      ],
+      "failClosed": false
     }
   ],
   "TeammateIdle": [
@@ -239,7 +262,8 @@
           "type": "command",
           "command": "__AGENT_GATE_BIN__"
         }
-      ]
+      ],
+      "failClosed": false
     }
   ],
   "UserPromptSubmit": [
@@ -249,7 +273,8 @@
           "type": "command",
           "command": "__AGENT_GATE_BIN__"
         }
-      ]
+      ],
+      "failClosed": false
     }
   ],
   "WorktreeCreate": [
@@ -259,7 +284,8 @@
           "type": "command",
           "command": "__AGENT_GATE_BIN__"
         }
-      ]
+      ],
+      "failClosed": false
     }
   ],
   "WorktreeRemove": [
@@ -269,7 +295,8 @@
           "type": "command",
           "command": "__AGENT_GATE_BIN__"
         }
-      ]
+      ],
+      "failClosed": false
     }
   ]
 }

@@ -94,3 +94,14 @@ func ClaudeBlock(ruleName, message string) []byte {
 func ClaudeBlockText(text string) []byte {
 	return []byte(text + "\n")
 }
+
+func renderClaudeResponse(request ResponseRequest) Response {
+	if request.Decision == ResponseDecisionBlock {
+		return Response{
+			Stdout:   ClaudeAllow(),
+			Stderr:   ClaudeBlockText(request.DiagnosticText),
+			ExitCode: 2,
+		}
+	}
+	return Response{Stdout: ClaudeAllow(), Stderr: nil, ExitCode: 0}
+}

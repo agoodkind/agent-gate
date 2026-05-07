@@ -8,6 +8,17 @@ package hook
 // misattributed.
 type HookSystem int
 
+type hookSystemName string
+
+const (
+	hookSystemNameClaude  hookSystemName = "claude"
+	hookSystemNameCodex   hookSystemName = "codex"
+	hookSystemNameCopilot hookSystemName = "copilot"
+	hookSystemNameCursor  hookSystemName = "cursor"
+	hookSystemNameGemini  hookSystemName = "gemini"
+	hookSystemNameVSCode  hookSystemName = "vscode"
+)
+
 // HookSystem variants. Each constant tags a single detected agent host.
 const (
 	// SystemUnknown means detection ran but no agent host matched.
@@ -49,18 +60,18 @@ func (s HookSystem) String() string {
 // SystemFromString parses the lowercase label produced by [HookSystem.String].
 // Unknown labels yield [SystemUnknown].
 func SystemFromString(s string) HookSystem {
-	switch s {
-	case "claude":
+	switch hookSystemName(s) {
+	case hookSystemNameClaude:
 		return SystemClaude
-	case "cursor":
+	case hookSystemNameCursor:
 		return SystemCursor
-	case "codex":
+	case hookSystemNameCodex:
 		return SystemCodex
-	case "gemini":
+	case hookSystemNameGemini:
 		return SystemGemini
-	case "vscode":
+	case hookSystemNameVSCode:
 		return SystemVSCode
-	case "copilot":
+	case hookSystemNameCopilot:
 		return SystemCopilot
 	default:
 		return SystemUnknown

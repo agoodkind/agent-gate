@@ -7,7 +7,8 @@
           "type": "command",
           "command": "__AGENT_GATE_BIN__ gemini-hook"
         }
-      ]
+      ],
+      "failClosed": false
     }
   ],
   "AfterTool": [
@@ -18,7 +19,8 @@
           "type": "command",
           "command": "__AGENT_GATE_BIN__ gemini-hook"
         }
-      ]
+      ],
+      "failClosed": false
     }
   ],
   "BeforeAgent": [
@@ -28,7 +30,8 @@
           "type": "command",
           "command": "__AGENT_GATE_BIN__ gemini-hook"
         }
-      ]
+      ],
+      "failClosed": false
     }
   ],
   "AfterAgent": [
@@ -38,7 +41,8 @@
           "type": "command",
           "command": "__AGENT_GATE_BIN__ gemini-hook"
         }
-      ]
+      ],
+      "failClosed": false
     }
   ],
   "BeforeModel": [
@@ -48,7 +52,8 @@
           "type": "command",
           "command": "__AGENT_GATE_BIN__ gemini-hook"
         }
-      ]
+      ],
+      "failClosed": false
     }
   ],
   "BeforeToolSelection": [
@@ -58,7 +63,8 @@
           "type": "command",
           "command": "__AGENT_GATE_BIN__ gemini-hook"
         }
-      ]
+      ],
+      "failClosed": false
     }
   ],
   "AfterModel": [
@@ -68,7 +74,8 @@
           "type": "command",
           "command": "__AGENT_GATE_BIN__ gemini-hook"
         }
-      ]
+      ],
+      "failClosed": false
     }
   ],
   "SessionStart": [
@@ -79,7 +86,8 @@
           "type": "command",
           "command": "__AGENT_GATE_BIN__ gemini-hook"
         }
-      ]
+      ],
+      "failClosed": false
     },
     {
       "matcher": "resume",
@@ -88,7 +96,8 @@
           "type": "command",
           "command": "__AGENT_GATE_BIN__ gemini-hook"
         }
-      ]
+      ],
+      "failClosed": false
     },
     {
       "matcher": "clear",
@@ -97,7 +106,8 @@
           "type": "command",
           "command": "__AGENT_GATE_BIN__ gemini-hook"
         }
-      ]
+      ],
+      "failClosed": false
     }
   ],
   "SessionEnd": [
@@ -108,7 +118,8 @@
           "type": "command",
           "command": "__AGENT_GATE_BIN__ gemini-hook"
         }
-      ]
+      ],
+      "failClosed": false
     },
     {
       "matcher": "clear",
@@ -117,7 +128,8 @@
           "type": "command",
           "command": "__AGENT_GATE_BIN__ gemini-hook"
         }
-      ]
+      ],
+      "failClosed": false
     },
     {
       "matcher": "logout",
@@ -126,7 +138,8 @@
           "type": "command",
           "command": "__AGENT_GATE_BIN__ gemini-hook"
         }
-      ]
+      ],
+      "failClosed": false
     },
     {
       "matcher": "prompt_input_exit",
@@ -135,7 +148,8 @@
           "type": "command",
           "command": "__AGENT_GATE_BIN__ gemini-hook"
         }
-      ]
+      ],
+      "failClosed": false
     },
     {
       "matcher": "other",
@@ -144,7 +158,8 @@
           "type": "command",
           "command": "__AGENT_GATE_BIN__ gemini-hook"
         }
-      ]
+      ],
+      "failClosed": false
     }
   ],
   "Notification": [
@@ -155,7 +170,8 @@
           "type": "command",
           "command": "__AGENT_GATE_BIN__ gemini-hook"
         }
-      ]
+      ],
+      "failClosed": false
     }
   ],
   "PreCompress": [
@@ -166,7 +182,8 @@
           "type": "command",
           "command": "__AGENT_GATE_BIN__ gemini-hook"
         }
-      ]
+      ],
+      "failClosed": false
     },
     {
       "matcher": "manual",
@@ -175,7 +192,8 @@
           "type": "command",
           "command": "__AGENT_GATE_BIN__ gemini-hook"
         }
-      ]
+      ],
+      "failClosed": false
     }
   ]
 }

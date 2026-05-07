@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -24,6 +25,13 @@ import (
 
 const configReloadDebounce = 200 * time.Millisecond
 
+const (
+	evaluateHookMinimumConcurrency = 4
+	evaluateHookConcurrencyFactor  = 4
+	evaluateHookQueueWait          = 25 * time.Millisecond
+	overloadLogInterval            = 5 * time.Second
+)
+
 // Server implements the AgentGateD gRPC service.
 type Server struct {
 	daemonpb.UnimplementedAgentGateDServer
@@ -35,6 +43,11 @@ type Server struct {
 	configWatcher *fsnotify.Watcher
 	configPath    string
 	closing       bool
+
+	evaluateSlots       chan struct{}
+	evaluateQueueWait   time.Duration
+	overloadLogMu       sync.Mutex
+	lastOverloadLogTime time.Time
 }
 
 // New creates a new daemon Server.
@@ -70,12 +83,24 @@ func New(log *slog.Logger, cfg *config.Config) (*Server, error) {
 		configWatcher:                 nil,
 		configPath:                    config.Path(),
 		closing:                       false,
+		evaluateSlots:                 make(chan struct{}, defaultEvaluateHookConcurrency()),
+		evaluateQueueWait:             evaluateHookQueueWait,
+		overloadLogMu:                 sync.Mutex{},
+		lastOverloadLogTime:           time.Time{},
 	}
 	if err := s.startConfigWatcher(); err != nil {
 		_ = eventLogger.Close()
 		return nil, err
 	}
 	return s, nil
+}
+
+func defaultEvaluateHookConcurrency() int {
+	limit := runtime.GOMAXPROCS(0) * evaluateHookConcurrencyFactor
+	if limit < evaluateHookMinimumConcurrency {
+		return evaluateHookMinimumConcurrency
+	}
+	return limit
 }
 
 // Close shuts down daemon-owned resources.
@@ -193,7 +218,7 @@ func (s *Server) reloadConfig(ctx context.Context) error {
 		return fmt.Errorf("hook config validation failed: %w", errs[0])
 	}
 
-	newEventLogger, err := audit.NewEventLogger(candidate, s.log)
+	newEventLogger, err := audit.NewEventLoggerContext(ctx, candidate, s.log)
 	if err != nil {
 		return fmt.Errorf("failed to create event logger for reloaded config: %w", err)
 	}
@@ -220,6 +245,12 @@ func (s *Server) reloadConfig(ctx context.Context) error {
 
 // EvaluateHook processes a hook event through daemon-owned enforcement.
 func (s *Server) EvaluateHook(ctx context.Context, req *daemonpb.EvaluateHookRequest) (*daemonpb.EvaluateHookResponse, error) {
+	if !s.acquireEvaluateSlot(ctx) {
+		s.logEvaluateOverload(ctx)
+		return failOpenEvaluateHookResponse(), nil
+	}
+	defer s.releaseEvaluateSlot()
+
 	rawJSON := req.GetRawJson()
 	if cwd := req.GetCwd(); cwd != "" {
 		rawJSON = injectCWD(rawJSON, cwd)
@@ -244,6 +275,70 @@ func (s *Server) EvaluateHook(ctx context.Context, req *daemonpb.EvaluateHookReq
 		StdoutData: stdout,
 		StderrData: stderr,
 	}, nil
+}
+
+func (s *Server) acquireEvaluateSlot(ctx context.Context) bool {
+	if s == nil || s.evaluateSlots == nil {
+		return true
+	}
+	select {
+	case s.evaluateSlots <- struct{}{}:
+		return true
+	default:
+	}
+
+	waitCtx := ctx
+	cancel := func() {}
+	if s.evaluateQueueWait > 0 {
+		waitCtx, cancel = context.WithTimeout(ctx, s.evaluateQueueWait)
+	}
+	defer cancel()
+
+	select {
+	case s.evaluateSlots <- struct{}{}:
+		return true
+	case <-waitCtx.Done():
+		return false
+	}
+}
+
+func (s *Server) releaseEvaluateSlot() {
+	if s == nil || s.evaluateSlots == nil {
+		return
+	}
+	select {
+	case <-s.evaluateSlots:
+	default:
+	}
+}
+
+func failOpenEvaluateHookResponse() *daemonpb.EvaluateHookResponse {
+	return &daemonpb.EvaluateHookResponse{
+		ExitCode:   0,
+		StdoutData: nil,
+		StderrData: nil,
+	}
+}
+
+var auditNow = time.Now
+
+func (s *Server) logEvaluateOverload(ctx context.Context) {
+	if s == nil || s.log == nil {
+		return
+	}
+	now := auditNow()
+	s.overloadLogMu.Lock()
+	if !s.lastOverloadLogTime.IsZero() && now.Sub(s.lastOverloadLogTime) < overloadLogInterval {
+		s.overloadLogMu.Unlock()
+		return
+	}
+	s.lastOverloadLogTime = now
+	s.overloadLogMu.Unlock()
+
+	s.log.WarnContext(ctx, "evaluate hook overloaded; failing open",
+		"max_concurrency", cap(s.evaluateSlots),
+		"queue_wait_ms", s.evaluateQueueWait.Milliseconds(),
+	)
 }
 
 // clampExitCode reduces an int exit code to the int32 range expected by the

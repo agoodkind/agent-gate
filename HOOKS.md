@@ -46,6 +46,14 @@ under `$XDG_STATE_HOME/agent-gate/events/YYYY/MM/DD/events.jsonl`, and
 returns the provider-specific allow or block response for the hook process
 to mirror.
 
+Hook transport failures are fail-open. If the hook process cannot read stdin,
+cannot reach the daemon, receives a daemon RPC error, or recovers a hook
+invocation panic, it emits the hinted provider's allow response and exits 0.
+For hooks without a provider hint, `agent-gate` exits 0 with empty stdout
+because no provider-specific allow schema is known at the transport boundary.
+Successful daemon policy blocks are not fail-open cases; the hook process
+mirrors the daemon's stdout, stderr, and exit code exactly.
+
 ## Claude Code hooks
 
 Source: `hooks/claude.json`. All events route to `agent-gate`.

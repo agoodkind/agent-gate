@@ -97,6 +97,16 @@ type Condition struct {
 	selectors   []FieldSelectorSpec
 }
 
+// ConditionKind selects which evaluator applies to a rule condition.
+type ConditionKind string
+
+// ConditionKind variants.
+const (
+	ConditionKindCommand ConditionKind = "command"
+	ConditionKindProject ConditionKind = "project"
+	ConditionKindRegex   ConditionKind = "regex"
+)
+
 // CompiledPattern returns the pre-compiled regex for Pattern.
 func (c *Condition) CompiledPattern() *regex.Regexp { return c.compiled }
 
@@ -334,8 +344,8 @@ func loadPath(path string, requireExisting bool) (*Config, error) {
 				if c.Kind == "" {
 					c.Kind = "regex"
 				}
-				switch c.Kind {
-				case "regex", "command", "project":
+				switch ConditionKind(c.Kind) {
+				case ConditionKindRegex, ConditionKindCommand, ConditionKindProject:
 				default:
 					return nil, fmt.Errorf("rule %q condition %d: unknown kind %q", r.Name, j, c.Kind)
 				}

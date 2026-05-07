@@ -113,7 +113,14 @@ func enforce(ctx context.Context, payload HookPayload, cfg *config.Config, sink 
 			slog.String("violation_message", diagnostic),
 		))
 		sink.Log(ctx, systemStr, sessionID, eventName, "info", "hook.blocked", attrs)
-		return blockTextResponse(payload.System, eventName, diagnostic)
+		response := RenderResponse(ResponseRequest{
+			System:         payload.System,
+			EventName:      eventName,
+			Decision:       ResponseDecisionBlock,
+			DiagnosticText: diagnostic,
+			FailOpenReason: "",
+		})
+		return response.Stdout, response.Stderr, response.ExitCode
 	}
 
 	if len(auditOnlyViolations) > 0 {
@@ -131,7 +138,14 @@ func enforce(ctx context.Context, payload HookPayload, cfg *config.Config, sink 
 		slog.String("violation_message", ""),
 	))
 	sink.Log(ctx, systemStr, sessionID, eventName, "info", "hook.allowed", allowAttrs)
-	return defaultAllow(payload.System), nil, 0
+	response := RenderResponse(ResponseRequest{
+		System:         payload.System,
+		EventName:      eventName,
+		Decision:       ResponseDecisionAllow,
+		DiagnosticText: "",
+		FailOpenReason: "",
+	})
+	return response.Stdout, response.Stderr, response.ExitCode
 }
 
 func blockingMatches(violations []rules.MatchViolation) []rules.MatchViolation {
@@ -165,36 +179,6 @@ func matchRuleNames(violations []rules.MatchViolation) []string {
 		names = append(names, violation.RuleName)
 	}
 	return names
-}
-
-func blockTextResponse(system HookSystem, eventName, text string) (stdout, stderr []byte, exitCode int) {
-	switch system {
-	case SystemCursor:
-		return CursorBlockText(text), nil, 0
-	case SystemCodex:
-		return CodexBlockText(eventName, text), nil, 0
-	case SystemGemini:
-		return GeminiBlockText(eventName, text), nil, 0
-	case SystemUnknown, SystemClaude, SystemVSCode, SystemCopilot:
-		return ClaudeAllow(), ClaudeBlockText(text), 2
-	default:
-		return ClaudeAllow(), ClaudeBlockText(text), 2
-	}
-}
-
-func defaultAllow(system HookSystem) []byte {
-	switch system {
-	case SystemCursor:
-		return CursorAllow()
-	case SystemCodex:
-		return CodexAllow()
-	case SystemGemini:
-		return GeminiAllow()
-	case SystemUnknown, SystemClaude, SystemVSCode, SystemCopilot:
-		return ClaudeAllow()
-	default:
-		return ClaudeAllow()
-	}
 }
 
 func logAttrs(fields rules.FieldSet) []slog.Attr {

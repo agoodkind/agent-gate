@@ -122,3 +122,14 @@ func CursorBlockText(text string) []byte {
 	}
 	return append(b, '\n')
 }
+
+func renderCursorResponse(request ResponseRequest) Response {
+	if request.Decision == ResponseDecisionBlock {
+		return Response{
+			Stdout:   CursorBlockText(request.DiagnosticText),
+			Stderr:   nil,
+			ExitCode: 0,
+		}
+	}
+	return Response{Stdout: CursorAllow(), Stderr: nil, ExitCode: 0}
+}

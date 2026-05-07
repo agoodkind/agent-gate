@@ -28,6 +28,15 @@ func makeSchema(base []string, extra ...string) EventSchema {
 // They are always valid regardless of event, so schema checks skip them.
 var virtualFields = []string{"effective_cwd", "cmd_segments"}
 
+type schemaSystem string
+
+const (
+	schemaSystemClaude schemaSystem = "claude"
+	schemaSystemCodex  schemaSystem = "codex"
+	schemaSystemCursor schemaSystem = "cursor"
+	schemaSystemGemini schemaSystem = "gemini"
+)
+
 // ── Cursor ──────────────────────────────────────────────────────────────────
 
 // cursorEnvelope contains fields present on every Cursor event.
@@ -299,14 +308,14 @@ func init() {
 // ValidPaths returns the EventSchema for the given system ("claude"/"cursor")
 // and event name. Returns nil if the system or event is unknown.
 func ValidPaths(system, eventName string) EventSchema {
-	switch system {
-	case "cursor":
+	switch schemaSystem(system) {
+	case schemaSystemCursor:
 		return cursorSchema[CursorEvent(eventName)]
-	case "claude":
+	case schemaSystemClaude:
 		return claudeSchema[ClaudeEvent(eventName)]
-	case "codex":
+	case schemaSystemCodex:
 		return codexSchema[CodexEvent(eventName)]
-	case "gemini":
+	case schemaSystemGemini:
 		return geminiSchema[GeminiEvent(eventName)]
 	default:
 		return nil
@@ -324,8 +333,8 @@ func ValidateConfig(cfg *config.Config) []error {
 		var allPaths []string
 		allPaths = append(allPaths, r.FieldPaths...)
 		for j := range r.Conditions {
-			switch r.Conditions[j].Kind {
-			case "", "regex", "command", "project":
+			switch config.ConditionKind(r.Conditions[j].Kind) {
+			case "", config.ConditionKindRegex, config.ConditionKindCommand, config.ConditionKindProject:
 			default:
 				errs = append(errs, fmt.Errorf("rule %q: condition %d has unknown kind %q", r.Name, j, r.Conditions[j].Kind))
 			}

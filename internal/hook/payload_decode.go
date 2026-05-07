@@ -3,6 +3,7 @@ package hook
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"goodkind.io/agent-gate/internal/rules"
@@ -13,6 +14,7 @@ import (
 // error directly without spelling out the wrap each time.
 func decodePayload[T HookEvent](rawBytes []byte, dst *T) error {
 	if err := json.Unmarshal(rawBytes, dst); err != nil {
+		slog.Warn("decode hook payload failed", slog.Any("err", err))
 		return fmt.Errorf("decode hook payload: %w", err)
 	}
 	return nil
@@ -123,6 +125,7 @@ func eventNameFromBytes(rawBytes []byte) (string, error) {
 		HookEventName string `json:"hook_event_name"`
 	}
 	if err := json.Unmarshal(rawBytes, &envelope); err != nil {
+		slog.Warn("decode event name failed", slog.Any("err", err))
 		return "", fmt.Errorf("decode event name: %w", err)
 	}
 	return envelope.HookEventName, nil

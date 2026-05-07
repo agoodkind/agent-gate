@@ -112,3 +112,14 @@ func GeminiBlockText(eventName, text string) []byte {
 	}
 	return append(bytes, '\n')
 }
+
+func renderGeminiResponse(request ResponseRequest) Response {
+	if request.Decision == ResponseDecisionBlock {
+		return Response{
+			Stdout:   GeminiBlockText(request.EventName, request.DiagnosticText),
+			Stderr:   nil,
+			ExitCode: 0,
+		}
+	}
+	return Response{Stdout: GeminiAllow(), Stderr: nil, ExitCode: 0}
+}

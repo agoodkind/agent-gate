@@ -53,7 +53,9 @@ func Connect(ctx context.Context) (*Client, error) {
 
 // Close closes the gRPC connection.
 func (c *Client) Close() error {
+	log := slog.Default()
 	if err := c.conn.Close(); err != nil {
+		log.Warn("close daemon client failed", slog.Any("err", err))
 		return fmt.Errorf("close daemon client: %w", err)
 	}
 	return nil
@@ -63,6 +65,7 @@ func (c *Client) Close() error {
 func (c *Client) EvaluateHook(rawJSON []byte, providerHint, cwd string, argv []string, env map[string]string) (*daemonpb.EvaluateHookResponse, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	log := slog.Default()
 
 	resp, err := c.rpc.EvaluateHook(ctx, &daemonpb.EvaluateHookRequest{
 		RawJson:        rawJSON,
@@ -72,6 +75,7 @@ func (c *Client) EvaluateHook(rawJSON []byte, providerHint, cwd string, argv []s
 		EnvFingerprint: env,
 	})
 	if err != nil {
+		log.WarnContext(ctx, "daemon EvaluateHook rpc failed", slog.Any("err", err))
 		return nil, fmt.Errorf("daemon EvaluateHook rpc: %w", err)
 	}
 	return resp, nil
@@ -81,8 +85,10 @@ func (c *Client) EvaluateHook(rawJSON []byte, providerHint, cwd string, argv []s
 func (c *Client) Status() (*daemonpb.StatusResponse, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	log := slog.Default()
 	resp, err := c.rpc.Status(ctx, &daemonpb.StatusRequest{})
 	if err != nil {
+		log.WarnContext(ctx, "daemon Status rpc failed", slog.Any("err", err))
 		return nil, fmt.Errorf("daemon Status rpc: %w", err)
 	}
 	return resp, nil

@@ -69,7 +69,7 @@ func conditionViolations(fields FieldSet, rule *config.Rule) []MatchViolation {
 	var violations []MatchViolation
 	for i := range rule.Conditions {
 		c := &rule.Conditions[i]
-		if conditionKind(c) != "regex" {
+		if conditionKind(c) != config.ConditionKindRegex {
 			continue
 		}
 		if c.CompiledPattern() == nil {
@@ -148,7 +148,7 @@ func allConditionsMatch(fields FieldSet, conditions []config.Condition) bool {
 	ctx := conditionContext{}
 	for i := range conditions {
 		c := &conditions[i]
-		if conditionKind(c) != "command" {
+		if conditionKind(c) != config.ConditionKindCommand {
 			continue
 		}
 		cwds, ok := commandConditionCwds(fields, c)
@@ -161,13 +161,13 @@ func allConditionsMatch(fields FieldSet, conditions []config.Condition) bool {
 	for i := range conditions {
 		c := &conditions[i]
 		switch conditionKind(c) {
-		case "regex":
+		case config.ConditionKindRegex:
 			if !regexConditionMatch(fields, c) {
 				return false
 			}
-		case "command":
+		case config.ConditionKindCommand:
 			continue
-		case "project":
+		case config.ConditionKindProject:
 			if !projectConditionMatch(fields, c, ctx) {
 				return false
 			}
@@ -182,11 +182,11 @@ type conditionContext struct {
 	commandCwds []string
 }
 
-func conditionKind(c *config.Condition) string {
+func conditionKind(c *config.Condition) config.ConditionKind {
 	if c.Kind == "" {
-		return "regex"
+		return config.ConditionKindRegex
 	}
-	return c.Kind
+	return config.ConditionKind(c.Kind)
 }
 
 func regexConditionMatch(fields FieldSet, c *config.Condition) bool {
@@ -594,15 +594,24 @@ func appliesToEvent(rule *config.Rule, system, eventName string) bool {
 		slices.Contains(specific, eventName)
 }
 
+type ruleSystem string
+
+const (
+	ruleSystemClaude ruleSystem = "claude"
+	ruleSystemCodex  ruleSystem = "codex"
+	ruleSystemCursor ruleSystem = "cursor"
+	ruleSystemGemini ruleSystem = "gemini"
+)
+
 func systemSpecificEvents(rule *config.Rule, system string) []string {
-	switch system {
-	case "claude":
+	switch ruleSystem(system) {
+	case ruleSystemClaude:
 		return rule.ClaudeEvents
-	case "cursor":
+	case ruleSystemCursor:
 		return rule.CursorEvents
-	case "codex":
+	case ruleSystemCodex:
 		return rule.CodexEvents
-	case "gemini":
+	case ruleSystemGemini:
 		return rule.GeminiEvents
 	default:
 		return nil

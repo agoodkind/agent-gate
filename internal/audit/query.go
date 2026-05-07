@@ -5,8 +5,10 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -29,6 +31,10 @@ type QueryFilter struct {
 	Decision  string
 	Rule      string
 	Limit     int
+}
+
+type queryArg struct {
+	Value string
 }
 
 // Query returns audit events matching filter, choosing between the SQLite
@@ -60,15 +66,18 @@ func queryJSONLWithSource(cfg *config.Config, filter QueryFilter) ([]Event, stri
 
 func querySQLite(cfg *config.Config, filter QueryFilter) ([]Event, error) {
 	ctx := context.Background()
+	log := slog.Default()
 	path := config.DefaultAuditSQLitePath()
 	if cfg != nil {
 		path = cfg.AuditSQLitePath()
 	}
 	if _, err := os.Stat(path); err != nil {
+		log.WarnContext(ctx, "stat audit sqlite path failed", slog.String("path", path), slog.Any("err", err))
 		return nil, fmt.Errorf("stat audit sqlite path: %w", err)
 	}
 	db, err := sql.Open("sqlite3", path)
 	if err != nil {
+		log.WarnContext(ctx, "open audit sqlite db failed", slog.String("path", path), slog.Any("err", err))
 		return nil, fmt.Errorf("open audit sqlite db: %w", err)
 	}
 	defer func() { _ = db.Close() }()
@@ -88,8 +97,9 @@ func querySQLite(cfg *config.Config, filter QueryFilter) ([]Event, error) {
 	// where + limit are derived from a closed enum filter and a positive int;
 	// they cannot carry user-supplied SQL fragments, so concatenation is safe
 	// here. Placeholders are still used for filter values via args.
-	rows, err := db.QueryContext(ctx, baseQuery+where+` order by e.time desc`+limit, args...)
+	rows, err := queryAuditRows(ctx, db, baseQuery+where+` order by e.time desc`+limit, args)
 	if err != nil {
+		log.WarnContext(ctx, "query audit events failed", slog.String("path", path), slog.Any("err", err))
 		return nil, fmt.Errorf("query audit events: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
@@ -103,6 +113,7 @@ func querySQLite(cfg *config.Config, filter QueryFilter) ([]Event, error) {
 			&event.System, &event.SessionID, &event.TurnID, &event.EventName, &event.ToolUseID, &event.ToolName, &event.RawPayloadHash,
 			&event.Operation.CWD, &event.Operation.EffectiveCWD, &event.Operation.Command, &event.Operation.FilePath,
 			&event.Decision.Kind, &canBlock, &checked, &matched); err != nil {
+			log.WarnContext(ctx, "scan audit event row failed", slog.String("path", path), slog.Any("err", err))
 			return nil, fmt.Errorf("scan audit event row: %w", err)
 		}
 		event.Decision.CanBlock = canBlock != 0
@@ -116,17 +127,18 @@ func querySQLite(cfg *config.Config, filter QueryFilter) ([]Event, error) {
 		out = append(out, event)
 	}
 	if err := rows.Err(); err != nil {
+		log.WarnContext(ctx, "iterate audit event rows failed", slog.String("path", path), slog.Any("err", err))
 		return nil, fmt.Errorf("iterate audit events: %w", err)
 	}
 	return out, nil
 }
 
-func queryWhere(filter QueryFilter) (string, []any) {
+func queryWhere(filter QueryFilter) (string, []queryArg) {
 	var clauses []string
-	var args []any
-	add := func(clause string, arg any) {
+	var args []queryArg
+	add := func(clause string, arg string) {
 		clauses = append(clauses, clause)
-		args = append(args, arg)
+		args = append(args, queryArg{Value: arg})
 	}
 	if !filter.Since.IsZero() {
 		add("e.time >= ?", filter.Since.UTC().Format(time.RFC3339Nano))
@@ -150,8 +162,7 @@ func queryWhere(filter QueryFilter) (string, []any) {
 		add("d.kind = ?", filter.Decision)
 	}
 	if filter.Rule != "" {
-		clauses = append(clauses, "exists (select 1 from violations v where v.event_id = e.event_id and v.rule = ?)")
-		args = append(args, filter.Rule)
+		add("exists (select 1 from violations v where v.event_id = e.event_id and v.rule = ?)", filter.Rule)
 	}
 	if len(clauses) == 0 {
 		return "", nil
@@ -159,9 +170,46 @@ func queryWhere(filter QueryFilter) (string, []any) {
 	return "where " + strings.Join(clauses, " and "), args
 }
 
+func queryAuditRows(ctx context.Context, db *sql.DB, query string, args []queryArg) (*sql.Rows, error) {
+	log := slog.Default()
+	var rows *sql.Rows
+	var err error
+	switch len(args) {
+	case 0:
+		rows, err = db.QueryContext(ctx, query)
+	case 1:
+		rows, err = db.QueryContext(ctx, query, args[0].Value)
+	case 2:
+		rows, err = db.QueryContext(ctx, query, args[0].Value, args[1].Value)
+	case 3:
+		rows, err = db.QueryContext(ctx, query, args[0].Value, args[1].Value, args[2].Value)
+	case 4:
+		rows, err = db.QueryContext(ctx, query, args[0].Value, args[1].Value, args[2].Value, args[3].Value)
+	case 5:
+		rows, err = db.QueryContext(ctx, query, args[0].Value, args[1].Value, args[2].Value, args[3].Value, args[4].Value)
+	case 6:
+		rows, err = db.QueryContext(ctx, query, args[0].Value, args[1].Value, args[2].Value, args[3].Value, args[4].Value, args[5].Value)
+	case 7:
+		rows, err = db.QueryContext(ctx, query, args[0].Value, args[1].Value, args[2].Value, args[3].Value, args[4].Value, args[5].Value, args[6].Value)
+	case 8:
+		rows, err = db.QueryContext(ctx, query, args[0].Value, args[1].Value, args[2].Value, args[3].Value, args[4].Value, args[5].Value, args[6].Value, args[7].Value)
+	default:
+		err := errors.New("too many audit query filters")
+		log.ErrorContext(ctx, "audit query argument limit exceeded", slog.Int("arg_count", len(args)), slog.Any("err", err))
+		return nil, err
+	}
+	if err != nil {
+		log.WarnContext(ctx, "query audit rows failed", slog.Int("arg_count", len(args)), slog.Any("err", err))
+		return nil, fmt.Errorf("query audit rows: %w", err)
+	}
+	return rows, nil
+}
+
 func sqliteViolations(ctx context.Context, db *sql.DB, eventID string) ([]Violation, error) {
+	log := slog.Default()
 	rows, err := db.QueryContext(ctx, `select rule, mode, field_path, file_path, start, end, message from violations where event_id = ? order by id`, eventID)
 	if err != nil {
+		log.WarnContext(ctx, "query audit violations failed", slog.String("event_id", eventID), slog.Any("err", err))
 		return nil, fmt.Errorf("query audit violations: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
@@ -169,22 +217,26 @@ func sqliteViolations(ctx context.Context, db *sql.DB, eventID string) ([]Violat
 	for rows.Next() {
 		var v Violation
 		if err := rows.Scan(&v.Rule, &v.Mode, &v.FieldPath, &v.FilePath, &v.Start, &v.End, &v.Message); err != nil {
+			log.WarnContext(ctx, "scan audit violation row failed", slog.String("event_id", eventID), slog.Any("err", err))
 			return nil, fmt.Errorf("scan audit violation row: %w", err)
 		}
 		out = append(out, v)
 	}
 	if err := rows.Err(); err != nil {
+		log.WarnContext(ctx, "iterate audit violation rows failed", slog.String("event_id", eventID), slog.Any("err", err))
 		return nil, fmt.Errorf("iterate audit violations: %w", err)
 	}
 	return out, nil
 }
 
 func queryJSONL(cfg *config.Config, filter QueryFilter) ([]Event, error) {
+	log := slog.Default()
 	dir := config.DefaultAuditEventsDir()
 	if cfg != nil {
 		dir = cfg.AuditEventsDir()
 	}
 	if _, err := os.Stat(dir); err != nil {
+		log.Warn("stat audit events dir failed", slog.String("dir", dir), slog.Any("err", err))
 		return nil, fmt.Errorf("stat audit events dir: %w", err)
 	}
 	var out []Event
@@ -200,6 +252,7 @@ func queryJSONL(cfg *config.Config, filter QueryFilter) ([]Event, error) {
 		return nil
 	})
 	if err != nil {
+		log.Warn("walk audit events dir failed", slog.String("dir", dir), slog.Any("err", err))
 		return nil, fmt.Errorf("walk audit events dir: %w", err)
 	}
 	sortEventsDesc(out)
@@ -210,8 +263,10 @@ func queryJSONL(cfg *config.Config, filter QueryFilter) ([]Event, error) {
 }
 
 func scanEventFile(path string, filter QueryFilter) ([]Event, error) {
+	log := slog.Default()
 	f, err := os.Open(path)
 	if err != nil {
+		log.Warn("open audit events file failed", slog.String("path", path), slog.Any("err", err))
 		return nil, fmt.Errorf("open audit events file: %w", err)
 	}
 	defer func() { _ = f.Close() }()
@@ -221,6 +276,7 @@ func scanEventFile(path string, filter QueryFilter) ([]Event, error) {
 	for scanner.Scan() {
 		var event Event
 		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
+			log.Warn("decode audit event failed", slog.String("path", path), slog.Any("err", err))
 			return nil, fmt.Errorf("decode audit event: %w", err)
 		}
 		if eventMatches(event, filter) {
@@ -228,6 +284,7 @@ func scanEventFile(path string, filter QueryFilter) ([]Event, error) {
 		}
 	}
 	if err := scanner.Err(); err != nil {
+		log.Warn("scan audit events file failed", slog.String("path", path), slog.Any("err", err))
 		return nil, fmt.Errorf("scan audit events file: %w", err)
 	}
 	return out, nil

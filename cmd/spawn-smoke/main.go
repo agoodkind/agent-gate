@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -20,6 +21,14 @@ const (
 	defaultProbeStep       = 64 * 1024
 	defaultPayloadKind     = "beforeSubmitPrompt"
 	defaultGenerateBytes   = 0
+)
+
+type payloadKind string
+
+const (
+	payloadKindBeforeReadFile     payloadKind = "beforeReadFile"
+	payloadKindBeforeSubmitPrompt payloadKind = "beforeSubmitPrompt"
+	payloadKindPreToolUse         payloadKind = "preToolUse"
 )
 
 type config struct {
@@ -71,6 +80,32 @@ type runResult struct {
 type padScenario struct {
 	argvPadBytes int
 	envPadBytes  int
+}
+
+type smokePayload struct {
+	ConversationID string              `json:"conversation_id"`
+	GenerationID   string              `json:"generation_id"`
+	SessionID      string              `json:"session_id"`
+	Model          string              `json:"model"`
+	CursorVersion  string              `json:"cursor_version"`
+	CWD            string              `json:"cwd"`
+	WorkspaceRoots []string            `json:"workspace_roots"`
+	Attachments    []map[string]string `json:"attachments"`
+	UserEmail      string              `json:"user_email"`
+	TranscriptPath string              `json:"transcript_path"`
+	HookEventName  string              `json:"hook_event_name"`
+	Prompt         string              `json:"prompt,omitempty"`
+	FilePath       string              `json:"file_path,omitempty"`
+	Content        string              `json:"content,omitempty"`
+	ToolName       string              `json:"tool_name,omitempty"`
+	ToolInput      *smokeToolInput     `json:"tool_input,omitempty"`
+}
+
+type smokeToolInput struct {
+	FilePath  string `json:"file_path"`
+	Content   string `json:"content"`
+	OldString string `json:"old_string"`
+	NewString string `json:"new_string"`
 }
 
 func main() {
@@ -274,48 +309,48 @@ func resolveTargetBinary(target string, logger *slog.Logger) (string, error) {
 	return target, nil
 }
 
-func buildPayload(payloadKind string, largeText string, logger *slog.Logger) ([]byte, error) {
-	base := map[string]any{
-		"conversation_id": "spawn-smoke-conversation",
-		"generation_id":   "spawn-smoke-generation",
-		"session_id":      "spawn-smoke-conversation",
-		"model":           "gpt-5.4",
-		"cursor_version":  "3.2.11",
-		"cwd":             "/Users/agoodkind/Sites/agent-gate",
-		"workspace_roots": []string{"/Users/agoodkind/Sites/agent-gate"},
-		"attachments":     []map[string]string{},
-		"user_email":      "redacted@example.com",
-		"transcript_path": filepath.Join(os.TempDir(), "spawn-smoke.jsonl"),
+func buildPayload(payloadKindValue string, largeText string, logger *slog.Logger) ([]byte, error) {
+	payload := smokePayload{
+		ConversationID: "spawn-smoke-conversation",
+		GenerationID:   "spawn-smoke-generation",
+		SessionID:      "spawn-smoke-conversation",
+		Model:          "gpt-5.4",
+		CursorVersion:  "3.2.11",
+		CWD:            "/Users/agoodkind/Sites/agent-gate",
+		WorkspaceRoots: []string{"/Users/agoodkind/Sites/agent-gate"},
+		Attachments:    []map[string]string{},
+		UserEmail:      "redacted@example.com",
+		TranscriptPath: filepath.Join(os.TempDir(), "spawn-smoke.jsonl"),
 	}
 
-	switch payloadKind {
-	case "beforeSubmitPrompt":
-		base["hook_event_name"] = "beforeSubmitPrompt"
-		base["prompt"] = largeText
-	case "beforeReadFile":
-		base["hook_event_name"] = "beforeReadFile"
-		base["file_path"] = "/tmp/spawn-smoke.txt"
-		base["content"] = largeText
-	case "preToolUse":
-		base["hook_event_name"] = "preToolUse"
-		base["tool_name"] = "edit_file"
-		base["tool_input"] = map[string]any{
-			"file_path":  "/tmp/spawn-smoke.txt",
-			"content":    largeText,
-			"old_string": "",
-			"new_string": largeText,
+	switch payloadKind(payloadKindValue) {
+	case payloadKindBeforeSubmitPrompt:
+		payload.HookEventName = string(payloadKindBeforeSubmitPrompt)
+		payload.Prompt = largeText
+	case payloadKindBeforeReadFile:
+		payload.HookEventName = string(payloadKindBeforeReadFile)
+		payload.FilePath = "/tmp/spawn-smoke.txt"
+		payload.Content = largeText
+	case payloadKindPreToolUse:
+		payload.HookEventName = string(payloadKindPreToolUse)
+		payload.ToolName = "edit_file"
+		payload.ToolInput = &smokeToolInput{
+			FilePath:  "/tmp/spawn-smoke.txt",
+			Content:   largeText,
+			OldString: "",
+			NewString: largeText,
 		}
 	default:
-		return nil, fmt.Errorf("unsupported payload kind %q", payloadKind)
+		return nil, fmt.Errorf("unsupported payload kind %q", payloadKindValue)
 	}
 
-	payloadBytes, err := json.Marshal(base)
+	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
 		logger.Error("marshal spawn smoke payload failed",
-			slog.String("payload_kind", payloadKind),
+			slog.String("payload_kind", payloadKindValue),
 			slog.Any("err", err),
 		)
-		return nil, fmt.Errorf("marshal %s payload: %w", payloadKind, err)
+		return nil, fmt.Errorf("marshal %s payload: %w", payloadKindValue, err)
 	}
 
 	return payloadBytes, nil
@@ -408,7 +443,7 @@ func runScenario(targetBinary string, payloadBytes []byte, scenario padScenario)
 		args = append(args, "--spawn-smoke-pad="+strings.Repeat("a", scenario.argvPadBytes))
 	}
 
-	cmd := exec.Command(targetBinary, args...)
+	cmd := exec.CommandContext(context.Background(), targetBinary, args...)
 	cmd.Stdin = bytes.NewReader(payloadBytes)
 	cmd.Env = append(os.Environ(), "AGENT_GATE_SPAWN_SMOKE_PAD="+strings.Repeat("e", scenario.envPadBytes))
 

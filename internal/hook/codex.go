@@ -135,3 +135,14 @@ func CodexBlockText(eventName, text string) []byte {
 	}
 	return append(bytes, '\n')
 }
+
+func renderCodexResponse(request ResponseRequest) Response {
+	if request.Decision == ResponseDecisionBlock {
+		return Response{
+			Stdout:   CodexBlockText(request.EventName, request.DiagnosticText),
+			Stderr:   nil,
+			ExitCode: 0,
+		}
+	}
+	return Response{Stdout: CodexAllow(), Stderr: nil, ExitCode: 0}
+}

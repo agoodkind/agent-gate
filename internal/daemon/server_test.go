@@ -3,11 +3,14 @@ package daemon
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"goodkind.io/agent-gate/api/daemonpb"
 	"goodkind.io/agent-gate/internal/config"
@@ -20,7 +23,7 @@ func newDiscardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil))
 }
 
-func setDaemonTestDirs(t *testing.T) {
+func setDaemonTestDirs(t testing.TB) {
 	t.Helper()
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
@@ -28,7 +31,7 @@ func setDaemonTestDirs(t *testing.T) {
 	t.Setenv("XDG_RUNTIME_DIR", filepath.Join(dir, "runtime"))
 }
 
-func daemonTestConfig(t *testing.T) *config.Config {
+func daemonTestConfig(t testing.TB) *config.Config {
 	t.Helper()
 	re, err := regex.Compile(`go test \./\.\.\.`)
 	if err != nil {
@@ -50,7 +53,7 @@ func daemonTestConfig(t *testing.T) *config.Config {
 	}
 }
 
-func emdashDaemonTestConfig(t *testing.T) *config.Config {
+func emdashDaemonTestConfig(t testing.TB) *config.Config {
 	t.Helper()
 	pattern := `[\x{2010}-\x{2015}]`
 	re, err := regex.Compile(pattern)
@@ -114,6 +117,83 @@ func TestEvaluateHook_InvalidJSONFailsClosed(t *testing.T) {
 	}
 	if !strings.Contains(string(resp.StderrData), "parse stdin JSON") {
 		t.Fatalf("stderr missing parse error: %q", string(resp.StderrData))
+	}
+}
+
+func TestEvaluateHook_OverloadFailsOpen(t *testing.T) {
+	setDaemonTestDirs(t)
+	srv, err := New(newDiscardLogger(), daemonTestConfig(t))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer srv.Close()
+
+	srv.evaluateSlots = make(chan struct{}, 1)
+	srv.evaluateSlots <- struct{}{}
+	srv.evaluateQueueWait = time.Millisecond
+
+	start := time.Now()
+	resp, err := srv.EvaluateHook(context.Background(), &daemonpb.EvaluateHookRequest{
+		RawJson:      []byte(`{"session_id":"s1","hook_event_name":"PreToolUse","tool_name":"Shell","tool_input":{"command":"go test ./..."}}`),
+		ProviderHint: "codex",
+		Cwd:          t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("EvaluateHook: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 100*time.Millisecond {
+		t.Fatalf("EvaluateHook overload took %s, want bounded wait", elapsed)
+	}
+	if resp.ExitCode != 0 {
+		t.Fatalf("exit_code = %d, want fail-open exit 0", resp.ExitCode)
+	}
+	if len(resp.StdoutData) != 0 || len(resp.StderrData) != 0 {
+		t.Fatalf("overload response wrote stdout=%q stderr=%q, want transport-neutral allow", string(resp.StdoutData), string(resp.StderrData))
+	}
+}
+
+func TestEvaluateHook_ConcurrentBurstCompletes(t *testing.T) {
+	setDaemonTestDirs(t)
+	srv, err := New(newDiscardLogger(), daemonTestConfig(t))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer srv.Close()
+
+	srv.evaluateSlots = make(chan struct{}, 4)
+	srv.evaluateQueueWait = 50 * time.Millisecond
+
+	const requestCount = 64
+	cwd := t.TempDir()
+	var wg sync.WaitGroup
+	errs := make(chan error, requestCount)
+	for i := 0; i < requestCount; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			resp, err := srv.EvaluateHook(context.Background(), &daemonpb.EvaluateHookRequest{
+				RawJson:      []byte(`{"session_id":"s1","hook_event_name":"PreToolUse","tool_name":"Shell","tool_input":{"command":"echo ok"}}`),
+				ProviderHint: "codex",
+				Cwd:          cwd,
+				EnvFingerprint: map[string]string{
+					"CODEX_THREAD_ID": "test-thread",
+				},
+			})
+			if err != nil {
+				errs <- err
+				return
+			}
+			if resp.ExitCode != 0 {
+				errs <- fmt.Errorf("unexpected non-zero exit: %d", resp.ExitCode)
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent EvaluateHook: %v", err)
+		}
 	}
 }
 

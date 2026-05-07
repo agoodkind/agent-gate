@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"goodkind.io/agent-gate/api/daemonpb"
 	"goodkind.io/agent-gate/internal/audit"
 	"goodkind.io/agent-gate/internal/config"
 	"goodkind.io/agent-gate/internal/daemon"
@@ -20,27 +21,40 @@ import (
 	"goodkind.io/gklog"
 )
 
-func writeUserf(writer io.Writer, format string, args ...any) {
-	_, _ = fmt.Fprintf(writer, format, args...)
-}
-
 func writeUserLine(writer io.Writer, line string) {
 	_, _ = io.WriteString(writer, line+"\n")
 }
+
+type commandName string
+
+const (
+	commandConfig     commandName = "config"
+	commandCodexHook  commandName = "codex-hook"
+	commandDaemon     commandName = "daemon"
+	commandGeminiHook commandName = "gemini-hook"
+	commandLogs       commandName = "logs"
+	commandVersion    commandName = "version"
+)
+
+type daemonCommandName string
+
+const (
+	daemonCommandStatus daemonCommandName = "status"
+)
 
 // printVersion writes the build metadata used in log entries to stdout.
 // Output mirrors the slog attrs from internal/version.Attrs so that what
 // appears in audit logs is exactly what `agent-gate version` reports.
 func printVersion(writer io.Writer) {
-	writeUserf(writer, "version:   %s\n", version.Version)
-	writeUserf(writer, "commit:    %s\n", version.Commit)
-	writeUserf(writer, "dirty:     %s\n", version.Dirty)
-	writeUserf(writer, "buildHash: %s\n", version.BuildHash())
+	_, _ = fmt.Fprintf(writer, "version:   %s\n", version.Version)
+	_, _ = fmt.Fprintf(writer, "commit:    %s\n", version.Commit)
+	_, _ = fmt.Fprintf(writer, "dirty:     %s\n", version.Dirty)
+	_, _ = fmt.Fprintf(writer, "buildHash: %s\n", version.BuildHash())
 }
 
 func main() {
 	slog.New(slog.NewJSONHandler(io.Discard, nil)).Info("agent-gate invocation", "argc", len(os.Args))
-	// Fail closed: any unrecovered panic exits 2, blocking the pending action.
+	// Hook panics are recovered in runHook so availability failures do not block.
 	defer func() {
 		if r := recover(); r != nil {
 			fmt.Fprintf(os.Stderr, "agent-gate: panic: %v\n", r)
@@ -49,33 +63,33 @@ func main() {
 	}()
 
 	if len(os.Args) > 1 {
-		switch os.Args[1] {
-		case "daemon":
+		switch commandName(os.Args[1]) {
+		case commandDaemon:
 			if len(os.Args) > 2 {
-				switch os.Args[2] {
-				case "status":
+				switch daemonCommandName(os.Args[2]) {
+				case daemonCommandStatus:
 					os.Exit(runDaemonStatus())
 				default:
 					fmt.Fprintf(os.Stderr, "agent-gate: unknown daemon subcommand %q\n", os.Args[2])
 					os.Exit(2)
 				}
 			}
-		case "codex-hook":
+		case commandCodexHook:
 			os.Exit(runHook(hook.SystemCodex))
-		case "gemini-hook":
+		case commandGeminiHook:
 			os.Exit(runHook(hook.SystemGemini))
-		case "logs":
+		case commandLogs:
 			os.Exit(runLogs(os.Args[2:]))
-		case "config":
+		case commandConfig:
 			os.Exit(runConfig(os.Args[2:]))
-		case "version", "--version", "-v":
+		case commandVersion, "--version", "-v":
 			printVersion(os.Stdout)
 			return
 		}
 	}
 
 	// Hidden subcommand: start the background daemon.
-	if len(os.Args) > 1 && os.Args[1] == "daemon" {
+	if len(os.Args) > 1 && commandName(os.Args[1]) == commandDaemon {
 		log, closeLog := openLog("daemon")
 		defer closeLog()
 		cfg, cfgErr := config.Load()
@@ -103,6 +117,21 @@ func connectDaemon(ctx context.Context) (*daemon.Client, error) {
 	return daemon.Connect(ctx)
 }
 
+type hookClient interface {
+	EvaluateHook(rawJSON []byte, providerHint, cwd string, argv []string, env map[string]string) (*daemonpb.EvaluateHookResponse, error)
+	Close() error
+}
+
+type hookRuntime struct {
+	stdin   io.Reader
+	stdout  io.Writer
+	stderr  io.Writer
+	args    []string
+	connect func(context.Context) (hookClient, error)
+	getwd   func() (string, error)
+	env     func() map[string]string
+}
+
 func runDaemonStatus() int {
 	ctx := context.Background()
 	client, err := connectDaemon(ctx)
@@ -116,13 +145,13 @@ func runDaemonStatus() int {
 		fmt.Fprintf(os.Stderr, "agent-gate: daemon status failed: %v\n", err)
 		return 1
 	}
-	writeUserf(os.Stdout, "pid:              %d\n", resp.Pid)
-	writeUserf(os.Stdout, "executable:       %s\n", resp.ExecutablePath)
-	writeUserf(os.Stdout, "socket:           %s\n", resp.SocketPath)
-	writeUserf(os.Stdout, "version:          %s\n", resp.Version)
-	writeUserf(os.Stdout, "commit:           %s\n", resp.Commit)
-	writeUserf(os.Stdout, "dirty:            %s\n", resp.Dirty)
-	writeUserf(os.Stdout, "buildHash:        %s\n", resp.BuildHash)
+	_, _ = fmt.Fprintf(os.Stdout, "pid:              %d\n", resp.Pid)
+	_, _ = fmt.Fprintf(os.Stdout, "executable:       %s\n", resp.ExecutablePath)
+	_, _ = fmt.Fprintf(os.Stdout, "socket:           %s\n", resp.SocketPath)
+	_, _ = fmt.Fprintf(os.Stdout, "version:          %s\n", resp.Version)
+	_, _ = fmt.Fprintf(os.Stdout, "commit:           %s\n", resp.Commit)
+	_, _ = fmt.Fprintf(os.Stdout, "dirty:            %s\n", resp.Dirty)
+	_, _ = fmt.Fprintf(os.Stdout, "buildHash:        %s\n", resp.BuildHash)
 	return 0
 }
 
@@ -233,8 +262,8 @@ func parseSince(s string) (time.Time, error) {
 }
 
 func printEventTable(source string, events []audit.Event) {
-	writeUserf(os.Stdout, "source=%s rows=%d\n", source, len(events))
-	writeUserf(os.Stdout, "%-25s  %-8s  %-12s  %-12s  %-9s  %-24s  %s\n", "time", "system", "decision", "event", "tool", "rules", "command")
+	_, _ = fmt.Fprintf(os.Stdout, "source=%s rows=%d\n", source, len(events))
+	_, _ = fmt.Fprintf(os.Stdout, "%-25s  %-8s  %-12s  %-12s  %-9s  %-24s  %s\n", "time", "system", "decision", "event", "tool", "rules", "command")
 	for _, event := range events {
 		rules := "-"
 		if len(event.Decision.RulesMatched) > 0 {
@@ -244,7 +273,7 @@ func printEventTable(source string, events []audit.Event) {
 		if len(cmd) > 80 {
 			cmd = cmd[:77] + "..."
 		}
-		writeUserf(os.Stdout, "%-25s  %-8s  %-12s  %-12s  %-9s  %-24s  %s\n",
+		_, _ = fmt.Fprintf(os.Stdout, "%-25s  %-8s  %-12s  %-12s  %-9s  %-24s  %s\n",
 			event.Time,
 			event.System,
 			event.Decision.Kind,
@@ -258,38 +287,83 @@ func printEventTable(source string, events []audit.Event) {
 
 // runHook handles hook mode: read stdin, forward to daemon, mirror response.
 func runHook(systemHint hook.HookSystem) int {
-	data, err := io.ReadAll(os.Stdin)
+	runtime := hookRuntime{
+		stdin:   os.Stdin,
+		stdout:  os.Stdout,
+		stderr:  os.Stderr,
+		args:    os.Args,
+		connect: defaultHookConnector,
+		getwd:   os.Getwd,
+		env:     envFingerprint,
+	}
+	return runHookWithRuntime(systemHint, runtime)
+}
+
+func defaultHookConnector(ctx context.Context) (hookClient, error) {
+	return connectDaemon(ctx)
+}
+
+func runHookWithRuntime(systemHint hook.HookSystem, runtime hookRuntime) (exitCode int) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			diagnostic := fmt.Sprintf("agent-gate: panic: %v", recovered)
+			response := hook.FailOpenResponse(systemHint, "", diagnostic, hook.FailOpenReasonPanic)
+			writeResponse(runtime.stdout, runtime.stderr, response)
+			exitCode = response.ExitCode
+		}
+	}()
+
+	data, err := io.ReadAll(runtime.stdin)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "agent-gate: read stdin: %v\n", err)
-		return 2
+		diagnostic := fmt.Sprintf("agent-gate: read stdin: %v", err)
+		response := hook.FailOpenResponse(systemHint, "", diagnostic, hook.FailOpenReasonStdinRead)
+		writeResponse(runtime.stdout, runtime.stderr, response)
+		return response.ExitCode
 	}
 	ctx := context.Background()
-	client, err := connectDaemon(ctx)
+	client, err := runtime.connect(ctx)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "agent-gate: daemon unavailable: %v\n", err)
-		return 2
+		diagnostic := fmt.Sprintf("agent-gate: daemon unavailable: %v", err)
+		response := hook.FailOpenResponse(systemHint, "", diagnostic, hook.FailOpenReasonDaemonUnavailable)
+		writeResponse(runtime.stdout, runtime.stderr, response)
+		return response.ExitCode
 	}
 	defer func() { _ = client.Close() }()
 
-	cwd, _ := os.Getwd()
-	resp, err := client.EvaluateHook(data, systemHint.String(), cwd, os.Args, envFingerprint())
+	cwd, _ := runtime.getwd()
+	resp, err := client.EvaluateHook(data, systemHint.String(), cwd, runtime.args, runtime.env())
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "agent-gate: daemon EvaluateHook failed: %v\n", err)
-		return 2
+		diagnostic := fmt.Sprintf("agent-gate: daemon EvaluateHook failed: %v", err)
+		response := hook.FailOpenResponse(systemHint, "", diagnostic, hook.FailOpenReasonRPCFailed)
+		writeResponse(runtime.stdout, runtime.stderr, response)
+		return response.ExitCode
 	}
 
 	if len(resp.StdoutData) > 0 {
-		if _, err := os.Stdout.Write(resp.StdoutData); err != nil {
-			fmt.Fprintf(os.Stderr, "agent-gate: write stdout: %v\n", err)
+		if _, err := runtime.stdout.Write(resp.StdoutData); err != nil {
+			fmt.Fprintf(runtime.stderr, "agent-gate: write stdout: %v\n", err)
 		}
 	}
 	if len(resp.StderrData) > 0 {
-		if _, err := os.Stderr.Write(resp.StderrData); err != nil {
+		if _, err := runtime.stderr.Write(resp.StderrData); err != nil {
 			_ = err
 		}
 	}
 
 	return int(resp.ExitCode)
+}
+
+func writeResponse(stdout io.Writer, stderr io.Writer, response hook.Response) {
+	if len(response.Stdout) > 0 {
+		if _, err := stdout.Write(response.Stdout); err != nil {
+			fmt.Fprintf(stderr, "agent-gate: write stdout: %v\n", err)
+		}
+	}
+	if len(response.Stderr) > 0 {
+		if _, err := stderr.Write(response.Stderr); err != nil {
+			_ = err
+		}
+	}
 }
 
 func envFingerprint() map[string]string {

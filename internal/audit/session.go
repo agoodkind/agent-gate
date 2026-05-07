@@ -27,6 +27,26 @@ const (
 	dedupCacheSize    = 4096
 	dedupTTL          = 30 * time.Second
 	schemaVersion     = 1
+	defaultQueueLimit = 8192
+	dropLogInterval   = 5 * time.Second
+)
+
+type auditMessage string
+
+const (
+	auditMessageAllowed        auditMessage = "hook.allowed"
+	auditMessageAuditViolation auditMessage = "hook.audit_violation"
+	auditMessageBlocked        auditMessage = "hook.blocked"
+)
+
+type auditLevelName string
+
+const (
+	auditLevelDebug   auditLevelName = "debug"
+	auditLevelErr     auditLevelName = "err"
+	auditLevelError   auditLevelName = "error"
+	auditLevelWarn    auditLevelName = "warn"
+	auditLevelWarning auditLevelName = "warning"
 )
 
 // EventLogger is the audit event sink shared by the daemon and the CLI.
@@ -37,10 +57,14 @@ type EventLogger struct {
 	dedup    *expirable.LRU[string, struct{}]
 	outputs  []eventSink
 	rawHash  bool
+	enabled  bool
 
 	mu       sync.Mutex
 	cond     *sync.Cond
 	queue    []eventWrite
+	limit    int
+	dropped  uint64
+	lastDrop time.Time
 	stopping bool
 
 	wg  sync.WaitGroup
@@ -50,6 +74,11 @@ type EventLogger struct {
 type eventWrite struct {
 	event      Event
 	rawPayload string
+}
+
+// LoggerOptions tunes queue behavior for tests and high-throughput daemon use.
+type LoggerOptions struct {
+	QueueLimit int
 }
 
 // Event is one normalized audit record. It is the canonical schema written
@@ -108,6 +137,17 @@ type eventSink interface {
 // The returned logger owns a background worker; callers must invoke
 // [EventLogger.Close] to flush and shut down cleanly.
 func NewEventLogger(cfg *config.Config, log *slog.Logger) (*EventLogger, error) {
+	return NewEventLoggerContext(context.Background(), cfg, log)
+}
+
+// NewEventLoggerContext constructs an [EventLogger] using ctx for setup I/O.
+func NewEventLoggerContext(ctx context.Context, cfg *config.Config, log *slog.Logger) (*EventLogger, error) {
+	return NewEventLoggerWithOptions(ctx, cfg, log, LoggerOptions{QueueLimit: 0})
+}
+
+// NewEventLoggerWithOptions constructs an [EventLogger] with explicit queue
+// tuning. Zero-valued options select production defaults.
+func NewEventLoggerWithOptions(ctx context.Context, cfg *config.Config, log *slog.Logger, options LoggerOptions) (*EventLogger, error) {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -115,63 +155,98 @@ func NewEventLogger(cfg *config.Config, log *slog.Logger) (*EventLogger, error) 
 	if cfg != nil {
 		level = cfg.AuditLevel()
 	}
-	el := &EventLogger{
-		minLevel: parseLevel(level),
-		log:      log,
+	queueLimit := options.QueueLimit
+	if queueLimit <= 0 {
+		queueLimit = defaultQueueLimit
 	}
+	el := new(EventLogger)
+	el.minLevel = parseLevel(level)
+	el.enabled = true
+	el.limit = queueLimit
+	el.log = log
 	el.cond = sync.NewCond(&el.mu)
 	el.dedup = expirable.NewLRU[string, struct{}](dedupCacheSize, nil, dedupTTL)
 
-	if cfg == nil || cfg.AuditEnabled() {
-		if cfg == nil || cfg.AuditJSONLEnabled() {
-			eventsDir := config.DefaultAuditEventsDir()
-			payloadsDir := config.DefaultAuditPayloadsDir()
-			writeRaw := true
-			if cfg != nil {
-				eventsDir = cfg.AuditEventsDir()
-				payloadsDir = cfg.AuditPayloadsDir()
-				writeRaw = cfg.AuditWriteRawPayloads()
-			}
-			el.rawHash = writeRaw
-			s, err := newJSONLEventSink(eventsDir, payloadsDir, writeRaw, log)
-			if err != nil {
-				return nil, err
-			}
-			el.outputs = append(el.outputs, s)
-		}
-		if cfg != nil && cfg.AuditSQLiteEnabled() {
-			s, err := newSQLiteEventSink(cfg.AuditSQLitePath())
-			if err != nil {
-				return nil, err
-			}
-			el.outputs = append(el.outputs, s)
+	if cfg != nil && !cfg.AuditEnabled() {
+		el.enabled = false
+	}
+	if el.enabled {
+		if err := el.configureOutputs(ctx, cfg, log); err != nil {
+			return nil, err
 		}
 	}
+	if len(el.outputs) == 0 {
+		el.enabled = false
+	}
 
-	el.wg.Add(1)
-	go func() {
-		defer func() {
-			if recovered := recover(); recovered != nil {
-				el.log.Error("audit worker panic recovered", slog.Any("err", recovered))
-			}
-			el.wg.Done()
+	if el.enabled {
+		el.wg.Add(1)
+		go func() {
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					el.log.ErrorContext(ctx, "audit worker panic recovered", slog.Any("err", recovered))
+				}
+				el.wg.Done()
+			}()
+			el.worker()
 		}()
-		el.worker()
-	}()
+	}
 	return el, nil
+}
+
+func (el *EventLogger) configureOutputs(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
+	if cfg == nil || cfg.AuditJSONLEnabled() {
+		eventsDir := config.DefaultAuditEventsDir()
+		payloadsDir := config.DefaultAuditPayloadsDir()
+		writeRaw := true
+		if cfg != nil {
+			eventsDir = cfg.AuditEventsDir()
+			payloadsDir = cfg.AuditPayloadsDir()
+			writeRaw = cfg.AuditWriteRawPayloads()
+		}
+		el.rawHash = writeRaw
+		s, err := newJSONLEventSink(eventsDir, payloadsDir, writeRaw, log)
+		if err != nil {
+			return err
+		}
+		el.outputs = append(el.outputs, s)
+	}
+	if cfg != nil && cfg.AuditSQLiteEnabled() {
+		s, err := newSQLiteEventSink(ctx, cfg.AuditSQLitePath(), log)
+		if err != nil {
+			return err
+		}
+		el.outputs = append(el.outputs, s)
+	}
+	return nil
 }
 
 // Log enqueues a normalized audit event for asynchronous write to all
 // configured outputs. Calls return without waiting for I/O; the call is
 // also a no-op when the receiver is nil or the level is filtered out.
 func (el *EventLogger) Log(system, sessionID, eventName, level, msg string, attrs Attrs) {
-	if el == nil || !el.shouldLog(level) {
+	if el == nil || !el.enabled || !el.shouldLog(level) {
+		return
+	}
+	if !el.hasQueueCapacity() {
+		el.recordDrop(system, sessionID, eventName, msg)
 		return
 	}
 
 	event := normalizeEvent(system, sessionID, eventName, level, msg, attrs)
 	fingerprint := dedupFingerprint(event, attrs)
+	el.mu.Lock()
+	if el.stopping {
+		el.mu.Unlock()
+		return
+	}
+	if len(el.queue) >= el.limit {
+		el.mu.Unlock()
+		el.recordDrop(system, sessionID, eventName, msg)
+		return
+	}
 	if _, seen := el.dedup.Get(fingerprint); seen {
+		el.mu.Unlock()
 		el.log.Debug("audit event dedup drop",
 			"system", event.System,
 			"session_id", event.SessionID,
@@ -191,14 +266,40 @@ func (el *EventLogger) Log(system, sessionID, eventName, level, msg string, attr
 		event.RawPayloadHash = payloadHash(rawPayload)
 	}
 
-	el.mu.Lock()
-	if el.stopping {
-		el.mu.Unlock()
-		return
-	}
 	el.queue = append(el.queue, eventWrite{event: event, rawPayload: rawPayload})
 	el.cond.Signal()
 	el.mu.Unlock()
+}
+
+func (el *EventLogger) hasQueueCapacity() bool {
+	el.mu.Lock()
+	defer el.mu.Unlock()
+	return !el.stopping && len(el.queue) < el.limit
+}
+
+func (el *EventLogger) recordDrop(system, sessionID, eventName, msg string) {
+	now := auditNow()
+	el.mu.Lock()
+	el.dropped++
+	dropped := el.dropped
+	if !el.lastDrop.IsZero() && now.Sub(el.lastDrop) < dropLogInterval {
+		el.mu.Unlock()
+		return
+	}
+	el.lastDrop = now
+	queueDepth := len(el.queue)
+	queueLimit := el.limit
+	el.mu.Unlock()
+
+	el.log.Warn("audit queue full; dropping event",
+		"system", system,
+		"session_id", sessionID,
+		"event", eventName,
+		"msg", msg,
+		"queue_depth", queueDepth,
+		"queue_limit", queueLimit,
+		"dropped", dropped,
+	)
 }
 
 // Close stops the background worker, drains the queue to all configured
@@ -317,12 +418,12 @@ func auditNow() time.Time {
 }
 
 func decisionFromMessage(msg string) string {
-	switch msg {
-	case "hook.allowed":
+	switch auditMessage(msg) {
+	case auditMessageAllowed:
 		return "allow"
-	case "hook.blocked":
+	case auditMessageBlocked:
 		return "block"
-	case "hook.audit_violation":
+	case auditMessageAuditViolation:
 		return "audit_only"
 	default:
 		return ""
@@ -381,12 +482,12 @@ func (el *EventLogger) shouldLog(level string) bool {
 }
 
 func parseLevel(s string) slog.Level {
-	switch strings.ToLower(strings.TrimSpace(s)) {
-	case "debug":
+	switch auditLevelName(strings.ToLower(strings.TrimSpace(s))) {
+	case auditLevelDebug:
 		return slog.LevelDebug
-	case "warn", "warning":
+	case auditLevelWarn, auditLevelWarning:
 		return slog.LevelWarn
-	case "error", "err":
+	case auditLevelError, auditLevelErr:
 		return slog.LevelError
 	default:
 		return slog.LevelInfo
@@ -430,6 +531,7 @@ type jsonlEventSink struct {
 	payloadsDir      string
 	writeRawPayloads bool
 	cache            *lru.Cache[string, *os.File]
+	log              *slog.Logger
 }
 
 func newJSONLEventSink(eventsDir, payloadsDir string, writeRawPayloads bool, log *slog.Logger) (*jsonlEventSink, error) {
@@ -462,7 +564,7 @@ func newJSONLEventSink(eventsDir, payloadsDir string, writeRawPayloads bool, log
 		)
 		return nil, fmt.Errorf("create audit event lru: %w", err)
 	}
-	return &jsonlEventSink{eventsDir: eventsDir, payloadsDir: payloadsDir, writeRawPayloads: writeRawPayloads, cache: cache}, nil
+	return &jsonlEventSink{eventsDir: eventsDir, payloadsDir: payloadsDir, writeRawPayloads: writeRawPayloads, cache: cache, log: log}, nil
 }
 
 func (s *jsonlEventSink) Write(event Event, rawPayload string) error {
@@ -476,6 +578,7 @@ func (s *jsonlEventSink) Write(event Event, rawPayload string) error {
 
 	line, err := json.Marshal(event)
 	if err != nil {
+		s.log.Warn("marshal audit event failed", slog.String("event_id", event.EventID), slog.Any("err", err))
 		return fmt.Errorf("marshal audit event: %w", err)
 	}
 	line = append(line, '\n')
@@ -485,6 +588,7 @@ func (s *jsonlEventSink) Write(event Event, rawPayload string) error {
 		return err
 	}
 	if _, err := f.Write(line); err != nil {
+		s.log.Warn("write audit event line failed", slog.String("event_id", event.EventID), slog.Any("err", err))
 		return fmt.Errorf("write audit event line: %w", err)
 	}
 	return nil
@@ -494,6 +598,7 @@ func (s *jsonlEventSink) writePayload(rawPayload string) (string, error) {
 	hash := strings.TrimPrefix(payloadHash(rawPayload), "sha256:")
 	dir := filepath.Join(s.payloadsDir, "sha256", hash[:2], hash[2:4])
 	if err := os.MkdirAll(dir, 0o755); err != nil {
+		s.log.Warn("create audit payload dir failed", slog.String("dir", dir), slog.Any("err", err))
 		return "", fmt.Errorf("create audit payload dir %s: %w", dir, err)
 	}
 	path := filepath.Join(dir, hash+".json")
@@ -501,6 +606,7 @@ func (s *jsonlEventSink) writePayload(rawPayload string) (string, error) {
 		return "sha256:" + hash, nil
 	}
 	if err := os.WriteFile(path, []byte(rawPayload), 0o600); err != nil {
+		s.log.Warn("write audit payload failed", slog.String("path", path), slog.Any("err", err))
 		return "sha256:" + hash, fmt.Errorf("write audit payload %s: %w", path, err)
 	}
 	return "sha256:" + hash, nil
@@ -518,11 +624,13 @@ func (s *jsonlEventSink) fileFor(ts string) (*os.File, error) {
 	}
 	dir := filepath.Join(s.eventsDir, day[:4], day[5:7], day[8:10])
 	if err := os.MkdirAll(dir, 0o755); err != nil {
+		s.log.Warn("create audit events dir failed", slog.String("dir", dir), slog.Any("err", err))
 		return nil, fmt.Errorf("create audit events dir %s: %w", dir, err)
 	}
 	path := filepath.Join(dir, "events.jsonl")
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
+		s.log.Warn("open audit events file failed", slog.String("path", path), slog.Any("err", err))
 		return nil, fmt.Errorf("open audit events file %s: %w", path, err)
 	}
 	s.cache.Add(day, f)
@@ -538,26 +646,32 @@ func (s *jsonlEventSink) Close() error {
 }
 
 type sqliteEventSink struct {
-	db *sql.DB
+	db  *sql.DB
+	log *slog.Logger
 }
 
-func newSQLiteEventSink(path string) (*sqliteEventSink, error) {
+func newSQLiteEventSink(ctx context.Context, path string, log *slog.Logger) (*sqliteEventSink, error) {
+	if log == nil {
+		log = slog.Default()
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		log.WarnContext(ctx, "create audit sqlite dir failed", slog.String("path", path), slog.Any("err", err))
 		return nil, fmt.Errorf("create audit sqlite dir: %w", err)
 	}
 	db, err := sql.Open("sqlite3", path)
 	if err != nil {
+		log.WarnContext(ctx, "open audit sqlite db failed", slog.String("path", path), slog.Any("err", err))
 		return nil, fmt.Errorf("open audit sqlite db: %w", err)
 	}
-	s := &sqliteEventSink{db: db}
-	if err := s.init(); err != nil {
+	s := &sqliteEventSink{db: db, log: log}
+	if err := s.init(ctx); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
 	return s, nil
 }
 
-func (s *sqliteEventSink) init() error {
+func (s *sqliteEventSink) init(ctx context.Context) error {
 	stmts := []string{
 		`create table if not exists events (
 			event_id text primary key,
@@ -608,7 +722,8 @@ func (s *sqliteEventSink) init() error {
 		`create index if not exists violations_mode_idx on violations(mode)`,
 	}
 	for _, stmt := range stmts {
-		if _, err := s.db.ExecContext(context.Background(), stmt); err != nil {
+		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
+			s.log.WarnContext(ctx, "init audit sqlite schema failed", slog.Any("err", err))
 			return fmt.Errorf("init audit sqlite schema: %w", err)
 		}
 	}
@@ -619,14 +734,17 @@ func (s *sqliteEventSink) Write(event Event, _ string) error {
 	ctx := context.Background()
 	checked, err := json.Marshal(event.Decision.RulesChecked)
 	if err != nil {
+		s.log.Warn("marshal audit rules_checked failed", slog.String("event_id", event.EventID), slog.Any("err", err))
 		return fmt.Errorf("marshal rules_checked: %w", err)
 	}
 	matched, err := json.Marshal(event.Decision.RulesMatched)
 	if err != nil {
+		s.log.Warn("marshal audit rules_matched failed", slog.String("event_id", event.EventID), slog.Any("err", err))
 		return fmt.Errorf("marshal rules_matched: %w", err)
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
+		s.log.Warn("begin audit tx failed", slog.String("event_id", event.EventID), slog.Any("err", err))
 		return fmt.Errorf("begin audit tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
@@ -635,26 +753,31 @@ func (s *sqliteEventSink) Write(event Event, _ string) error {
 		event.EventID, event.SchemaVersion, event.Time, event.Level, event.Message, event.System,
 		event.SessionID, event.TurnID, event.EventName, event.ToolUseID, event.ToolName, event.RawPayloadHash,
 	); err != nil {
+		s.log.Warn("insert audit event failed", slog.String("event_id", event.EventID), slog.Any("err", err))
 		return fmt.Errorf("insert audit event: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, `insert or ignore into operations values (?, ?, ?, ?, ?)`,
 		event.EventID, event.Operation.CWD, event.Operation.EffectiveCWD, event.Operation.Command, event.Operation.FilePath,
 	); err != nil {
+		s.log.Warn("insert audit operation failed", slog.String("event_id", event.EventID), slog.Any("err", err))
 		return fmt.Errorf("insert audit operation: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, `insert or ignore into decisions values (?, ?, ?, ?, ?)`,
 		event.EventID, event.Decision.Kind, boolInt(event.Decision.CanBlock), string(checked), string(matched),
 	); err != nil {
+		s.log.Warn("insert audit decision failed", slog.String("event_id", event.EventID), slog.Any("err", err))
 		return fmt.Errorf("insert audit decision: %w", err)
 	}
 	for _, v := range event.Violations {
 		if _, err := tx.ExecContext(ctx, `insert into violations (event_id, rule, mode, field_path, file_path, start, end, message) values (?, ?, ?, ?, ?, ?, ?, ?)`,
 			event.EventID, v.Rule, v.Mode, v.FieldPath, v.FilePath, v.Start, v.End, v.Message,
 		); err != nil {
+			s.log.Warn("insert audit violation failed", slog.String("event_id", event.EventID), slog.String("rule", v.Rule), slog.Any("err", err))
 			return fmt.Errorf("insert audit violation: %w", err)
 		}
 	}
 	if err := tx.Commit(); err != nil {
+		s.log.Warn("commit audit tx failed", slog.String("event_id", event.EventID), slog.Any("err", err))
 		return fmt.Errorf("commit audit tx: %w", err)
 	}
 	return nil
@@ -672,6 +795,7 @@ func (s *sqliteEventSink) Close() error {
 		return nil
 	}
 	if err := s.db.Close(); err != nil {
+		s.log.Warn("close audit sqlite db failed", slog.Any("err", err))
 		return fmt.Errorf("close audit sqlite db: %w", err)
 	}
 	return nil
