@@ -10,6 +10,8 @@ import (
 
 	"goodkind.io/agent-gate/internal/config"
 	"goodkind.io/agent-gate/internal/regex"
+	regexconcern "goodkind.io/agent-gate/internal/rules/concerns/regex"
+	"goodkind.io/agent-gate/pipeline"
 )
 
 // Violation describes a rule that matched the current hook payload.
@@ -47,26 +49,85 @@ func Evaluate(ctx context.Context, system, eventName string, fields FieldSet, ru
 }
 
 // EvaluateAll returns every concrete regex match for every applicable rule.
-func EvaluateAll(ctx context.Context, system, eventName string, fields FieldSet, rules []config.Rule) []MatchViolation {
+// All applicable regex rules are wrapped in a single batchRegexConcern and run
+// through one Orchestrator per call. Command and project conditions remain inline
+// (landings 6 and 7 will migrate those).
+func EvaluateAll(ctx context.Context, system, eventName string, fields FieldSet, rulesSlice []config.Rule) []MatchViolation {
+	batch := &batchRegexConcern{
+		fields:     fields,
+		rulesSlice: rulesSlice,
+		system:     system,
+		eventName:  eventName,
+	}
+	orch := &pipeline.Orchestrator{
+		Concerns:  []pipeline.Concern{batch},
+		Scheduler: pipeline.FixedScheduler{SlotCount: 1},
+		Sentinel:  pipeline.NoopSentinel{},
+	}
+	results, _ := orch.Run(ctx, nil)
+	if len(results) == 0 || results[0].Outcome == nil {
+		return nil
+	}
+	out, ok := results[0].Outcome.(batchOutcome)
+	if !ok {
+		return nil
+	}
+	return out.violations
+}
+
+// batchRegexConcern is a single pipeline.Concern that evaluates all applicable
+// regex rules for one EvaluateAll call. It encapsulates the former inline loop
+// so the Orchestrator wraps exactly one unit of work. The FieldSet is stored by
+// value; Execute passes &b.fields to concern helpers to avoid interface boxing
+// of the large struct.
+type batchRegexConcern struct {
+	fields     FieldSet
+	rulesSlice []config.Rule
+	system     string
+	eventName  string
+}
+
+// batchOutcome is returned by batchRegexConcern and carries all violations.
+type batchOutcome struct {
+	violations []MatchViolation
+}
+
+func (b *batchRegexConcern) Profile() pipeline.Profile {
+	return pipeline.Profile{
+		Name:         "rules.evaluate_all",
+		Cost:         pipeline.CostCheap,
+		Idempotent:   true,
+		MemoLifetime: pipeline.MemoEvent,
+	}
+}
+
+func (b *batchRegexConcern) Execute(_ context.Context, _ pipeline.Input) (pipeline.Outcome, error) {
 	var violations []MatchViolation
-	for i := range rules {
-		rule := &rules[i]
-		if !appliesToEvent(rule, system, eventName) {
+	for i := range b.rulesSlice {
+		rule := &b.rulesSlice[i]
+		if !appliesToEvent(rule, b.system, b.eventName) {
 			continue
 		}
 		if len(rule.Conditions) > 0 {
-			if allConditionsMatch(fields, rule.Conditions) {
-				violations = append(violations, conditionViolations(fields, rule)...)
+			if allConditionsMatch(b.fields, rule.Conditions) {
+				violations = append(violations, evalConditionViolations(&b.fields, rule)...)
 			}
 			continue
 		}
-
-		violations = append(violations, fieldViolations(fields, rule, rule.Selectors(), rule.Compiled(), rule.DiagnosticGroup)...)
+		violations = append(violations, evalSimpleRule(&b.fields, rule)...)
 	}
-	return violations
+	return batchOutcome{violations: violations}, nil
 }
 
-func conditionViolations(fields FieldSet, rule *config.Rule) []MatchViolation {
+// evalSimpleRule runs the top-level pattern for a rule with no conditions.
+func evalSimpleRule(fields *FieldSet, rule *config.Rule) []MatchViolation {
+	matches := regexconcern.EvalFieldMatches(fields, rule.Selectors(), rule.Compiled(), rule.DiagnosticGroup)
+	return matchesToViolations(matches, rule)
+}
+
+// evalConditionViolations produces violations from the regex-kind conditions of
+// a matched condition rule.
+func evalConditionViolations(fields *FieldSet, rule *config.Rule) []MatchViolation {
 	var violations []MatchViolation
 	for i := range rule.Conditions {
 		c := &rule.Conditions[i]
@@ -76,10 +137,33 @@ func conditionViolations(fields FieldSet, rule *config.Rule) []MatchViolation {
 		if c.CompiledPattern() == nil {
 			continue
 		}
-		violations = append(violations, fieldViolations(fields, rule, c.Selectors(), c.CompiledPattern(), c.DiagnosticGroup)...)
+		matches := regexconcern.EvalFieldMatches(fields, c.Selectors(), c.CompiledPattern(), c.DiagnosticGroup)
+		violations = append(violations, matchesToViolations(matches, rule)...)
 	}
 	if len(violations) == 0 {
-		violations = append(violations, conditionFallbackViolation(fields, rule))
+		violations = append(violations, conditionFallbackViolation(*fields, rule))
+	}
+	return violations
+}
+
+// matchesToViolations converts MatchResult values from the concern package into
+// MatchViolation values with rule metadata attached.
+func matchesToViolations(matches []regexconcern.MatchResult, rule *config.Rule) []MatchViolation {
+	if len(matches) == 0 {
+		return nil
+	}
+	violations := make([]MatchViolation, len(matches))
+	for i, m := range matches {
+		violations[i] = MatchViolation{
+			RuleName:  rule.Name,
+			Message:   rule.ViolationMessage,
+			AuditOnly: rule.AuditOnly,
+			FieldPath: m.FieldPath,
+			FilePath:  m.FilePath,
+			Value:     m.Value,
+			Start:     m.Start,
+			End:       m.End,
+		}
 	}
 	return violations
 }
@@ -110,34 +194,6 @@ func conditionFallbackViolation(fields FieldSet, rule *config.Rule) MatchViolati
 	}
 }
 
-type regexMatcher interface {
-	FindAllStringGroupIndex(string, int, uint32) [][2]int
-}
-
-func fieldViolations(fields FieldSet, rule *config.Rule, selectors []config.FieldSelectorSpec, re regexMatcher, diagnosticGroup int) []MatchViolation {
-	var violations []MatchViolation
-	filePath := fields.FilePathValue()
-	for _, selector := range selectors {
-		value := fields.String(selector.Selector)
-		if value == "" {
-			continue
-		}
-		for _, idx := range re.FindAllStringGroupIndex(value, -1, uint32(diagnosticGroup)) {
-			violations = append(violations, MatchViolation{
-				RuleName:  rule.Name,
-				Message:   rule.ViolationMessage,
-				AuditOnly: rule.AuditOnly,
-				FieldPath: selector.Path,
-				FilePath:  filePath,
-				Value:     value,
-				Start:     idx[0],
-				End:       idx[1],
-			})
-		}
-	}
-	return violations
-}
-
 // allConditionsMatch returns true when every condition in the slice matches
 // the payload (AND semantics). A condition matches when:
 //   - Its Pattern is set and matches the extracted field value, AND
@@ -163,7 +219,7 @@ func allConditionsMatch(fields FieldSet, conditions []config.Condition) bool {
 		c := &conditions[i]
 		switch conditionKind(c) {
 		case config.ConditionKindRegex:
-			if !regexConditionMatch(fields, c) {
+			if !regexconcern.ConditionMatch(fields, c) {
 				return false
 			}
 		case config.ConditionKindCommand:
@@ -188,17 +244,6 @@ func conditionKind(c *config.Condition) config.ConditionKind {
 		return config.ConditionKindRegex
 	}
 	return config.ConditionKind(c.Kind)
-}
-
-func regexConditionMatch(fields FieldSet, c *config.Condition) bool {
-	_, value := extractField(fields, c.Selectors())
-	if c.CompiledPattern() != nil && !c.CompiledPattern().MatchString(value) {
-		return false
-	}
-	if c.CompiledNotPattern() != nil && c.CompiledNotPattern().MatchString(value) {
-		return false
-	}
-	return true
 }
 
 func commandConditionCwds(fields FieldSet, c *config.Condition) ([]string, bool) {
