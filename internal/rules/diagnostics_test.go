@@ -182,9 +182,10 @@ func TestFormatViolationsQuotesBacktickRunsWithoutFence(t *testing.T) {
 	}
 }
 
-func TestFormatViolationsQuotesUnicodeAsASCII(t *testing.T) {
-	value := "emdash validation: " + string(rune(0x2014))
-	start := strings.Index(value, string(rune(0x2014)))
+func TestFormatViolationsQuotesUnicodeLiterally(t *testing.T) {
+	dash := string(rune(0x2014))
+	value := "emdash validation: " + dash
+	start := strings.Index(value, dash)
 	if start < 0 {
 		t.Fatal("test fixture is missing unicode dash")
 	}
@@ -196,12 +197,12 @@ func TestFormatViolationsQuotesUnicodeAsASCII(t *testing.T) {
 			FieldPath: "tool_input.content",
 			Value:     value,
 			Start:     start,
-			End:       start + len(string(rune(0x2014))),
+			End:       start + len(dash),
 		},
 	})
 	for _, want := range []string{
-		`match: "\u2014"`,
-		`text: "emdash validation: \u2014"`,
+		`match: "` + dash + `"`,
+		`text: "emdash validation: ` + dash + `"`,
 		"column: 20",
 	} {
 		if !strings.Contains(got, want) {

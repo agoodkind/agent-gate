@@ -88,8 +88,8 @@ func writeOccurrence(b *strings.Builder, occ diagnosticOccurrence) {
 	}
 	fmt.Fprintf(b, "    line: %d\n", occ.Line)
 	fmt.Fprintf(b, "    column: %d\n", occ.Column)
-	fmt.Fprintf(b, "    match: %s\n", strconv.QuoteToASCII(occ.Match))
-	fmt.Fprintf(b, "    text: %s\n", strconv.QuoteToASCII(occ.LineText))
+	fmt.Fprintf(b, "    match: %s\n", strconv.Quote(occ.Match))
+	fmt.Fprintf(b, "    text: %s\n", strconv.Quote(occ.LineText))
 }
 
 func writeLegend(b *strings.Builder, occurrences []diagnosticOccurrence) {
