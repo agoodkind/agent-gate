@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"time"
 
 	"go.opentelemetry.io/otel"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
@@ -23,6 +24,9 @@ type Options struct {
 // Setup installs the global OTel TracerProvider (via gklog/trace) and a
 // no-op MeterProvider. The returned [io.Closer] flushes both on shutdown.
 func Setup(opts Options) (io.Closer, error) {
+	if opts.SlowOpThresholdMs > 0 {
+		trace.SlowOpThreshold = time.Duration(opts.SlowOpThresholdMs) * time.Millisecond
+	}
 	traceCloser, err := trace.Setup(trace.Options{
 		ServiceName: "agent-gate",
 		Endpoint:    opts.OTLPEndpoint,
