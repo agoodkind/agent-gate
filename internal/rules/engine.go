@@ -1,6 +1,7 @@
 package rules
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"slices"
@@ -32,8 +33,8 @@ type MatchViolation struct {
 
 // Evaluate iterates over all rules and returns the first Violation whose
 // pattern matches a typed field selected from payload, or nil if no rule fires.
-func Evaluate(system, eventName string, fields FieldSet, rules []config.Rule) *Violation {
-	violations := EvaluateAll(system, eventName, fields, rules)
+func Evaluate(ctx context.Context, system, eventName string, fields FieldSet, rules []config.Rule) *Violation {
+	violations := EvaluateAll(ctx, system, eventName, fields, rules)
 	if len(violations) == 0 {
 		return nil
 	}
@@ -46,7 +47,7 @@ func Evaluate(system, eventName string, fields FieldSet, rules []config.Rule) *V
 }
 
 // EvaluateAll returns every concrete regex match for every applicable rule.
-func EvaluateAll(system, eventName string, fields FieldSet, rules []config.Rule) []MatchViolation {
+func EvaluateAll(ctx context.Context, system, eventName string, fields FieldSet, rules []config.Rule) []MatchViolation {
 	var violations []MatchViolation
 	for i := range rules {
 		rule := &rules[i]

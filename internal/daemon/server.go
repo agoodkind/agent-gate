@@ -307,7 +307,7 @@ func (s *Server) EvaluateHook(ctx context.Context, req *daemonpb.EvaluateHookReq
 		return envFingerprint[key]
 	}
 
-	result := hook.EvaluateHot(rawJSON, snapshot.cfg, hook.SystemFromString(req.GetProviderHint()), getenv)
+	result := hook.EvaluateHot(ctx, rawJSON, snapshot.cfg, hook.SystemFromString(req.GetProviderHint()), getenv)
 	if result.Deferred.Valid && snapshot.deferredAudit != nil {
 		snapshot.deferredAudit.Enqueue(result.Deferred)
 	}
