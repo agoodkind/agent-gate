@@ -14,3 +14,11 @@ internal/regex/limits.go:281:6: unreachable func: matchWithLimits	# deadcode:fir
 internal/rules/engine.go:35:6: unreachable func: Evaluate	# deadcode:first_added=2026-05-05T04:09:36Z last_seen=2026-05-05T04:09:36Z
 internal/rules/fields.go:264:6: unreachable func: CmdSegments	# deadcode:first_added=2026-05-05T04:09:36Z last_seen=2026-05-05T04:09:36Z
 internal/version/version.go:38:6: unreachable func: Attrs	# deadcode:first_added=2026-05-05T04:09:36Z last_seen=2026-05-05T04:09:36Z
+pipeline/memo.go:25:6: unreachable func: NewEventCache	# deadcode:first_added=2026-05-08T16:10:11Z last_seen=2026-05-08T16:10:11Z
+pipeline/memo.go:30:22: unreachable func: EventCache.For	# deadcode:first_added=2026-05-08T16:10:11Z last_seen=2026-05-08T16:10:11Z
+pipeline/memo.go:35:22: unreachable func: EventCache.Get	# deadcode:first_added=2026-05-08T16:10:11Z last_seen=2026-05-08T16:10:11Z
+pipeline/memo.go:41:22: unreachable func: EventCache.Put	# deadcode:first_added=2026-05-08T16:10:11Z last_seen=2026-05-08T16:10:11Z
+pipeline/orchestrator.go:29:24: unreachable func: Orchestrator.Run	# deadcode:first_added=2026-05-08T16:10:11Z last_seen=2026-05-08T16:10:11Z
+pipeline/scheduler.go:17:25: unreachable func: FixedScheduler.Slots	# deadcode:first_added=2026-05-08T16:10:11Z last_seen=2026-05-08T16:10:11Z
+pipeline/scheduler.go:22:25: unreachable func: FixedScheduler.Observe	# deadcode:first_added=2026-05-08T16:10:11Z last_seen=2026-05-08T16:10:11Z
+pipeline/sentinel.go:14:21: unreachable func: NoopSentinel.Probe	# deadcode:first_added=2026-05-08T16:10:11Z last_seen=2026-05-08T16:10:11Z
