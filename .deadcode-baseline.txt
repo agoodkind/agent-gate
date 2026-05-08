@@ -12,8 +12,13 @@ internal/regex/limits.go:263:6: unreachable func: pcre2MatchError	# deadcode:fir
 internal/regex/limits.go:281:6: unreachable func: matchWithLimits	# deadcode:first_added=2026-05-05T04:09:36Z last_seen=2026-05-08T20:52:00Z
 internal/rules/engine.go:35:6: unreachable func: Evaluate	# deadcode:first_added=2026-05-05T04:09:36Z last_seen=2026-05-08T20:52:00Z
 internal/rules/fields.go:264:6: unreachable func: CmdSegments	# deadcode:first_added=2026-05-05T04:09:36Z last_seen=2026-05-08T20:52:00Z
-internal/rules/concerns/regex/concern.go:41:6: unreachable func: New	# deadcode:first_added=2026-05-08T20:52:00Z last_seen=2026-05-08T20:52:00Z
-internal/rules/concerns/regex/concern.go:95:6: unreachable func: ConditionMatch	# deadcode:first_added=2026-05-08T20:52:00Z last_seen=2026-05-08T20:52:00Z
 internal/version/version.go:38:6: unreachable func: Attrs	# deadcode:first_added=2026-05-05T04:09:36Z last_seen=2026-05-08T20:52:00Z
+pipeline/memo.go:25:6: unreachable func: NewEventCache	# deadcode:first_added=2026-05-08T20:52:00Z last_seen=2026-05-08T20:52:00Z
+pipeline/memo.go:30:22: unreachable func: EventCache.For	# deadcode:first_added=2026-05-08T20:52:00Z last_seen=2026-05-08T20:52:00Z
+pipeline/memo.go:35:22: unreachable func: EventCache.Get	# deadcode:first_added=2026-05-08T20:52:00Z last_seen=2026-05-08T20:52:00Z
+pipeline/memo.go:41:22: unreachable func: EventCache.Put	# deadcode:first_added=2026-05-08T20:52:00Z last_seen=2026-05-08T20:52:00Z
+pipeline/sentinel.go:42:6: unreachable func: NewMeteringSentinel	# deadcode:first_added=2026-05-08T20:52:00Z last_seen=2026-05-08T20:52:00Z
+pipeline/sentinel.go:58:28: unreachable func: MeteringSentinel.Probe	# deadcode:first_added=2026-05-08T20:52:00Z last_seen=2026-05-08T20:52:00Z
+pipeline/sentinel.go:74:6: unreachable func: classifyError	# deadcode:first_added=2026-05-08T20:52:00Z last_seen=2026-05-08T20:52:00Z
 internal/telemetry/setup.go:13:2: could not import goodkind.io/gklog/trace (invalid package name: "")	# deadcode:first_added=2026-05-08T20:52:00Z last_seen=2026-05-08T20:52:00Z
 internal/telemetry/setup.go:13:2: no required module provides package goodkind.io/gklog/trace; to add it:	# deadcode:first_added=2026-05-08T20:52:00Z last_seen=2026-05-08T20:52:00Z

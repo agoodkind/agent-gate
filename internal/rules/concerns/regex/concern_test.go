@@ -1,7 +1,6 @@
 package regex_test
 
 import (
-	"context"
 	"testing"
 
 	"goodkind.io/agent-gate/internal/config"
@@ -38,7 +37,7 @@ func selectorKey(sel config.FieldSelector) string {
 	}
 }
 
-func TestConcern_Execute_MatchesViolation(t *testing.T) {
+func TestEvalFieldMatches_Match(t *testing.T) {
 	pattern := `AKIA[0-9A-Z]{16}`
 	re, err := intregex.Compile(pattern)
 	if err != nil {
@@ -52,30 +51,13 @@ func TestConcern_Execute_MatchesViolation(t *testing.T) {
 		},
 	}
 
-	in := regexconcern.Input{
-		RuleName:        "no-aws-key",
-		Selectors:       selectors,
-		CompiledPattern: re,
-		DiagnosticGroup: 0,
-		Fields:          fields,
+	matches := regexconcern.EvalFieldMatches(fields, selectors, re, 0)
+
+	if len(matches) != 1 {
+		t.Fatalf("expected 1 match, got %d: %#v", len(matches), matches)
 	}
 
-	c := regexconcern.New("no-aws-key")
-	raw, err := c.Execute(context.Background(), in)
-	if err != nil {
-		t.Fatalf("Execute returned error: %v", err)
-	}
-
-	out, ok := raw.(regexconcern.Outcome)
-	if !ok {
-		t.Fatalf("Execute returned unexpected type %T", raw)
-	}
-
-	if len(out.Matches) != 1 {
-		t.Fatalf("expected 1 match, got %d: %#v", len(out.Matches), out.Matches)
-	}
-
-	m := out.Matches[0]
+	m := matches[0]
 	if m.FieldPath != "tool_input.content" {
 		t.Errorf("FieldPath = %q, want %q", m.FieldPath, "tool_input.content")
 	}
@@ -85,7 +67,7 @@ func TestConcern_Execute_MatchesViolation(t *testing.T) {
 	}
 }
 
-func TestConcern_Execute_NoMatch(t *testing.T) {
+func TestEvalFieldMatches_NoMatch(t *testing.T) {
 	pattern := `AKIA[0-9A-Z]{16}`
 	re, err := intregex.Compile(pattern)
 	if err != nil {
@@ -99,42 +81,29 @@ func TestConcern_Execute_NoMatch(t *testing.T) {
 		},
 	}
 
-	in := regexconcern.Input{
-		RuleName:        "no-aws-key",
-		Selectors:       selectors,
-		CompiledPattern: re,
-		DiagnosticGroup: 0,
-		Fields:          fields,
-	}
+	matches := regexconcern.EvalFieldMatches(fields, selectors, re, 0)
 
-	c := regexconcern.New("no-aws-key")
-	raw, err := c.Execute(context.Background(), in)
-	if err != nil {
-		t.Fatalf("Execute returned error: %v", err)
-	}
-
-	out, ok := raw.(regexconcern.Outcome)
-	if !ok {
-		t.Fatalf("Execute returned unexpected type %T", raw)
-	}
-
-	if len(out.Matches) != 0 {
-		t.Errorf("expected 0 matches, got %d", len(out.Matches))
+	if len(matches) != 0 {
+		t.Errorf("expected 0 matches, got %d", len(matches))
 	}
 }
 
-func TestConcern_Execute_WrongInputType(t *testing.T) {
-	c := regexconcern.New("test-rule")
-	raw, err := c.Execute(context.Background(), "not-an-Input")
+func TestEvalFieldMatches_EmptyField(t *testing.T) {
+	pattern := `AKIA[0-9A-Z]{16}`
+	re, err := intregex.Compile(pattern)
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf("compile pattern: %v", err)
 	}
-	out, ok := raw.(regexconcern.Outcome)
-	if !ok {
-		t.Fatalf("returned %T, want Outcome", raw)
+
+	selectors := config.CompileFieldSelectorSpecs([]string{"tool_input.content"})
+	fields := &testFields{
+		values: map[string]string{},
 	}
-	if len(out.Matches) != 0 {
-		t.Errorf("expected empty matches for wrong input type, got %d", len(out.Matches))
+
+	matches := regexconcern.EvalFieldMatches(fields, selectors, re, 0)
+
+	if len(matches) != 0 {
+		t.Errorf("expected 0 matches for empty field, got %d", len(matches))
 	}
 }
 

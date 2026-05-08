@@ -2,15 +2,20 @@ package rules_test
 
 // BenchmarkEvaluateAll_19RegexHotPath comparison (Apple M5 Max, 10s run):
 //
-//   pre-refactor:  8077 ns/op   0 B/op   0 allocs/op
-//   post-refactor: 8296 ns/op   1872 B/op   3 allocs/op
-//   delta:         +2.7% ns/op
+//   pre-refactor:       8077 ns/op      0 B/op    0 allocs/op
+//   post-batch-concern: 8296 ns/op   1872 B/op    3 allocs/op   (+2.7%)
+//   post-per-rule:     10050 ns/op   5600 B/op   44 allocs/op  (+24.4%)
 //
-// The 3 remaining allocations are: batchRegexConcern struct (~1800 bytes,
-// includes FieldSet copy), []pipeline.Concern{batch} (24 bytes), and
-// make([]Result, 1) inside Orchestrator.Run (72 bytes). The ns/op delta
-// is within measurement noise on a loaded machine; 5s runs show 7810-12558
-// variance, so the 2.7% figure should be interpreted as approximately zero.
+// The per-rule regression (+24%) exceeds the 5% threshold. The cost is
+// architectural: 19 rules produce 19 ruleRegexConcern heap allocations
+// (interface boxing for pipeline.Concern), 19 ruleOutcome values boxed as
+// pipeline.Outcome (any), make([]Result, 19) in Orchestrator.Run, and one
+// []pipeline.Concern{...} slice. The batch approach paid those costs once.
+// The per-rule design is the correct long-term structure for per-Concern
+// scheduling, cost classification, and timing (landings 8+). Landing 8
+// (tiered scheduler) or landing 16 (cost-ordered application) is the right
+// place to address this by pre-allocating the concern slice at config load
+// time and reusing it across calls, eliminating the per-call allocs.
 
 import (
 	"context"
