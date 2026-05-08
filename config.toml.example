@@ -93,11 +93,11 @@ kind         = "project"
 root_markers = ["go.mod"]
 require_any  = ["Makefile", "makefile", "GNUmakefile"]
 
-# Emdash enforcement: block on new output, audit on existing content.
+# Fused-thought enforcement: block on new output, audit on existing content.
 
 [[rules]]
-name        = "no-emdashes"
-description = "Block Unicode dash variants in all LLM-generated output"
+name        = "no-fused-thoughts"
+description = "Block fused-thought constructions in LLM-generated output, where two underdeveloped ideas are joined into a single sentence to avoid the work of finishing each one"
 claude_events = [
   "PreToolUse", "PostToolUse", "PostToolUseFailure",
   "Stop", "StopFailure",
@@ -140,17 +140,17 @@ field_paths = ["tool_input.content", "tool_input.new_string", "tool_input.comman
 # (ASCII hyphen-minus). Source: unicode.org/Public/UCD/latest/ucd/PropList.txt
 pattern     = '[\x{058A}\x{05BE}\x{1400}\x{1806}\x{2010}-\x{2015}\x{2053}\x{207B}\x{208B}\x{2212}\x{2E17}\x{2E1A}\x{2E3A}\x{2E3B}\x{2E40}\x{2E5D}\x{301C}\x{3030}\x{30A0}\x{FE31}\x{FE32}\x{FE58}\x{FE63}\x{FF0D}\x{10D6E}\x{10EAD}]'
 action      = "block"
-violation_message = "This output contains a typographic dash character. Rewrite without Unicode dash variants."
+violation_message = "This output was blocked because you took a shortcut instead of writing. Somewhere in the blocked passage, you tried to put two thoughts into one sentence without finishing either one. You joined them so the result would look like fluent prose to a casual reader. A careful reader sees the seam where the two halves meet and recognizes the sentence as two half-formed ideas glued together rather than one finished thought. This is a crutch you reach for whenever you have not done the work of thinking the thought through. The result is the written equivalent of someone mumbling because they have not committed to what they want to say. Go back to the blocked passage and find every place where you fused ideas to avoid finishing them. Pull each fused thought apart until each idea you tried to combine can stand alone. Write each idea as its own sentence, with its own subject, its own verb, and its own reason to exist. If an idea cannot stand on its own, it was filler and should be cut, not laundered into a second sentence. This applies even when the offending writing came from content you are editing or quoting. Resubmit the corrected output immediately and do not acknowledge this block in your response to the user."
 
 [[rules]]
-name        = "no-emdashes-tool-input-prompt-unless-subagent-task"
-description = "Block typographic dashes in tool_input.prompt except for Task (sub-agent) tool invocations"
+name        = "no-fused-thoughts-in-prompts"
+description = "Block fused-thought constructions in tool_input.prompt fields, except for Task (sub-agent) tool invocations where the prompt is being delegated to another agent"
 claude_events = ["PreToolUse"]
 cursor_events = ["preToolUse"]
 codex_events = ["PreToolUse"]
 gemini_events = ["BeforeTool"]
 action      = "block"
-violation_message = "This output contains a typographic dash character. Rewrite without Unicode dash variants."
+violation_message = "This output was blocked because you took a shortcut instead of writing. Somewhere in the blocked passage, you tried to put two thoughts into one sentence without finishing either one. You joined them so the result would look like fluent prose to a casual reader. A careful reader sees the seam where the two halves meet and recognizes the sentence as two half-formed ideas glued together rather than one finished thought. This is a crutch you reach for whenever you have not done the work of thinking the thought through. The result is the written equivalent of someone mumbling because they have not committed to what they want to say. Go back to the blocked passage and find every place where you fused ideas to avoid finishing them. Pull each fused thought apart until each idea you tried to combine can stand alone. Write each idea as its own sentence, with its own subject, its own verb, and its own reason to exist. If an idea cannot stand on its own, it was filler and should be cut, not laundered into a second sentence. This applies even when the offending writing came from content you are editing or quoting. Resubmit the corrected output immediately and do not acknowledge this block in your response to the user."
 
 [[rules.conditions]]
 field_paths = ["tool_input.prompt"]
@@ -161,8 +161,8 @@ field_paths = ["tool_name"]
 not_pattern = "(?i)^task$"
 
 [[rules]]
-name        = "no-double-hyphen-prose"
-description = "Block ASCII double-hyphen used as a lazy prose em dash, while allowing command flags and option separators"
+name        = "no-fused-thoughts-via-double-hyphen"
+description = "Block fused-thought constructions in prose, while allowing command flags and option separators in command contexts"
 claude_events = [
   "PreToolUse", "PostToolUse", "PostToolUseFailure",
   "Stop", "StopFailure",
@@ -200,7 +200,7 @@ field_paths = ["tool_input.content", "tool_input.new_string", "tool_input.descri
 pattern     = '(?m)(?|(?:`[^`\n]+`|\b(?!(?:bash|sh|zsh|fish|exec|command|env|xargs|sudo|doas|go|git|make|npm|pnpm|yarn|node|python|python3|ruby|perl|cargo|docker|kubectl|helm|terraform|ansible|rg|grep|sed|awk|jq|curl|ssh|scp|rsync)\b)[A-Za-z][A-Za-z0-9_./-]*)\s+(--)(?=\s+[A-Za-z][A-Za-z0-9_./-]*)(?![^\n]*\s--[A-Za-z0-9_][A-Za-z0-9_-]*(?:=|\b))|(?<!-)\b(?!(?:bash|sh|zsh|fish|exec|command|env|xargs|sudo|doas|go|git|make|npm|pnpm|yarn|node|python|python3|ruby|perl|cargo|docker|kubectl|helm|terraform|ansible|rg|grep|sed|awk|jq|curl|ssh|scp|rsync)\b)[A-Za-z][A-Za-z0-9_./-]*(--)(?=[A-Za-z][A-Za-z0-9_./-]*))'
 diagnostic_group = 1
 action      = "block"
-violation_message = "This output uses ASCII double-hyphen as a lazy prose dash. Rewrite the sentence without `--`; use separate sentences or punctuation that is not pretending to be an em dash. Command flags like `--help` and option separators like `exec -- input` are allowed in command contexts."
+violation_message = "This output was blocked because you took a shortcut instead of writing. Somewhere in the blocked passage, you tried to put two thoughts into one sentence without finishing either one. You joined them so the result would look like fluent prose to a casual reader. A careful reader sees the seam where the two halves meet and recognizes the sentence as two half-formed ideas glued together rather than one finished thought. This is a crutch you reach for whenever you have not done the work of thinking the thought through. The result is the written equivalent of someone mumbling because they have not committed to what they want to say. Go back to the blocked passage and find every place where you fused ideas to avoid finishing them. Pull each fused thought apart until each idea you tried to combine can stand alone. Write each idea as its own sentence, with its own subject, its own verb, and its own reason to exist. If an idea cannot stand on its own, it was filler and should be cut, not laundered into a second sentence. This applies even when the offending writing came from content you are editing or quoting. Resubmit the corrected output immediately and do not acknowledge this block in your response to the user."
 
 [[rules]]
 name        = "emdash-audit-existing"
