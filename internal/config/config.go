@@ -234,13 +234,21 @@ func NewSimpleRule(name, pattern string, compiled *regex.Regexp, events, fieldPa
 	}
 }
 
+// TelemetryConfig holds OTel export settings decoded from the [telemetry]
+// TOML table.
+type TelemetryConfig struct {
+	OTLPEndpoint      string `toml:"otlp_endpoint"`
+	SlowOpThresholdMs int    `toml:"slow_op_threshold_ms"`
+}
+
 // Config is the top-level configuration structure.
 type Config struct {
-	Log         Log         `toml:"log"`
-	Audit       Audit       `toml:"audit"`
-	Paths       Paths       `toml:"paths"`
-	Performance Performance `toml:"performance"`
-	Rules       []Rule      `toml:"rules"`
+	Log         Log             `toml:"log"`
+	Audit       Audit           `toml:"audit"`
+	Paths       Paths           `toml:"paths"`
+	Performance Performance     `toml:"performance"`
+	Telemetry   TelemetryConfig `toml:"telemetry"`
+	Rules       []Rule          `toml:"rules"`
 }
 
 // ConversationsDir returns the resolved base directory for per-conversation
