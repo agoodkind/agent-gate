@@ -240,6 +240,8 @@ func TestValidateConfig_ConditionKinds(t *testing.T) {
 					{Kind: "command", Argv0: "go", StripEnv: true, StripArgs: []string{"env"}, CwdFlags: []string{"-C"}},
 					{Kind: "project", RootMarkers: []string{"go.mod"}},
 					{Kind: "regex", FieldPaths: []string{"tool_input.command"}, Pattern: "x"},
+					{Kind: "diff", FieldPair: "tool_input.old_string,tool_input.new_string", Pattern: "y"},
+					{Kind: "shell-write", FieldPaths: []string{"tool_input.command"}, Globs: []string{"*.txt"}},
 				},
 			},
 		},
