@@ -32,7 +32,7 @@ func EvaluateHot(ctx context.Context, rawBytes []byte, cfg *config.Config, hint 
 		}
 	}
 
-	return evaluatePayloadHot(ctx, payload, rawBytes, cfg)
+	return evaluatePayloadHot(ctx, payload, rawBytes, cfg, getenv)
 }
 
 func emptyDeferredAuditEvent(system HookSystem) DeferredAuditEvent {
@@ -72,12 +72,12 @@ func CanBlock(system HookSystem, eventName string) bool {
 	}
 }
 
-func evaluatePayloadHot(ctx context.Context, payload HookPayload, rawBytes []byte, cfg *config.Config) HotEvaluation {
+func evaluatePayloadHot(ctx context.Context, payload HookPayload, rawBytes []byte, cfg *config.Config, getenv func(string) string) HotEvaluation {
 	systemStr := payload.System.String()
 	eventName := payload.EventName()
 	fields := payload.Fields()
 	ruleSet := rulesForConfig(cfg)
-	violations := rules.EvaluateAll(ctx, systemStr, eventName, fields, ruleSet)
+	violations := rules.EvaluateAll(ctx, systemStr, eventName, fields, ruleSet, getenv)
 	blockingViolations := blockingMatches(violations)
 	auditOnlyViolations := auditOnlyMatches(violations)
 	canBlock := CanBlock(payload.System, eventName)

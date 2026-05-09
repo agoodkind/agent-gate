@@ -207,7 +207,7 @@ func BenchmarkEvaluateAll_19RegexHotPath(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
 	for range b.N {
-		got := rules.EvaluateAll(ctx, "claude", "PreToolUse", fields, rulesSlice)
+		got := rules.EvaluateAll(ctx, "claude", "PreToolUse", fields, rulesSlice, nil)
 		if len(got) != 0 {
 			b.Fatalf("expected 0 violations, got %d", len(got))
 		}
