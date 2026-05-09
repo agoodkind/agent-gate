@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"goodkind.io/agent-gate/internal/config"
+	"goodkind.io/agent-gate/internal/hook"
 	"goodkind.io/agent-gate/internal/regex"
 	"goodkind.io/agent-gate/internal/rules"
 )
@@ -795,7 +796,7 @@ func TestEvaluateAllUsesDiagnosticGroupSpan(t *testing.T) {
 		"assistant_message": value,
 	}
 
-	got := rules.EvaluateAll(context.Background(), "claude", "Stop", testFields(payload), []config.Rule{rule})
+	got := rules.EvaluateAll(context.Background(), "claude", "Stop", testFields(payload), []config.Rule{rule}, nil)
 	if len(got) != 1 {
 		t.Fatalf("EvaluateAll returned %d matches, want 1: %#v", len(got), got)
 	}
@@ -829,7 +830,7 @@ func TestEvaluateAllUsesConditionDiagnosticGroupSpan(t *testing.T) {
 		"assistant_message": value,
 	}
 
-	got := rules.EvaluateAll(context.Background(), "claude", "Stop", testFields(payload), []config.Rule{rule})
+	got := rules.EvaluateAll(context.Background(), "claude", "Stop", testFields(payload), []config.Rule{rule}, nil)
 	if len(got) != 1 {
 		t.Fatalf("EvaluateAll returned %d matches, want 1: %#v", len(got), got)
 	}
@@ -905,7 +906,7 @@ func TestEvaluate_DoubleHyphenProseMatchSpan(t *testing.T) {
 		"tool_input": map[string]any{"content": value},
 	}
 
-	got := rules.EvaluateAll(context.Background(), "claude", "PreToolUse", testFields(payload), []config.Rule{rule})
+	got := rules.EvaluateAll(context.Background(), "claude", "PreToolUse", testFields(payload), []config.Rule{rule}, nil)
 	if len(got) != 1 {
 		t.Fatalf("EvaluateAll returned %d matches, want 1: %#v", len(got), got)
 	}
@@ -1413,4 +1414,234 @@ func TestEvaluate_ProjectCondition_AllowsOutsideMarkedProject(t *testing.T) {
 	if v != nil {
 		t.Fatalf("expected allow outside Go module, got %s", v.Message)
 	}
+}
+
+// makeDiffRule builds a rule with a single diff condition matching the
+// pattern against tool_input.new_string but allowing existing matches.
+func makeDiffRule(t *testing.T, pattern string) config.Rule {
+	t.Helper()
+	cond, err := config.NewCondition(nil, pattern, "")
+	if err != nil {
+		t.Fatalf("NewCondition: %v", err)
+	}
+	cond.Kind = string(config.ConditionKindDiff)
+	cond.FieldPair = "tool_input.old_string,tool_input.new_string"
+	return config.Rule{
+		Name:             "block-additive",
+		Description:      "",
+		Events:           []string{"PreToolUse"},
+		ClaudeEvents:     nil,
+		CursorEvents:     nil,
+		CodexEvents:      nil,
+		GeminiEvents:     nil,
+		Conditions:       []config.Condition{cond},
+		FieldPaths:       nil,
+		Pattern:          "",
+		Action:           "block",
+		ViolationMessage: "additive content blocked",
+		DiagnosticGroup:  0,
+		AuditOnly:        false,
+		DisableIfEnv:     nil,
+	}
+}
+
+func TestEvaluateAll_DiffCondition_BlocksAdditive(t *testing.T) {
+	rule := makeDiffRule(t, `internal/foo\.go`)
+	rule.Conditions[0].FieldPaths = []string{"tool_input.new_string"}
+	rule.Conditions[0].Selectors() // touch to ensure parse-equivalent state
+	// Compile fieldPair via Load equivalent: simulate by going through ParseFieldPair.
+	pair, err := config.ParseFieldPair(rule.Conditions[0].FieldPair)
+	if err != nil {
+		t.Fatalf("ParseFieldPair: %v", err)
+	}
+	// We need the loadPath path to populate fieldPairs; substitute by going via TOML below.
+	_ = pair
+
+	// The cleanest path is via TOML decode.
+	const tomlBody = `
+[[rules]]
+name = "block-additive-foo"
+events = ["PreToolUse"]
+action = "block"
+violation_message = "additive content blocked"
+
+[[rules.conditions]]
+kind = "diff"
+field_pair = "tool_input.old_string,tool_input.new_string"
+pattern = '''internal/foo\.go'''
+`
+	cfg := loadTOML(t, tomlBody)
+	if errs := loadValidate(t, cfg); len(errs) != 0 {
+		t.Fatalf("ValidateConfig: %v", errs)
+	}
+
+	cases := []struct {
+		name    string
+		fields  rules.FieldSet
+		blocked bool
+	}{
+		{
+			name: "additive only",
+			fields: rules.FieldSet{
+				ToolInputOldString: "no reference here",
+				ToolInputNewString: "added: internal/foo.go",
+			},
+			blocked: true,
+		},
+		{
+			name: "present in both",
+			fields: rules.FieldSet{
+				ToolInputOldString: "internal/foo.go was here",
+				ToolInputNewString: "internal/foo.go was here, slightly changed",
+			},
+			blocked: false,
+		},
+		{
+			name: "deletion only",
+			fields: rules.FieldSet{
+				ToolInputOldString: "internal/foo.go was here",
+				ToolInputNewString: "no reference",
+			},
+			blocked: false,
+		},
+		{
+			name: "neither side has it",
+			fields: rules.FieldSet{
+				ToolInputOldString: "clean old",
+				ToolInputNewString: "clean new",
+			},
+			blocked: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := rules.EvaluateAll(context.Background(), "claude", "PreToolUse", tc.fields, cfg.Rules, nil)
+			if (len(got) > 0) != tc.blocked {
+				t.Fatalf("blocked=%v, got %d violations: %#v", tc.blocked, len(got), got)
+			}
+		})
+	}
+}
+
+func TestEvaluateAll_ShellWriteCondition_BlocksGlobMatch(t *testing.T) {
+	const tomlBody = `
+[[rules]]
+name = "block-baseline-bash-tampering"
+events = ["PreToolUse"]
+action = "block"
+violation_message = "writing to a baseline file is not permitted"
+
+[[rules.conditions]]
+kind = "shell-write"
+field_paths = ["tool_input.command"]
+globs = ["*-baseline.txt", "*.golangci-lint-baseline.txt"]
+`
+	cfg := loadTOML(t, tomlBody)
+	if errs := loadValidate(t, cfg); len(errs) != 0 {
+		t.Fatalf("ValidateConfig: %v", errs)
+	}
+
+	cases := []struct {
+		name    string
+		command string
+		blocked bool
+	}{
+		{name: "redirect append", command: "echo entry >> .golangci-lint-baseline.txt", blocked: true},
+		{name: "tee append", command: "tee -a .golangci-lint-baseline.txt < extras.txt", blocked: true},
+		{name: "sed in-place", command: "sed -i 's/^/-/' .golangci-lint-baseline.txt", blocked: true},
+		{name: "unparseable bash -c sentinel", command: `bash -c "echo hi >> /tmp/log"`, blocked: true},
+		{name: "read-only cat allowed", command: "cat README.md", blocked: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fields := rules.FieldSet{
+				CWD:              "/work",
+				ToolInputCommand: tc.command,
+			}
+			got := rules.EvaluateAll(context.Background(), "claude", "PreToolUse", fields, cfg.Rules, nil)
+			if (len(got) > 0) != tc.blocked {
+				t.Fatalf("blocked=%v, got %d violations: %#v", tc.blocked, len(got), got)
+			}
+		})
+	}
+}
+
+func TestEvaluateAllSkipsWhenEnvGuardSet(t *testing.T) {
+	const tomlBody = `
+[[rules]]
+name = "block-additive-foo"
+events = ["PreToolUse"]
+action = "block"
+violation_message = "blocked"
+disable_if_env = ["LINT_BASELINE_REFRESH"]
+
+[[rules.conditions]]
+kind = "diff"
+field_pair = "tool_input.old_string,tool_input.new_string"
+pattern = '''internal/foo\.go'''
+`
+	cfg := loadTOML(t, tomlBody)
+
+	fields := rules.FieldSet{
+		ToolInputOldString: "no reference",
+		ToolInputNewString: "added: internal/foo.go",
+	}
+
+	cases := []struct {
+		name    string
+		getenv  func(string) string
+		blocked bool
+	}{
+		{
+			name:    "no getenv blocks",
+			getenv:  nil,
+			blocked: true,
+		},
+		{
+			name:    "env unset blocks",
+			getenv:  func(_ string) string { return "" },
+			blocked: true,
+		},
+		{
+			name: "env set to non-empty allows",
+			getenv: func(key string) string {
+				if key == "LINT_BASELINE_REFRESH" {
+					return "1"
+				}
+				return ""
+			},
+			blocked: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := rules.EvaluateAll(context.Background(), "claude", "PreToolUse", fields, cfg.Rules, tc.getenv)
+			if (len(got) > 0) != tc.blocked {
+				t.Fatalf("blocked=%v, got %d violations: %#v", tc.blocked, len(got), got)
+			}
+		})
+	}
+}
+
+// loadTOML decodes a TOML body string through the same path as a real config
+// file: it writes a tempfile and calls config.LoadExisting so loadPath wires
+// up compiled regexes, selectors, and field pairs.
+func loadTOML(t *testing.T, body string) *config.Config {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "agent-gate.toml")
+	writeFile(t, path, body)
+	cfg, err := config.LoadExisting(path)
+	if err != nil {
+		t.Fatalf("LoadExisting: %v", err)
+	}
+	return cfg
+}
+
+// loadValidate calls hook.ValidateConfig and returns its findings. Wrapped
+// here so engine_test does not need to import hook just for this helper at
+// every call site.
+func loadValidate(t *testing.T, cfg *config.Config) []error {
+	t.Helper()
+	return hook.ValidateConfig(cfg)
 }
