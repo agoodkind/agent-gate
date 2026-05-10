@@ -199,6 +199,35 @@ func TestEvaluateHook_ConcurrentBurstCompletes(t *testing.T) {
 	}
 }
 
+func TestEvaluateHook_DeferredWorkerCompletesFreshEvent(t *testing.T) {
+	setDaemonTestDirs(t)
+	cfg := daemonTestConfig(t)
+	cfg.Performance.Hook.DeferredWorkers = 1
+	cfg.Performance.Hook.DeferredQueueLimit = 4
+	srv, err := New(newDiscardLogger(), cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer srv.Close()
+
+	resp, err := srv.EvaluateHook(context.Background(), &daemonpb.EvaluateHookRequest{
+		RawJson:      []byte(`{"session_id":"s1","hook_event_name":"PreToolUse","tool_name":"Shell","tool_input":{"command":"echo ok"}}`),
+		ProviderHint: "codex",
+		Cwd:          t.TempDir(),
+		EnvFingerprint: map[string]string{
+			"CODEX_THREAD_ID": "test-thread",
+		},
+	})
+	if err != nil {
+		t.Fatalf("EvaluateHook: %v", err)
+	}
+	if resp.ExitCode != 0 {
+		t.Fatalf("exit_code = %d, want 0", resp.ExitCode)
+	}
+
+	waitForNoPendingIntake(t, srv)
+}
+
 func TestHotPathBlocksBeforeDeferredQueue(t *testing.T) {
 	setDaemonTestDirs(t)
 	srv, err := New(newDiscardLogger(), daemonTestConfig(t))
@@ -786,4 +815,24 @@ func waitForAuditMessages(t testing.TB, cfg *config.Config, messages ...string) 
 		time.Sleep(25 * time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for audit messages %v", messages)
+}
+
+func waitForNoPendingIntake(t testing.TB, srv *Server) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		snapshot := srv.runtime.Load()
+		if snapshot == nil {
+			t.Fatal("runtime snapshot is nil")
+		}
+		pending, err := snapshot.intakeStore.ListPending(context.Background())
+		if err != nil {
+			t.Fatalf("ListPending: %v", err)
+		}
+		if len(pending) == 0 {
+			return
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatal("timed out waiting for pending intake records to complete")
 }

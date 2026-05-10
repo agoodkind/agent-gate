@@ -5,6 +5,7 @@ package regex
 
 import (
 	"runtime"
+	"sync"
 	"unicode/utf8"
 	"unsafe"
 )
@@ -19,6 +20,7 @@ const (
 type Regexp struct {
 	pattern string
 	handle  unsafe.Pointer
+	mu      sync.Mutex
 }
 
 // Compile compiles a pattern for use in rules.
@@ -31,6 +33,7 @@ func Compile(pattern string) (*Regexp, error) {
 	re := &Regexp{
 		pattern: pattern,
 		handle:  handle,
+		mu:      sync.Mutex{},
 	}
 	runtime.SetFinalizer(re, (*Regexp).free)
 
@@ -63,6 +66,9 @@ func (r *Regexp) MatchString(s string) bool {
 	if r == nil || r.handle == nil {
 		return false
 	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
 
 	rc := HandleMatch(r.handle, s, 0)
 
@@ -98,6 +104,9 @@ func (r *Regexp) ForEachStringGroupIndex(s string, n int, group uint32, yield fu
 		return
 	}
 
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
 	offset := 0
 	matchCount := 0
 	for offset <= len(s) && (n < 0 || matchCount < n) {
@@ -132,6 +141,8 @@ func (r *Regexp) CaptureCount() uint32 {
 	if r == nil || r.handle == nil {
 		return 0
 	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	return HandleCaptureCount(r.handle)
 }
 
@@ -158,6 +169,9 @@ func (r *Regexp) Split(s string, n int) []string {
 	if n == 1 || r == nil || r.handle == nil {
 		return []string{s}
 	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
 
 	parts := make([]string, 0, 4)
 	remainder := s
@@ -216,6 +230,9 @@ func (r *Regexp) FindStringSubmatch(s string) []string {
 	if r == nil || r.handle == nil {
 		return nil
 	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
 
 	rc := HandleMatch(r.handle, s, 0)
 	if rc != 1 {

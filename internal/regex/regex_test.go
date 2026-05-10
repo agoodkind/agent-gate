@@ -2,6 +2,7 @@ package regex
 
 import (
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -116,6 +117,35 @@ func TestForEachStringGroupIndexStopsEarly(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("match %d = %#v, want %#v", i, got[i], want[i])
 		}
+	}
+}
+
+func TestRegexpConcurrentMatchAndGroupAccess(t *testing.T) {
+	re := MustCompile(`(?i)(alpha)\s+(one|two|three)`)
+	const workerCount = 32
+	const iterations = 100
+
+	var wg sync.WaitGroup
+	errs := make(chan string, workerCount)
+	for range workerCount {
+		wg.Go(func() {
+			for range iterations {
+				if !re.MatchString("alpha one") {
+					errs <- "MatchString returned false"
+					return
+				}
+				got := re.FindAllStringGroupIndex("alpha one && alpha two", -1, 2)
+				if len(got) != 2 {
+					errs <- "FindAllStringGroupIndex returned wrong count"
+					return
+				}
+			}
+		})
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatal(err)
 	}
 }
 
