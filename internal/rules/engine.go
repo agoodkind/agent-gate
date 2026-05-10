@@ -2,15 +2,18 @@ package rules
 
 import (
 	"context"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"unicode"
 
 	"goodkind.io/agent-gate/internal/config"
 	"goodkind.io/agent-gate/internal/regex"
 	diffconcern "goodkind.io/agent-gate/internal/rules/concerns/diff"
+	concernlimit "goodkind.io/agent-gate/internal/rules/concerns/limit"
 	regexconcern "goodkind.io/agent-gate/internal/rules/concerns/regex"
 	shellwriteconcern "goodkind.io/agent-gate/internal/rules/concerns/shellwrite"
 	"goodkind.io/agent-gate/pipeline"
@@ -28,6 +31,7 @@ type MatchViolation struct {
 	RuleName  string
 	Message   string
 	AuditOnly bool
+	Redact    bool
 	FieldPath string
 	FilePath  string
 	Value     string
@@ -149,6 +153,7 @@ func buildRuleRegexConcerns(fields *FieldSet, rulesSlice []config.Rule, system, 
 	var concerns []pipeline.Concern
 	for i := range rulesSlice {
 		rule := &rulesSlice[i]
+		budget := newRuleMatchBudget(concernlimit.MaxCollectedMatchesPerEvaluation)
 		if !appliesToEvent(rule, system, eventName) {
 			continue
 		}
@@ -161,6 +166,7 @@ func buildRuleRegexConcerns(fields *FieldSet, rulesSlice []config.Rule, system, 
 				fields:  fields,
 				rule:    rule,
 				condIdx: -1,
+				budget:  budget,
 			})
 			continue
 		}
@@ -178,6 +184,7 @@ func buildRuleRegexConcerns(fields *FieldSet, rulesSlice []config.Rule, system, 
 				fields:  fields,
 				rule:    rule,
 				condIdx: j,
+				budget:  budget,
 			})
 			matchingCondCount++
 		}
@@ -190,6 +197,7 @@ func buildRuleRegexConcerns(fields *FieldSet, rulesSlice []config.Rule, system, 
 				fields:  fields,
 				rule:    rule,
 				condIdx: -2,
+				budget:  nil,
 			})
 		}
 	}
@@ -226,6 +234,63 @@ type ruleRegexConcern struct {
 	fields  *FieldSet
 	rule    *config.Rule
 	condIdx int
+	budget  *ruleMatchBudget
+}
+
+type ruleMatchBudget struct {
+	remaining atomic.Int32
+}
+
+func newRuleMatchBudget(limit int) *ruleMatchBudget {
+	budget := new(ruleMatchBudget)
+	if limit <= 0 {
+		budget.remaining.Store(0)
+		return budget
+	}
+	if limit > math.MaxInt32 {
+		budget.remaining.Store(math.MaxInt32)
+		return budget
+	}
+	budget.remaining.Store(int32(limit))
+	return budget
+}
+
+func (b *ruleMatchBudget) Remaining() int {
+	if b == nil {
+		return 0
+	}
+
+	remaining := b.remaining.Load()
+	if remaining < 0 {
+		return 0
+	}
+	return int(remaining)
+}
+
+func (b *ruleMatchBudget) Consume(count int) {
+	if b == nil || count <= 0 {
+		return
+	}
+
+	for {
+		current := b.remaining.Load()
+		if current <= 0 {
+			return
+		}
+
+		if count > math.MaxInt32 {
+			if b.remaining.CompareAndSwap(current, 0) {
+				return
+			}
+			continue
+		}
+
+		decrement := int32(count)
+		next := max(current-decrement, 0)
+		if b.remaining.CompareAndSwap(current, next) {
+			return
+		}
+	}
 }
 
 // ruleOutcome carries the violations produced by one ruleRegexConcern plus the
@@ -249,7 +314,7 @@ func (r *ruleRegexConcern) Profile() pipeline.Profile {
 func (r *ruleRegexConcern) Execute(_ context.Context, _ pipeline.Input) (pipeline.Outcome, error) {
 	if r.condIdx == -1 {
 		return ruleOutcome{
-			violations:       evalSimpleRule(r.fields, r.rule),
+			violations:       evalSimpleRule(r.fields, r.rule, r.budget.Remaining()),
 			rule:             nil,
 			isConditionBased: false,
 			gateMatched:      false,
@@ -286,9 +351,19 @@ func (r *ruleRegexConcern) Execute(_ context.Context, _ pipeline.Input) (pipelin
 		}, nil
 	}
 	c := &r.rule.Conditions[r.condIdx]
+	matchLimit := r.budget.Remaining()
+	if matchLimit == 0 {
+		return ruleOutcome{
+			violations:       nil,
+			rule:             r.rule,
+			isConditionBased: true,
+			gateMatched:      true,
+		}, nil
+	}
 	switch conditionKind(c) {
 	case config.ConditionKindRegex:
-		matches := regexconcern.EvalFieldMatches(r.fields, c.Selectors(), c.CompiledPattern(), c.DiagnosticGroup)
+		matches := regexconcern.EvalFieldMatches(r.fields, c.Selectors(), c.CompiledPattern(), c.DiagnosticGroup, matchLimit)
+		r.budget.Consume(len(matches))
 		return ruleOutcome{
 			violations:       matchesToViolations(matches, r.rule),
 			rule:             r.rule,
@@ -296,8 +371,10 @@ func (r *ruleRegexConcern) Execute(_ context.Context, _ pipeline.Input) (pipelin
 			gateMatched:      true,
 		}, nil
 	case config.ConditionKindDiff:
+		violations := evalDiffCondition(r.fields, c, r.rule, matchLimit)
+		r.budget.Consume(len(violations))
 		return ruleOutcome{
-			violations:       evalDiffCondition(r.fields, c, r.rule),
+			violations:       violations,
 			rule:             r.rule,
 			isConditionBased: true,
 			gateMatched:      true,
@@ -332,7 +409,11 @@ func (r *ruleRegexConcern) Execute(_ context.Context, _ pipeline.Input) (pipelin
 
 // evalDiffCondition runs the diff Concern for one condition and returns its
 // match violations in the rules.MatchViolation shape.
-func evalDiffCondition(fields *FieldSet, c *config.Condition, rule *config.Rule) []MatchViolation {
+func evalDiffCondition(fields *FieldSet, c *config.Condition, rule *config.Rule, limit int) []MatchViolation {
+	if limit <= 0 {
+		return nil
+	}
+
 	pairs := c.FieldPairs()
 	if len(pairs) == 0 {
 		// Default to old_string/new_string when field_pair is unset.
@@ -353,18 +434,27 @@ func evalDiffCondition(fields *FieldSet, c *config.Condition, rule *config.Rule)
 	}
 	var matches []diffconcern.MatchResult
 	for _, pair := range pairs {
-		matches = append(matches, diffconcern.EvalDiffMatches(fields, pair, pattern, group)...)
+		remaining := limit - len(matches)
+		if remaining == 0 {
+			break
+		}
+
+		matches = append(matches, diffconcern.EvalDiffMatches(fields, pair, pattern, group, remaining)...)
 		// Fallback: when the configured new field is empty but edits[*] has
 		// content, apply the same pattern against the joined edits view so
 		// a single condition covers both Edit and MultiEdit shapes.
 		if len(matches) == 0 && pair.NewField == config.FieldToolInputNewString {
+			remaining = limit - len(matches)
+			if remaining == 0 {
+				break
+			}
 			batchPair := config.FieldPairSpec{
 				OldPath:  "edits[*].old_string",
 				NewPath:  "edits[*].new_string",
 				OldField: config.FieldEditsOldString,
 				NewField: config.FieldEditsNewString,
 			}
-			matches = append(matches, diffconcern.EvalDiffMatches(fields, batchPair, pattern, group)...)
+			matches = append(matches, diffconcern.EvalDiffMatches(fields, batchPair, pattern, group, remaining)...)
 		}
 	}
 	return diffMatchesToViolations(matches, rule)
@@ -380,6 +470,7 @@ func diffMatchesToViolations(matches []diffconcern.MatchResult, rule *config.Rul
 			RuleName:  rule.Name,
 			Message:   rule.ViolationMessage,
 			AuditOnly: rule.AuditOnly,
+			Redact:    rule.RedactDiagnostics,
 			FieldPath: m.FieldPath,
 			FilePath:  m.FilePath,
 			Value:     m.Value,
@@ -410,6 +501,7 @@ func evalShellWriteCondition(fields *FieldSet, c *config.Condition, rule *config
 			RuleName:  rule.Name,
 			Message:   rule.ViolationMessage,
 			AuditOnly: rule.AuditOnly,
+			Redact:    rule.RedactDiagnostics,
 			FieldPath: m.FieldPath,
 			FilePath:  m.FilePath,
 			Value:     m.Value,
@@ -421,8 +513,8 @@ func evalShellWriteCondition(fields *FieldSet, c *config.Condition, rule *config
 }
 
 // evalSimpleRule runs the top-level pattern for a rule with no conditions.
-func evalSimpleRule(fields *FieldSet, rule *config.Rule) []MatchViolation {
-	matches := regexconcern.EvalFieldMatches(fields, rule.Selectors(), rule.Compiled(), rule.DiagnosticGroup)
+func evalSimpleRule(fields *FieldSet, rule *config.Rule, limit int) []MatchViolation {
+	matches := regexconcern.EvalFieldMatches(fields, rule.Selectors(), rule.Compiled(), rule.DiagnosticGroup, limit)
 	return matchesToViolations(matches, rule)
 }
 
@@ -438,6 +530,7 @@ func matchesToViolations(matches []regexconcern.MatchResult, rule *config.Rule) 
 			RuleName:  rule.Name,
 			Message:   rule.ViolationMessage,
 			AuditOnly: rule.AuditOnly,
+			Redact:    rule.RedactDiagnostics,
 			FieldPath: m.FieldPath,
 			FilePath:  m.FilePath,
 			Value:     m.Value,
@@ -463,6 +556,7 @@ func conditionFallbackViolation(fields FieldSet, rule *config.Rule) MatchViolati
 		RuleName:  rule.Name,
 		Message:   rule.ViolationMessage,
 		AuditOnly: rule.AuditOnly,
+		Redact:    rule.RedactDiagnostics,
 		FieldPath: fieldPath,
 		FilePath:  fields.FilePathValue(),
 		Value:     value,
@@ -528,22 +622,24 @@ func diffConditionGateMatch(fields FieldSet, c *config.Condition) bool {
 		return false
 	}
 	return len(evalDiffCondition(&fields, c, &config.Rule{
-		Name:             "",
-		Description:      "",
-		Events:           nil,
-		ClaudeEvents:     nil,
-		CursorEvents:     nil,
-		CodexEvents:      nil,
-		GeminiEvents:     nil,
-		Conditions:       nil,
-		FieldPaths:       nil,
-		Pattern:          "",
-		Action:           "",
-		ViolationMessage: "",
-		DiagnosticGroup:  0,
-		AuditOnly:        false,
-		DisableIfEnv:     nil,
-	})) > 0
+		Name:              "",
+		Description:       "",
+		Events:            nil,
+		ClaudeEvents:      nil,
+		CursorEvents:      nil,
+		CodexEvents:       nil,
+		GeminiEvents:      nil,
+		Class:             config.RuleClassSync,
+		Conditions:        nil,
+		FieldPaths:        nil,
+		Pattern:           "",
+		Action:            "",
+		ViolationMessage:  "",
+		DiagnosticGroup:   0,
+		RedactDiagnostics: false,
+		AuditOnly:         false,
+		DisableIfEnv:      nil,
+	}, 1)) > 0
 }
 
 // safeDiagnosticGroup converts an int diagnostic group value to uint32,

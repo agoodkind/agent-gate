@@ -17,6 +17,7 @@ import (
 	"goodkind.io/agent-gate/internal/config"
 	"goodkind.io/agent-gate/internal/daemon"
 	"goodkind.io/agent-gate/internal/hook"
+	"goodkind.io/agent-gate/internal/intake"
 	"goodkind.io/agent-gate/internal/telemetry"
 	"goodkind.io/agent-gate/internal/version"
 	"goodkind.io/gklog"
@@ -33,7 +34,7 @@ const (
 	commandCodexHook  commandName = "codex-hook"
 	commandDaemon     commandName = "daemon"
 	commandGeminiHook commandName = "gemini-hook"
-	commandLogs       commandName = "logs"
+	commandQuery      commandName = "query"
 	commandVersion    commandName = "version"
 )
 
@@ -41,6 +42,13 @@ type daemonCommandName string
 
 const (
 	daemonCommandStatus daemonCommandName = "status"
+)
+
+type queryCommandName string
+
+const (
+	queryCommandDecisions queryCommandName = "decisions"
+	queryCommandSeen      queryCommandName = "seen"
 )
 
 // printVersion writes the build metadata used in log entries to stdout.
@@ -79,8 +87,8 @@ func main() {
 			os.Exit(runHook(hook.SystemCodex))
 		case commandGeminiHook:
 			os.Exit(runHook(hook.SystemGemini))
-		case commandLogs:
-			os.Exit(runLogs(os.Args[2:]))
+		case commandQuery:
+			os.Exit(runQuery(os.Args[2:]))
 		case commandConfig:
 			os.Exit(runConfig(os.Args[2:]))
 		case commandVersion, "--version", "-v":
@@ -202,59 +210,117 @@ func openLog(component string) (*slog.Logger, func()) {
 	}
 }
 
-func runLogs(args []string) int {
-	if len(args) == 0 || args[0] != "query" {
-		fmt.Fprintln(os.Stderr, "usage: agent-gate logs query [--today] [--since 24h] [--system claude] [--decision block] [--rule NAME] [--json]")
+func runQuery(args []string) int {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "usage: agent-gate query seen|decisions [flags]")
 		return 2
 	}
+	switch queryCommandName(args[0]) {
+	case queryCommandSeen:
+		return runSeenQuery(args[1:])
+	case queryCommandDecisions:
+		return runDecisionQuery(args[1:])
+	default:
+		fmt.Fprintf(os.Stderr, "agent-gate query: unknown subcommand %q\n", args[0])
+		return 2
+	}
+}
 
-	fs := flag.NewFlagSet("agent-gate logs query", flag.ContinueOnError)
+type sharedQueryFlags struct {
+	today   bool
+	since   string
+	until   string
+	jsonOut bool
+}
+
+func registerSharedQueryFlags(fs *flag.FlagSet, shared *sharedQueryFlags, system *string, session *string, event *string, tool *string, limit *int) {
+	fs.BoolVar(&shared.today, "today", false, "show events since local midnight")
+	fs.StringVar(&shared.since, "since", "", "show events since duration or RFC3339 time")
+	fs.StringVar(&shared.until, "until", "", "show events until duration or RFC3339 time")
+	fs.StringVar(system, "system", "", "filter by system")
+	fs.StringVar(session, "session", "", "filter by session id")
+	fs.StringVar(event, "event", "", "filter by event name")
+	fs.StringVar(tool, "tool", "", "filter by tool name")
+	fs.IntVar(limit, "limit", 50, "maximum rows")
+	fs.BoolVar(&shared.jsonOut, "json", false, "print JSONL")
+}
+
+func applySharedAuditQueryFlags(shared sharedQueryFlags, filter *audit.QueryFilter, command string) bool {
+	since, until, ok := parseSharedQueryRange(shared, command)
+	if !ok {
+		return false
+	}
+	filter.Since = since
+	filter.Until = until
+	return true
+}
+
+func applySharedSeenQueryFlags(shared sharedQueryFlags, filter *intake.QueryFilter, command string) bool {
+	since, until, ok := parseSharedQueryRange(shared, command)
+	if !ok {
+		return false
+	}
+	filter.Since = since
+	filter.Until = until
+	return true
+}
+
+func parseSharedQueryRange(shared sharedQueryFlags, command string) (time.Time, time.Time, bool) {
+	var since time.Time
+	var until time.Time
+	if shared.today {
+		now := time.Now()
+		since = time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	}
+	if shared.since != "" {
+		t, err := parseQueryTime(shared.since)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "agent-gate %s: invalid --since: %v\n", command, err)
+			return time.Time{}, time.Time{}, false
+		}
+		since = t
+	}
+	if shared.until != "" {
+		t, err := parseQueryTime(shared.until)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "agent-gate %s: invalid --until: %v\n", command, err)
+			return time.Time{}, time.Time{}, false
+		}
+		until = t
+	}
+	return since, until, true
+}
+
+func runDecisionQuery(args []string) int {
+	fs := flag.NewFlagSet("agent-gate query decisions", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	var filter audit.QueryFilter
-	var today bool
-	var since string
-	var jsonOut bool
-	fs.BoolVar(&today, "today", false, "show events since local midnight")
-	fs.StringVar(&since, "since", "", "show events since duration or RFC3339 time")
-	fs.StringVar(&filter.System, "system", "", "filter by system")
-	fs.StringVar(&filter.SessionID, "session", "", "filter by session id")
-	fs.StringVar(&filter.EventName, "event", "", "filter by event name")
-	fs.StringVar(&filter.ToolName, "tool", "", "filter by tool name")
+	var shared sharedQueryFlags
+	registerSharedQueryFlags(fs, &shared, &filter.System, &filter.SessionID, &filter.EventName, &filter.ToolName, &filter.Limit)
 	fs.StringVar(&filter.Decision, "decision", "", "filter by decision")
 	fs.StringVar(&filter.Rule, "rule", "", "filter by rule")
-	fs.IntVar(&filter.Limit, "limit", 50, "maximum rows")
-	fs.BoolVar(&jsonOut, "json", false, "print JSONL")
-	if err := fs.Parse(args[1:]); err != nil {
+	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	if today {
-		now := time.Now()
-		filter.Since = time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
-	}
-	if since != "" {
-		t, err := parseSince(since)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "agent-gate logs query: invalid --since: %v\n", err)
-			return 2
-		}
-		filter.Since = t
+	if !applySharedAuditQueryFlags(shared, &filter, "query decisions") {
+		return 2
 	}
 
 	cfg, err := config.Load()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "agent-gate logs query: config load failed: %v\n", err)
+		fmt.Fprintf(os.Stderr, "agent-gate query decisions: config load failed: %v\n", err)
 		return 2
 	}
 	events, source, err := audit.Query(cfg, filter)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "agent-gate logs query: no audit output available: %v\n", err)
+		fmt.Fprintf(os.Stderr, "agent-gate query decisions: no audit output available: %v\n", err)
 		return 1
 	}
-	if jsonOut {
+	if shared.jsonOut {
 		enc := json.NewEncoder(os.Stdout)
 		for _, event := range events {
 			if err := enc.Encode(event); err != nil {
-				fmt.Fprintf(os.Stderr, "agent-gate logs query: encode: %v\n", err)
+				fmt.Fprintf(os.Stderr, "agent-gate query decisions: encode: %v\n", err)
 				return 1
 			}
 		}
@@ -264,7 +330,51 @@ func runLogs(args []string) int {
 	return 0
 }
 
-func parseSince(s string) (time.Time, error) {
+func runSeenQuery(args []string) int {
+	fs := flag.NewFlagSet("agent-gate query seen", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	var filter intake.QueryFilter
+	var shared sharedQueryFlags
+	registerSharedQueryFlags(fs, &shared, &filter.System, &filter.SessionID, &filter.EventName, &filter.ToolName, &filter.Limit)
+	fs.StringVar(&filter.DeferredState, "state", "", "filter by deferred replay state")
+	fs.StringVar(&filter.EventID, "event-id", "", "filter by durable event id")
+	fs.BoolVar(&filter.IncludeNormalized, "include-normalized", false, "include normalized payload JSON")
+	fs.BoolVar(&filter.IncludeEnv, "include-env", false, "include environment fingerprint")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if !applySharedSeenQueryFlags(shared, &filter, "query seen") {
+		return 2
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-gate query seen: config load failed: %v\n", err)
+		return 2
+	}
+	result, err := intake.Query(context.Background(), cfg, filter)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-gate query seen: %v\n", err)
+		return 1
+	}
+	if shared.jsonOut {
+		if result.Note != "" {
+			fmt.Fprintf(os.Stderr, "agent-gate query seen: %s\n", result.Note)
+		}
+		enc := json.NewEncoder(os.Stdout)
+		for _, record := range result.Records {
+			if err := enc.Encode(record); err != nil {
+				fmt.Fprintf(os.Stderr, "agent-gate query seen: encode: %v\n", err)
+				return 1
+			}
+		}
+		return 0
+	}
+	printSeenTable(result)
+	return 0
+}
+
+func parseQueryTime(s string) (time.Time, error) {
 	if d, err := time.ParseDuration(s); err == nil {
 		return time.Now().Add(-d), nil
 	}
@@ -290,6 +400,29 @@ func printEventTable(source string, events []audit.Event) {
 			event.EventName,
 			event.ToolName,
 			rules,
+			cmd,
+		)
+	}
+}
+
+func printSeenTable(result intake.QueryResult) {
+	_, _ = fmt.Fprintf(os.Stdout, "source=%s rows=%d\n", result.Source, len(result.Records))
+	if result.Note != "" {
+		_, _ = fmt.Fprintf(os.Stdout, "note=%s\n", result.Note)
+	}
+	_, _ = fmt.Fprintf(os.Stdout, "%-25s  %-8s  %-12s  %-12s  %-9s  %-10s  %s\n", "recorded_at", "system", "state", "event", "tool", "session", "command")
+	for _, record := range result.Records {
+		cmd := record.Operation.Command
+		if len(cmd) > 80 {
+			cmd = cmd[:77] + "..."
+		}
+		_, _ = fmt.Fprintf(os.Stdout, "%-25s  %-8s  %-12s  %-12s  %-9s  %-10s  %s\n",
+			record.RecordedAt,
+			record.System,
+			record.Deferred.State,
+			record.EventName,
+			record.ToolName,
+			record.SessionID,
 			cmd,
 		)
 	}

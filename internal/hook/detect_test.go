@@ -53,6 +53,8 @@ func TestDetect_PriorityChain(t *testing.T) {
 		{name: "copilot OTEL_ENABLED alone", env: map[string]string{"COPILOT_OTEL_ENABLED": "true"}, payload: hook.DetectionPayload{HookEventName: "UserPromptSubmit"}, want: hook.SystemCopilot},
 		{name: "vscode env without other markers", env: map[string]string{"VSCODE_PID": "12345"}, payload: hook.DetectionPayload{HookEventName: "PreToolUse"}, want: hook.SystemVSCode},
 		{name: "vscode env loses to claude env", env: map[string]string{"VSCODE_PID": "12345", "CLAUDE_CODE_ENTRYPOINT": "cli"}, payload: hook.DetectionPayload{HookEventName: "PreToolUse"}, want: hook.SystemClaude},
+		{name: "codex subcommand hint beats shared transcript path", payload: hook.DetectionPayload{HookEventName: "PostToolUse", TranscriptPath: "/tmp/codex.jsonl"}, hint: hook.SystemCodex, want: hook.SystemCodex},
+		{name: "codex subcommand hint beats leaked claude env", env: map[string]string{"CLAUDE_CODE_ENTRYPOINT": "cli"}, payload: hook.DetectionPayload{HookEventName: "PostToolUse", TranscriptPath: "/tmp/codex.jsonl"}, hint: hook.SystemCodex, want: hook.SystemCodex},
 		{name: "subcommand hint reached when nothing else matches", payload: hook.DetectionPayload{HookEventName: "PreToolUse"}, hint: hook.SystemCodex, want: hook.SystemCodex},
 		{name: "subcommand hint outranked by cursor payload", payload: hook.DetectionPayload{HookEventName: "PreToolUse", CursorVersion: "0.42"}, hint: hook.SystemCodex, want: hook.SystemCursor},
 		{name: "pure pascal case with no markers returns unknown", payload: hook.DetectionPayload{HookEventName: "PreToolUse"}, want: hook.SystemUnknown},

@@ -5,6 +5,7 @@ import (
 
 	"goodkind.io/agent-gate/internal/config"
 	intregex "goodkind.io/agent-gate/internal/regex"
+	concernlimit "goodkind.io/agent-gate/internal/rules/concerns/limit"
 	regexconcern "goodkind.io/agent-gate/internal/rules/concerns/regex"
 )
 
@@ -51,7 +52,7 @@ func TestEvalFieldMatches_Match(t *testing.T) {
 		},
 	}
 
-	matches := regexconcern.EvalFieldMatches(fields, selectors, re, 0)
+	matches := regexconcern.EvalFieldMatches(fields, selectors, re, 0, concernlimit.MaxCollectedMatchesPerEvaluation)
 
 	if len(matches) != 1 {
 		t.Fatalf("expected 1 match, got %d: %#v", len(matches), matches)
@@ -81,7 +82,7 @@ func TestEvalFieldMatches_NoMatch(t *testing.T) {
 		},
 	}
 
-	matches := regexconcern.EvalFieldMatches(fields, selectors, re, 0)
+	matches := regexconcern.EvalFieldMatches(fields, selectors, re, 0, concernlimit.MaxCollectedMatchesPerEvaluation)
 
 	if len(matches) != 0 {
 		t.Errorf("expected 0 matches, got %d", len(matches))
@@ -100,7 +101,7 @@ func TestEvalFieldMatches_EmptyField(t *testing.T) {
 		values: map[string]string{},
 	}
 
-	matches := regexconcern.EvalFieldMatches(fields, selectors, re, 0)
+	matches := regexconcern.EvalFieldMatches(fields, selectors, re, 0, concernlimit.MaxCollectedMatchesPerEvaluation)
 
 	if len(matches) != 0 {
 		t.Errorf("expected 0 matches for empty field, got %d", len(matches))

@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,12 +15,14 @@ import (
 
 	"github.com/fsnotify/fsnotify"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 
 	"goodkind.io/agent-gate/api/daemonpb"
 	"goodkind.io/agent-gate/internal/audit"
 	"goodkind.io/agent-gate/internal/config"
 	"goodkind.io/agent-gate/internal/hook"
+	"goodkind.io/agent-gate/internal/intake"
 	"goodkind.io/agent-gate/internal/version"
 )
 
@@ -32,9 +35,11 @@ const (
 type runtimeSnapshot struct {
 	cfg               *config.Config
 	eventLogger       *audit.EventLogger
-	deferredAudit     *hook.DeferredAuditQueue
+	intakeStore       intakeStore
+	deferredProcessor *deferredProcessor
 	evaluateSlots     chan struct{}
 	evaluateQueueWait time.Duration
+	hotEvaluate       func(context.Context, []byte, *config.Config, hook.HookSystem, func(string) string) hook.HotEvaluation
 }
 
 // Server implements the AgentGateD gRPC service.
@@ -112,25 +117,43 @@ func newRuntimeSnapshot(ctx context.Context, cfg *config.Config, log *slog.Logge
 		return nil, fmt.Errorf("create event logger: %w", err)
 	}
 
-	var deferredAudit *hook.DeferredAuditQueue
+	intakeStore, err := newSQLiteIntakeStore(ctx, cfg, log)
+	if err != nil {
+		if eventLogger != nil {
+			_ = eventLogger.Close()
+		}
+		return nil, fmt.Errorf("create intake store: %w", err)
+	}
+
+	var sink audit.Sink
 	if eventLogger.Enabled() {
-		deferredAudit = hook.NewDeferredAuditQueue(
-			ctx,
-			audit.NewLocalSink(eventLogger),
-			hook.DeferredAuditQueueOptions{
-				QueueLimit: cfg.HookDeferredQueueLimit(),
-				Workers:    cfg.HookDeferredWorkers(),
-				Log:        log,
-			},
-		)
+		sink = audit.NewLocalSink(eventLogger)
+	}
+	deferredProcessor := newDeferredProcessor(
+		ctx,
+		intakeStore,
+		sink,
+		cfg,
+		cfg.HookDeferredQueueLimit(),
+		cfg.HookDeferredWorkers(),
+		log,
+	)
+	if err := deferredProcessor.ReplayPending(ctx); err != nil {
+		deferredProcessor.Close()
+		if eventLogger != nil {
+			_ = eventLogger.Close()
+		}
+		return nil, fmt.Errorf("replay pending intake: %w", err)
 	}
 
 	return &runtimeSnapshot{
 		cfg:               cfg,
 		eventLogger:       eventLogger,
-		deferredAudit:     deferredAudit,
+		intakeStore:       intakeStore,
+		deferredProcessor: deferredProcessor,
 		evaluateSlots:     make(chan struct{}, cfg.HookHotConcurrency()),
 		evaluateQueueWait: cfg.HookHotQueueWait(),
+		hotEvaluate:       hook.EvaluateHot,
 	}, nil
 }
 
@@ -138,12 +161,17 @@ func (s *runtimeSnapshot) close(ctx context.Context, log *slog.Logger) {
 	if s == nil {
 		return
 	}
-	if s.deferredAudit != nil {
-		s.deferredAudit.Close()
+	if s.deferredProcessor != nil {
+		s.deferredProcessor.Close()
 	}
 	if s.eventLogger != nil {
 		if err := s.eventLogger.Close(); err != nil && log != nil {
 			log.WarnContext(ctx, "audit logger close failed", "err", err)
+		}
+	}
+	if s.intakeStore != nil {
+		if err := s.intakeStore.Close(); err != nil && log != nil {
+			log.WarnContext(ctx, "intake store close failed", "err", err)
 		}
 	}
 }
@@ -288,6 +316,10 @@ func (s *Server) EvaluateHook(ctx context.Context, req *daemonpb.EvaluateHookReq
 	if snapshot == nil {
 		return failOpenEvaluateHookResponse(), nil
 	}
+	requestLog := s.log
+	if peerInfo, ok := peer.FromContext(ctx); ok && peerInfo.Addr != nil {
+		requestLog = requestLog.With("peer_addr", peerInfo.Addr.String())
+	}
 	if !s.acquireEvaluateSlot(ctx, snapshot) {
 		s.logEvaluateOverload(ctx, snapshot)
 		return failOpenEvaluateHookResponse(), nil
@@ -307,15 +339,117 @@ func (s *Server) EvaluateHook(ctx context.Context, req *daemonpb.EvaluateHookReq
 		return envFingerprint[key]
 	}
 
-	result := hook.EvaluateHot(ctx, rawJSON, snapshot.cfg, hook.SystemFromString(req.GetProviderHint()), getenv)
-	if result.Deferred.Valid && snapshot.deferredAudit != nil {
-		snapshot.deferredAudit.Enqueue(result.Deferred)
+	intakeRecord, err := buildIntakeRecord(rawJSON, req.GetProviderHint(), envFingerprint)
+	if err != nil {
+		result := snapshot.hotEvaluate(ctx, rawJSON, snapshot.cfg, hook.SystemFromString(req.GetProviderHint()), getenv)
+		return &daemonpb.EvaluateHookResponse{
+			ExitCode:   clampExitCode(result.ExitCode),
+			StdoutData: append([]byte(nil), result.Stdout...),
+			StderrData: append([]byte(nil), result.Stderr...),
+		}, nil
+	}
+
+	appendResult, err := snapshot.intakeStore.Append(ctx, intakeRecord)
+	if err != nil {
+		requestLog.WarnContext(ctx, "append hook intake failed; failing open", "err", err)
+		return failOpenEvaluateHookResponse(), nil
+	}
+
+	syncCfg := hook.SyncConfig(snapshot.cfg)
+	result := snapshot.hotEvaluate(ctx, rawJSON, syncCfg, hook.SystemFromString(req.GetProviderHint()), getenv)
+	if err := enqueueDeferredReplay(ctx, requestLog, snapshot, appendResult, result.Deferred.Valid); err != nil {
+		return failOpenEvaluateHookResponse(), nil
 	}
 	return &daemonpb.EvaluateHookResponse{
 		ExitCode:   clampExitCode(result.ExitCode),
-		StdoutData: result.Stdout,
-		StderrData: result.Stderr,
+		StdoutData: append([]byte(nil), result.Stdout...),
+		StderrData: append([]byte(nil), result.Stderr...),
 	}, nil
+}
+
+func buildIntakeRecord(rawJSON []byte, providerHint string, envFingerprint map[string]string) (intake.Record, error) {
+	detectionPayload, err := hook.ParseDetectionPayload(rawJSON)
+	if err != nil {
+		return intake.Record{}, wrapServerError("parse intake detection payload", err)
+	}
+	system := hook.DetectWithEnv(detectionPayload, hook.SystemFromString(providerHint), func(key string) string {
+		return envFingerprint[key]
+	})
+	payload, err := hook.ParseHookPayload(system, rawJSON)
+	if err != nil {
+		return intake.Record{}, wrapServerError("parse intake hook payload", err)
+	}
+
+	fields := payload.Fields()
+	var record intake.Record
+	record.System = system.String()
+	record.SessionID = payload.SessionID()
+	record.TurnID = fields.TurnID
+	record.EventName = payload.EventName()
+	record.ToolName = fields.ToolName
+	record.ToolUseID = fields.ToolUseID
+	record.RawPayload = append([]byte(nil), rawJSON...)
+	record.NormalizedJSON = append([]byte(nil), rawJSON...)
+	record.EnvFingerprint = cloneStringMap(envFingerprint)
+	record.Operation.CWD = firstNonEmpty(fields.CWD, payload.CWD())
+	record.Operation.EffectiveCWD = fields.String(config.FieldEffectiveCWD)
+	record.Operation.Command = fields.CommandValue()
+	record.Operation.FilePath = fields.FilePathValue()
+	return record, nil
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func cloneStringMap(values map[string]string) map[string]string {
+	if len(values) == 0 {
+		return map[string]string{}
+	}
+	cloned := make(map[string]string, len(values))
+	maps.Copy(cloned, values)
+	return cloned
+}
+
+func enqueueDeferredReplay(ctx context.Context, log *slog.Logger, snapshot *runtimeSnapshot, appendResult intake.AppendResult, deferredValid bool) error {
+	if !deferredValid {
+		return nil
+	}
+
+	shouldEnqueue := appendResult.Inserted
+	if !appendResult.Inserted {
+		record, err := snapshot.intakeStore.Get(ctx, appendResult.EventID)
+		if err != nil {
+			log.WarnContext(ctx, "load duplicate hook intake failed; failing open", "event_id", appendResult.EventID, "err", err)
+			return fmt.Errorf("load duplicate hook intake %q: %w", appendResult.EventID, err)
+		}
+		shouldEnqueue = record.DeferredState != intake.DeferredStateComplete
+	}
+	if !shouldEnqueue {
+		return nil
+	}
+
+	if err := snapshot.intakeStore.MarkDeferredPending(ctx, appendResult.EventID); err != nil {
+		log.WarnContext(ctx, "mark deferred intake pending failed; failing open", "event_id", appendResult.EventID, "err", err)
+		return fmt.Errorf("mark deferred intake pending %q: %w", appendResult.EventID, err)
+	}
+	if snapshot.deferredProcessor != nil {
+		snapshot.deferredProcessor.Enqueue(appendResult.EventID)
+	}
+	return nil
+}
+
+func wrapServerError(message string, err error) error {
+	if err == nil {
+		return nil
+	}
+	slog.Warn(message+" failed", "err", err)
+	return fmt.Errorf("%s: %w", message, err)
 }
 
 func (s *Server) acquireEvaluateSlot(ctx context.Context, snapshot *runtimeSnapshot) bool {

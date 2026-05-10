@@ -3,6 +3,7 @@ package daemon
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -13,8 +14,10 @@ import (
 	"time"
 
 	"goodkind.io/agent-gate/api/daemonpb"
+	"goodkind.io/agent-gate/internal/audit"
 	"goodkind.io/agent-gate/internal/config"
 	"goodkind.io/agent-gate/internal/hook"
+	"goodkind.io/agent-gate/internal/intake"
 	"goodkind.io/agent-gate/internal/regex"
 )
 
@@ -204,8 +207,101 @@ func TestHotPathBlocksBeforeDeferredQueue(t *testing.T) {
 	}
 	defer srv.Close()
 
-	replaceDeferredAuditForTest(t, srv, 1, 0)
-	fillDeferredAuditQueue(t, srv)
+	hotCalled := false
+	setHotEvaluatorForTest(t, srv, func(ctx context.Context, rawJSON []byte, cfg *config.Config, hint hook.HookSystem, getenv func(string) string) hook.HotEvaluation {
+		hotCalled = true
+		return hook.EvaluateHot(ctx, rawJSON, cfg, hint, getenv)
+	})
+	replaceIntakeStoreForTest(t, srv, failingIntakeStore{})
+
+	resp, err := srv.EvaluateHook(context.Background(), &daemonpb.EvaluateHookRequest{
+		RawJson:      []byte(`{"session_id":"s1","hook_event_name":"PreToolUse","tool_name":"Shell","tool_input":{"command":"go test ./..."}}`),
+		ProviderHint: "codex",
+		Cwd:          t.TempDir(),
+		EnvFingerprint: map[string]string{
+			"CODEX_THREAD_ID": "test-thread",
+		},
+	})
+	if err != nil {
+		t.Fatalf("EvaluateHook: %v", err)
+	}
+	if hotCalled {
+		t.Fatal("hot evaluator ran after intake append failed, want append-before-eval fail-open")
+	}
+	if resp.ExitCode != 0 {
+		t.Fatalf("exit_code = %d, want fail-open exit 0", resp.ExitCode)
+	}
+	if len(resp.StdoutData) != 0 || len(resp.StderrData) != 0 {
+		t.Fatalf("append failure response wrote stdout=%q stderr=%q, want transport-neutral allow", string(resp.StdoutData), string(resp.StderrData))
+	}
+}
+
+func TestDeferredReplayAfterRestart(t *testing.T) {
+	setDaemonTestDirs(t)
+	cfg := auditOnlyDaemonTestConfig(t)
+	cfg.Performance.Hook.DeferredWorkers = 0
+	cfg.Performance.Hook.DeferredQueueLimit = 4
+
+	srv, err := New(newDiscardLogger(), cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	resp, err := srv.EvaluateHook(context.Background(), &daemonpb.EvaluateHookRequest{
+		RawJson:      []byte(`{"session_id":"s1","hook_event_name":"PreToolUse","tool_name":"Shell","tool_input":{"command":"echo ok"}}`),
+		ProviderHint: "codex",
+		Cwd:          t.TempDir(),
+		EnvFingerprint: map[string]string{
+			"CODEX_THREAD_ID": "test-thread",
+		},
+	})
+	if err != nil {
+		t.Fatalf("EvaluateHook: %v", err)
+	}
+	if resp.ExitCode != 0 {
+		t.Fatalf("exit_code = %d, want 0", resp.ExitCode)
+	}
+	snapshot := srv.runtime.Load()
+	if snapshot == nil {
+		t.Fatal("runtime snapshot is nil")
+	}
+	pendingBeforeClose, err := snapshot.intakeStore.ListPending(context.Background())
+	if err != nil {
+		t.Fatalf("ListPending before close: %v", err)
+	}
+	if len(pendingBeforeClose) != 1 {
+		t.Fatalf("pending before close = %d, want 1", len(pendingBeforeClose))
+	}
+	srv.Close()
+
+	cfg.Performance.Hook.DeferredWorkers = 1
+	srv, err = New(newDiscardLogger(), cfg)
+	if err != nil {
+		t.Fatalf("New restart: %v", err)
+	}
+	defer srv.Close()
+
+	waitForAuditMessages(t, cfg, "hook.audit_violation", "hook.allowed")
+	pendingAfterReplay, err := srv.runtime.Load().intakeStore.ListPending(context.Background())
+	if err != nil {
+		t.Fatalf("ListPending after replay: %v", err)
+	}
+	if len(pendingAfterReplay) != 0 {
+		t.Fatalf("pending after replay = %d, want 0", len(pendingAfterReplay))
+	}
+}
+
+func TestSyncAndDeferredRulesStaySeparated(t *testing.T) {
+	setDaemonTestDirs(t)
+	cfg := mixedSyncDeferredDaemonTestConfig(t)
+	cfg.Performance.Hook.DeferredWorkers = 1
+	cfg.Performance.Hook.DeferredQueueLimit = 4
+
+	srv, err := New(newDiscardLogger(), cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer srv.Close()
 
 	resp, err := srv.EvaluateHook(context.Background(), &daemonpb.EvaluateHookRequest{
 		RawJson:      []byte(`{"session_id":"s1","hook_event_name":"PreToolUse","tool_name":"Shell","tool_input":{"command":"go test ./..."}}`),
@@ -219,41 +315,18 @@ func TestHotPathBlocksBeforeDeferredQueue(t *testing.T) {
 		t.Fatalf("EvaluateHook: %v", err)
 	}
 	if got := string(resp.StdoutData); !strings.Contains(got, `"permissionDecision":"deny"`) || !strings.Contains(got, "no-broad-go-test") {
-		t.Fatalf("stdout missing Codex deny response with full deferred queue: %s", got)
+		t.Fatalf("stdout missing Codex deny response: %s", got)
 	}
-}
 
-func TestHotPathAllowedWhenDeferredQueueFull(t *testing.T) {
-	setDaemonTestDirs(t)
-	srv, err := New(newDiscardLogger(), daemonTestConfig(t))
+	waitForAuditMessages(t, cfg, "hook.blocked")
+	events, _, err := audit.Query(cfg, audit.QueryFilter{Limit: 20})
 	if err != nil {
-		t.Fatalf("New: %v", err)
+		t.Fatalf("audit.Query: %v", err)
 	}
-	defer srv.Close()
-
-	replaceDeferredAuditForTest(t, srv, 1, 0)
-	fillDeferredAuditQueue(t, srv)
-
-	start := time.Now()
-	resp, err := srv.EvaluateHook(context.Background(), &daemonpb.EvaluateHookRequest{
-		RawJson:      []byte(`{"session_id":"s1","hook_event_name":"PreToolUse","tool_name":"Shell","tool_input":{"command":"echo ok"}}`),
-		ProviderHint: "codex",
-		Cwd:          t.TempDir(),
-		EnvFingerprint: map[string]string{
-			"CODEX_THREAD_ID": "test-thread",
-		},
-	})
-	if err != nil {
-		t.Fatalf("EvaluateHook: %v", err)
-	}
-	if elapsed := time.Since(start); elapsed > 100*time.Millisecond {
-		t.Fatalf("EvaluateHook with full deferred queue took %s, want quick allow", elapsed)
-	}
-	if resp.ExitCode != 0 {
-		t.Fatalf("exit_code = %d, want 0", resp.ExitCode)
-	}
-	if strings.Contains(string(resp.StdoutData), `"permissionDecision":"deny"`) {
-		t.Fatalf("stdout has deny response: %s", string(resp.StdoutData))
+	for _, event := range events {
+		if event.Message == "hook.audit_violation" {
+			t.Fatalf("unexpected audit-only event alongside sync block: %+v", event)
+		}
 	}
 }
 
@@ -266,8 +339,6 @@ func TestPolicyBlockDoesNotFailOpenWhenHotSlotsAvailable(t *testing.T) {
 	defer srv.Close()
 
 	setEvaluateAdmissionForTest(t, srv, 1, time.Millisecond)
-	replaceDeferredAuditForTest(t, srv, 1, 0)
-	fillDeferredAuditQueue(t, srv)
 
 	assertCommandDecision(t, srv, "go test ./...", 0, "no-broad-go-test")
 }
@@ -564,40 +635,155 @@ func setEvaluateAdmissionForTest(t testing.TB, srv *Server, concurrency int, wai
 	return snapshot
 }
 
-func replaceDeferredAuditForTest(t testing.TB, srv *Server, queueLimit int, workers int) {
+type failingIntakeStore struct{}
+
+func (failingIntakeStore) Append(context.Context, intake.Record) (intake.AppendResult, error) {
+	return intake.AppendResult{}, errors.New("append failed")
+}
+
+func (failingIntakeStore) Get(context.Context, string) (intake.Record, error) {
+	return intake.Record{}, errors.New("get failed")
+}
+
+func (failingIntakeStore) MarkDeferredPending(context.Context, string) error {
+	return errors.New("mark pending failed")
+}
+
+func (failingIntakeStore) MarkDeferredComplete(context.Context, string) error {
+	return errors.New("mark complete failed")
+}
+
+func (failingIntakeStore) ReplayPending(context.Context, func(intake.Record) error) error {
+	return errors.New("replay failed")
+}
+
+func (failingIntakeStore) ListPending(context.Context) ([]string, error) {
+	return nil, errors.New("list failed")
+}
+
+func (failingIntakeStore) Close() error {
+	return nil
+}
+
+func replaceIntakeStoreForTest(t testing.TB, srv *Server, store intakeStore) {
 	t.Helper()
 	snapshot := srv.runtime.Load()
 	if snapshot == nil {
 		t.Fatal("runtime snapshot is nil")
 	}
-	if snapshot.deferredAudit != nil {
-		snapshot.deferredAudit.Close()
+	snapshot.intakeStore = store
+}
+
+func replaceDeferredProcessorForTest(t testing.TB, srv *Server, queueLimit int, workers int) {
+	t.Helper()
+	snapshot := srv.runtime.Load()
+	if snapshot == nil {
+		t.Fatal("runtime snapshot is nil")
 	}
-	snapshot.deferredAudit = hook.NewDeferredAuditQueue(
+	if snapshot.deferredProcessor != nil {
+		snapshot.deferredProcessor.Close()
+	}
+	snapshot.deferredProcessor = newDeferredProcessor(
 		context.Background(),
+		snapshot.intakeStore,
 		nil,
-		hook.DeferredAuditQueueOptions{
-			QueueLimit: queueLimit,
-			Workers:    workers,
-			Log:        newDiscardLogger(),
-		},
+		snapshot.cfg,
+		queueLimit,
+		workers,
+		newDiscardLogger(),
 	)
 }
 
-func fillDeferredAuditQueue(t testing.TB, srv *Server) {
+func fillDeferredProcessorQueue(t testing.TB, srv *Server) {
 	t.Helper()
-	resp, err := srv.EvaluateHook(context.Background(), &daemonpb.EvaluateHookRequest{
-		RawJson:      []byte(`{"session_id":"s1","hook_event_name":"PreToolUse","tool_name":"Shell","tool_input":{"command":"echo first"}}`),
-		ProviderHint: "codex",
-		Cwd:          t.TempDir(),
-		EnvFingerprint: map[string]string{
-			"CODEX_THREAD_ID": "test-thread",
-		},
-	})
-	if err != nil {
-		t.Fatalf("EvaluateHook: %v", err)
+	snapshot := srv.runtime.Load()
+	if snapshot == nil || snapshot.deferredProcessor == nil {
+		t.Fatal("deferred processor is nil")
 	}
-	if resp.ExitCode != 0 {
-		t.Fatalf("exit_code = %d, want 0", resp.ExitCode)
+	snapshot.deferredProcessor.events <- "occupied"
+}
+
+func setHotEvaluatorForTest(t testing.TB, srv *Server, evaluator func(context.Context, []byte, *config.Config, hook.HookSystem, func(string) string) hook.HotEvaluation) {
+	t.Helper()
+	snapshot := srv.runtime.Load()
+	if snapshot == nil {
+		t.Fatal("runtime snapshot is nil")
 	}
+	snapshot.hotEvaluate = evaluator
+}
+
+func auditOnlyDaemonTestConfig(t testing.TB) *config.Config {
+	t.Helper()
+	re := regex.MustCompile(`echo ok`)
+	rule := config.NewSimpleRule(
+		"audit-echo-ok",
+		`echo ok`,
+		re,
+		[]string{"PreToolUse"},
+		[]string{"tool_input.command"},
+		"block",
+		"Record echo usage.",
+	)
+	rule.AuditOnly = true
+	rule.Class = config.RuleClassDeferred
+	return &config.Config{
+		Audit: config.Audit{Enabled: boolPtr(true)},
+		Rules: []config.Rule{rule},
+	}
+}
+
+func mixedSyncDeferredDaemonTestConfig(t testing.TB) *config.Config {
+	t.Helper()
+	blockRe := regex.MustCompile(`go test \./\.\.\.`)
+	blockRule := config.NewSimpleRule(
+		"no-broad-go-test",
+		`go test \./\.\.\.`,
+		blockRe,
+		[]string{"PreToolUse"},
+		[]string{"tool_input.command"},
+		"block",
+		"Use make test for full project runs.",
+	)
+	auditRe := regex.MustCompile(`go test`)
+	auditRule := config.NewSimpleRule(
+		"audit-go-test",
+		`go test`,
+		auditRe,
+		[]string{"PreToolUse"},
+		[]string{"tool_input.command"},
+		"block",
+		"Record go test usage.",
+	)
+	auditRule.AuditOnly = true
+	auditRule.Class = config.RuleClassDeferred
+	return &config.Config{
+		Audit: config.Audit{Enabled: boolPtr(true)},
+		Rules: []config.Rule{blockRule, auditRule},
+	}
+}
+
+func waitForAuditMessages(t testing.TB, cfg *config.Config, messages ...string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		events, _, err := audit.Query(cfg, audit.QueryFilter{Limit: 50})
+		if err == nil {
+			found := make(map[string]bool, len(messages))
+			for _, event := range events {
+				found[event.Message] = true
+			}
+			allFound := true
+			for _, message := range messages {
+				if !found[message] {
+					allFound = false
+					break
+				}
+			}
+			if allFound {
+				return
+			}
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for audit messages %v", messages)
 }

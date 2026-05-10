@@ -1,15 +1,42 @@
 package hook_test
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
+	"goodkind.io/agent-gate/internal/audit"
 	"goodkind.io/agent-gate/internal/config"
 	"goodkind.io/agent-gate/internal/hook"
+	"goodkind.io/agent-gate/internal/regex"
 )
+
+type recordingAuditSink struct {
+	mu       sync.Mutex
+	messages []string
+}
+
+func (s *recordingAuditSink) Log(_ context.Context, _, _, _, _, msg string, _ audit.Attrs) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.messages = append(s.messages, msg)
+}
+
+func (s *recordingAuditSink) Close() error {
+	return nil
+}
+
+func (s *recordingAuditSink) snapshot() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]string, len(s.messages))
+	copy(out, s.messages)
+	return out
+}
 
 func TestCanBlock_NewProviders(t *testing.T) {
 	tests := []struct {
@@ -17,8 +44,12 @@ func TestCanBlock_NewProviders(t *testing.T) {
 		event  string
 		want   bool
 	}{
+		{hook.SystemClaude, "PostToolUse", false},
 		{hook.SystemCodex, "PreToolUse", true},
 		{hook.SystemCodex, "SessionStart", false},
+		{hook.SystemCursor, "postToolUse", true},
+		{hook.SystemCursor, "afterMCPExecution", true},
+		{hook.SystemCursor, "afterAgentResponse", true},
 		{hook.SystemGemini, "BeforeTool", true},
 		{hook.SystemGemini, "BeforeToolSelection", false},
 		{hook.SystemGemini, "Notification", false},
@@ -172,6 +203,9 @@ func TestCodexBlockResponses(t *testing.T) {
 	if !strings.Contains(got, `"permissionDecision":"deny"`) {
 		t.Fatalf("CodexBlock(PreToolUse) missing deny payload: %s", got)
 	}
+	if strings.Contains(got, `"decision"`) {
+		t.Fatalf("CodexBlock(PreToolUse) should omit unsupported nested decision: %s", got)
+	}
 
 	got = string(hook.CodexBlock("PermissionRequest", "r", "blocked"))
 	if !strings.Contains(got, `"behavior":"deny"`) {
@@ -181,6 +215,14 @@ func TestCodexBlockResponses(t *testing.T) {
 	got = string(hook.CodexBlock("Stop", "r", "blocked"))
 	if !strings.Contains(got, `"decision":"block"`) {
 		t.Fatalf("CodexBlock(Stop) missing block decision: %s", got)
+	}
+
+	got = string(hook.CodexBlock("PostToolUse", "r", "blocked"))
+	if !strings.Contains(got, `"continue":false`) || !strings.Contains(got, `"stopReason":"agent-gate: [r] blocked"`) {
+		t.Fatalf("CodexBlock(PostToolUse) missing stop payload: %s", got)
+	}
+	if strings.Contains(got, "hookSpecificOutput") {
+		t.Fatalf("CodexBlock(PostToolUse) should omit hookSpecificOutput: %s", got)
 	}
 }
 
@@ -205,6 +247,138 @@ func TestGeminiBlockResponses(t *testing.T) {
 	if !strings.Contains(got, `"decision":"deny"`) || !strings.Contains(got, `"reason":"agent-gate: [r] blocked"`) {
 		t.Fatalf("GeminiBlock(BeforeTool) missing deny response: %s", got)
 	}
+}
+
+func TestEvaluateHot_BlocksCodexCredentialFileRead(t *testing.T) {
+	rule := testProviderRule(t,
+		"no-credential-file-reads",
+		`(?i)(?:(?:^|[/\\])[^/\\\n]*(?:1password|onepassword|op[ _.-]?export|app[ _.-]?store|asc[ _.-]?api|api[ _.-]?key|private[ _.-]?key|secret|credential|credentials|token|password|passwd|auth)[^/\\\n]*(?:[/\\].*)?\.(?:json|p8|pem|key|pkcs8|p12|pfx)$|(?:^|[/\\])[^/\\\n]*\.(?:p8|pem|key|pkcs8|p12|pfx)$)`,
+		[]string{"PreToolUse", "beforeReadFile"},
+		[]string{"tool_input.file_path", "tool_input.path", "file_path"},
+		"Do not read likely credential files into the agent transcript.",
+	)
+	cfg := &config.Config{Rules: []config.Rule{rule}}
+	rawJSON := []byte(`{"hook_event_name":"PreToolUse","session_id":"s1","turn_id":"t1","tool_name":"Read","tool_use_id":"call_1","cwd":"/repo","tool_input":{"path":"/Users/agoodkind/Downloads/AuthKey_ABC123.p8"}}`)
+
+	evaluation := hook.EvaluateHot(context.Background(), rawJSON, cfg, hook.SystemCodex, func(string) string { return "" })
+	if evaluation.ExitCode != 0 {
+		t.Fatalf("ExitCode = %d, want 0 for Codex hook response", evaluation.ExitCode)
+	}
+	stdout := string(evaluation.Stdout)
+	if !strings.Contains(stdout, `"permissionDecision":"deny"`) {
+		t.Fatalf("Codex response did not deny read: %s", stdout)
+	}
+	if !strings.Contains(stdout, "no-credential-file-reads") {
+		t.Fatalf("Codex response missing rule diagnostic: %s", stdout)
+	}
+}
+
+func TestEvaluateHot_BlocksCursorBeforeReadFileCredentialPath(t *testing.T) {
+	rule := testProviderRule(t,
+		"no-credential-file-reads",
+		`(?i)(?:(?:^|[/\\])[^/\\\n]*(?:1password|onepassword|op[ _.-]?export|app[ _.-]?store|asc[ _.-]?api|api[ _.-]?key|private[ _.-]?key|secret|credential|credentials|token|password|passwd|auth)[^/\\\n]*(?:[/\\].*)?\.(?:json|p8|pem|key|pkcs8|p12|pfx)$|(?:^|[/\\])[^/\\\n]*\.(?:p8|pem|key|pkcs8|p12|pfx)$)`,
+		[]string{"PreToolUse", "beforeReadFile"},
+		[]string{"tool_input.file_path", "tool_input.path", "file_path"},
+		"Do not read likely credential files into the agent transcript.",
+	)
+	cfg := &config.Config{Rules: []config.Rule{rule}}
+	rawJSON := []byte(`{"hook_event_name":"beforeReadFile","session_id":"s1","cwd":"/repo","file_path":"/Users/agoodkind/Downloads/1Password Export/items.json"}`)
+
+	evaluation := hook.EvaluateHot(context.Background(), rawJSON, cfg, hook.SystemCursor, func(string) string { return "" })
+	if evaluation.ExitCode != 0 {
+		t.Fatalf("ExitCode = %d, want 0 for Cursor hook response", evaluation.ExitCode)
+	}
+	stdout := string(evaluation.Stdout)
+	if !strings.Contains(stdout, `"permission":"deny"`) {
+		t.Fatalf("Cursor response did not deny read: %s", stdout)
+	}
+	if !strings.Contains(stdout, "no-credential-file-reads") {
+		t.Fatalf("Cursor response missing rule diagnostic: %s", stdout)
+	}
+}
+
+func TestEvaluateHot_BlocksCursorPostToolSecretOutput(t *testing.T) {
+	rule := testProviderRule(t,
+		"no-secrets-in-output",
+		`\x2d\x2d\x2d\x2d\x2dBEGIN (?:RSA |EC |DSA |OPENSSH |PGP |ENCRYPTED )?PRIVATE KEY\x2d\x2d\x2d\x2d\x2d`,
+		[]string{"postToolUse"},
+		[]string{"tool_output"},
+		"Tool output contains credential material.",
+	)
+	cfg := &config.Config{Rules: []config.Rule{rule}}
+	privateKeyHeader := "-----BEGIN " + "PRIVATE KEY-----"
+	rawJSON := []byte(`{"hook_event_name":"postToolUse","session_id":"s1","tool_name":"Read","tool_use_id":"call_1","cwd":"/repo","tool_input":{"file_path":"/tmp/AuthKey_ABC123.p8"},"tool_output":"` + privateKeyHeader + `\nsecret\n-----END PRIVATE KEY-----"}`)
+
+	evaluation := hook.EvaluateHot(context.Background(), rawJSON, cfg, hook.SystemCursor, func(string) string { return "" })
+	if evaluation.ExitCode != 0 {
+		t.Fatalf("ExitCode = %d, want 0 for Cursor hook response", evaluation.ExitCode)
+	}
+	stdout := string(evaluation.Stdout)
+	if !strings.Contains(stdout, `"permission":"deny"`) {
+		t.Fatalf("Cursor response did not deny post-tool output: %s", stdout)
+	}
+	if !strings.Contains(stdout, "no-secrets-in-output") {
+		t.Fatalf("Cursor response missing rule diagnostic: %s", stdout)
+	}
+}
+
+func TestWriteDeferredAudit_AllowSkipsReceivedAndRawPayload(t *testing.T) {
+	cfg := &config.Config{}
+	rawJSON := []byte(`{"hook_event_name":"PreToolUse","session_id":"s1","tool_name":"Shell","tool_use_id":"call_1","cwd":"/repo","tool_input":{"command":"echo ok"}}`)
+
+	evaluation := hook.EvaluateHot(context.Background(), rawJSON, cfg, hook.SystemCodex, func(string) string { return "" })
+	sink := &recordingAuditSink{}
+	hook.WriteDeferredAudit(context.Background(), evaluation.Deferred, sink)
+
+	if got := sink.snapshot(); strings.Join(got, ",") != "hook.allowed" {
+		t.Fatalf("messages = %#v, want only hook.allowed", got)
+	}
+}
+
+func TestWriteDeferredAudit_AuditOnlySkipsReceivedAndRawPayload(t *testing.T) {
+	rule := testProviderRule(t,
+		"audit-shell-command",
+		`echo ok`,
+		[]string{"PreToolUse"},
+		[]string{"tool_input.command"},
+		"Record shell command usage.",
+	)
+	rule.AuditOnly = true
+	cfg := &config.Config{Rules: []config.Rule{rule}}
+	rawJSON := []byte(`{"hook_event_name":"PreToolUse","session_id":"s1","tool_name":"Shell","tool_use_id":"call_1","cwd":"/repo","tool_input":{"command":"echo ok"}}`)
+
+	evaluation := hook.EvaluateHot(context.Background(), rawJSON, cfg, hook.SystemCodex, func(string) string { return "" })
+	sink := &recordingAuditSink{}
+	hook.WriteDeferredAudit(context.Background(), evaluation.Deferred, sink)
+
+	if got := sink.snapshot(); strings.Join(got, ",") != "hook.audit_violation,hook.allowed" {
+		t.Fatalf("messages = %#v, want audit_violation then allow", got)
+	}
+}
+
+func TestWriteDeferredAudit_BlockKeepsReceivedAndRawPayload(t *testing.T) {
+	cfg := &config.Config{Rules: []config.Rule{testProviderRule(t,
+		"block-shell-command",
+		`go test \./\.\.\.`,
+		[]string{"PreToolUse"},
+		[]string{"tool_input.command"},
+		"Use make test for full project runs.",
+	)}}
+	rawJSON := []byte(`{"hook_event_name":"PreToolUse","session_id":"s1","tool_name":"Shell","tool_use_id":"call_1","cwd":"/repo","tool_input":{"command":"go test ./..."}}`)
+
+	evaluation := hook.EvaluateHot(context.Background(), rawJSON, cfg, hook.SystemCodex, func(string) string { return "" })
+	sink := &recordingAuditSink{}
+	hook.WriteDeferredAudit(context.Background(), evaluation.Deferred, sink)
+
+	if got := sink.snapshot(); strings.Join(got, ",") != "hook.received,hook.raw_payload,hook.blocked" {
+		t.Fatalf("messages = %#v, want received, raw_payload, blocked", got)
+	}
+}
+
+func testProviderRule(t *testing.T, name string, pattern string, events []string, fieldPaths []string, message string) config.Rule {
+	t.Helper()
+	compiled := regex.MustCompile(pattern)
+	return config.NewSimpleRule(name, pattern, compiled, events, fieldPaths, "block", message)
 }
 
 func TestValidPaths_NewProviders(t *testing.T) {

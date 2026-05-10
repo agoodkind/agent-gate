@@ -245,12 +245,6 @@ func (el *EventLogger) Log(system, sessionID, eventName, level, msg string, attr
 	}
 	if _, seen := el.dedup.Get(fingerprint); seen {
 		el.mu.Unlock()
-		el.log.Debug("audit event dedup drop",
-			"system", event.System,
-			"session_id", event.SessionID,
-			"event", event.EventName,
-			"msg", msg,
-		)
 		return
 	}
 	el.dedup.Add(fingerprint, struct{}{})

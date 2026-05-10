@@ -103,6 +103,111 @@ slow_op_threshold_ms = 50
 	}
 }
 
+func TestLoadDefaultsRuleClassFromAuditOnly(t *testing.T) {
+	setConfigHome(t, `[[rules]]
+name = "deferred-audit-rule"
+events = ["Stop"]
+field_paths = ["assistant_message"]
+pattern = "blocked"
+action = "block"
+audit_only = true
+violation_message = "blocked"
+`)
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if len(cfg.Rules) != 1 {
+		t.Fatalf("loaded rules = %d, want 1", len(cfg.Rules))
+	}
+	if cfg.Rules[0].Class != config.RuleClassDeferred {
+		t.Fatalf("rule class = %q, want %q", cfg.Rules[0].Class, config.RuleClassDeferred)
+	}
+	if !cfg.Rules[0].AuditOnly {
+		t.Fatal("AuditOnly = false, want true")
+	}
+}
+
+func TestLoadMapsDeferredClassToAuditOnly(t *testing.T) {
+	setConfigHome(t, `[[rules]]
+name = "explicit-deferred-rule"
+class = "deferred"
+events = ["Stop"]
+field_paths = ["assistant_message"]
+pattern = "blocked"
+action = "block"
+violation_message = "blocked"
+`)
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if len(cfg.Rules) != 1 {
+		t.Fatalf("loaded rules = %d, want 1", len(cfg.Rules))
+	}
+	if cfg.Rules[0].Class != config.RuleClassDeferred {
+		t.Fatalf("rule class = %q, want %q", cfg.Rules[0].Class, config.RuleClassDeferred)
+	}
+	if !cfg.Rules[0].AuditOnly {
+		t.Fatal("AuditOnly = false, want true")
+	}
+}
+
+func TestLoadRejectsConflictingSyncClassAndAuditOnly(t *testing.T) {
+	setConfigHome(t, `[[rules]]
+name = "conflicting-sync-rule"
+class = "sync"
+events = ["Stop"]
+field_paths = ["assistant_message"]
+pattern = "blocked"
+action = "block"
+audit_only = true
+violation_message = "blocked"
+`)
+
+	_, err := config.Load()
+	if err == nil {
+		t.Fatal("Load() returned nil error for conflicting class/audit_only")
+	}
+	if !strings.Contains(err.Error(), `class "sync" conflicts with audit_only = true`) {
+		t.Fatalf("Load() error = %v", err)
+	}
+}
+
+func TestLoadRejectsUnknownRuleClass(t *testing.T) {
+	setConfigHome(t, `[[rules]]
+name = "unknown-class-rule"
+class = "later"
+events = ["Stop"]
+field_paths = ["assistant_message"]
+pattern = "blocked"
+action = "block"
+violation_message = "blocked"
+`)
+
+	_, err := config.Load()
+	if err == nil {
+		t.Fatal("Load() returned nil error for unknown class")
+	}
+	if !strings.Contains(err.Error(), `unknown class "later"`) {
+		t.Fatalf("Load() error = %v", err)
+	}
+}
+
+func TestLoadExampleConfig(t *testing.T) {
+	examplePath := filepath.Join("..", "..", "config.toml.example")
+
+	cfg, err := config.LoadExisting(examplePath)
+	if err != nil {
+		t.Fatalf("LoadExisting(%q) error: %v", examplePath, err)
+	}
+	if len(cfg.Rules) == 0 {
+		t.Fatal("example config loaded zero rules")
+	}
+}
+
 func setConfigHome(t *testing.T, contents string) {
 	t.Helper()
 	dir := t.TempDir()

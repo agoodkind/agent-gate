@@ -40,10 +40,10 @@ func CanBlockCodex(eventName string) bool {
 // CodexHookSpecificOutput is the discriminated output block carried in a
 // Codex hook response.
 type CodexHookSpecificOutput struct {
-	HookEventName            string                  `json:"hookEventName,omitempty"`
-	PermissionDecision       string                  `json:"permissionDecision,omitempty"`
-	PermissionDecisionReason string                  `json:"permissionDecisionReason,omitempty"`
-	Decision                 CodexPermissionDecision `json:"decision,omitempty"`
+	HookEventName            string                   `json:"hookEventName,omitempty"`
+	PermissionDecision       string                   `json:"permissionDecision,omitempty"`
+	PermissionDecisionReason string                   `json:"permissionDecisionReason,omitempty"`
+	Decision                 *CodexPermissionDecision `json:"decision,omitempty"`
 }
 
 // CodexPermissionDecision is the inner permission verdict for permission
@@ -54,13 +54,13 @@ type CodexPermissionDecision struct {
 }
 
 type codexResponse struct {
-	Continue           *bool                   `json:"continue,omitempty"`
-	StopReason         string                  `json:"stopReason,omitempty"`
-	SystemMessage      string                  `json:"systemMessage,omitempty"`
-	SuppressOutput     *bool                   `json:"suppressOutput,omitempty"`
-	Decision           string                  `json:"decision,omitempty"`
-	Reason             string                  `json:"reason,omitempty"`
-	HookSpecificOutput CodexHookSpecificOutput `json:"hookSpecificOutput,omitempty"`
+	Continue           *bool                    `json:"continue,omitempty"`
+	StopReason         string                   `json:"stopReason,omitempty"`
+	SystemMessage      string                   `json:"systemMessage,omitempty"`
+	SuppressOutput     *bool                    `json:"suppressOutput,omitempty"`
+	Decision           string                   `json:"decision,omitempty"`
+	Reason             string                   `json:"reason,omitempty"`
+	HookSpecificOutput *CodexHookSpecificOutput `json:"hookSpecificOutput,omitempty"`
 }
 
 // CodexAllow returns the stdout bytes for an allow response.
@@ -79,47 +79,41 @@ func CodexBlock(eventName, ruleName, message string) []byte {
 // given free-form text in whichever per-event channel Codex expects.
 func CodexBlockText(eventName, text string) []byte {
 	resp := codexResponse{
-		Continue:       nil,
-		StopReason:     "",
-		SystemMessage:  "",
-		SuppressOutput: nil,
-		Decision:       "",
-		Reason:         "",
-		HookSpecificOutput: CodexHookSpecificOutput{
-			HookEventName:            "",
-			PermissionDecision:       "",
-			PermissionDecisionReason: "",
-			Decision: CodexPermissionDecision{
-				Behavior: "",
-				Message:  "",
-			},
-		},
+		Continue:           nil,
+		StopReason:         "",
+		SystemMessage:      "",
+		SuppressOutput:     nil,
+		Decision:           "",
+		Reason:             "",
+		HookSpecificOutput: nil,
 	}
 
 	switch CodexEvent(eventName) {
 	case CodexPreToolUse:
 		resp.SystemMessage = text
-		resp.HookSpecificOutput = CodexHookSpecificOutput{
+		resp.HookSpecificOutput = &CodexHookSpecificOutput{
 			HookEventName:            "PreToolUse",
 			PermissionDecision:       "deny",
 			PermissionDecisionReason: text,
-			Decision: CodexPermissionDecision{
-				Behavior: "",
-				Message:  "",
-			},
+			Decision:                 nil,
 		}
 	case CodexPermissionRequest:
-		resp.HookSpecificOutput = CodexHookSpecificOutput{
+		resp.HookSpecificOutput = &CodexHookSpecificOutput{
 			HookEventName:            "PermissionRequest",
 			PermissionDecision:       "",
 			PermissionDecisionReason: "",
-			Decision: CodexPermissionDecision{
+			Decision: &CodexPermissionDecision{
 				Behavior: "deny",
 				Message:  text,
 			},
 		}
-	case CodexPostToolUse,
-		CodexUserPromptSubmit,
+	case CodexPostToolUse:
+		continueProcessing := false
+		resp.Continue = &continueProcessing
+		resp.StopReason = text
+		resp.Decision = "block"
+		resp.Reason = text
+	case CodexUserPromptSubmit,
 		CodexStop,
 		CodexSessionStart:
 		resp.Decision = "block"

@@ -83,8 +83,24 @@ func (r *Regexp) FindAllStringGroupIndex(s string, n int, group uint32) [][2]int
 	}
 
 	out := make([][2]int, 0)
+	r.ForEachStringGroupIndex(s, n, group, func(start int, end int) bool {
+		out = append(out, [2]int{start, end})
+		return true
+	})
+
+	return out
+}
+
+// ForEachStringGroupIndex calls yield for each non-overlapping match span for
+// group. Returning false from yield stops iteration early.
+func (r *Regexp) ForEachStringGroupIndex(s string, n int, group uint32, yield func(int, int) bool) {
+	if n == 0 || r == nil || r.handle == nil || yield == nil {
+		return
+	}
+
 	offset := 0
-	for offset <= len(s) && (n < 0 || len(out) < n) {
+	matchCount := 0
+	for offset <= len(s) && (n < 0 || matchCount < n) {
 		rc := HandleMatch(r.handle, s, offset)
 		if rc != 1 {
 			break
@@ -97,7 +113,10 @@ func (r *Regexp) FindAllStringGroupIndex(s string, n int, group uint32) [][2]int
 
 		start, end, unset, ok := HandleGroupBounds(r.handle, group)
 		if ok && !unset && start >= matchStart && end >= start && end <= len(s) {
-			out = append(out, [2]int{start, end})
+			matchCount++
+			if !yield(start, end) {
+				break
+			}
 		}
 
 		nextOffset, ok := nextMatchOffset(s, matchStart, matchEnd)
@@ -106,8 +125,6 @@ func (r *Regexp) FindAllStringGroupIndex(s string, n int, group uint32) [][2]int
 		}
 		offset = nextOffset
 	}
-
-	return out
 }
 
 // CaptureCount returns the number of capturing subpatterns in the compiled regex.

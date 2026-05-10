@@ -104,8 +104,8 @@ func BenchmarkEvaluateHookAuditEnabledParallel(b *testing.B) {
 
 func BenchmarkEvaluateHookFullDeferredQueueParallel(b *testing.B) {
 	srv := newBenchmarkServer(b, daemonTestConfig(b))
-	replaceDeferredAuditForTest(b, srv, 1, 0)
-	fillDeferredAuditQueue(b, srv)
+	replaceDeferredProcessorForTest(b, srv, 1, 0)
+	fillDeferredProcessorQueue(b, srv)
 	cwd := b.TempDir()
 	req := &daemonpb.EvaluateHookRequest{
 		RawJson:      []byte(`{"session_id":"bench","hook_event_name":"PreToolUse","tool_name":"Shell","tool_input":{"command":"echo ok"}}`),

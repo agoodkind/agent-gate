@@ -65,6 +65,9 @@ func DetectWithEnv(p DetectionPayload, hint HookSystem, getenv func(string) stri
 	if hasGeminiEnv(getenv) || hasGeminiEvent(p) {
 		return SystemGemini
 	}
+	if hint != SystemUnknown {
+		return hint
+	}
 	if hasClaudeEnv(getenv) {
 		return SystemClaude
 	}
@@ -73,9 +76,6 @@ func DetectWithEnv(p DetectionPayload, hint HookSystem, getenv func(string) stri
 	}
 	if hasVSCodeEnv(getenv) {
 		return SystemVSCode
-	}
-	if hint != SystemUnknown {
-		return hint
 	}
 	return SystemUnknown
 }

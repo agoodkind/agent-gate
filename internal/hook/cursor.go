@@ -55,19 +55,32 @@ const (
 	CursorAfterTabFileEdit CursorEvent = "afterTabFileEdit"
 )
 
-// CanBlockCursor returns true for Cursor events where exit code 2 or
-// permission:"deny" actually prevents the action. Only pre-hooks are blockable;
-// post and observational hooks are fire-and-forget.
+// CanBlockCursor returns true for Cursor events where agent-gate should emit a
+// permission:"deny" response instead of reducing a match to audit-only.
 func CanBlockCursor(eventName string) bool {
 	switch CursorEvent(eventName) {
 	case CursorPreToolUse,
+		CursorPostToolUse,
+		CursorPostToolUseFailure,
 		CursorBeforeShellExecution,
 		CursorBeforeMCPExecution,
+		CursorAfterMCPExecution,
 		CursorBeforeReadFile,
 		CursorSubagentStart,
 		CursorBeforeSubmitPrompt,
+		CursorAfterAgentResponse,
 		CursorBeforeTabFileRead:
 		return true
+	case CursorSessionStart,
+		CursorSessionEnd,
+		CursorAfterShellExecution,
+		CursorAfterFileEdit,
+		CursorSubagentStop,
+		CursorPreCompact,
+		CursorStop,
+		CursorAfterAgentThought,
+		CursorAfterTabFileEdit:
+		return false
 	}
 	return false
 }

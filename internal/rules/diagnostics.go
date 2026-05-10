@@ -6,9 +6,11 @@ import (
 	"strconv"
 	"strings"
 	"unicode/utf8"
+
+	concernlimit "goodkind.io/agent-gate/internal/rules/concerns/limit"
 )
 
-const maxDiagnosticMatches = 50
+const maxDiagnosticMatches = concernlimit.MaxCollectedMatchesPerEvaluation
 
 type diagnosticOccurrence struct {
 	MatchViolation
@@ -88,6 +90,11 @@ func writeOccurrence(b *strings.Builder, occ diagnosticOccurrence) {
 	}
 	fmt.Fprintf(b, "    line: %d\n", occ.Line)
 	fmt.Fprintf(b, "    column: %d\n", occ.Column)
+	if occ.Redact {
+		fmt.Fprintf(b, "    match: %s\n", strconv.Quote("<redacted>"))
+		fmt.Fprintf(b, "    text: %s\n", strconv.Quote("<redacted>"))
+		return
+	}
 	fmt.Fprintf(b, "    match: %s\n", strconv.Quote(occ.Match))
 	fmt.Fprintf(b, "    text: %s\n", strconv.Quote(occ.LineText))
 }

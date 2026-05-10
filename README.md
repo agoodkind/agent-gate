@@ -281,13 +281,27 @@ Each event includes normalized operation, decision, and violation details:
 }
 ```
 
-Query recent audit events with:
+Query recent audit state with separate durable intake visibility and derived
+audit decisions:
 
 ```
-agent-gate logs query --today
-agent-gate logs query --system claude --decision block
-agent-gate logs query --rule use-make-not-go-direct --since 24h --json
+agent-gate query seen --today
+agent-gate query seen --system claude --session abc123 --event PreToolUse --tool Bash
+agent-gate query seen --state pending --event-id intake_... --limit 20
+agent-gate query seen --since 24h --json --include-normalized --include-env
+agent-gate query decisions --today
+agent-gate query decisions --system claude --decision block
+agent-gate query decisions --rule use-make-not-go-direct --since 24h --json
+agent-gate query decisions --system claude --decision block --rule use-make-not-go-direct
 ```
+
+`query seen` reads durable intake records and omits raw payload bodies. It
+prints normalized hook JSON and environment fingerprints only when
+`--include-normalized` or `--include-env` is set. When a requested time range
+starts before the first intake record, the command reports the first available
+record timestamp and clamps the intake-side range dynamically. Use
+`query decisions` for the existing audit decision view, including legacy ranges
+that predate durable intake records.
 
 ## Fail-open behavior
 

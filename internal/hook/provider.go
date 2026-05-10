@@ -158,8 +158,14 @@ func WriteDeferredAudit(ctx context.Context, event DeferredAuditEvent, sink audi
 		return
 	}
 
-	auditReceivedFields(ctx, event, sink)
+	if shouldWriteReceivedAudit(event) {
+		auditReceivedFields(ctx, event, sink)
+	}
 	writeDecisionAudit(ctx, event, sink)
+}
+
+func shouldWriteReceivedAudit(event DeferredAuditEvent) bool {
+	return event.Decision == ResponseDecisionBlock
 }
 
 func auditReceivedFields(ctx context.Context, event DeferredAuditEvent, sink audit.Sink) {

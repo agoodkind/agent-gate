@@ -264,6 +264,7 @@ type Rule struct {
 	CursorEvents []string    `toml:"cursor_events"`
 	CodexEvents  []string    `toml:"codex_events"`
 	GeminiEvents []string    `toml:"gemini_events"`
+	Class        RuleClass   `toml:"class"`
 	Conditions   []Condition `toml:"conditions"`
 	// FieldPaths and Pattern are used when Conditions is empty (simple rules).
 	FieldPaths       []string `toml:"field_paths"`
@@ -273,6 +274,9 @@ type Rule struct {
 	// DiagnosticGroup selects which capture group supplies diagnostic spans.
 	// Zero means the full match.
 	DiagnosticGroup int `toml:"diagnostic_group"`
+	// RedactDiagnostics hides matched source text in block messages and audit
+	// logs for rules that inspect secret-bearing fields.
+	RedactDiagnostics bool `toml:"redact_diagnostics"`
 	// AuditOnly logs the violation without blocking when true.
 	AuditOnly bool `toml:"audit_only"`
 	// DisableIfEnv lists environment variable keys. When the daemon has any of
@@ -284,6 +288,16 @@ type Rule struct {
 	compiled  *regex.Regexp
 	selectors []FieldSelectorSpec
 }
+
+// RuleClass selects whether a rule stays on the synchronous block path or is
+// classified as deferred audit/analysis policy.
+type RuleClass string
+
+// RuleClass variants.
+const (
+	RuleClassSync     RuleClass = "sync"
+	RuleClassDeferred RuleClass = "deferred"
+)
 
 // Compiled returns the pre-compiled regex for the top-level Pattern.
 // Always non-nil after Load() when Conditions is empty.
@@ -298,23 +312,25 @@ func (r *Rule) Selectors() []FieldSelectorSpec { return r.selectors }
 // regex. Intended for tests and programmatic rule construction.
 func NewSimpleRule(name, pattern string, compiled *regex.Regexp, events, fieldPaths []string, action, violationMessage string) Rule {
 	return Rule{
-		Name:             name,
-		Description:      "",
-		Pattern:          pattern,
-		Events:           events,
-		ClaudeEvents:     nil,
-		CursorEvents:     nil,
-		CodexEvents:      nil,
-		GeminiEvents:     nil,
-		Conditions:       nil,
-		FieldPaths:       fieldPaths,
-		Action:           action,
-		ViolationMessage: violationMessage,
-		DiagnosticGroup:  0,
-		AuditOnly:        false,
-		DisableIfEnv:     nil,
-		compiled:         compiled,
-		selectors:        CompileFieldSelectorSpecs(fieldPaths),
+		Name:              name,
+		Description:       "",
+		Pattern:           pattern,
+		Events:            events,
+		ClaudeEvents:      nil,
+		CursorEvents:      nil,
+		CodexEvents:       nil,
+		GeminiEvents:      nil,
+		Class:             RuleClassSync,
+		Conditions:        nil,
+		FieldPaths:        fieldPaths,
+		Action:            action,
+		ViolationMessage:  violationMessage,
+		DiagnosticGroup:   0,
+		RedactDiagnostics: false,
+		AuditOnly:         false,
+		DisableIfEnv:      nil,
+		compiled:          compiled,
+		selectors:         CompileFieldSelectorSpecs(fieldPaths),
 	}
 }
 
@@ -499,6 +515,9 @@ func loadPath(path string, requireExisting bool) (*Config, error) {
 // compileRule attaches compiled regexes and selectors to rule and its
 // conditions. Errors are returned with rule-context wrapping.
 func compileRule(log *slog.Logger, r *Rule) error {
+	if err := normalizeRuleClass(r); err != nil {
+		return fmt.Errorf("rule %q: %w", r.Name, err)
+	}
 	if len(r.Conditions) > 0 {
 		for j := range r.Conditions {
 			if err := compileCondition(log, r.Name, j, &r.Conditions[j]); err != nil {
@@ -515,6 +534,27 @@ func compileRule(log *slog.Logger, r *Rule) error {
 	}
 	r.compiled = re
 	return validateDiagnosticGroup(fmt.Sprintf("rule %q", r.Name), r.DiagnosticGroup, r.compiled)
+}
+
+func normalizeRuleClass(r *Rule) error {
+	switch r.Class {
+	case "":
+		if r.AuditOnly {
+			r.Class = RuleClassDeferred
+		} else {
+			r.Class = RuleClassSync
+		}
+	case RuleClassSync:
+		if r.AuditOnly {
+			return fmt.Errorf("class %q conflicts with audit_only = true", RuleClassSync)
+		}
+	case RuleClassDeferred:
+		r.AuditOnly = true
+	default:
+		return fmt.Errorf("unknown class %q", r.Class)
+	}
+	r.AuditOnly = r.Class == RuleClassDeferred
+	return nil
 }
 
 // compileCondition fills in compiled regex and selector state for one

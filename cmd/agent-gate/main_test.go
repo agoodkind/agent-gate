@@ -5,10 +5,14 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"goodkind.io/agent-gate/api/daemonpb"
+	"goodkind.io/agent-gate/internal/audit"
+	"goodkind.io/agent-gate/internal/config"
 	"goodkind.io/agent-gate/internal/hook"
 )
 
@@ -132,6 +136,86 @@ func TestRunHookMirrorsDaemonBlockResponse(t *testing.T) {
 	}
 }
 
+func TestRunQueryUnknownSubcommandFailsClearly(t *testing.T) {
+	exitCode, _, stderr := captureRunQuery(t, []string{"bogus"})
+
+	if exitCode != 2 {
+		t.Fatalf("exitCode = %d, want 2", exitCode)
+	}
+	if !strings.Contains(stderr, `unknown subcommand "bogus"`) {
+		t.Fatalf("stderr = %q, want unknown subcommand message", stderr)
+	}
+}
+
+func TestRunQuerySeenAcceptsSharedAndIntakeFilters(t *testing.T) {
+	setupQueryEnvironment(t)
+
+	exitCode, stdout, stderr := captureRunQuery(t, []string{
+		"seen",
+		"--system", "claude",
+		"--session", "session-1",
+		"--event", "PreToolUse",
+		"--tool", "Bash",
+		"--state", "none",
+		"--event-id", "evt_1",
+		"--since", "1h",
+		"--until", "2099-01-01T00:00:00Z",
+		"--limit", "5",
+		"--json",
+		"--include-normalized",
+		"--include-env",
+	})
+
+	if exitCode != 0 {
+		t.Fatalf("exitCode = %d, want 0; stderr=%q", exitCode, stderr)
+	}
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want empty JSONL for missing intake history", stdout)
+	}
+	if !strings.Contains(stderr, "no durable seen-event history") {
+		t.Fatalf("stderr = %q, want friendly empty history note", stderr)
+	}
+}
+
+func TestRunQueryDecisionsPreservesAuditQueryBehavior(t *testing.T) {
+	setupQueryEnvironment(t)
+	logger, err := audit.NewEventLoggerContext(context.Background(), &config.Config{}, nil)
+	if err != nil {
+		t.Fatalf("NewEventLoggerContext: %v", err)
+	}
+	logger.Log("claude", "session-1", "PreToolUse", "info", "hook.blocked", audit.Attrs{
+		"system":         audit.NewStringValue("claude"),
+		"session_id":     audit.NewStringValue("session-1"),
+		"event":          audit.NewStringValue("PreToolUse"),
+		"tool_name":      audit.NewStringValue("Bash"),
+		"decision":       audit.NewStringValue("block"),
+		"blocking_rules": audit.NewStringSliceValue([]string{"use-make-not-go-direct"}),
+	})
+	if err := logger.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	exitCode, stdout, stderr := captureRunQuery(t, []string{
+		"decisions",
+		"--system", "claude",
+		"--event", "PreToolUse",
+		"--tool", "Bash",
+		"--decision", "block",
+		"--rule", "use-make-not-go-direct",
+		"--limit", "5",
+	})
+
+	if exitCode != 0 {
+		t.Fatalf("exitCode = %d, want 0; stderr=%q", exitCode, stderr)
+	}
+	if !strings.Contains(stdout, "source=jsonl rows=1") {
+		t.Fatalf("stdout = %q, want one JSONL-backed audit row", stdout)
+	}
+	if !strings.Contains(stdout, "use-make-not-go-direct") {
+		t.Fatalf("stdout = %q, want matched rule", stdout)
+	}
+}
+
 func testHookRuntime(stdin io.Reader, connect func(context.Context) (hookClient, error)) (hookRuntime, *bytes.Buffer, *bytes.Buffer) {
 	stdout := &bytes.Buffer{}
 	stderr := &bytes.Buffer{}
@@ -154,4 +238,52 @@ func testHookRuntime(stdin io.Reader, connect func(context.Context) (hookClient,
 		},
 	}
 	return runtime, stdout, stderr
+}
+
+func setupQueryEnvironment(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+	t.Setenv("XDG_RUNTIME_DIR", filepath.Join(dir, "runtime"))
+}
+
+func captureRunQuery(t *testing.T, args []string) (int, string, string) {
+	t.Helper()
+	stdoutFile, err := os.CreateTemp(t.TempDir(), "stdout-*")
+	if err != nil {
+		t.Fatalf("CreateTemp stdout: %v", err)
+	}
+	stderrFile, err := os.CreateTemp(t.TempDir(), "stderr-*")
+	if err != nil {
+		t.Fatalf("CreateTemp stderr: %v", err)
+	}
+	originalStdout := os.Stdout
+	originalStderr := os.Stderr
+	os.Stdout = stdoutFile
+	os.Stderr = stderrFile
+	defer func() {
+		os.Stdout = originalStdout
+		os.Stderr = originalStderr
+	}()
+
+	exitCode := runQuery(args)
+	stdout := readCapturedFile(t, stdoutFile)
+	stderr := readCapturedFile(t, stderrFile)
+	return exitCode, stdout, stderr
+}
+
+func readCapturedFile(t *testing.T, file *os.File) string {
+	t.Helper()
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		t.Fatalf("Seek captured file: %v", err)
+	}
+	data, err := io.ReadAll(file)
+	if err != nil {
+		t.Fatalf("ReadAll captured file: %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("Close captured file: %v", err)
+	}
+	return string(data)
 }

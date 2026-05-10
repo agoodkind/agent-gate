@@ -9,6 +9,7 @@ import (
 // It is exported so callers can pass compiled patterns without importing regex internals.
 type Matcher interface {
 	FindAllStringGroupIndex(string, int, uint32) [][2]int
+	ForEachStringGroupIndex(string, int, uint32, func(int, int) bool)
 }
 
 // FieldAccessor allows the package to read field values and the file path
@@ -29,23 +30,33 @@ type MatchResult struct {
 
 // EvalFieldMatches evaluates re against every field selected by selectors and
 // returns one MatchResult per match position found.
-func EvalFieldMatches(fields FieldAccessor, selectors []config.FieldSelectorSpec, re Matcher, diagnosticGroup int) []MatchResult {
+func EvalFieldMatches(fields FieldAccessor, selectors []config.FieldSelectorSpec, re Matcher, diagnosticGroup int, limit int) []MatchResult {
+	if limit <= 0 {
+		return nil
+	}
+
 	var matches []MatchResult
 	filePath := fields.FilePathValue()
+	remaining := limit
 	for _, selector := range selectors {
+		if remaining == 0 {
+			break
+		}
 		value := fields.String(selector.Selector)
 		if value == "" {
 			continue
 		}
-		for _, idx := range re.FindAllStringGroupIndex(value, -1, uint32(diagnosticGroup)) {
+		re.ForEachStringGroupIndex(value, remaining, uint32(diagnosticGroup), func(start int, end int) bool {
 			matches = append(matches, MatchResult{
 				FieldPath: selector.Path,
 				FilePath:  filePath,
 				Value:     value,
-				Start:     idx[0],
-				End:       idx[1],
+				Start:     start,
+				End:       end,
 			})
-		}
+			remaining--
+			return remaining > 0
+		})
 	}
 	return matches
 }

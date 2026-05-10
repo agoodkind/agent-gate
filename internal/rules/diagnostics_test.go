@@ -122,6 +122,38 @@ func TestFormatViolationsReportsCaptureGroupSpan(t *testing.T) {
 	}
 }
 
+func TestFormatViolationsRedactsSensitiveMatches(t *testing.T) {
+	privateKeyHeader := "-----BEGIN " + "PRIVATE KEY-----"
+	value := privateKeyHeader + "\nbody-sensitive-value\n-----END PRIVATE KEY-----"
+	got := rules.FormatViolations([]rules.MatchViolation{
+		{
+			RuleName:  "no-secrets-in-output",
+			Message:   "credential output is blocked.",
+			Redact:    true,
+			FieldPath: "tool_response",
+			Value:     value,
+			Start:     0,
+			End:       len(privateKeyHeader),
+		},
+	})
+
+	for _, want := range []string{
+		"match: \"<redacted>\"",
+		"text: \"<redacted>\"",
+		"A = no-secrets-in-output",
+		"message: credential output is blocked.",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("diagnostic missing %q:\n%s", want, got)
+		}
+	}
+	for _, leaked := range []string{"PRIVATE KEY", "body-sensitive-value"} {
+		if strings.Contains(got, leaked) {
+			t.Fatalf("diagnostic leaked %q:\n%s", leaked, got)
+		}
+	}
+}
+
 func TestFormatViolationsReportsDoubleHyphenSpan(t *testing.T) {
 	doubleHyphen := strings.Repeat("-", 2)
 	value := "// allocator is only used for temporary allocations " + doubleHyphen + " all memory"

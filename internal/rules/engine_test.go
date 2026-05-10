@@ -38,14 +38,28 @@ func testFields(payload map[string]any) rules.FieldSet {
 	if value, ok := payload["tool_name"].(string); ok {
 		fields.ToolName = value
 	}
+	if value, ok := payload["file_path"].(string); ok {
+		fields.FilePath = value
+	}
+	if value, ok := payload["path"].(string); ok {
+		fields.Path = value
+	}
+	if value, ok := payload["tool_response"].(string); ok {
+		fields.ToolResponse = value
+	}
+	if value, ok := payload["tool_output"].(string); ok {
+		fields.ToolOutput = value
+	}
 	if value, ok := payload["tool_input"].(map[string]any); ok {
 		fields.ToolInputCommand = testString(value, "command")
+		fields.ToolInputFilePath = testString(value, "file_path")
 		fields.ToolInputContent = testString(value, "content")
 		fields.ToolInputNewString = testString(value, "new_string")
 		fields.ToolInputOldString = testString(value, "old_string")
 		fields.ToolInputPrompt = testString(value, "prompt")
 		fields.ToolInputDescription = testString(value, "description")
 		fields.ToolInputWorkdir = testString(value, "workdir")
+		fields.ToolInputPath = testString(value, "path")
 	}
 	if edits, ok := payload["edits"].([]any); ok {
 		for _, edit := range edits {
@@ -101,6 +115,397 @@ func redirectionRule(t *testing.T) config.Rule {
 		[]string{"tool_input.command", "command"},
 		"Shell redirection is not permitted.",
 	)
+}
+
+func unboundedRootFindRule(t *testing.T) config.Rule {
+	t.Helper()
+	cmdCond, err := config.NewCondition(
+		[]string{"cmd_segments"},
+		`(?:^|\s)/+(?:\s|$)`,
+		`(?:^|\s)(?:-maxdepth\s+\d+|-xdev)(?:\s|$)`,
+	)
+	if err != nil {
+		t.Fatalf("compile root find command condition: %v", err)
+	}
+	cmdCond.Kind = string(config.ConditionKindCommand)
+	cmdCond.Argv0 = "find"
+	cmdCond.StripEnv = true
+	cmdCond.StripArgs = []string{"sudo", "doas", "env", "time", "command"}
+	return config.Rule{
+		Name:             "no-unbounded-root-find",
+		Events:           []string{"PreToolUse", "beforeShellExecution", "preToolUse", "BeforeTool"},
+		Conditions:       []config.Condition{cmdCond},
+		Action:           "block",
+		ViolationMessage: "Do not run unbounded recursive find from filesystem root.",
+	}
+}
+
+func TestEvaluate_UnboundedRootFindBlocked(t *testing.T) {
+	rule := unboundedRootFindRule(t)
+
+	cases := []struct {
+		name    string
+		event   string
+		payload map[string]any
+	}{
+		{
+			name:  "plain root find",
+			event: "PreToolUse",
+			payload: map[string]any{
+				"cwd":        "/Users/agoodkind/Sites/agent-gate",
+				"tool_input": map[string]any{"command": "find /"},
+			},
+		},
+		{
+			name:  "root find with name filter",
+			event: "PreToolUse",
+			payload: map[string]any{
+				"cwd":        "/Users/agoodkind/Sites/agent-gate",
+				"tool_input": map[string]any{"command": "find / -name foo"},
+			},
+		},
+		{
+			name:  "sudo root find",
+			event: "PreToolUse",
+			payload: map[string]any{
+				"cwd":        "/Users/agoodkind/Sites/agent-gate",
+				"tool_input": map[string]any{"command": "sudo find / -type f"},
+			},
+		},
+		{
+			name:  "env root find",
+			event: "PreToolUse",
+			payload: map[string]any{
+				"cwd":        "/Users/agoodkind/Sites/agent-gate",
+				"tool_input": map[string]any{"command": "env FOO=bar find / -name foo"},
+			},
+		},
+		{
+			name:  "cursor shell root find",
+			event: "beforeShellExecution",
+			payload: map[string]any{
+				"cwd":     "/Users/agoodkind/Sites/agent-gate",
+				"command": "find / -type f",
+			},
+		},
+		{
+			name:  "root find after cd chain",
+			event: "PreToolUse",
+			payload: map[string]any{
+				"cwd":        "/Users/agoodkind",
+				"tool_input": map[string]any{"command": "cd /tmp && find / -name foo"},
+			},
+		},
+	}
+
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			v := rules.Evaluate(context.Background(), systemFor(testCase.event), testCase.event, testFields(testCase.payload), []config.Rule{rule})
+			if v == nil {
+				t.Fatalf("expected unbounded root find violation for %#v", testCase.payload)
+			}
+		})
+	}
+}
+
+func TestEvaluate_RootFindWithExplicitBoundsAllowed(t *testing.T) {
+	rule := unboundedRootFindRule(t)
+
+	cases := []struct {
+		name    string
+		event   string
+		payload map[string]any
+	}{
+		{
+			name:  "root find maxdepth one",
+			event: "PreToolUse",
+			payload: map[string]any{
+				"cwd":        "/Users/agoodkind/Sites/agent-gate",
+				"tool_input": map[string]any{"command": "find / -maxdepth 1 -name foo"},
+			},
+		},
+		{
+			name:  "root find xdev",
+			event: "PreToolUse",
+			payload: map[string]any{
+				"cwd":        "/Users/agoodkind/Sites/agent-gate",
+				"tool_input": map[string]any{"command": "find / -xdev -type f"},
+			},
+		},
+		{
+			name:  "current directory find",
+			event: "PreToolUse",
+			payload: map[string]any{
+				"cwd":        "/Users/agoodkind/Sites/agent-gate",
+				"tool_input": map[string]any{"command": "find . -name foo"},
+			},
+		},
+		{
+			name:  "user sites find",
+			event: "PreToolUse",
+			payload: map[string]any{
+				"cwd":        "/Users/agoodkind/Sites/agent-gate",
+				"tool_input": map[string]any{"command": "find /Users/agoodkind/Sites -name foo"},
+			},
+		},
+		{
+			name:  "non find command with root path",
+			event: "PreToolUse",
+			payload: map[string]any{
+				"cwd":        "/Users/agoodkind/Sites/agent-gate",
+				"tool_input": map[string]any{"command": "ls /"},
+			},
+		},
+		{
+			name:  "non-matching event",
+			event: "PostToolUse",
+			payload: map[string]any{
+				"cwd":        "/Users/agoodkind/Sites/agent-gate",
+				"tool_input": map[string]any{"command": "find /"},
+			},
+		},
+	}
+
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			v := rules.Evaluate(context.Background(), systemFor(testCase.event), testCase.event, testFields(testCase.payload), []config.Rule{rule})
+			if v != nil {
+				t.Fatalf("expected allow, got rule %q", v.RuleName)
+			}
+		})
+	}
+}
+
+const secretReadPathPattern = `(?i)(?:(?:^|[/\\])[^/\\\n]*(?:1password|onepassword|op[ _.-]?export|app[ _.-]?store|asc[ _.-]?api|api[ _.-]?key|private[ _.-]?key|secret|credential|credentials|token|password|passwd|auth)[^/\\\n]*(?:[/\\].*)?\.(?:json|p8|pem|key|pkcs8|p12|pfx)$|(?:^|[/\\])[^/\\\n]*\.(?:p8|pem|key|pkcs8|p12|pfx)$)`
+
+func secretReadPathRule(t *testing.T) config.Rule {
+	t.Helper()
+	return loadRule(t,
+		"no-credential-file-reads",
+		secretReadPathPattern,
+		[]string{"PreToolUse", "preToolUse", "beforeReadFile", "beforeTabFileRead", "BeforeTool"},
+		[]string{"tool_input.file_path", "tool_input.path", "file_path"},
+		"Do not read likely credential files into the agent transcript.",
+	)
+}
+
+func secretOutputRule(t *testing.T) config.Rule {
+	t.Helper()
+	return loadRule(t,
+		"no-secrets-in-output",
+		`\x2d\x2d\x2d\x2d\x2dBEGIN (?:RSA |EC |DSA |OPENSSH |PGP |ENCRYPTED )?PRIVATE KEY\x2d\x2d\x2d\x2d\x2d`,
+		[]string{"PostToolUse", "postToolUse", "AfterTool"},
+		[]string{"tool_response", "tool_output"},
+		"Tool output contains credential material.",
+	)
+}
+
+func syntheticPrivateKeyHeader() string {
+	return "-----BEGIN " + "PRIVATE KEY-----"
+}
+
+func knownSecretAssignmentRule(t *testing.T) config.Rule {
+	t.Helper()
+	return loadRule(t,
+		"no-secrets-in-output",
+		`(?i)\b(?:password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|client[_-]?secret|auth(?:orization)?|bearer|aws[_-]?secret[_-]?access[_-]?key|aws[_-]?access[_-]?key[_-]?id)\s*[:=]\s*['"]?(?:bearer\s+)?[A-Za-z0-9._+/=-]{16,}`,
+		[]string{"PostToolUse", "postToolUse", "AfterTool"},
+		[]string{"tool_response", "tool_output"},
+		"Tool output contains credential material.",
+	)
+}
+
+func TestEvaluate_CredentialFileReadPathsBlocked(t *testing.T) {
+	rule := secretReadPathRule(t)
+
+	cases := []struct {
+		name    string
+		event   string
+		payload map[string]any
+	}{
+		{
+			name:  "codex p8 path",
+			event: "PreToolUse",
+			payload: map[string]any{
+				"tool_input": map[string]any{"path": "/Users/agoodkind/Downloads/AuthKey_ABC123.p8"},
+			},
+		},
+		{
+			name:  "codex pem file path",
+			event: "PreToolUse",
+			payload: map[string]any{
+				"tool_input": map[string]any{"file_path": "/tmp/service-account.pem"},
+			},
+		},
+		{
+			name:  "cursor before read 1password json basename",
+			event: "beforeReadFile",
+			payload: map[string]any{
+				"file_path": "/Users/agoodkind/Downloads/1Password Export.json",
+			},
+		},
+		{
+			name:  "cursor before read 1password directory",
+			event: "beforeReadFile",
+			payload: map[string]any{
+				"file_path": "/Users/agoodkind/Downloads/1Password Export/items.json",
+			},
+		},
+		{
+			name:  "cursor before tab read token json",
+			event: "beforeTabFileRead",
+			payload: map[string]any{
+				"file_path": "/Users/agoodkind/Downloads/service-token.json",
+			},
+		},
+		{
+			name:  "gemini private key path",
+			event: "BeforeTool",
+			payload: map[string]any{
+				"tool_input": map[string]any{"path": "/Users/agoodkind/secrets/private-key.pkcs8"},
+			},
+		},
+	}
+
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			v := rules.Evaluate(context.Background(), systemFor(testCase.event), testCase.event, testFields(testCase.payload), []config.Rule{rule})
+			if v == nil {
+				t.Fatalf("expected credential read path violation for %#v", testCase.payload)
+			}
+		})
+	}
+}
+
+func TestEvaluate_CredentialFileReadPathsAllowed(t *testing.T) {
+	rule := secretReadPathRule(t)
+
+	cases := []struct {
+		name    string
+		event   string
+		payload map[string]any
+	}{
+		{
+			name:  "ordinary package json",
+			event: "PreToolUse",
+			payload: map[string]any{
+				"tool_input": map[string]any{"path": "/Users/agoodkind/Sites/app/package.json"},
+			},
+		},
+		{
+			name:  "ordinary readme markdown",
+			event: "beforeReadFile",
+			payload: map[string]any{
+				"file_path": "/Users/agoodkind/Sites/app/docs/private-key-handling.md",
+			},
+		},
+		{
+			name:  "secret phrase in non-credential extension",
+			event: "PreToolUse",
+			payload: map[string]any{
+				"tool_input": map[string]any{"file_path": "/Users/agoodkind/Sites/app/secret-notes.txt"},
+			},
+		},
+		{
+			name:  "non-read event",
+			event: "SessionStart",
+			payload: map[string]any{
+				"path": "/Users/agoodkind/Downloads/AuthKey_ABC123.p8",
+			},
+		},
+	}
+
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			v := rules.Evaluate(context.Background(), systemFor(testCase.event), testCase.event, testFields(testCase.payload), []config.Rule{rule})
+			if v != nil {
+				t.Fatalf("expected allow, got rule %q", v.RuleName)
+			}
+		})
+	}
+}
+
+func TestEvaluate_SecretOutputBlocksPrivateKey(t *testing.T) {
+	rule := secretOutputRule(t)
+
+	cases := []struct {
+		name    string
+		event   string
+		payload map[string]any
+	}{
+		{
+			name:  "codex tool response",
+			event: "PostToolUse",
+			payload: map[string]any{
+				"tool_response": "header\n" + syntheticPrivateKeyHeader() + "\nbody",
+			},
+		},
+		{
+			name:  "cursor tool output",
+			event: "postToolUse",
+			payload: map[string]any{
+				"tool_output": "header\n" + syntheticPrivateKeyHeader() + "\nbody",
+			},
+		},
+	}
+
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			v := rules.Evaluate(context.Background(), systemFor(testCase.event), testCase.event, testFields(testCase.payload), []config.Rule{rule})
+			if v == nil {
+				t.Fatalf("expected secret output violation")
+			}
+		})
+	}
+}
+
+func TestEvaluate_SecretOutputAssignmentBlocksKnownCredentialValue(t *testing.T) {
+	rule := knownSecretAssignmentRule(t)
+	secretValue := strings.Repeat("a", 20)
+
+	v := rules.Evaluate(context.Background(), "codex", "PostToolUse", rules.FieldSet{
+		ToolResponse: "export " + "AWS_SECRET_ACCESS_KEY=" + secretValue,
+	}, []config.Rule{rule})
+	if v == nil {
+		t.Fatal("expected known credential assignment violation")
+	}
+}
+
+func TestEvaluate_SecretOutputAssignmentAllowsGenericMakeContractText(t *testing.T) {
+	rule := knownSecretAssignmentRule(t)
+
+	cases := []struct {
+		name  string
+		value string
+	}{
+		{
+			name:  "placeholder token value",
+			value: "Required:\n  " + "BASELINE_TOKEN=<today-token>",
+		},
+		{
+			name:  "token command value",
+			value: "Token source: " + "BASELINE_TOKEN_CMD='printf expected'",
+		},
+		{
+			name:  "token command with url",
+			value: "Token source: " + "BASELINE_TOKEN_CMD='curl -fsSL https://en.wikipedia.org/api/rest_v1/feed/featured/2026/05/09'",
+		},
+		{
+			name:  "generic uppercase token assignment",
+			value: "BASELINE_TOKEN=sample",
+		},
+	}
+
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			v := rules.Evaluate(context.Background(), "codex", "PostToolUse", rules.FieldSet{
+				ToolResponse: testCase.value,
+			}, []config.Rule{rule})
+			if v != nil {
+				t.Fatalf("expected allow, got rule %q", v.RuleName)
+			}
+		})
+	}
 }
 
 // TestEvaluate_RedirectionBlocked verifies that common redirect patterns are blocked.

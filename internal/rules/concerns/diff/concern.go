@@ -11,6 +11,7 @@ import (
 // Matcher is the subset of *regex.Regexp used by diff evaluation.
 type Matcher interface {
 	FindAllStringGroupIndex(string, int, uint32) [][2]int
+	ForEachStringGroupIndex(string, int, uint32, func(int, int) bool)
 }
 
 // FieldAccessor allows the package to read field values without importing
@@ -38,8 +39,8 @@ type MatchResult struct {
 // (for example "edits[*].old_string" / "edits[*].new_string"), the same
 // text-based comparison applies: a match is additive only if its text is
 // not present anywhere in the old joined view.
-func EvalDiffMatches(fields FieldAccessor, pair config.FieldPairSpec, re Matcher, diagnosticGroup uint32) []MatchResult {
-	if re == nil {
+func EvalDiffMatches(fields FieldAccessor, pair config.FieldPairSpec, re Matcher, diagnosticGroup uint32, limit int) []MatchResult {
+	if re == nil || limit <= 0 {
 		return nil
 	}
 	if pair.NewField == config.FieldSelectorInvalid {
@@ -50,11 +51,11 @@ func EvalDiffMatches(fields FieldAccessor, pair config.FieldPairSpec, re Matcher
 		return nil
 	}
 	oldText := fields.String(pair.OldField)
-	newIndexes := re.FindAllStringGroupIndex(newText, -1, diagnosticGroup)
+	newIndexes := collectIndexes(re, newText, diagnosticGroup, limit)
 	if len(newIndexes) == 0 {
 		return nil
 	}
-	oldStrings := matchStrings(re, oldText, diagnosticGroup)
+	oldStrings := findMatchingOldStrings(re, oldText, newIndexes, newText, diagnosticGroup)
 	additive := NewOnly(newIndexes, oldStrings, newText)
 	if len(additive) == 0 {
 		return nil
@@ -73,17 +74,42 @@ func EvalDiffMatches(fields FieldAccessor, pair config.FieldPairSpec, re Matcher
 	return out
 }
 
-func matchStrings(re Matcher, text string, diagnosticGroup uint32) []string {
+func collectIndexes(re Matcher, text string, diagnosticGroup uint32, limit int) [][2]int {
+	if text == "" || limit == 0 {
+		return nil
+	}
+	indexes := make([][2]int, 0)
+	re.ForEachStringGroupIndex(text, limit, diagnosticGroup, func(start int, end int) bool {
+		indexes = append(indexes, [2]int{start, end})
+		return true
+	})
+	return indexes
+}
+
+func findMatchingOldStrings(re Matcher, text string, newIndexes [][2]int, newText string, diagnosticGroup uint32) []string {
 	if text == "" {
 		return nil
 	}
-	indexes := re.FindAllStringGroupIndex(text, -1, diagnosticGroup)
-	if len(indexes) == 0 {
+
+	pending := make(map[string]struct{}, len(newIndexes))
+	for _, idx := range newIndexes {
+		pending[newText[idx[0]:idx[1]]] = struct{}{}
+	}
+	if len(pending) == 0 {
 		return nil
 	}
-	out := make([]string, len(indexes))
-	for i, idx := range indexes {
-		out[i] = text[idx[0]:idx[1]]
-	}
+
+	out := make([]string, 0, len(pending))
+	re.ForEachStringGroupIndex(text, -1, diagnosticGroup, func(start int, end int) bool {
+		matchedText := text[start:end]
+		if _, ok := pending[matchedText]; !ok {
+			return true
+		}
+
+		out = append(out, matchedText)
+		delete(pending, matchedText)
+
+		return len(pending) > 0
+	})
 	return out
 }
