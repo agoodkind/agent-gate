@@ -1,43 +1,121 @@
-# staticcheck-extra: generated_at=2026-05-05T03:45:35Z
-cmd/agent-gate/main.go:23:55: signature uses ...any, which expands to slice of any (empty interface); declare a deeply enumerated named type	# staticcheck-extra:first_added=2026-05-05T03:45:35Z last_seen=2026-05-05T03:45:35Z
-cmd/agent-gate/main.go:23:58: do not use any; declare a deeply enumerated named type	# staticcheck-extra:first_added=2026-05-05T03:45:35Z last_seen=2026-05-05T03:45:35Z
-internal/audit/query.go:106:4: function querySQLite returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog	# staticcheck-extra:first_added=2026-05-05T03:45:35Z last_seen=2026-05-05T03:45:35Z
-internal/audit/query.go:119:3: function querySQLite returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog	# staticcheck-extra:first_added=2026-05-05T03:45:35Z last_seen=2026-05-05T03:45:35Z
-internal/audit/query.go:124:46: signature uses []any, which expands to slice of any (empty interface); declare a deeply enumerated named type	# staticcheck-extra:first_added=2026-05-05T03:45:35Z last_seen=2026-05-05T03:45:35Z
-internal/audit/query.go:124:48: do not use any; declare a deeply enumerated named type	# staticcheck-extra:first_added=2026-05-05T03:45:35Z last_seen=2026-05-05T03:45:35Z
-internal/audit/query.go:165:3: function sqliteViolations returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog	# staticcheck-extra:first_added=2026-05-05T03:45:35Z last_seen=2026-05-05T03:45:35Z
-internal/audit/query.go:172:4: function sqliteViolations returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog	# staticcheck-extra:first_added=2026-05-05T03:45:35Z last_seen=2026-05-05T03:45:35Z
-internal/audit/query.go:177:3: function sqliteViolations returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog	# staticcheck-extra:first_added=2026-05-05T03:45:35Z last_seen=2026-05-05T03:45:35Z
-internal/audit/query.go:188:3: function queryJSONL returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog	# staticcheck-extra:first_added=2026-05-05T03:45:35Z last_seen=2026-05-05T03:45:35Z
-internal/audit/query.go:203:3: function queryJSONL returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog	# staticcheck-extra:first_added=2026-05-05T03:45:35Z last_seen=2026-05-05T03:45:35Z
-internal/audit/query.go:215:3: function scanEventFile returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog	# staticcheck-extra:first_added=2026-05-05T03:45:35Z last_seen=2026-05-05T03:45:35Z
-internal/audit/query.go:224:4: function scanEventFile returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog	# staticcheck-extra:first_added=2026-05-05T03:45:35Z last_seen=2026-05-05T03:45:35Z
-internal/audit/query.go:231:3: function scanEventFile returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog	# staticcheck-extra:first_added=2026-05-05T03:45:35Z last_seen=2026-05-05T03:45:35Z
-internal/audit/query.go:68:3: function querySQLite returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog	# staticcheck-extra:first_added=2026-05-05T03:45:35Z last_seen=2026-05-05T03:45:35Z
-internal/audit/query.go:72:3: function querySQLite returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog	# staticcheck-extra:first_added=2026-05-05T03:45:35Z last_seen=2026-05-05T03:45:35Z
-internal/audit/query.go:93:3: function querySQLite returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog	# staticcheck-extra:first_added=2026-05-05T03:45:35Z last_seen=2026-05-05T03:45:35Z
-internal/audit/session.go:479:3: function Write returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog	# staticcheck-extra:first_added=2026-05-05T03:45:35Z last_seen=2026-05-05T03:45:35Z
-internal/audit/session.go:488:3: function Write returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog	# staticcheck-extra:first_added=2026-05-05T03:45:35Z last_seen=2026-05-05T03:45:35Z
-internal/audit/session.go:497:3: function writePayload returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog	# staticcheck-extra:first_added=2026-05-05T03:45:35Z last_seen=2026-05-05T03:45:35Z
-internal/audit/session.go:504:3: function writePayload returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog	# staticcheck-extra:first_added=2026-05-05T03:45:35Z last_seen=2026-05-05T03:45:35Z
-internal/audit/session.go:521:3: function fileFor returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog	# staticcheck-extra:first_added=2026-05-05T03:45:35Z last_seen=2026-05-05T03:45:35Z
-internal/audit/session.go:526:3: function fileFor returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog	# staticcheck-extra:first_added=2026-05-05T03:45:35Z last_seen=2026-05-05T03:45:35Z
-internal/audit/session.go:546:3: function newSQLiteEventSink returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog	# staticcheck-extra:first_added=2026-05-05T03:45:35Z last_seen=2026-05-05T03:45:35Z
-internal/audit/session.go:550:3: function newSQLiteEventSink returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog	# staticcheck-extra:first_added=2026-05-05T03:45:35Z last_seen=2026-05-05T03:45:35Z
-internal/audit/session.go:612:4: function init returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog	# staticcheck-extra:first_added=2026-05-05T03:45:35Z last_seen=2026-05-05T03:45:35Z
-internal/audit/session.go:622:3: function Write returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog	# staticcheck-extra:first_added=2026-05-05T03:45:35Z last_seen=2026-05-05T03:45:35Z
-internal/audit/session.go:626:3: function Write returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog	# staticcheck-extra:first_added=2026-05-05T03:45:35Z last_seen=2026-05-05T03:45:35Z
-internal/audit/session.go:630:3: function Write returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog	# staticcheck-extra:first_added=2026-05-05T03:45:35Z last_seen=2026-05-05T03:45:35Z
-internal/audit/session.go:638:3: function Write returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog	# staticcheck-extra:first_added=2026-05-05T03:45:35Z last_seen=2026-05-05T03:45:35Z
-internal/audit/session.go:643:3: function Write returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog	# staticcheck-extra:first_added=2026-05-05T03:45:35Z last_seen=2026-05-05T03:45:35Z
-internal/audit/session.go:648:3: function Write returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog	# staticcheck-extra:first_added=2026-05-05T03:45:35Z last_seen=2026-05-05T03:45:35Z
-internal/audit/session.go:654:4: function Write returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog	# staticcheck-extra:first_added=2026-05-05T03:45:35Z last_seen=2026-05-05T03:45:35Z
-internal/audit/session.go:658:3: function Write returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog	# staticcheck-extra:first_added=2026-05-05T03:45:35Z last_seen=2026-05-05T03:45:35Z
-internal/audit/session.go:675:3: function Close returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog	# staticcheck-extra:first_added=2026-05-05T03:45:35Z last_seen=2026-05-05T03:45:35Z
-internal/daemon/client.go:57:3: function Close returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog	# staticcheck-extra:first_added=2026-05-05T03:45:35Z last_seen=2026-05-05T03:45:35Z
-internal/daemon/client.go:75:3: function EvaluateHook returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog	# staticcheck-extra:first_added=2026-05-05T03:45:35Z last_seen=2026-05-05T03:45:35Z
-internal/daemon/client.go:86:3: function Status returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog	# staticcheck-extra:first_added=2026-05-05T03:45:35Z last_seen=2026-05-05T03:45:35Z
-internal/daemon/run.go:38:3: error-level slog event must include an err field	# staticcheck-extra:first_added=2026-05-05T03:45:35Z last_seen=2026-05-05T03:45:35Z
-internal/daemon/server.go:282:1: gRPC handler Status logs without enriching context with peer info; call peer.FromContext or metadata.FromIncomingContext	# staticcheck-extra:first_added=2026-05-05T03:45:35Z last_seen=2026-05-05T03:45:35Z
-internal/daemon/server.go:285:3: slog call inside func taking context.Context does not pass the ctx; use slog.ErrorContext or include ctx for trace correlation	# staticcheck-extra:first_added=2026-05-05T03:45:35Z last_seen=2026-05-05T03:45:35Z
-internal/hook/payload_decode.go:126:3: function eventNameFromBytes returns a wrapped error without an accompanying slog.Error/Warn; either log before returning or add //nolint:wrapped_error_without_slog	# staticcheck-extra:first_added=2026-05-05T03:45:35Z last_seen=2026-05-05T03:45:35Z
+# staticcheck-extra: generated_at=2026-05-08T20:50:35Z
+	go get goodkind.io/gklog/trace	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+banned_direct_output: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+banned_direct_output: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+banned_direct_output: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+banned_direct_output: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+banned_direct_output: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+banned_direct_output: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+context_todo_in_production: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+context_todo_in_production: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+context_todo_in_production: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+context_todo_in_production: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+context_todo_in_production: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+context_todo_in_production: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+goroutine_without_recover: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+goroutine_without_recover: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+goroutine_without_recover: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+goroutine_without_recover: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+goroutine_without_recover: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+goroutine_without_recover: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+grpc_handler_missing_peer_enrichment: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+grpc_handler_missing_peer_enrichment: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+grpc_handler_missing_peer_enrichment: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+grpc_handler_missing_peer_enrichment: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+grpc_handler_missing_peer_enrichment: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+grpc_handler_missing_peer_enrichment: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+hot_loop_info_log: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+hot_loop_info_log: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+hot_loop_info_log: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+hot_loop_info_log: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+hot_loop_info_log: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+hot_loop_info_log: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+internal/daemon/run.go:38:3: error-level slog event must include an err field	# staticcheck-extra:first_added=2026-05-05T03:45:35Z last_seen=2026-05-08T20:50:35Z
+internal/daemon/server.go:418:1: gRPC handler Status logs without enriching context with peer info; call peer.FromContext or metadata.FromIncomingContext	# staticcheck-extra:first_added=2026-05-05T03:45:35Z last_seen=2026-05-08T20:50:35Z
+internal/daemon/server.go:421:3: slog call inside func taking context.Context does not pass the ctx; use slog.ErrorContext or include ctx for trace correlation	# staticcheck-extra:first_added=2026-05-05T03:45:35Z last_seen=2026-05-08T20:50:35Z
+internal/rules/concerns/regex/concern.go:75:49: signature uses pipeline.Input, which expands to any (empty interface); define a deeply enumerated named type	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+internal/rules/concerns/regex/concern.go:75:66: signature uses pipeline.Outcome, which expands to any (empty interface); define a deeply enumerated named type	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+internal/rules/engine.go:137:55: signature uses pipeline.Input, which expands to any (empty interface); define a deeply enumerated named type	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+internal/rules/engine.go:137:72: signature uses pipeline.Outcome, which expands to any (empty interface); define a deeply enumerated named type	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+internal/telemetry/setup.go:13:2: could not import goodkind.io/gklog/trace (invalid package name: "")	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+internal/telemetry/setup.go:13:2: no required module provides package goodkind.io/gklog/trace; to add it:	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+missing_boundary_log: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+missing_boundary_log: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+missing_boundary_log: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+missing_boundary_log: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+missing_boundary_log: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+missing_boundary_log: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+no_any_or_empty_interface: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+no_any_or_empty_interface: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+no_any_or_empty_interface: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+no_any_or_empty_interface: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+no_any_or_empty_interface: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+no_any_or_empty_interface: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+nolint_ban: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+nolint_ban: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+nolint_ban: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+nolint_ban: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+nolint_ban: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+nolint_ban: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+os_exit_outside_main: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+os_exit_outside_main: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+os_exit_outside_main: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+os_exit_outside_main: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+os_exit_outside_main: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+os_exit_outside_main: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+panic_in_production: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+panic_in_production: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+panic_in_production: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+panic_in_production: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+panic_in_production: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+panic_in_production: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+pipeline/concern.go:51:14: do not use any; define a deeply enumerated named type	# staticcheck-extra:first_added=2026-05-08T16:10:11Z last_seen=2026-05-08T20:50:35Z
+pipeline/concern.go:51:6: type Input expands to any (empty interface), which is forbidden; define a deeply enumerated named type instead	# staticcheck-extra:first_added=2026-05-08T16:10:11Z last_seen=2026-05-08T20:50:35Z
+pipeline/concern.go:55:16: do not use any; define a deeply enumerated named type	# staticcheck-extra:first_added=2026-05-08T16:10:11Z last_seen=2026-05-08T20:50:35Z
+pipeline/concern.go:55:6: type Outcome expands to any (empty interface), which is forbidden; define a deeply enumerated named type instead	# staticcheck-extra:first_added=2026-05-08T16:10:11Z last_seen=2026-05-08T20:50:35Z
+pipeline/concern.go:60:34: signature uses Input, which expands to any (empty interface); define a deeply enumerated named type	# staticcheck-extra:first_added=2026-05-08T16:10:11Z last_seen=2026-05-08T20:50:35Z
+pipeline/concern.go:60:42: signature uses Outcome, which expands to any (empty interface); define a deeply enumerated named type	# staticcheck-extra:first_added=2026-05-08T16:10:11Z last_seen=2026-05-08T20:50:35Z
+pipeline/orchestrator.go:22:2: struct field type Outcome expands to any (empty interface); define a deeply enumerated named type	# staticcheck-extra:first_added=2026-05-08T16:10:11Z last_seen=2026-05-08T20:50:35Z
+pipeline/orchestrator.go:29:52: signature uses Input, which expands to any (empty interface); define a deeply enumerated named type	# staticcheck-extra:first_added=2026-05-08T16:10:11Z last_seen=2026-05-08T20:50:35Z
+slog_error_without_err: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+slog_error_without_err: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+slog_error_without_err: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+slog_error_without_err: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+slog_error_without_err: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+slog_error_without_err: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+slog_missing_trace_id: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+slog_missing_trace_id: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+slog_missing_trace_id: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+slog_missing_trace_id: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+slog_missing_trace_id: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+slog_missing_trace_id: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+string_switch_should_be_enum: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+string_switch_should_be_enum: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+string_switch_should_be_enum: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+string_switch_should_be_enum: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+string_switch_should_be_enum: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+string_switch_should_be_enum: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+thin_wrapper_to_launderable_call: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+thin_wrapper_to_launderable_call: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+thin_wrapper_to_launderable_call: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+thin_wrapper_to_launderable_call: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+thin_wrapper_to_launderable_call: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+thin_wrapper_to_launderable_call: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+time_now_outside_clock: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+time_now_outside_clock: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+time_now_outside_clock: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+time_now_outside_clock: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+time_now_outside_clock: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+time_now_outside_clock: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+time_sleep_in_production: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+time_sleep_in_production: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+time_sleep_in_production: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+time_sleep_in_production: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+time_sleep_in_production: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+time_sleep_in_production: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+wrapped_error_without_slog: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+wrapped_error_without_slog: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+wrapped_error_without_slog: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+wrapped_error_without_slog: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+wrapped_error_without_slog: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
+wrapped_error_without_slog: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z

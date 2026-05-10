@@ -1,6 +1,7 @@
 package rules_test
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -27,7 +28,7 @@ func TestEvaluateAllCollectsConcreteMatches(t *testing.T) {
 		AssistantMessage: "alpha xx\nrun tests >/dev/null\nx marks",
 	}
 
-	got := rules.EvaluateAll("codex", "Stop", payload, []config.Rule{ruleA, ruleB})
+	got := rules.EvaluateAll(context.Background(), "codex", "Stop", payload, []config.Rule{ruleA, ruleB}, nil)
 	if len(got) != 3 {
 		t.Fatalf("EvaluateAll returned %d matches, want 3: %#v", len(got), got)
 	}

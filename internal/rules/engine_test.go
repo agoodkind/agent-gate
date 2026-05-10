@@ -1,6 +1,7 @@
 package rules_test
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"goodkind.io/agent-gate/internal/config"
+	"goodkind.io/agent-gate/internal/hook"
 	"goodkind.io/agent-gate/internal/regex"
 	"goodkind.io/agent-gate/internal/rules"
 )
@@ -163,7 +165,7 @@ func TestEvaluate_RedirectionBlocked(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			v := rules.Evaluate(systemFor(tc.event), tc.event, testFields(tc.payload), []config.Rule{rule})
+			v := rules.Evaluate(context.Background(), systemFor(tc.event), tc.event, testFields(tc.payload), []config.Rule{rule})
 			if v == nil {
 				t.Errorf("expected violation for command %q, got nil", tc.payload)
 			}
@@ -219,7 +221,7 @@ func TestEvaluate_CleanCommandAllowed(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			v := rules.Evaluate(systemFor(tc.event), tc.event, testFields(tc.payload), []config.Rule{rule})
+			v := rules.Evaluate(context.Background(), systemFor(tc.event), tc.event, testFields(tc.payload), []config.Rule{rule})
 			if v != nil {
 				t.Errorf("expected no violation, got rule %q: %s", v.RuleName, v.Message)
 			}
@@ -233,7 +235,7 @@ func TestEvaluate_EventFilter(t *testing.T) {
 
 	// A redirect in a PostToolUse payload should not fire the rule
 	// because PostToolUse is not in the rule's events list.
-	v := rules.Evaluate("claude", "PostToolUse", rules.FieldSet{ToolInputCommand: "ls 2>/dev/null"}, []config.Rule{rule})
+	v := rules.Evaluate(context.Background(), "claude", "PostToolUse", rules.FieldSet{ToolInputCommand: "ls 2>/dev/null"}, []config.Rule{rule})
 
 	if v != nil {
 		t.Errorf("rule fired for non-matching event PostToolUse, expected nil")
@@ -245,7 +247,7 @@ func TestEvaluate_EmptyEventList(t *testing.T) {
 	rule := loadRule(t, "catch-all", `forbidden`, nil,
 		[]string{"command"}, "forbidden keyword")
 
-	v := rules.Evaluate("unknown", "AnyEvent", rules.FieldSet{Command: "do something forbidden here"}, []config.Rule{rule})
+	v := rules.Evaluate(context.Background(), "unknown", "AnyEvent", rules.FieldSet{Command: "do something forbidden here"}, []config.Rule{rule})
 
 	if v == nil {
 		t.Error("expected violation for catch-all rule, got nil")
@@ -260,7 +262,7 @@ func TestEvaluate_UnknownFieldSelector(t *testing.T) {
 		"found it",
 	)
 
-	v := rules.Evaluate("claude", "PreToolUse", rules.FieldSet{}, []config.Rule{rule})
+	v := rules.Evaluate(context.Background(), "claude", "PreToolUse", rules.FieldSet{}, []config.Rule{rule})
 	if v != nil {
 		t.Errorf("expected nil for unknown selector, got violation %q", v.RuleName)
 	}
@@ -337,7 +339,7 @@ func TestEvaluate_MultiCondition_HomeCWD(t *testing.T) {
 	}
 	for _, cmd := range blocked {
 		t.Run("blocked/"+cmd, func(t *testing.T) {
-			v := rules.Evaluate("claude", "PreToolUse", homePayload(cmd), []config.Rule{rule})
+			v := rules.Evaluate(context.Background(), "claude", "PreToolUse", homePayload(cmd), []config.Rule{rule})
 			if v == nil {
 				t.Errorf("expected block for %q in home cwd, got nil", cmd)
 			}
@@ -396,7 +398,7 @@ func TestEvaluate_MultiCondition_HomeCWD(t *testing.T) {
 	}
 	for _, tc := range allowed {
 		t.Run("allowed/"+tc.name, func(t *testing.T) {
-			v := rules.Evaluate("claude", "PreToolUse", testFields(tc.payload), []config.Rule{rule})
+			v := rules.Evaluate(context.Background(), "claude", "PreToolUse", testFields(tc.payload), []config.Rule{rule})
 			if v != nil {
 				t.Errorf("expected allow, got block: %s", v.Message)
 			}
@@ -428,7 +430,7 @@ func TestEvaluate_EffectiveCwd_StillHome(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			v := rules.Evaluate("claude", "PreToolUse", testFields(tc.payload), []config.Rule{rule})
+			v := rules.Evaluate(context.Background(), "claude", "PreToolUse", testFields(tc.payload), []config.Rule{rule})
 			if v == nil {
 				t.Errorf("expected block (effective cwd is still home), got nil")
 			}
@@ -668,7 +670,7 @@ func TestEvaluate_EmdashBlocked(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			v := rules.Evaluate(systemFor(tc.event), tc.event, testFields(tc.payload), rulesSlice)
+			v := rules.Evaluate(context.Background(), systemFor(tc.event), tc.event, testFields(tc.payload), rulesSlice)
 			if v == nil {
 				t.Error("expected violation, got nil")
 			}
@@ -759,7 +761,7 @@ func TestEvaluate_EmdashAllowed(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			v := rules.Evaluate(systemFor(tc.event), tc.event, testFields(tc.payload), rulesSlice)
+			v := rules.Evaluate(context.Background(), systemFor(tc.event), tc.event, testFields(tc.payload), rulesSlice)
 			if v != nil {
 				t.Errorf("expected no violation, got rule %q: %s", v.RuleName, v.Message)
 			}
@@ -794,7 +796,7 @@ func TestEvaluateAllUsesDiagnosticGroupSpan(t *testing.T) {
 		"assistant_message": value,
 	}
 
-	got := rules.EvaluateAll("claude", "Stop", testFields(payload), []config.Rule{rule})
+	got := rules.EvaluateAll(context.Background(), "claude", "Stop", testFields(payload), []config.Rule{rule}, nil)
 	if len(got) != 1 {
 		t.Fatalf("EvaluateAll returned %d matches, want 1: %#v", len(got), got)
 	}
@@ -828,7 +830,7 @@ func TestEvaluateAllUsesConditionDiagnosticGroupSpan(t *testing.T) {
 		"assistant_message": value,
 	}
 
-	got := rules.EvaluateAll("claude", "Stop", testFields(payload), []config.Rule{rule})
+	got := rules.EvaluateAll(context.Background(), "claude", "Stop", testFields(payload), []config.Rule{rule}, nil)
 	if len(got) != 1 {
 		t.Fatalf("EvaluateAll returned %d matches, want 1: %#v", len(got), got)
 	}
@@ -889,7 +891,7 @@ func TestEvaluate_DoubleHyphenProseBlocked(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			v := rules.Evaluate(systemFor(tc.event), tc.event, testFields(tc.payload), []config.Rule{rule})
+			v := rules.Evaluate(context.Background(), systemFor(tc.event), tc.event, testFields(tc.payload), []config.Rule{rule})
 			if v == nil {
 				t.Fatal("expected violation, got nil")
 			}
@@ -904,7 +906,7 @@ func TestEvaluate_DoubleHyphenProseMatchSpan(t *testing.T) {
 		"tool_input": map[string]any{"content": value},
 	}
 
-	got := rules.EvaluateAll("claude", "PreToolUse", testFields(payload), []config.Rule{rule})
+	got := rules.EvaluateAll(context.Background(), "claude", "PreToolUse", testFields(payload), []config.Rule{rule}, nil)
 	if len(got) != 1 {
 		t.Fatalf("EvaluateAll returned %d matches, want 1: %#v", len(got), got)
 	}
@@ -955,7 +957,7 @@ func TestEvaluate_DoubleHyphenProseAllowed(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			v := rules.Evaluate(systemFor(tc.event), tc.event, testFields(tc.payload), []config.Rule{rule})
+			v := rules.Evaluate(context.Background(), systemFor(tc.event), tc.event, testFields(tc.payload), []config.Rule{rule})
 			if v != nil {
 				t.Fatalf("expected allow, got %s", v.RuleName)
 			}
@@ -1014,7 +1016,7 @@ func TestNavigatePath_ArrayWildcard(t *testing.T) {
 
 	for _, tc := range blocked {
 		t.Run("blocked/"+tc.name, func(t *testing.T) {
-			v := rules.Evaluate("cursor", "afterFileEdit", testFields(tc.payload), []config.Rule{rule})
+			v := rules.Evaluate(context.Background(), "cursor", "afterFileEdit", testFields(tc.payload), []config.Rule{rule})
 			if v == nil {
 				t.Error("expected violation, got nil")
 			}
@@ -1050,7 +1052,7 @@ func TestNavigatePath_ArrayWildcard(t *testing.T) {
 
 	for _, tc := range allowed {
 		t.Run("allowed/"+tc.name, func(t *testing.T) {
-			v := rules.Evaluate("cursor", "afterFileEdit", testFields(tc.payload), []config.Rule{rule})
+			v := rules.Evaluate(context.Background(), "cursor", "afterFileEdit", testFields(tc.payload), []config.Rule{rule})
 			if v != nil {
 				t.Errorf("expected no violation, got rule %q: %s", v.RuleName, v.Message)
 			}
@@ -1369,7 +1371,7 @@ func TestEvaluate_CommandAndProjectConditions_GoThroughMake(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			v := rules.Evaluate(tc.system, tc.event, testFields(tc.payload), []config.Rule{rule})
+			v := rules.Evaluate(context.Background(), tc.system, tc.event, testFields(tc.payload), []config.Rule{rule})
 			if got := v != nil; got != tc.want {
 				t.Fatalf("blocked = %v, want %v; violation = %#v", got, tc.want, v)
 			}
@@ -1385,7 +1387,7 @@ func TestEvaluate_CommandAndProjectConditions_OrderIndependent(t *testing.T) {
 	rule := makeGoThroughMakeRule()
 	rule.Conditions[0], rule.Conditions[1] = rule.Conditions[1], rule.Conditions[0]
 
-	v := rules.Evaluate("claude", "PreToolUse", rules.FieldSet{CWD: t.TempDir(), ToolInputCommand: "cd " + root + " && go test ./..."}, []config.Rule{rule})
+	v := rules.Evaluate(context.Background(), "claude", "PreToolUse", rules.FieldSet{CWD: t.TempDir(), ToolInputCommand: "cd " + root + " && go test ./..."}, []config.Rule{rule})
 
 	if v == nil {
 		t.Fatal("expected project condition to use matched command cwd regardless of condition order")
@@ -1396,7 +1398,7 @@ func TestEvaluate_ProjectCondition_AllowsWhenProjectDoesNotSupportMake(t *testin
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "go.mod"), "module example.test/project\n")
 
-	v := rules.Evaluate("claude", "PreToolUse", rules.FieldSet{CWD: root, ToolInputCommand: "go test ./..."}, []config.Rule{makeGoThroughMakeRule()})
+	v := rules.Evaluate(context.Background(), "claude", "PreToolUse", rules.FieldSet{CWD: root, ToolInputCommand: "go test ./..."}, []config.Rule{makeGoThroughMakeRule()})
 
 	if v != nil {
 		t.Fatalf("expected allow without Makefile, got %s", v.Message)
@@ -1407,9 +1409,239 @@ func TestEvaluate_ProjectCondition_AllowsOutsideMarkedProject(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "Makefile"), "test:\n\tgo test ./...\n")
 
-	v := rules.Evaluate("claude", "PreToolUse", rules.FieldSet{CWD: root, ToolInputCommand: "go test ./..."}, []config.Rule{makeGoThroughMakeRule()})
+	v := rules.Evaluate(context.Background(), "claude", "PreToolUse", rules.FieldSet{CWD: root, ToolInputCommand: "go test ./..."}, []config.Rule{makeGoThroughMakeRule()})
 
 	if v != nil {
 		t.Fatalf("expected allow outside Go module, got %s", v.Message)
 	}
+}
+
+// makeDiffRule builds a rule with a single diff condition matching the
+// pattern against tool_input.new_string but allowing existing matches.
+func makeDiffRule(t *testing.T, pattern string) config.Rule {
+	t.Helper()
+	cond, err := config.NewCondition(nil, pattern, "")
+	if err != nil {
+		t.Fatalf("NewCondition: %v", err)
+	}
+	cond.Kind = string(config.ConditionKindDiff)
+	cond.FieldPair = "tool_input.old_string,tool_input.new_string"
+	return config.Rule{
+		Name:             "block-additive",
+		Description:      "",
+		Events:           []string{"PreToolUse"},
+		ClaudeEvents:     nil,
+		CursorEvents:     nil,
+		CodexEvents:      nil,
+		GeminiEvents:     nil,
+		Conditions:       []config.Condition{cond},
+		FieldPaths:       nil,
+		Pattern:          "",
+		Action:           "block",
+		ViolationMessage: "additive content blocked",
+		DiagnosticGroup:  0,
+		AuditOnly:        false,
+		DisableIfEnv:     nil,
+	}
+}
+
+func TestEvaluateAll_DiffCondition_BlocksAdditive(t *testing.T) {
+	rule := makeDiffRule(t, `internal/foo\.go`)
+	rule.Conditions[0].FieldPaths = []string{"tool_input.new_string"}
+	rule.Conditions[0].Selectors() // touch to ensure parse-equivalent state
+	// Compile fieldPair via Load equivalent: simulate by going through ParseFieldPair.
+	pair, err := config.ParseFieldPair(rule.Conditions[0].FieldPair)
+	if err != nil {
+		t.Fatalf("ParseFieldPair: %v", err)
+	}
+	// We need the loadPath path to populate fieldPairs; substitute by going via TOML below.
+	_ = pair
+
+	// The cleanest path is via TOML decode.
+	const tomlBody = `
+[[rules]]
+name = "block-additive-foo"
+events = ["PreToolUse"]
+action = "block"
+violation_message = "additive content blocked"
+
+[[rules.conditions]]
+kind = "diff"
+field_pair = "tool_input.old_string,tool_input.new_string"
+pattern = '''internal/foo\.go'''
+`
+	cfg := loadTOML(t, tomlBody)
+	if errs := loadValidate(t, cfg); len(errs) != 0 {
+		t.Fatalf("ValidateConfig: %v", errs)
+	}
+
+	cases := []struct {
+		name    string
+		fields  rules.FieldSet
+		blocked bool
+	}{
+		{
+			name: "additive only",
+			fields: rules.FieldSet{
+				ToolInputOldString: "no reference here",
+				ToolInputNewString: "added: internal/foo.go",
+			},
+			blocked: true,
+		},
+		{
+			name: "present in both",
+			fields: rules.FieldSet{
+				ToolInputOldString: "internal/foo.go was here",
+				ToolInputNewString: "internal/foo.go was here, slightly changed",
+			},
+			blocked: false,
+		},
+		{
+			name: "deletion only",
+			fields: rules.FieldSet{
+				ToolInputOldString: "internal/foo.go was here",
+				ToolInputNewString: "no reference",
+			},
+			blocked: false,
+		},
+		{
+			name: "neither side has it",
+			fields: rules.FieldSet{
+				ToolInputOldString: "clean old",
+				ToolInputNewString: "clean new",
+			},
+			blocked: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := rules.EvaluateAll(context.Background(), "claude", "PreToolUse", tc.fields, cfg.Rules, nil)
+			if (len(got) > 0) != tc.blocked {
+				t.Fatalf("blocked=%v, got %d violations: %#v", tc.blocked, len(got), got)
+			}
+		})
+	}
+}
+
+func TestEvaluateAll_ShellWriteCondition_BlocksGlobMatch(t *testing.T) {
+	const tomlBody = `
+[[rules]]
+name = "block-baseline-bash-tampering"
+events = ["PreToolUse"]
+action = "block"
+violation_message = "writing to a baseline file is not permitted"
+
+[[rules.conditions]]
+kind = "shell-write"
+field_paths = ["tool_input.command"]
+globs = ["*-baseline.txt", "*.golangci-lint-baseline.txt"]
+`
+	cfg := loadTOML(t, tomlBody)
+	if errs := loadValidate(t, cfg); len(errs) != 0 {
+		t.Fatalf("ValidateConfig: %v", errs)
+	}
+
+	cases := []struct {
+		name    string
+		command string
+		blocked bool
+	}{
+		{name: "redirect append", command: "echo entry >> .golangci-lint-baseline.txt", blocked: true},
+		{name: "tee append", command: "tee -a .golangci-lint-baseline.txt < extras.txt", blocked: true},
+		{name: "sed in-place", command: "sed -i 's/^/-/' .golangci-lint-baseline.txt", blocked: true},
+		{name: "unparseable bash -c sentinel", command: `bash -c "echo hi >> /tmp/log"`, blocked: true},
+		{name: "read-only cat allowed", command: "cat README.md", blocked: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fields := rules.FieldSet{
+				CWD:              "/work",
+				ToolInputCommand: tc.command,
+			}
+			got := rules.EvaluateAll(context.Background(), "claude", "PreToolUse", fields, cfg.Rules, nil)
+			if (len(got) > 0) != tc.blocked {
+				t.Fatalf("blocked=%v, got %d violations: %#v", tc.blocked, len(got), got)
+			}
+		})
+	}
+}
+
+func TestEvaluateAllSkipsWhenEnvGuardSet(t *testing.T) {
+	const tomlBody = `
+[[rules]]
+name = "block-additive-foo"
+events = ["PreToolUse"]
+action = "block"
+violation_message = "blocked"
+disable_if_env = ["LINT_BASELINE_REFRESH"]
+
+[[rules.conditions]]
+kind = "diff"
+field_pair = "tool_input.old_string,tool_input.new_string"
+pattern = '''internal/foo\.go'''
+`
+	cfg := loadTOML(t, tomlBody)
+
+	fields := rules.FieldSet{
+		ToolInputOldString: "no reference",
+		ToolInputNewString: "added: internal/foo.go",
+	}
+
+	cases := []struct {
+		name    string
+		getenv  func(string) string
+		blocked bool
+	}{
+		{
+			name:    "no getenv blocks",
+			getenv:  nil,
+			blocked: true,
+		},
+		{
+			name:    "env unset blocks",
+			getenv:  func(_ string) string { return "" },
+			blocked: true,
+		},
+		{
+			name: "env set to non-empty allows",
+			getenv: func(key string) string {
+				if key == "LINT_BASELINE_REFRESH" {
+					return "1"
+				}
+				return ""
+			},
+			blocked: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := rules.EvaluateAll(context.Background(), "claude", "PreToolUse", fields, cfg.Rules, tc.getenv)
+			if (len(got) > 0) != tc.blocked {
+				t.Fatalf("blocked=%v, got %d violations: %#v", tc.blocked, len(got), got)
+			}
+		})
+	}
+}
+
+// loadTOML decodes a TOML body string through the same path as a real config
+// file: it writes a tempfile and calls config.LoadExisting so loadPath wires
+// up compiled regexes, selectors, and field pairs.
+func loadTOML(t *testing.T, body string) *config.Config {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "agent-gate.toml")
+	writeFile(t, path, body)
+	cfg, err := config.LoadExisting(path)
+	if err != nil {
+		t.Fatalf("LoadExisting: %v", err)
+	}
+	return cfg
+}
+
+// loadValidate calls hook.ValidateConfig and returns its findings. Wrapped
+// here so engine_test does not need to import hook just for this helper at
+// every call site.
+func loadValidate(t *testing.T, cfg *config.Config) []error {
+	t.Helper()
+	return hook.ValidateConfig(cfg)
 }

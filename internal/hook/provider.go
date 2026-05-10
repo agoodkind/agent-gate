@@ -11,7 +11,7 @@ import (
 
 // EvaluateHot performs only provider detection, typed parsing, rule
 // evaluation, block diagnostics, and response rendering.
-func EvaluateHot(rawBytes []byte, cfg *config.Config, hint HookSystem, getenv func(string) string) HotEvaluation {
+func EvaluateHot(ctx context.Context, rawBytes []byte, cfg *config.Config, hint HookSystem, getenv func(string) string) HotEvaluation {
 	detectionPayload, err := ParseDetectionPayload(rawBytes)
 	if err != nil {
 		return HotEvaluation{
@@ -32,7 +32,7 @@ func EvaluateHot(rawBytes []byte, cfg *config.Config, hint HookSystem, getenv fu
 		}
 	}
 
-	return evaluatePayloadHot(payload, rawBytes, cfg)
+	return evaluatePayloadHot(ctx, payload, rawBytes, cfg, getenv)
 }
 
 func emptyDeferredAuditEvent(system HookSystem) DeferredAuditEvent {
@@ -72,12 +72,12 @@ func CanBlock(system HookSystem, eventName string) bool {
 	}
 }
 
-func evaluatePayloadHot(payload HookPayload, rawBytes []byte, cfg *config.Config) HotEvaluation {
+func evaluatePayloadHot(ctx context.Context, payload HookPayload, rawBytes []byte, cfg *config.Config, getenv func(string) string) HotEvaluation {
 	systemStr := payload.System.String()
 	eventName := payload.EventName()
 	fields := payload.Fields()
 	ruleSet := rulesForConfig(cfg)
-	violations := rules.EvaluateAll(systemStr, eventName, fields, ruleSet)
+	violations := rules.EvaluateAll(ctx, systemStr, eventName, fields, ruleSet, getenv)
 	blockingViolations := blockingMatches(violations)
 	auditOnlyViolations := auditOnlyMatches(violations)
 	canBlock := CanBlock(payload.System, eventName)

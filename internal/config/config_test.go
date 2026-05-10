@@ -84,6 +84,25 @@ func TestLoadExistingRequiresFile(t *testing.T) {
 	}
 }
 
+func TestLoadTelemetryBlock(t *testing.T) {
+	setConfigHome(t, `
+[telemetry]
+otlp_endpoint = "127.0.0.1:4317"
+slow_op_threshold_ms = 50
+`)
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.Telemetry.OTLPEndpoint != "127.0.0.1:4317" {
+		t.Errorf("OTLPEndpoint = %q, want %q", cfg.Telemetry.OTLPEndpoint, "127.0.0.1:4317")
+	}
+	if cfg.Telemetry.SlowOpThresholdMs != 50 {
+		t.Errorf("SlowOpThresholdMs = %d, want 50", cfg.Telemetry.SlowOpThresholdMs)
+	}
+}
+
 func setConfigHome(t *testing.T, contents string) {
 	t.Helper()
 	dir := t.TempDir()

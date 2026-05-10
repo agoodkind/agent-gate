@@ -17,6 +17,7 @@ import (
 	"goodkind.io/agent-gate/internal/config"
 	"goodkind.io/agent-gate/internal/daemon"
 	"goodkind.io/agent-gate/internal/hook"
+	"goodkind.io/agent-gate/internal/telemetry"
 	"goodkind.io/agent-gate/internal/version"
 	"goodkind.io/gklog"
 )
@@ -97,6 +98,15 @@ func main() {
 			fmt.Fprintf(os.Stderr, "agent-gate: daemon: config load failed: %v\n", cfgErr)
 			os.Exit(1)
 		}
+		telemCloser, telemErr := telemetry.Setup(telemetry.Options{
+			OTLPEndpoint:      cfg.Telemetry.OTLPEndpoint,
+			SlowOpThresholdMs: cfg.Telemetry.SlowOpThresholdMs,
+		})
+		if telemErr != nil {
+			fmt.Fprintf(os.Stderr, "agent-gate: daemon: telemetry setup failed: %v\n", telemErr)
+			os.Exit(1)
+		}
+		defer func() { _ = telemCloser.Close() }()
 		if err := daemon.Run(log, cfg); err != nil {
 			fmt.Fprintf(os.Stderr, "agent-gate: daemon: %v\n", err)
 			os.Exit(1)

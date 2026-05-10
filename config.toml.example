@@ -216,3 +216,37 @@ pattern     = '[\x{058A}\x{05BE}\x{1400}\x{1806}\x{2010}-\x{2015}\x{2053}\x{207B
 action      = "block"
 audit_only  = true
 violation_message = "Existing content contains typographic dashes. The LLM should clean these up in its replacement."
+
+# ── Composing diff, shell-write, and disable_if_env (documentation only) ────
+#
+# The three condition primitives below are independent and can be composed in
+# a single rule. This example shows what the wiring looks like; it is NOT a
+# default ruleset and is commented out so loading the file does not enable it.
+#
+# A user copies this block (uncommented) into their own config and adapts the
+# patterns, globs, and env name to their project. The rule fires when the
+# tool call would either:
+#   - add a path matching internal/foo\.go to the new side of an Edit, or
+#   - run a shell command that writes to a file matching the listed globs.
+# The rule is skipped entirely when the listed env var is set in the daemon's
+# env_fingerprint (the user's escape hatch for legitimate maintenance edits).
+#
+# [[rules]]
+# name        = "block-baseline-tampering-example"
+# description = "Block edits that add a watched path, and shell writes to baseline files."
+# claude_events = ["PreToolUse"]
+# cursor_events = ["beforeShellExecution", "beforeFileEdit"]
+# action      = "block"
+# violation_message = "Watched baseline content cannot be edited from a tool call."
+# # Set this env var in the daemon's environment to bypass the rule (one-shot).
+# disable_if_env = ["LINT_BASELINE_REFRESH"]
+#
+# [[rules.conditions]]
+# kind        = "diff"
+# field_pair  = "tool_input.old_string,tool_input.new_string"
+# pattern     = '''internal/foo\.go'''
+#
+# [[rules.conditions]]
+# kind        = "shell-write"
+# field_paths = ["tool_input.command"]
+# globs       = ["*-baseline.txt", ".golangci-lint-baseline.txt"]

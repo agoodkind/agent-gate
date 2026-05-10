@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/BurntSushi/toml"
@@ -115,19 +116,44 @@ type Condition struct {
 	RequireAll  []string `toml:"require_all"`
 	ForbidAny   []string `toml:"forbid_any"`
 
+	// FieldPair is a comma-separated pair of dot-paths used by the diff condition
+	// kind, for example "tool_input.old_string,tool_input.new_string". The first
+	// element is the "old" view, the second is the "new" view.
+	FieldPair string `toml:"field_pair"`
+	// Globs is a list of file-path glob patterns used by the shell-write
+	// condition kind. Each parsed write target is matched against this list.
+	// The match uses [path/filepath.Match] semantics.
+	Globs []string `toml:"globs"`
+
 	compiled    *regex.Regexp
 	compiledNot *regex.Regexp
 	selectors   []FieldSelectorSpec
+	fieldPairs  []FieldPairSpec
 }
+
+// FieldPairSpec carries the compiled selectors for a [Condition.FieldPair].
+// Old and New are the two sides of the comparison.
+type FieldPairSpec struct {
+	OldPath  string
+	NewPath  string
+	OldField FieldSelector
+	NewField FieldSelector
+}
+
+// FieldPairs returns the parsed [FieldPairSpec] values for a condition.
+// The slice has length zero when [Condition.FieldPair] is unset.
+func (c *Condition) FieldPairs() []FieldPairSpec { return c.fieldPairs }
 
 // ConditionKind selects which evaluator applies to a rule condition.
 type ConditionKind string
 
 // ConditionKind variants.
 const (
-	ConditionKindCommand ConditionKind = "command"
-	ConditionKindProject ConditionKind = "project"
-	ConditionKindRegex   ConditionKind = "regex"
+	ConditionKindCommand    ConditionKind = "command"
+	ConditionKindDiff       ConditionKind = "diff"
+	ConditionKindProject    ConditionKind = "project"
+	ConditionKindRegex      ConditionKind = "regex"
+	ConditionKindShellWrite ConditionKind = "shell-write"
 )
 
 // CompiledPattern returns the pre-compiled regex for Pattern.
@@ -143,7 +169,28 @@ func (c *Condition) Selectors() []FieldSelectorSpec { return c.selectors }
 // Intended for tests and programmatic rule construction.
 func NewCondition(fieldPaths []string, pattern, notPattern string) (Condition, error) {
 	log := slog.Default()
-	c := Condition{Kind: "regex", FieldPaths: fieldPaths, Pattern: pattern, NotPattern: notPattern, selectors: CompileFieldSelectorSpecs(fieldPaths)}
+	c := Condition{
+		Kind:            "regex",
+		FieldPaths:      fieldPaths,
+		Pattern:         pattern,
+		NotPattern:      notPattern,
+		DiagnosticGroup: 0,
+		Argv0:           "",
+		Subcommands:     nil,
+		StripEnv:        false,
+		StripArgs:       nil,
+		CwdFlags:        nil,
+		RootMarkers:     nil,
+		RequireAny:      nil,
+		RequireAll:      nil,
+		ForbidAny:       nil,
+		FieldPair:       "",
+		Globs:           nil,
+		selectors:       CompileFieldSelectorSpecs(fieldPaths),
+		compiled:        nil,
+		compiledNot:     nil,
+		fieldPairs:      nil,
+	}
 	if pattern != "" {
 		re, err := regex.Compile(pattern)
 		if err != nil {
@@ -161,6 +208,29 @@ func NewCondition(fieldPaths []string, pattern, notPattern string) (Condition, e
 		c.compiledNot = re
 	}
 	return c, nil
+}
+
+// ParseFieldPair splits a comma-separated old,new dotted-path pair and returns
+// a [FieldPairSpec] with both sides compiled. An empty input returns the zero
+// value with no error so callers can use this for optional fields.
+func ParseFieldPair(spec string) (FieldPairSpec, error) {
+	trimmed := strings.TrimSpace(spec)
+	if trimmed == "" {
+		return FieldPairSpec{OldPath: "", NewPath: "", OldField: FieldSelectorInvalid, NewField: FieldSelectorInvalid}, nil
+	}
+	parts := strings.Split(trimmed, ",")
+	if len(parts) != 2 {
+		return FieldPairSpec{OldPath: "", NewPath: "", OldField: FieldSelectorInvalid, NewField: FieldSelectorInvalid},
+			fmt.Errorf("field_pair %q: expected exactly two comma-separated paths", spec)
+	}
+	oldPath := strings.TrimSpace(parts[0])
+	newPath := strings.TrimSpace(parts[1])
+	return FieldPairSpec{
+		OldPath:  oldPath,
+		NewPath:  newPath,
+		OldField: CompileFieldSelector(oldPath),
+		NewField: CompileFieldSelector(newPath),
+	}, nil
 }
 
 func validateDiagnosticGroup(context string, group int, re *regex.Regexp) error {
@@ -205,6 +275,11 @@ type Rule struct {
 	DiagnosticGroup int `toml:"diagnostic_group"`
 	// AuditOnly logs the violation without blocking when true.
 	AuditOnly bool `toml:"audit_only"`
+	// DisableIfEnv lists environment variable keys. When the daemon has any of
+	// these keys set to a non-empty value in the hook event's environment
+	// fingerprint, the rule is skipped without evaluation. Used as a per-rule
+	// opt-out (for example a maintenance refresh of a baseline file).
+	DisableIfEnv []string `toml:"disable_if_env"`
 
 	compiled  *regex.Regexp
 	selectors []FieldSelectorSpec
@@ -224,23 +299,40 @@ func (r *Rule) Selectors() []FieldSelectorSpec { return r.selectors }
 func NewSimpleRule(name, pattern string, compiled *regex.Regexp, events, fieldPaths []string, action, violationMessage string) Rule {
 	return Rule{
 		Name:             name,
+		Description:      "",
 		Pattern:          pattern,
 		Events:           events,
+		ClaudeEvents:     nil,
+		CursorEvents:     nil,
+		CodexEvents:      nil,
+		GeminiEvents:     nil,
+		Conditions:       nil,
 		FieldPaths:       fieldPaths,
 		Action:           action,
 		ViolationMessage: violationMessage,
+		DiagnosticGroup:  0,
+		AuditOnly:        false,
+		DisableIfEnv:     nil,
 		compiled:         compiled,
 		selectors:        CompileFieldSelectorSpecs(fieldPaths),
 	}
 }
 
+// TelemetryConfig holds OTel export settings decoded from the [telemetry]
+// TOML table.
+type TelemetryConfig struct {
+	OTLPEndpoint      string `toml:"otlp_endpoint"`
+	SlowOpThresholdMs int    `toml:"slow_op_threshold_ms"`
+}
+
 // Config is the top-level configuration structure.
 type Config struct {
-	Log         Log         `toml:"log"`
-	Audit       Audit       `toml:"audit"`
-	Paths       Paths       `toml:"paths"`
-	Performance Performance `toml:"performance"`
-	Rules       []Rule      `toml:"rules"`
+	Log         Log             `toml:"log"`
+	Audit       Audit           `toml:"audit"`
+	Paths       Paths           `toml:"paths"`
+	Performance Performance     `toml:"performance"`
+	Telemetry   TelemetryConfig `toml:"telemetry"`
+	Rules       []Rule          `toml:"rules"`
 }
 
 // ConversationsDir returns the resolved base directory for per-conversation
@@ -396,53 +488,72 @@ func loadPath(path string, requireExisting bool) (*Config, error) {
 	}
 
 	for i := range cfg.Rules {
-		r := &cfg.Rules[i]
-
-		if len(r.Conditions) > 0 {
-			for j := range r.Conditions {
-				c := &r.Conditions[j]
-				c.selectors = CompileFieldSelectorSpecs(c.FieldPaths)
-				if c.Kind == "" {
-					c.Kind = "regex"
-				}
-				switch ConditionKind(c.Kind) {
-				case ConditionKindRegex, ConditionKindCommand, ConditionKindProject:
-				default:
-					return nil, fmt.Errorf("rule %q condition %d: unknown kind %q", r.Name, j, c.Kind)
-				}
-				if c.Pattern != "" {
-					re, err := regex.Compile(c.Pattern)
-					if err != nil {
-						log.Error("compile rule condition pattern failed", "rule", r.Name, "condition_index", j, "pattern", c.Pattern, "err", err)
-						return nil, fmt.Errorf("rule %q condition %d: compile pattern %q: %w", r.Name, j, c.Pattern, err)
-					}
-					c.compiled = re
-				}
-				if err := validateDiagnosticGroup(fmt.Sprintf("rule %q condition %d", r.Name, j), c.DiagnosticGroup, c.compiled); err != nil {
-					return nil, err
-				}
-				if c.NotPattern != "" {
-					re, err := regex.Compile(c.NotPattern)
-					if err != nil {
-						log.Error("compile rule condition not_pattern failed", "rule", r.Name, "condition_index", j, "not_pattern", c.NotPattern, "err", err)
-						return nil, fmt.Errorf("rule %q condition %d: compile not_pattern %q: %w", r.Name, j, c.NotPattern, err)
-					}
-					c.compiledNot = re
-				}
-			}
-		} else {
-			r.selectors = CompileFieldSelectorSpecs(r.FieldPaths)
-			re, err := regex.Compile(r.Pattern)
-			if err != nil {
-				log.Error("compile rule pattern failed", "rule", r.Name, "pattern", r.Pattern, "err", err)
-				return nil, fmt.Errorf("rule %q: compile pattern %q: %w", r.Name, r.Pattern, err)
-			}
-			r.compiled = re
-			if err := validateDiagnosticGroup(fmt.Sprintf("rule %q", r.Name), r.DiagnosticGroup, r.compiled); err != nil {
-				return nil, err
-			}
+		if err := compileRule(log, &cfg.Rules[i]); err != nil {
+			return nil, err
 		}
 	}
 
 	return &cfg, nil
+}
+
+// compileRule attaches compiled regexes and selectors to rule and its
+// conditions. Errors are returned with rule-context wrapping.
+func compileRule(log *slog.Logger, r *Rule) error {
+	if len(r.Conditions) > 0 {
+		for j := range r.Conditions {
+			if err := compileCondition(log, r.Name, j, &r.Conditions[j]); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	r.selectors = CompileFieldSelectorSpecs(r.FieldPaths)
+	re, err := regex.Compile(r.Pattern)
+	if err != nil {
+		log.Error("compile rule pattern failed", "rule", r.Name, "pattern", r.Pattern, "err", err)
+		return fmt.Errorf("rule %q: compile pattern %q: %w", r.Name, r.Pattern, err)
+	}
+	r.compiled = re
+	return validateDiagnosticGroup(fmt.Sprintf("rule %q", r.Name), r.DiagnosticGroup, r.compiled)
+}
+
+// compileCondition fills in compiled regex and selector state for one
+// condition, validates the kind, and parses any field_pair value.
+func compileCondition(log *slog.Logger, ruleName string, index int, c *Condition) error {
+	c.selectors = CompileFieldSelectorSpecs(c.FieldPaths)
+	if c.Kind == "" {
+		c.Kind = "regex"
+	}
+	switch ConditionKind(c.Kind) {
+	case ConditionKindRegex, ConditionKindCommand, ConditionKindProject, ConditionKindDiff, ConditionKindShellWrite:
+	default:
+		return fmt.Errorf("rule %q condition %d: unknown kind %q", ruleName, index, c.Kind)
+	}
+	if c.Pattern != "" {
+		re, err := regex.Compile(c.Pattern)
+		if err != nil {
+			log.Error("compile rule condition pattern failed", "rule", ruleName, "condition_index", index, "pattern", c.Pattern, "err", err)
+			return fmt.Errorf("rule %q condition %d: compile pattern %q: %w", ruleName, index, c.Pattern, err)
+		}
+		c.compiled = re
+	}
+	if err := validateDiagnosticGroup(fmt.Sprintf("rule %q condition %d", ruleName, index), c.DiagnosticGroup, c.compiled); err != nil {
+		return err
+	}
+	if c.NotPattern != "" {
+		re, err := regex.Compile(c.NotPattern)
+		if err != nil {
+			log.Error("compile rule condition not_pattern failed", "rule", ruleName, "condition_index", index, "not_pattern", c.NotPattern, "err", err)
+			return fmt.Errorf("rule %q condition %d: compile not_pattern %q: %w", ruleName, index, c.NotPattern, err)
+		}
+		c.compiledNot = re
+	}
+	if c.FieldPair != "" {
+		pair, err := ParseFieldPair(c.FieldPair)
+		if err != nil {
+			return fmt.Errorf("rule %q condition %d: %w", ruleName, index, err)
+		}
+		c.fieldPairs = []FieldPairSpec{pair}
+	}
+	return nil
 }
