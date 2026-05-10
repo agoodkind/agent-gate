@@ -26,6 +26,8 @@ import (
 
 const schemaVersion = 1
 
+const sqliteBusyTimeoutMS = 5000
+
 // DeferredState tracks whether an intake event is still waiting for deferred
 // replay or has already been processed.
 type DeferredState string
@@ -112,6 +114,7 @@ func OpenSQLite(ctx context.Context, path string, log *slog.Logger) (*Store, err
 	if err != nil {
 		return nil, wrapLoggedError(ctx, log, "open intake sqlite db", err)
 	}
+	configureSQLite(db)
 	store := &Store{
 		db:  db,
 		log: log,
@@ -121,6 +124,11 @@ func OpenSQLite(ctx context.Context, path string, log *slog.Logger) (*Store, err
 		return nil, err
 	}
 	return store, nil
+}
+
+func configureSQLite(db *sql.DB) {
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
 }
 
 // Close closes the underlying SQLite handle.
@@ -399,6 +407,9 @@ func (s *Store) ReplayDeferredPending(ctx context.Context, limit int, replay fun
 
 func (s *Store) init(ctx context.Context) error {
 	stmts := []string{
+		fmt.Sprintf(`pragma busy_timeout = %d`, sqliteBusyTimeoutMS),
+		`pragma journal_mode = wal`,
+		`pragma foreign_keys = on`,
 		`create table if not exists intake_events (
 			seq integer primary key autoincrement,
 			event_id text not null unique,
