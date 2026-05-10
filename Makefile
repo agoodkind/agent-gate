@@ -44,7 +44,8 @@ include bootstrap.mk
 # Daemon control comes from go-service.mk: service-install, service-uninstall,
 # service-restart, service-status. Templates live at packaging/{macos,systemd}/.
 
-.PHONY: proto smoke-build deploy deploy-service daemon-wait daemon-status spawn-smoke
+.PHONY: proto smoke-build deploy deploy-service install-release install-release-bin install-release-hooks install-release-service \
+        daemon-wait daemon-status spawn-smoke
 
 proto:
 	buf generate
@@ -75,6 +76,21 @@ deploy-service:
 		fi; \
 		$(MAKE) service-restart; \
 	}
+
+# install-release fetches the latest release via install.sh. Distinct from
+# canonical `make install` which atomically copies the locally-built binary
+# into $XDG_BIN_HOME.
+install-release:
+	./install.sh $(ARGS)
+
+install-release-bin:
+	./install.sh --bin-only $(ARGS)
+
+install-release-hooks:
+	./install.sh --hooks-only $(ARGS)
+
+install-release-service:
+	./install.sh --service-only --bin-dir $(INSTALL_DIR) $(ARGS)
 
 # daemon-status calls the agent-gate CLI's own status subcommand, which is
 # richer than launchctl/systemctl status. service-status from go-service.mk
