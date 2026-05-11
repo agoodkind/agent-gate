@@ -71,6 +71,15 @@ action      = "block"
 violation_message = "Shell redirection is not permitted (e.g. 2>&1, >/dev/null, &>). Express output handling explicitly without redirects."
 
 [[rules]]
+name        = "no-lossy-log-sampling"
+description = "Block head or tail sampling of diagnostic logs and log-producing command output"
+events      = ["PreToolUse", "preToolUse", "beforeShellExecution"]
+field_paths = ["cmd_segments", "tool_input.command", "command"]
+pattern     = '''(?im)(?:\b(?:journalctl|docker\s+logs|kubectl\s+logs|log\s+show|agent-gate\s+query|cat\s+\S*(?:\.log|/logs?/)|grep\b|rg\b)[^;&\n|]*\|\s*(?:head|tail)\b|\b(?:head|tail)\b[^;&\n]*(?:\.log\b|/logs?/|journal|daemon|audit|trace|error|incident))'''
+action      = "block"
+violation_message = "Do not sample diagnostic output with head or tail. Preserve the full output, write it to a file if needed, and inspect explicit line ranges or search terms. For logs, use rg with context, sed -n with exact ranges after locating line numbers, or save the full command output and cite the path."
+
+[[rules]]
 name        = "go-build-test-through-make"
 description = "Require make for Go build/test in Go modules that provide a Makefile"
 claude_events = ["PreToolUse"]

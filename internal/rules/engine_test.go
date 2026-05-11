@@ -276,6 +276,149 @@ func TestEvaluate_RootFindWithExplicitBoundsAllowed(t *testing.T) {
 	}
 }
 
+const lossyLogSamplingPattern = `(?im)(?:\b(?:journalctl|docker\s+logs|kubectl\s+logs|log\s+show|agent-gate\s+query|cat\s+\S*(?:\.log|/logs?/)|grep\b|rg\b)[^;&\n|]*\|\s*(?:head|tail)\b|\b(?:head|tail)\b[^;&\n]*(?:\.log\b|/logs?/|journal|daemon|audit|trace|error|incident))`
+
+func lossyLogSamplingRule(t *testing.T) config.Rule {
+	t.Helper()
+	return loadRule(t,
+		"no-lossy-log-sampling",
+		lossyLogSamplingPattern,
+		[]string{"PreToolUse", "preToolUse", "beforeShellExecution"},
+		[]string{"cmd_segments", "tool_input.command", "command"},
+		"Do not sample diagnostic output with head or tail.",
+	)
+}
+
+func TestEvaluate_LossyLogSamplingBlocked(t *testing.T) {
+	rule := lossyLogSamplingRule(t)
+
+	cases := []struct {
+		name    string
+		system  string
+		event   string
+		payload map[string]any
+	}{
+		{
+			name:   "docker logs piped to tail",
+			system: "codex",
+			event:  "PreToolUse",
+			payload: map[string]any{
+				"tool_input": map[string]any{"command": "docker logs api | tail -100"},
+			},
+		},
+		{
+			name:   "journalctl piped to head",
+			system: "claude",
+			event:  "PreToolUse",
+			payload: map[string]any{
+				"tool_input": map[string]any{"command": "journalctl -u service | head"},
+			},
+		},
+		{
+			name:   "agent gate query piped to tail",
+			system: "codex",
+			event:  "PreToolUse",
+			payload: map[string]any{
+				"tool_input": map[string]any{"command": "agent-gate query seen --json | tail -20"},
+			},
+		},
+		{
+			name:   "rg log search piped to tail",
+			system: "codex",
+			event:  "PreToolUse",
+			payload: map[string]any{
+				"tool_input": map[string]any{"command": "rg ERROR app.log | tail"},
+			},
+		},
+		{
+			name:   "direct tail of system log",
+			system: "cursor",
+			event:  "beforeShellExecution",
+			payload: map[string]any{
+				"command": "tail -50 /var/log/system.log",
+			},
+		},
+		{
+			name:   "chained docker logs command",
+			system: "codex",
+			event:  "PreToolUse",
+			payload: map[string]any{
+				"tool_input": map[string]any{"command": "echo checking && docker logs api | tail -100"},
+			},
+		},
+	}
+
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			v := rules.Evaluate(context.Background(), testCase.system, testCase.event, testFields(testCase.payload), []config.Rule{rule})
+			if v == nil {
+				t.Fatalf("expected lossy log sampling violation for %#v", testCase.payload)
+			}
+		})
+	}
+}
+
+func TestEvaluate_LossyLogSamplingAllowed(t *testing.T) {
+	rule := lossyLogSamplingRule(t)
+
+	cases := []struct {
+		name    string
+		system  string
+		event   string
+		payload map[string]any
+	}{
+		{
+			name:   "explicit sed line range",
+			system: "codex",
+			event:  "PreToolUse",
+			payload: map[string]any{
+				"tool_input": map[string]any{"command": "sed -n '1200,1300p' app.log"},
+			},
+		},
+		{
+			name:   "rg search with context",
+			system: "codex",
+			event:  "PreToolUse",
+			payload: map[string]any{
+				"tool_input": map[string]any{"command": "rg -n 'error' app.log -C 20"},
+			},
+		},
+		{
+			name:   "head non log data file",
+			system: "codex",
+			event:  "PreToolUse",
+			payload: map[string]any{
+				"tool_input": map[string]any{"command": "head -5 README.md"},
+			},
+		},
+		{
+			name:   "tail non log data file",
+			system: "cursor",
+			event:  "beforeShellExecution",
+			payload: map[string]any{
+				"command": "tail -n 2 table.csv",
+			},
+		},
+		{
+			name:   "head unrelated pipeline",
+			system: "codex",
+			event:  "PreToolUse",
+			payload: map[string]any{
+				"tool_input": map[string]any{"command": "printf 'a\\nb\\n' | head -1"},
+			},
+		},
+	}
+
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			v := rules.Evaluate(context.Background(), testCase.system, testCase.event, testFields(testCase.payload), []config.Rule{rule})
+			if v != nil {
+				t.Fatalf("expected allow, got rule %q", v.RuleName)
+			}
+		})
+	}
+}
+
 const secretReadPathPattern = `(?i)(?:(?:^|[/\\])[^/\\\n]*(?:1password|onepassword|op[ _.-]?export|app[ _.-]?store|asc[ _.-]?api|api[ _.-]?key|private[ _.-]?key|secret|credential|credentials|token|password|passwd|auth)[^/\\\n]*(?:[/\\].*)?\.(?:json|p8|pem|key|pkcs8|p12|pfx)$|(?:^|[/\\])[^/\\\n]*\.(?:p8|pem|key|pkcs8|p12|pfx)$)`
 
 func secretReadPathRule(t *testing.T) config.Rule {
