@@ -42,7 +42,7 @@ func TestEvaluateAllCollectsConcreteMatches(t *testing.T) {
 
 func TestFormatViolationsLineNumberedLegend(t *testing.T) {
 	value := "alpha xx\nrun tests >/dev/null\nx marks"
-	violations := []rules.MatchViolation{
+	violations := []rules.Violation{
 		{
 			RuleName:  "no-x",
 			Message:   "letter x is blocked.",
@@ -98,7 +98,7 @@ func TestFormatViolationsReportsCaptureGroupSpan(t *testing.T) {
 		t.Fatal("test fixture is missing capture text")
 	}
 
-	got := rules.FormatViolations([]rules.MatchViolation{
+	got := rules.FormatViolations([]rules.Violation{
 		{
 			RuleName:  "capture-only",
 			Message:   "capture is blocked.",
@@ -125,7 +125,7 @@ func TestFormatViolationsReportsCaptureGroupSpan(t *testing.T) {
 func TestFormatViolationsRedactsSensitiveMatches(t *testing.T) {
 	privateKeyHeader := "-----BEGIN " + "PRIVATE KEY-----"
 	value := privateKeyHeader + "\nbody-sensitive-value\n-----END PRIVATE KEY-----"
-	got := rules.FormatViolations([]rules.MatchViolation{
+	got := rules.FormatViolations([]rules.Violation{
 		{
 			RuleName:  "no-secrets-in-output",
 			Message:   "credential output is blocked.",
@@ -162,7 +162,7 @@ func TestFormatViolationsReportsDoubleHyphenSpan(t *testing.T) {
 		t.Fatal("test fixture is missing double hyphen")
 	}
 
-	got := rules.FormatViolations([]rules.MatchViolation{
+	got := rules.FormatViolations([]rules.Violation{
 		{
 			RuleName:  "no-double-hyphen-prose",
 			Message:   "ASCII double-hyphen is not permitted as a prose dash.",
@@ -192,7 +192,7 @@ func TestFormatViolationsQuotesBacktickRunsWithoutFence(t *testing.T) {
 		t.Fatal("test fixture is missing backtick run")
 	}
 
-	got := rules.FormatViolations([]rules.MatchViolation{
+	got := rules.FormatViolations([]rules.Violation{
 		{
 			RuleName:  "no-backticks",
 			Message:   "backticks are blocked.",
@@ -223,7 +223,7 @@ func TestFormatViolationsQuotesUnicodeLiterally(t *testing.T) {
 		t.Fatal("test fixture is missing unicode dash")
 	}
 
-	got := rules.FormatViolations([]rules.MatchViolation{
+	got := rules.FormatViolations([]rules.Violation{
 		{
 			RuleName:  "no-emdashes",
 			Message:   "typographic dash is blocked.",

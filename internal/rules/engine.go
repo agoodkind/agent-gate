@@ -19,15 +19,11 @@ import (
 	"goodkind.io/agent-gate/pipeline"
 )
 
-// Violation describes a rule that matched the current hook payload.
+// Violation describes one concrete match that violated a rule. The location
+// fields (FieldPath, FilePath, Value, Start, End) carry the match position
+// when available; they stay empty for rule classes that have no specific span
+// to point at (such as fallback violations from gate-only condition rules).
 type Violation struct {
-	RuleName  string
-	Message   string
-	AuditOnly bool
-}
-
-// MatchViolation describes one concrete regex match that violated a rule.
-type MatchViolation struct {
 	RuleName  string
 	Message   string
 	AuditOnly bool
@@ -46,12 +42,8 @@ func Evaluate(ctx context.Context, system, eventName string, fields FieldSet, ru
 	if len(violations) == 0 {
 		return nil
 	}
-
-	return &Violation{
-		RuleName:  violations[0].RuleName,
-		Message:   violations[0].Message,
-		AuditOnly: violations[0].AuditOnly,
-	}
+	out := violations[0]
+	return &out
 }
 
 // EvaluateAll returns every concrete match for every applicable rule across
@@ -62,7 +54,7 @@ func Evaluate(ctx context.Context, system, eventName string, fields FieldSet, ru
 //
 // getenv is consulted by the [config.Rule.DisableIfEnv] guard. Pass nil to
 // disable env-based rule skipping.
-func EvaluateAll(ctx context.Context, system, eventName string, fields FieldSet, rulesSlice []config.Rule, getenv func(string) string) []MatchViolation {
+func EvaluateAll(ctx context.Context, system, eventName string, fields FieldSet, rulesSlice []config.Rule, getenv func(string) string) []Violation {
 	conditions := buildRuleRegexConditions(&fields, rulesSlice, system, eventName, getenv)
 	if len(conditions) == 0 {
 		return nil
@@ -91,10 +83,10 @@ func envGuardFires(getenv func(string) string, keys []string) bool {
 	return false
 }
 
-// aggregateResults flattens Orchestrator results into MatchViolation values.
+// aggregateResults flattens Orchestrator results into Violation values.
 // For condition-based rules where the gate fired but all regex conditions produced
 // zero matches, one fallback violation is emitted per rule.
-func aggregateResults(results []pipeline.Result, fields FieldSet) []MatchViolation {
+func aggregateResults(results []pipeline.Result, fields FieldSet) []Violation {
 	// Track which condition-based rules fired but produced no regex matches.
 	// Key is rule pointer (same slice element across conditions for one rule).
 	type ruleState struct {
@@ -105,7 +97,7 @@ func aggregateResults(results []pipeline.Result, fields FieldSet) []MatchViolati
 	var gateRules []*ruleState
 	ruleStateByPtr := map[*config.Rule]*ruleState{}
 
-	var violations []MatchViolation
+	var violations []Violation
 	for i := range results {
 		if results[i].Outcome == nil {
 			continue
@@ -296,7 +288,7 @@ func (b *ruleMatchBudget) Consume(count int) {
 // ruleOutcome carries the violations produced by one ruleRegexCondition plus the
 // metadata that aggregateResults needs to deduplicate fallback generation.
 type ruleOutcome struct {
-	violations       []MatchViolation
+	violations       []Violation
 	rule             *config.Rule
 	isConditionBased bool
 	gateMatched      bool
@@ -333,7 +325,7 @@ func (r *ruleRegexCondition) Execute(_ context.Context, _ pipeline.Input) (pipel
 			}, nil
 		}
 		return ruleOutcome{
-			violations:       []MatchViolation{conditionFallbackViolation(*r.fields, r.rule)},
+			violations:       []Violation{conditionFallbackViolation(*r.fields, r.rule)},
 			rule:             r.rule,
 			isConditionBased: true,
 			gateMatched:      true,
@@ -408,8 +400,8 @@ func (r *ruleRegexCondition) Execute(_ context.Context, _ pipeline.Input) (pipel
 }
 
 // evalDiffCondition runs the diff Condition for one condition and returns its
-// match violations in the rules.MatchViolation shape.
-func evalDiffCondition(fields *FieldSet, c *config.Condition, rule *config.Rule, limit int) []MatchViolation {
+// match violations in the rules.Violation shape.
+func evalDiffCondition(fields *FieldSet, c *config.Condition, rule *config.Rule, limit int) []Violation {
 	if limit <= 0 {
 		return nil
 	}
@@ -460,13 +452,13 @@ func evalDiffCondition(fields *FieldSet, c *config.Condition, rule *config.Rule,
 	return diffMatchesToViolations(matches, rule)
 }
 
-func diffMatchesToViolations(matches []diffconcern.MatchResult, rule *config.Rule) []MatchViolation {
+func diffMatchesToViolations(matches []diffconcern.MatchResult, rule *config.Rule) []Violation {
 	if len(matches) == 0 {
 		return nil
 	}
-	out := make([]MatchViolation, len(matches))
+	out := make([]Violation, len(matches))
 	for i, m := range matches {
-		out[i] = MatchViolation{
+		out[i] = Violation{
 			RuleName:  rule.Name,
 			Message:   rule.ViolationMessage,
 			AuditOnly: rule.AuditOnly,
@@ -482,8 +474,8 @@ func diffMatchesToViolations(matches []diffconcern.MatchResult, rule *config.Rul
 }
 
 // evalShellWriteCondition runs the shellwrite Condition for one condition and
-// returns its match violations in the rules.MatchViolation shape.
-func evalShellWriteCondition(fields *FieldSet, c *config.Condition, rule *config.Rule) []MatchViolation {
+// returns its match violations in the rules.Violation shape.
+func evalShellWriteCondition(fields *FieldSet, c *config.Condition, rule *config.Rule) []Violation {
 	commandSelector := config.FieldToolInputCommand
 	for _, sel := range c.Selectors() {
 		if sel.Selector != config.FieldSelectorInvalid {
@@ -495,9 +487,9 @@ func evalShellWriteCondition(fields *FieldSet, c *config.Condition, rule *config
 	if len(matches) == 0 {
 		return nil
 	}
-	out := make([]MatchViolation, len(matches))
+	out := make([]Violation, len(matches))
 	for i, m := range matches {
-		out[i] = MatchViolation{
+		out[i] = Violation{
 			RuleName:  rule.Name,
 			Message:   rule.ViolationMessage,
 			AuditOnly: rule.AuditOnly,
@@ -513,20 +505,20 @@ func evalShellWriteCondition(fields *FieldSet, c *config.Condition, rule *config
 }
 
 // evalSimpleRule runs the top-level pattern for a rule with no conditions.
-func evalSimpleRule(fields *FieldSet, rule *config.Rule, limit int) []MatchViolation {
+func evalSimpleRule(fields *FieldSet, rule *config.Rule, limit int) []Violation {
 	matches := regexconcern.EvalFieldMatches(fields, rule.Selectors(), rule.Compiled(), rule.DiagnosticGroup, limit)
 	return matchesToViolations(matches, rule)
 }
 
 // matchesToViolations converts MatchResult values from the concern package into
-// MatchViolation values with rule metadata attached.
-func matchesToViolations(matches []regexconcern.MatchResult, rule *config.Rule) []MatchViolation {
+// Violation values with rule metadata attached.
+func matchesToViolations(matches []regexconcern.MatchResult, rule *config.Rule) []Violation {
 	if len(matches) == 0 {
 		return nil
 	}
-	violations := make([]MatchViolation, len(matches))
+	violations := make([]Violation, len(matches))
 	for i, m := range matches {
-		violations[i] = MatchViolation{
+		violations[i] = Violation{
 			RuleName:  rule.Name,
 			Message:   rule.ViolationMessage,
 			AuditOnly: rule.AuditOnly,
@@ -541,7 +533,7 @@ func matchesToViolations(matches []regexconcern.MatchResult, rule *config.Rule) 
 	return violations
 }
 
-func conditionFallbackViolation(fields FieldSet, rule *config.Rule) MatchViolation {
+func conditionFallbackViolation(fields FieldSet, rule *config.Rule) Violation {
 	fieldPath := "payload"
 	value := rule.Name
 	for i := range rule.Conditions {
@@ -552,7 +544,7 @@ func conditionFallbackViolation(fields FieldSet, rule *config.Rule) MatchViolati
 		}
 	}
 	end := min(len(value), 1)
-	return MatchViolation{
+	return Violation{
 		RuleName:  rule.Name,
 		Message:   rule.ViolationMessage,
 		AuditOnly: rule.AuditOnly,

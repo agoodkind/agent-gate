@@ -129,8 +129,8 @@ func newDeferredAuditEvent(
 	payload HookPayload,
 	fields rules.FieldSet,
 	ruleSet []config.Rule,
-	blockingViolations []rules.MatchViolation,
-	auditOnlyViolations []rules.MatchViolation,
+	blockingViolations []rules.Violation,
+	auditOnlyViolations []rules.Violation,
 	decision ResponseDecision,
 	diagnosticText string,
 ) DeferredAuditEvent {
@@ -231,8 +231,8 @@ func writeDecisionAudit(ctx context.Context, event DeferredAuditEvent, sink audi
 	sink.Log(ctx, event.SystemString, event.SessionID, event.EventName, "info", "hook.allowed", allowAttrs)
 }
 
-func blockingMatches(violations []rules.MatchViolation) []rules.MatchViolation {
-	out := make([]rules.MatchViolation, 0, len(violations))
+func blockingMatches(violations []rules.Violation) []rules.Violation {
+	out := make([]rules.Violation, 0, len(violations))
 	for _, violation := range violations {
 		if !violation.AuditOnly {
 			out = append(out, violation)
@@ -241,8 +241,8 @@ func blockingMatches(violations []rules.MatchViolation) []rules.MatchViolation {
 	return out
 }
 
-func auditOnlyMatches(violations []rules.MatchViolation) []rules.MatchViolation {
-	out := make([]rules.MatchViolation, 0, len(violations))
+func auditOnlyMatches(violations []rules.Violation) []rules.Violation {
+	out := make([]rules.Violation, 0, len(violations))
 	for _, violation := range violations {
 		if violation.AuditOnly {
 			out = append(out, violation)
@@ -251,7 +251,7 @@ func auditOnlyMatches(violations []rules.MatchViolation) []rules.MatchViolation 
 	return out
 }
 
-func matchRuleNames(violations []rules.MatchViolation) []string {
+func matchRuleNames(violations []rules.Violation) []string {
 	seen := make(map[string]bool)
 	var names []string
 	for _, violation := range violations {
