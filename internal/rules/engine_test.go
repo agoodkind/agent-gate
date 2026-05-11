@@ -1937,7 +1937,7 @@ action = "block"
 violation_message = "writing to a baseline file is not permitted"
 
 [[rules.conditions]]
-kind = "shell-write"
+kind = "shell_write"
 field_paths = ["tool_input.command"]
 globs = ["*-baseline.txt", "*.golangci-lint-baseline.txt"]
 `

@@ -153,7 +153,7 @@ const (
 	ConditionKindDiff       ConditionKind = "diff"
 	ConditionKindProject    ConditionKind = "project"
 	ConditionKindRegex      ConditionKind = "regex"
-	ConditionKindShellWrite ConditionKind = "shell-write"
+	ConditionKindShellWrite ConditionKind = "shell_write"
 )
 
 // CompiledPattern returns the pre-compiled regex for Pattern.
@@ -264,21 +264,28 @@ type Rule struct {
 	CursorEvents []string    `toml:"cursor_events"`
 	CodexEvents  []string    `toml:"codex_events"`
 	GeminiEvents []string    `toml:"gemini_events"`
-	Class        RuleClass   `toml:"class"`
 	Conditions   []Condition `toml:"conditions"`
 	// FieldPaths and Pattern are used when Conditions is empty (simple rules).
-	FieldPaths       []string `toml:"field_paths"`
-	Pattern          string   `toml:"pattern"`
-	Action           string   `toml:"action"`
-	ViolationMessage string   `toml:"violation_message"`
+	FieldPaths []string `toml:"field_paths"`
+	Pattern    string   `toml:"pattern"`
+	// Action selects the rule's effect when it matches. Valid values are
+	// "block" (default) and "audit". The legacy "class" field is no longer
+	// accepted; its old "sync" maps to action="block" and "deferred" maps to
+	// action="audit". A rule with action="audit" never blocks; it logs to the
+	// audit layer. Note that the daemon may still emit a config-load WARN if
+	// a rule with action="block" subscribes to a (provider, event) pair that
+	// the protocol cannot block at; see internal/hook/capability.go.
+	Action           string `toml:"action"`
+	ViolationMessage string `toml:"violation_message"`
 	// DiagnosticGroup selects which capture group supplies diagnostic spans.
 	// Zero means the full match.
 	DiagnosticGroup int `toml:"diagnostic_group"`
 	// RedactDiagnostics hides matched source text in block messages and audit
 	// logs for rules that inspect secret-bearing fields.
 	RedactDiagnostics bool `toml:"redact_diagnostics"`
-	// AuditOnly logs the violation without blocking when true.
-	AuditOnly bool `toml:"audit_only"`
+	// AuditOnly is set internally from Action during compileRule. Callers
+	// should treat this as read-only; it is not a separate user-facing field.
+	AuditOnly bool `toml:"-"`
 	// DisableIfEnv lists environment variable keys. When the daemon has any of
 	// these keys set to a non-empty value in the hook event's environment
 	// fingerprint, the rule is skipped without evaluation. Used as a per-rule
@@ -289,14 +296,15 @@ type Rule struct {
 	selectors []FieldSelectorSpec
 }
 
-// RuleClass selects whether a rule stays on the synchronous block path or is
-// classified as deferred audit/analysis policy.
-type RuleClass string
-
-// RuleClass variants.
+// Rule action values.
 const (
-	RuleClassSync     RuleClass = "sync"
-	RuleClassDeferred RuleClass = "deferred"
+	// ActionBlock is the default. The rule's match stops the tool call when
+	// the subscribed (provider, event) pair supports blocking. On post-event
+	// hooks that cannot block, the daemon emits a config-load WARN and
+	// effectively treats the rule as if it were action="audit".
+	ActionBlock = "block"
+	// ActionAudit logs the violation to the audit layer without blocking.
+	ActionAudit = "audit"
 )
 
 // Compiled returns the pre-compiled regex for the top-level Pattern.
@@ -320,7 +328,6 @@ func NewSimpleRule(name, pattern string, compiled *regex.Regexp, events, fieldPa
 		CursorEvents:      nil,
 		CodexEvents:       nil,
 		GeminiEvents:      nil,
-		Class:             RuleClassSync,
 		Conditions:        nil,
 		FieldPaths:        fieldPaths,
 		Action:            action,
@@ -515,7 +522,7 @@ func loadPath(path string, requireExisting bool) (*Config, error) {
 // compileRule attaches compiled regexes and selectors to rule and its
 // conditions. Errors are returned with rule-context wrapping.
 func compileRule(log *slog.Logger, r *Rule) error {
-	if err := normalizeRuleClass(r); err != nil {
+	if err := normalizeRuleAction(r); err != nil {
 		return fmt.Errorf("rule %q: %w", r.Name, err)
 	}
 	if len(r.Conditions) > 0 {
@@ -536,24 +543,22 @@ func compileRule(log *slog.Logger, r *Rule) error {
 	return validateDiagnosticGroup(fmt.Sprintf("rule %q", r.Name), r.DiagnosticGroup, r.compiled)
 }
 
-func normalizeRuleClass(r *Rule) error {
-	switch r.Class {
-	case "":
-		if r.AuditOnly {
-			r.Class = RuleClassDeferred
-		} else {
-			r.Class = RuleClassSync
-		}
-	case RuleClassSync:
-		if r.AuditOnly {
-			return fmt.Errorf("class %q conflicts with audit_only = true", RuleClassSync)
-		}
-	case RuleClassDeferred:
+// normalizeRuleAction validates the Action field and derives AuditOnly from
+// it. The action field replaces the legacy class field; the previous "sync"
+// maps to ActionBlock and "deferred" maps to ActionAudit. AuditOnly is no
+// longer a TOML-readable field; it is set here from Action.
+func normalizeRuleAction(r *Rule) error {
+	if r.Action == "" {
+		r.Action = ActionBlock
+	}
+	switch r.Action {
+	case ActionBlock:
+		r.AuditOnly = false
+	case ActionAudit:
 		r.AuditOnly = true
 	default:
-		return fmt.Errorf("unknown class %q", r.Class)
+		return fmt.Errorf("unknown action %q (expected %q or %q)", r.Action, ActionBlock, ActionAudit)
 	}
-	r.AuditOnly = r.Class == RuleClassDeferred
 	return nil
 }
 

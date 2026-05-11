@@ -47,12 +47,12 @@ prefer = "sqlite" # sqlite | jsonl
 # Fields:
 #   name              - unique identifier shown in audit log and error messages
 #   description       - human-readable explanation
-#   class             - "sync" blocks immediately, "deferred" records audit/analysis policy
+#   action            - "block" stops the tool call (default), "audit" records without blocking
 #   events            - hook event names this rule applies to (empty = all)
 #   field_paths       - dot-path(s) into the JSON payload to inspect;
 #                       first non-empty value found across all paths is tested
 #   pattern           - PCRE2 regex matched against the extracted field value
-#   action            - what to do on match: "block" is the only supported action
+#   (action above; "block" by default, set to "audit" for record-only)
 #   violation_message - message sent back to the AI and written to the audit log
 #   diagnostic_group - optional capture group to underline in diagnostics (default: 0, the full match)
 #
@@ -64,7 +64,6 @@ prefer = "sqlite" # sqlite | jsonl
 [[rules]]
 name        = "no-shell-redirection"
 description = "Block shell output/error redirection patterns LLMs commonly emit to suppress errors"
-class       = "sync"
 events      = ["PreToolUse", "beforeShellExecution", "preToolUse", "BeforeTool"]
 field_paths = ["tool_input.command", "command"]
 pattern     = '(\d+>&\d+|>&\d+|&>|\|&|>/dev/null|2>/dev/null|>>/dev/null|2>>/dev/null|&>/dev/null)'
@@ -74,7 +73,6 @@ violation_message = "Shell redirection is not permitted (e.g. 2>&1, >/dev/null, 
 [[rules]]
 name        = "go-build-test-through-make"
 description = "Require make for Go build/test in Go modules that provide a Makefile"
-class       = "sync"
 claude_events = ["PreToolUse"]
 cursor_events = ["preToolUse", "beforeShellExecution"]
 codex_events  = ["PreToolUse"]
@@ -99,7 +97,6 @@ require_any  = ["Makefile", "makefile", "GNUmakefile"]
 [[rules]]
 name        = "no-unbounded-root-find"
 description = "Block unbounded recursive find commands from filesystem root"
-class       = "sync"
 claude_events = ["PreToolUse"]
 cursor_events = ["preToolUse", "beforeShellExecution"]
 codex_events  = ["PreToolUse"]
@@ -118,7 +115,6 @@ not_pattern = '(?:^|\s)(?:-maxdepth\s+\d+|-xdev)(?:\s|$)'
 [[rules]]
 name        = "no-credential-file-reads"
 description = "Block reading likely credential-bearing files before tool output can enter the transcript"
-class       = "sync"
 claude_events = ["PreToolUse"]
 cursor_events = ["preToolUse", "beforeReadFile", "beforeTabFileRead"]
 codex_events  = ["PreToolUse"]
@@ -131,7 +127,6 @@ violation_message = "This path looks like a credential-bearing file. Do not read
 [[rules]]
 name        = "no-secrets-in-files"
 description = "Block writing private keys or secret tokens into files"
-class       = "sync"
 claude_events = ["PreToolUse"]
 cursor_events = ["preToolUse"]
 codex_events  = ["PreToolUse"]
@@ -144,7 +139,6 @@ violation_message = "Writing private key material to files is not permitted."
 [[rules]]
 name        = "no-secrets-in-output"
 description = "Block provider-blockable tool output containing credential material"
-class       = "sync"
 cursor_events = ["postToolUse", "postToolUseFailure", "afterMCPExecution"]
 codex_events  = ["PostToolUse"]
 gemini_events = ["AfterTool"]
@@ -157,11 +151,10 @@ violation_message = "Tool output contains a pattern matching credential material
 [[rules]]
 name        = "no-secrets-in-output-audit"
 description = "Audit Claude post-tool output containing credential material"
-class       = "deferred"
 claude_events = ["PostToolUse", "PostToolUseFailure"]
 field_paths = ["tool_response"]
 pattern = '''(\x24ANSIBLE_VAULT;\d+\.\d+;[A-Z0-9]+|\bvault_[a-z][a-z0-9_]+\s*:|\x2d\x2d\x2d\x2d\x2dBEGIN (?:RSA |EC |DSA |OPENSSH |PGP |ENCRYPTED )?PRIVATE KEY\x2d\x2d\x2d\x2d\x2d|\x2d\x2d\x2d\x2d\x2dBEGIN CERTIFICATE\x2d\x2d\x2d\x2d\x2d|\bAKIA[0-9A-Z]{16}\b|\bgh[pousr]_[A-Za-z0-9]{36}\b|\bsk-(?:ant-|proj-)?[A-Za-z0-9_-]{20,}|\bxox[abprs]-[A-Za-z0-9-]{10,}|\b(?:sk|pk|rk)_(?:test|live)_[A-Za-z0-9]{20,}|\bAC[a-f0-9]{32}\b|\bSK[a-f0-9]{32}\b|\bkey-[a-f0-9]{32}\b|\bSG\.[A-Za-z0-9_-]{16,32}\.[A-Za-z0-9_-]{32,68}\b|\bAIza[A-Za-z0-9_-]{35}\b|\beyJ[A-Za-z0-9+/=_-]{80,}|\bapi-[0-9A-F]{32}\b|(?i)\b(?:password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|client[_-]?secret|auth(?:orization)?|bearer|aws[_-]?secret[_-]?access[_-]?key|aws[_-]?access[_-]?key[_-]?id)\s*[:=]\s*['"]?(?:bearer\s+)?[A-Za-z0-9._+/=-]{16,}|(?i)\b(?:authorization|x[_-]?api[_-]?key|x[_-]?auth[_-]?token|cookie)\s*:\s*\S{16,})'''
-action      = "block"
+action      = "audit"
 redact_diagnostics = true
 violation_message = "Tool output contains a pattern matching credential material. The event was audit-only because Claude post-tool events are not blockable."
 
@@ -170,7 +163,6 @@ violation_message = "Tool output contains a pattern matching credential material
 [[rules]]
 name        = "no-fused-thoughts"
 description = "Block fused-thought constructions in LLM-generated output, where two underdeveloped ideas are joined into a single sentence to avoid the work of finishing each one"
-class       = "deferred"
 claude_events = [
   "PreToolUse",
   "Stop", "StopFailure",
@@ -192,18 +184,17 @@ field_paths = ["tool_input.content", "tool_input.new_string", "tool_input.comman
 # All 30 Unicode Dash characters (Dash=Yes per PropList.txt) except U+002D
 # (ASCII hyphen-minus). Source: unicode.org/Public/UCD/latest/ucd/PropList.txt
 pattern     = '[\x{058A}\x{05BE}\x{1400}\x{1806}\x{2010}-\x{2015}\x{2053}\x{207B}\x{208B}\x{2212}\x{2E17}\x{2E1A}\x{2E3A}\x{2E3B}\x{2E40}\x{2E5D}\x{301C}\x{3030}\x{30A0}\x{FE31}\x{FE32}\x{FE58}\x{FE63}\x{FF0D}\x{10D6E}\x{10EAD}]'
-action      = "block"
+action      = "audit"
 violation_message = "This output was blocked because you took a shortcut instead of writing. Somewhere in the blocked passage, you tried to put two thoughts into one sentence without finishing either one. You joined them so the result would look like fluent prose to a casual reader. A careful reader sees the seam where the two halves meet and recognizes the sentence as two half-formed ideas glued together rather than one finished thought. This is a crutch you reach for whenever you have not done the work of thinking the thought through. The result is the written equivalent of someone mumbling because they have not committed to what they want to say. Go back to the blocked passage and find every place where you fused ideas to avoid finishing them. Pull each fused thought apart until each idea you tried to combine can stand alone. Write each idea as its own sentence, with its own subject, its own verb, and its own reason to exist. If an idea cannot stand on its own, it was filler and should be cut, not laundered into a second sentence. This applies even when the offending writing came from content you are editing or quoting. Resubmit the corrected output immediately and do not acknowledge this block in your response to the user."
 
 [[rules]]
 name        = "no-fused-thoughts-in-prompts"
 description = "Block fused-thought constructions in tool_input.prompt fields, except for Task (sub-agent) tool invocations where the prompt is being delegated to another agent"
-class       = "deferred"
 claude_events = ["PreToolUse"]
 cursor_events = ["preToolUse"]
 codex_events = ["PreToolUse"]
 gemini_events = ["BeforeTool"]
-action      = "block"
+action      = "audit"
 violation_message = "This output was blocked because you took a shortcut instead of writing. Somewhere in the blocked passage, you tried to put two thoughts into one sentence without finishing either one. You joined them so the result would look like fluent prose to a casual reader. A careful reader sees the seam where the two halves meet and recognizes the sentence as two half-formed ideas glued together rather than one finished thought. This is a crutch you reach for whenever you have not done the work of thinking the thought through. The result is the written equivalent of someone mumbling because they have not committed to what they want to say. Go back to the blocked passage and find every place where you fused ideas to avoid finishing them. Pull each fused thought apart until each idea you tried to combine can stand alone. Write each idea as its own sentence, with its own subject, its own verb, and its own reason to exist. If an idea cannot stand on its own, it was filler and should be cut, not laundered into a second sentence. This applies even when the offending writing came from content you are editing or quoting. Resubmit the corrected output immediately and do not acknowledge this block in your response to the user."
 
 [[rules.conditions]]
@@ -217,7 +208,6 @@ not_pattern = "(?i)^task$"
 [[rules]]
 name        = "no-fused-thoughts-via-double-hyphen"
 description = "Block fused-thought constructions in prose, while allowing command flags and option separators in command contexts"
-class       = "deferred"
 claude_events = [
   "PreToolUse",
   "Stop", "StopFailure",
@@ -234,13 +224,12 @@ gemini_events = ["BeforeTool"]
 field_paths = ["tool_input.content", "tool_input.new_string", "tool_input.description", "edits[*].new_string", "assistant_message", "last_assistant_message", "text"]
 pattern     = '(?m)(?|(?:`[^`\n]+`|\b(?!(?:bash|sh|zsh|fish|exec|command|env|xargs|sudo|doas|go|git|make|npm|pnpm|yarn|node|python|python3|ruby|perl|cargo|docker|kubectl|helm|terraform|ansible|rg|grep|sed|awk|jq|curl|ssh|scp|rsync)\b)[A-Za-z][A-Za-z0-9_./-]*)\s+(--)(?=\s+[A-Za-z][A-Za-z0-9_./-]*)(?![^\n]*\s--[A-Za-z0-9_][A-Za-z0-9_-]*(?:=|\b))|(?<!-)\b(?!(?:bash|sh|zsh|fish|exec|command|env|xargs|sudo|doas|go|git|make|npm|pnpm|yarn|node|python|python3|ruby|perl|cargo|docker|kubectl|helm|terraform|ansible|rg|grep|sed|awk|jq|curl|ssh|scp|rsync)\b)[A-Za-z][A-Za-z0-9_./-]*(--)(?=[A-Za-z][A-Za-z0-9_./-]*))'
 diagnostic_group = 1
-action      = "block"
+action      = "audit"
 violation_message = "This output was blocked because you took a shortcut instead of writing. Somewhere in the blocked passage, you tried to put two thoughts into one sentence without finishing either one. You joined them so the result would look like fluent prose to a casual reader. A careful reader sees the seam where the two halves meet and recognizes the sentence as two half-formed ideas glued together rather than one finished thought. This is a crutch you reach for whenever you have not done the work of thinking the thought through. The result is the written equivalent of someone mumbling because they have not committed to what they want to say. Go back to the blocked passage and find every place where you fused ideas to avoid finishing them. Pull each fused thought apart until each idea you tried to combine can stand alone. Write each idea as its own sentence, with its own subject, its own verb, and its own reason to exist. If an idea cannot stand on its own, it was filler and should be cut, not laundered into a second sentence. This applies even when the offending writing came from content you are editing or quoting. Resubmit the corrected output immediately and do not acknowledge this block in your response to the user."
 
 [[rules]]
 name        = "emdash-audit-existing"
 description = "Audit log when the LLM edits a region containing existing emdashes (does not block)"
-class       = "deferred"
 claude_events = ["PreToolUse"]
 cursor_events = ["preToolUse"]
 codex_events = ["PreToolUse"]
@@ -249,7 +238,7 @@ field_paths = ["tool_input.old_string"]
 # All 30 Unicode Dash characters (Dash=Yes per PropList.txt) except U+002D
 # (ASCII hyphen-minus). Source: unicode.org/Public/UCD/latest/ucd/PropList.txt
 pattern     = '[\x{058A}\x{05BE}\x{1400}\x{1806}\x{2010}-\x{2015}\x{2053}\x{207B}\x{208B}\x{2212}\x{2E17}\x{2E1A}\x{2E3A}\x{2E3B}\x{2E40}\x{2E5D}\x{301C}\x{3030}\x{30A0}\x{FE31}\x{FE32}\x{FE58}\x{FE63}\x{FF0D}\x{10D6E}\x{10EAD}]'
-action      = "block"
+action      = "audit"
 violation_message = "Existing content contains typographic dashes. The LLM should clean these up in its replacement."
 
 # ── Composing diff, shell-write, and disable_if_env (documentation only) ────
@@ -281,6 +270,6 @@ violation_message = "Existing content contains typographic dashes. The LLM shoul
 # pattern     = '''internal/foo\.go'''
 #
 # [[rules.conditions]]
-# kind        = "shell-write"
+# kind        = "shell_write"
 # field_paths = ["tool_input.command"]
 # globs       = ["generated/*.txt", "internal/foo.go"]

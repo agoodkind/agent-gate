@@ -103,14 +103,13 @@ slow_op_threshold_ms = 50
 	}
 }
 
-func TestLoadDefaultsRuleClassFromAuditOnly(t *testing.T) {
+func TestLoadActionAuditSetsAuditOnly(t *testing.T) {
 	setConfigHome(t, `[[rules]]
-name = "deferred-audit-rule"
+name = "audit-rule"
 events = ["Stop"]
 field_paths = ["assistant_message"]
 pattern = "blocked"
-action = "block"
-audit_only = true
+action = "audit"
 violation_message = "blocked"
 `)
 
@@ -121,22 +120,20 @@ violation_message = "blocked"
 	if len(cfg.Rules) != 1 {
 		t.Fatalf("loaded rules = %d, want 1", len(cfg.Rules))
 	}
-	if cfg.Rules[0].Class != config.RuleClassDeferred {
-		t.Fatalf("rule class = %q, want %q", cfg.Rules[0].Class, config.RuleClassDeferred)
+	if cfg.Rules[0].Action != config.ActionAudit {
+		t.Fatalf("rule action = %q, want %q", cfg.Rules[0].Action, config.ActionAudit)
 	}
 	if !cfg.Rules[0].AuditOnly {
 		t.Fatal("AuditOnly = false, want true")
 	}
 }
 
-func TestLoadMapsDeferredClassToAuditOnly(t *testing.T) {
+func TestLoadActionDefaultsToBlock(t *testing.T) {
 	setConfigHome(t, `[[rules]]
-name = "explicit-deferred-rule"
-class = "deferred"
+name = "default-action-rule"
 events = ["Stop"]
 field_paths = ["assistant_message"]
 pattern = "blocked"
-action = "block"
 violation_message = "blocked"
 `)
 
@@ -147,51 +144,29 @@ violation_message = "blocked"
 	if len(cfg.Rules) != 1 {
 		t.Fatalf("loaded rules = %d, want 1", len(cfg.Rules))
 	}
-	if cfg.Rules[0].Class != config.RuleClassDeferred {
-		t.Fatalf("rule class = %q, want %q", cfg.Rules[0].Class, config.RuleClassDeferred)
+	if cfg.Rules[0].Action != config.ActionBlock {
+		t.Fatalf("rule action = %q, want %q", cfg.Rules[0].Action, config.ActionBlock)
 	}
-	if !cfg.Rules[0].AuditOnly {
-		t.Fatal("AuditOnly = false, want true")
+	if cfg.Rules[0].AuditOnly {
+		t.Fatal("AuditOnly = true, want false for default action")
 	}
 }
 
-func TestLoadRejectsConflictingSyncClassAndAuditOnly(t *testing.T) {
+func TestLoadRejectsUnknownAction(t *testing.T) {
 	setConfigHome(t, `[[rules]]
-name = "conflicting-sync-rule"
-class = "sync"
+name = "unknown-action-rule"
 events = ["Stop"]
 field_paths = ["assistant_message"]
 pattern = "blocked"
-action = "block"
-audit_only = true
+action = "warn"
 violation_message = "blocked"
 `)
 
 	_, err := config.Load()
 	if err == nil {
-		t.Fatal("Load() returned nil error for conflicting class/audit_only")
+		t.Fatal("Load() returned nil error for unknown action")
 	}
-	if !strings.Contains(err.Error(), `class "sync" conflicts with audit_only = true`) {
-		t.Fatalf("Load() error = %v", err)
-	}
-}
-
-func TestLoadRejectsUnknownRuleClass(t *testing.T) {
-	setConfigHome(t, `[[rules]]
-name = "unknown-class-rule"
-class = "later"
-events = ["Stop"]
-field_paths = ["assistant_message"]
-pattern = "blocked"
-action = "block"
-violation_message = "blocked"
-`)
-
-	_, err := config.Load()
-	if err == nil {
-		t.Fatal("Load() returned nil error for unknown class")
-	}
-	if !strings.Contains(err.Error(), `unknown class "later"`) {
+	if !strings.Contains(err.Error(), `unknown action "warn"`) {
 		t.Fatalf("Load() error = %v", err)
 	}
 }

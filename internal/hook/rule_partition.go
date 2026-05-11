@@ -11,7 +11,7 @@ func PartitionRules(cfg *config.Config) ([]config.Rule, []config.Rule) {
 	syncRules := make([]config.Rule, 0, len(cfg.Rules))
 	deferredRules := make([]config.Rule, 0, len(cfg.Rules))
 	for _, rule := range cfg.Rules {
-		if isDeferredRule(rule) {
+		if isAuditRule(rule) {
 			deferredRules = append(deferredRules, rule)
 			continue
 		}
@@ -20,10 +20,10 @@ func PartitionRules(cfg *config.Config) ([]config.Rule, []config.Rule) {
 	return syncRules, deferredRules
 }
 
-func isDeferredRule(rule config.Rule) bool {
-	if rule.Class == config.RuleClassDeferred {
-		return true
-	}
+// isAuditRule reports whether rule runs in the audit phase (post-event, no
+// blocking) rather than the gate phase. The check reads AuditOnly, which is
+// derived from Action during compileRule.
+func isAuditRule(rule config.Rule) bool {
 	return rule.AuditOnly
 }
 
