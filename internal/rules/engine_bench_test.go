@@ -7,11 +7,11 @@ package rules_test
 //   post-per-rule:     10050 ns/op   5600 B/op   44 allocs/op  (+24.4%)
 //
 // The per-rule regression (+24%) exceeds the 5% threshold. The cost is
-// architectural: 19 rules produce 19 ruleRegexConcern heap allocations
-// (interface boxing for pipeline.Concern), 19 ruleOutcome values boxed as
+// architectural: 19 rules produce 19 ruleRegexCondition heap allocations
+// (interface boxing for pipeline.Condition), 19 ruleOutcome values boxed as
 // pipeline.Outcome (any), make([]Result, 19) in Orchestrator.Run, and one
-// []pipeline.Concern{...} slice. The batch approach paid those costs once.
-// The per-rule design is the correct long-term structure for per-Concern
+// []pipeline.Condition{...} slice. The batch approach paid those costs once.
+// The per-rule design is the correct long-term structure for per-Condition
 // scheduling, cost classification, and timing (landings 8+). Landing 8
 // (tiered scheduler) or landing 16 (cost-ordered application) is the right
 // place to address this by pre-allocating the concern slice at config load

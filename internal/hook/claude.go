@@ -120,6 +120,19 @@ func ClaudeBlockText(text string) []byte {
 	return []byte(text + "\n")
 }
 
+// renderClaudeResponse encodes a daemon decision for the Claude Code hook
+// protocol. Exit 2 is a strong signal at PreToolUse: the tool call is dropped
+// and stderr is shown to the model as the block reason.
+//
+// At PostToolUse, exit 2 cannot undo the tool call. The tool already ran and
+// Claude has already received its output. Hook stderr is appended as context
+// for the next assistant turn, but the original tool output remains in the
+// model's window. Documented at https://code.claude.com/docs/en/hooks under
+// "Exit code 2 behavior per event".
+//
+// Rules subscribed to Claude PostToolUse trigger a config-load WARN noting
+// the effective downgrade to audit. See internal/hook/capability.go and the
+// Provider Capability Matrix in HOOKS.md.
 func renderClaudeResponse(request ResponseRequest) Response {
 	if request.Decision == ResponseDecisionBlock {
 		return Response{

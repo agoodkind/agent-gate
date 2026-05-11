@@ -152,8 +152,7 @@ violation_message = "Shell redirection is not permitted."
 | `gemini_events` | Gemini-only event filter (takes precedence over `events` for Gemini). |
 | `field_paths` | Dot-paths into the JSON payload. First non-empty value is tested. |
 | `pattern` | PCRE2 regex matched against the extracted field value. |
-| `action` | `"block"` is the only supported action. |
-| `audit_only` | If `true`, log the violation but do not block. |
+| `action` | `"block"` (default) stops the tool call where the protocol allows it. `"audit"` records the violation without blocking. The legacy `class` field is no longer accepted. |
 | `violation_message` | Returned to the LLM and written to the audit log. |
 | `conditions` | Multi-condition AND rules. Each condition has a `kind`; missing `kind` means `regex` for compatibility. |
 

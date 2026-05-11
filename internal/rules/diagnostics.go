@@ -13,7 +13,7 @@ import (
 const maxDiagnosticMatches = concernlimit.MaxCollectedMatchesPerEvaluation
 
 type diagnosticOccurrence struct {
-	MatchViolation
+	Violation
 	Key      string
 	Line     int
 	Column   int
@@ -23,7 +23,7 @@ type diagnosticOccurrence struct {
 
 // FormatViolations renders concrete matches as line-numbered diagnostics with
 // compact rule legend labels.
-func FormatViolations(violations []MatchViolation) string {
+func FormatViolations(violations []Violation) string {
 	if len(violations) == 0 {
 		return ""
 	}
@@ -103,7 +103,7 @@ func writeLegend(b *strings.Builder, occurrences []diagnosticOccurrence) {
 	seen := make(map[string]bool)
 	var order []diagnosticOccurrence
 	for _, occ := range occurrences {
-		id := legendID(occ.MatchViolation)
+		id := legendID(occ.Violation)
 		if seen[id] {
 			continue
 		}
@@ -122,7 +122,7 @@ func writeLegend(b *strings.Builder, occurrences []diagnosticOccurrence) {
 	}
 }
 
-func occurrenceFor(v MatchViolation) diagnosticOccurrence {
+func occurrenceFor(v Violation) diagnosticOccurrence {
 	line, lineStart, lineText := lineForOffset(v.Value, v.Start)
 	startInLine := v.Start - lineStart
 	endInLine := v.End - lineStart
@@ -137,11 +137,11 @@ func occurrenceFor(v MatchViolation) diagnosticOccurrence {
 	match := lineText[startInLine:endInLine]
 
 	return diagnosticOccurrence{
-		MatchViolation: v,
-		Line:           line,
-		Column:         utf8.RuneCountInString(prefix) + 1,
-		LineText:       clippedLineText(visibleText(lineText), utf8.RuneCountInString(prefix), visibleWidth(match)),
-		Match:          visibleText(match),
+		Violation: v,
+		Line:      line,
+		Column:    utf8.RuneCountInString(prefix) + 1,
+		LineText:  clippedLineText(visibleText(lineText), utf8.RuneCountInString(prefix), visibleWidth(match)),
+		Match:     visibleText(match),
 	}
 }
 
@@ -201,7 +201,7 @@ func clippedLineText(line string, matchStart int, matchWidth int) string {
 	return prefix + string(lineRunes[start:end]) + suffix
 }
 
-func legendKeys(violations []MatchViolation) map[string]string {
+func legendKeys(violations []Violation) map[string]string {
 	keys := make(map[string]string)
 	next := 0
 	for _, v := range violations {
@@ -215,7 +215,7 @@ func legendKeys(violations []MatchViolation) map[string]string {
 	return keys
 }
 
-func legendID(v MatchViolation) string {
+func legendID(v Violation) string {
 	return v.RuleName + "\x00" + v.Message
 }
 

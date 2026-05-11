@@ -753,8 +753,8 @@ func auditOnlyDaemonTestConfig(t testing.TB) *config.Config {
 		"block",
 		"Record echo usage.",
 	)
+	rule.Action = config.ActionAudit
 	rule.AuditOnly = true
-	rule.Class = config.RuleClassDeferred
 	return &config.Config{
 		Audit: config.Audit{Enabled: boolPtr(true)},
 		Rules: []config.Rule{rule},
@@ -783,8 +783,8 @@ func mixedSyncDeferredDaemonTestConfig(t testing.TB) *config.Config {
 		"block",
 		"Record go test usage.",
 	)
+	auditRule.Action = config.ActionAudit
 	auditRule.AuditOnly = true
-	auditRule.Class = config.RuleClassDeferred
 	return &config.Config{
 		Audit: config.Audit{Enabled: boolPtr(true)},
 		Rules: []config.Rule{blockRule, auditRule},

@@ -24,8 +24,8 @@ type DeferredAuditEvent struct {
 	CWD                 string
 	Fields              rules.FieldSet
 	Rules               []config.Rule
-	BlockingViolations  []rules.MatchViolation
-	AuditOnlyViolations []rules.MatchViolation
+	BlockingViolations  []rules.Violation
+	AuditOnlyViolations []rules.Violation
 	Decision            ResponseDecision
 	DiagnosticText      string
 }

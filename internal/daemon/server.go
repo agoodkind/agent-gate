@@ -290,6 +290,8 @@ func (s *Server) reloadConfig(ctx context.Context) error {
 		return fmt.Errorf("hook config validation failed: %w", errs[0])
 	}
 
+	hook.WarnCapabilityDowngrades(ctx, s.log, candidate)
+
 	newSnapshot, err := newRuntimeSnapshot(ctx, candidate, s.log)
 	if err != nil {
 		s.log.WarnContext(ctx, "create runtime snapshot for reloaded config failed", "path", s.configPath, "err", err)

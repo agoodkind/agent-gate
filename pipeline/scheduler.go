@@ -2,7 +2,7 @@ package pipeline
 
 import "time"
 
-// Scheduler decides how many concurrent slots a Concern may use and observes outcomes.
+// Scheduler decides how many concurrent slots a Condition may use and observes outcomes.
 type Scheduler interface {
 	Slots(profile Profile) int
 	Observe(name string, elapsed time.Duration, err error)

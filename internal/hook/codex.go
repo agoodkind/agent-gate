@@ -130,6 +130,14 @@ func CodexBlockText(eventName, text string) []byte {
 	return append(bytes, '\n')
 }
 
+// renderCodexResponse encodes a daemon decision for the Codex CLI hook
+// protocol. At PreToolUse, exit 2 hard-blocks the tool call.
+//
+// At PostToolUse, exit 2 replaces the tool result the agent sees with the
+// hook's stderr feedback. The tool ran, but the agent sees the daemon's
+// block message instead of the original output. This is a result-substitution
+// capability, not a true block. See internal/hook/capability.go and the
+// Provider Capability Matrix in HOOKS.md.
 func renderCodexResponse(request ResponseRequest) Response {
 	if request.Decision == ResponseDecisionBlock {
 		return Response{

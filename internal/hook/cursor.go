@@ -136,6 +136,16 @@ func CursorBlockText(text string) []byte {
 	return append(b, '\n')
 }
 
+// renderCursorResponse encodes a daemon decision for the Cursor hook
+// protocol. Pre-events (preToolUse, beforeShellExecution, beforeMCPExecution,
+// beforeReadFile) carry a permission field that blocks the tool call.
+//
+// Cursor post-events (postToolUse, afterShellExecution, afterMCPExecution,
+// afterFileEdit) cannot block. postToolUse can return updated_mcp_tool_output
+// to substitute the MCP result the model sees, or additional_context to
+// inject text. The three after* events are observe-only. See
+// internal/hook/capability.go and the Provider Capability Matrix in
+// HOOKS.md.
 func renderCursorResponse(request ResponseRequest) Response {
 	if request.Decision == ResponseDecisionBlock {
 		return Response{

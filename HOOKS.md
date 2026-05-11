@@ -5,6 +5,37 @@ across Claude Code, Codex, Gemini, Copilot, and Cursor. The JSON templates
 that `install.sh` merges into each tool's config live under `hooks/` and stay
 in sync with this list.
 
+## Provider Capability Matrix
+
+`action = "block"` describes the rule's intent. The daemon does the strongest
+available thing per (provider, event) pair and emits a config-load WARN when
+the rule subscribes to an event that can only observe. See
+`internal/hook/capability.go` for the source of truth.
+
+| Provider event | Capability | Source |
+|---|---|---|
+| Claude `PreToolUse` | block | docs.claude.com/hooks |
+| Claude `PostToolUse` | observe | docs.claude.com/hooks |
+| Codex `PreToolUse` | block | developers.openai.com/codex/hooks |
+| Codex `PostToolUse` | substitute | developers.openai.com/codex/hooks |
+| Cursor `preToolUse`, `beforeShellExecution`, `beforeMCPExecution`, `beforeReadFile` | block | cursor.com/docs/agent/hooks |
+| Cursor `postToolUse` | substitute (MCP results only) | cursor.com/docs/agent/hooks |
+| Cursor `afterShellExecution`, `afterMCPExecution`, `afterFileEdit` | observe | cursor.com/docs/agent/hooks |
+| Gemini `BeforeTool` | block | geminicli.com/docs/hooks/reference |
+| Gemini `AfterTool` | observe (until source confirms otherwise) | geminicli.com/docs/hooks/reference |
+
+Capability tiers, weakest to strongest:
+
+- **observe**: the tool already ran and the model has already seen the
+  output. A block decision is added as extra context but cannot prevent the
+  result from reaching the model.
+- **substitute**: the tool already ran, but exit 2 replaces the result the
+  model sees with the hook's stderr feedback. Codex `PostToolUse` is in this
+  tier; Cursor `postToolUse` is in this tier for MCP tool results.
+- **block**: the hook fires before the tool runs and a block decision stops
+  the tool from executing. All `pre*` and `before*` events on supported
+  providers are in this tier.
+
 ## Install paths
 
 | Tool    | Config file                             | Top-level key |

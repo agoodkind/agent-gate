@@ -1,4 +1,4 @@
-// Package diff provides a Concern that fires only when a regex pattern matches
+// Package diff provides a Condition that fires only when a regex pattern matches
 // the "new" side of a field pair without matching the "old" side. This lets a
 // rule treat additive content as a violation while ignoring identity-preserving
 // edits and pure deletions.

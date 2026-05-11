@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-type countingConcern struct {
+type countingCondition struct {
 	name    string
 	calls   *int
 	order   *[]string
@@ -14,28 +14,28 @@ type countingConcern struct {
 	err     error
 }
 
-func (c *countingConcern) Profile() Profile {
+func (c *countingCondition) Profile() Profile {
 	return Profile{Name: c.name}
 }
 
-func (c *countingConcern) Execute(_ context.Context, _ Input) (Outcome, error) {
+func (c *countingCondition) Execute(_ context.Context, _ Input) (Outcome, error) {
 	*c.calls++
 	*c.order = append(*c.order, c.name)
 	return c.outcome, c.err
 }
 
-func TestOrchestratorRunSingleConcern(t *testing.T) {
+func TestOrchestratorRunSingleCondition(t *testing.T) {
 	t.Parallel()
 	calls := 0
 	order := []string{}
-	concern := &countingConcern{
+	condition := &countingCondition{
 		name:    "alpha",
 		calls:   &calls,
 		order:   &order,
 		outcome: "ok",
 		err:     nil,
 	}
-	orch := &Orchestrator{Concerns: []Concern{concern}}
+	orch := &Orchestrator{Conditions: []Condition{condition}}
 	results, err := orch.Run(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("Run returned error: %v", err)
@@ -47,8 +47,8 @@ func TestOrchestratorRunSingleConcern(t *testing.T) {
 		t.Fatalf("expected 1 result, got %d", len(results))
 	}
 	got := results[0]
-	if got.ConcernName != "alpha" {
-		t.Fatalf("ConcernName mismatch: %q", got.ConcernName)
+	if got.ConditionName != "alpha" {
+		t.Fatalf("ConditionName mismatch: %q", got.ConditionName)
 	}
 	if got.Outcome != "ok" {
 		t.Fatalf("Outcome mismatch: %v", got.Outcome)
@@ -69,15 +69,15 @@ func TestOrchestratorRunPreservesOrder(t *testing.T) {
 	calls := 0
 	order := []string{}
 	names := []string{"first", "second", "third"}
-	concerns := make([]Concern, 0, len(names))
+	conditions := make([]Condition, 0, len(names))
 	for _, name := range names {
-		concerns = append(concerns, &countingConcern{
+		conditions = append(conditions, &countingCondition{
 			name:  name,
 			calls: &calls,
 			order: &order,
 		})
 	}
-	orch := &Orchestrator{Concerns: concerns}
+	orch := &Orchestrator{Conditions: conditions}
 	results, err := orch.Run(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("Run returned error: %v", err)
@@ -92,8 +92,8 @@ func TestOrchestratorRunPreservesOrder(t *testing.T) {
 		if order[index] != name {
 			t.Fatalf("execution order at %d: want %q, got %q", index, name, order[index])
 		}
-		if results[index].ConcernName != name {
-			t.Fatalf("Result[%d].ConcernName: want %q, got %q", index, name, results[index].ConcernName)
+		if results[index].ConditionName != name {
+			t.Fatalf("Result[%d].ConditionName: want %q, got %q", index, name, results[index].ConditionName)
 		}
 		if results[index].Slot != index {
 			t.Fatalf("Result[%d].Slot: want %d, got %d", index, index, results[index].Slot)
@@ -106,13 +106,13 @@ func TestOrchestratorRunCapturesError(t *testing.T) {
 	calls := 0
 	order := []string{}
 	boom := errors.New("boom")
-	concern := &countingConcern{
+	condition := &countingCondition{
 		name:  "explodes",
 		calls: &calls,
 		order: &order,
 		err:   boom,
 	}
-	orch := &Orchestrator{Concerns: []Concern{concern}}
+	orch := &Orchestrator{Conditions: []Condition{condition}}
 	results, err := orch.Run(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("Run itself should not return aggregated error in Landing 1, got %v", err)
