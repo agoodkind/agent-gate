@@ -1,4 +1,4 @@
-// Package pipeline is the generic Concern-Orchestrator framework that internal
+// Package pipeline is the generic Condition-Orchestrator framework that internal
 // rule evaluation will adopt in later landings. This landing supplies only the
 // types, a fixed scheduler, an event-scoped memo, and a no-op sentinel.
 package pipeline
@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// CostClass categorizes a Concern by execution cost so the scheduler can tier work.
+// CostClass categorizes a Condition by execution cost so the scheduler can tier work.
 type CostClass int
 
 // CostClass values run from cheapest to most expensive in declaration order.
@@ -34,7 +34,7 @@ const (
 	MemoSession MemoLifetime = "session"
 )
 
-// Profile describes a Concern's execution and caching behavior.
+// Profile describes a Condition's execution and caching behavior.
 type Profile struct {
 	Name         string
 	Cost         CostClass
@@ -45,17 +45,17 @@ type Profile struct {
 	MemoTTL      time.Duration
 }
 
-// Input is the per-Run payload supplied to every Concern. The framework stays
+// Input is the per-Run payload supplied to every Condition. The framework stays
 // neutral about caller payload shape; later landings narrow this at the call
 // sites that build Orchestrators.
 type Input = any
 
-// Outcome is whatever a Concern produces. Callers narrow with a type assertion
+// Outcome is whatever a Condition produces. Callers narrow with a type assertion
 // right after Execute.
 type Outcome = any
 
-// Concern is the unit of work scheduled by the Orchestrator.
-type Concern interface {
+// Condition is the unit of work scheduled by the Orchestrator.
+type Condition interface {
 	Profile() Profile
 	Execute(ctx context.Context, in Input) (Outcome, error)
 }

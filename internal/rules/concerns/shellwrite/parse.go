@@ -185,7 +185,7 @@ func commandWriteTargets(fields []string, raw, cwd string) []WriteTarget {
 
 // teeTargets returns every non-flag positional argument as a write target.
 // `tee` writes to all listed files (with -a for append, no semantic change
-// for the purposes of this Concern, both shapes are writes).
+// for the purposes of this Condition, both shapes are writes).
 func teeTargets(args []string, raw, cwd string) []WriteTarget {
 	var out []WriteTarget
 	for _, arg := range args {
@@ -281,7 +281,7 @@ func patchTargets(args []string, raw, cwd string) []WriteTarget {
 }
 
 // gitTargets handles `git apply [flags] path`. Other git subcommands are not
-// treated as direct write targets; they are out of scope for this Concern.
+// treated as direct write targets; they are out of scope for this Condition.
 func gitTargets(args []string, raw, cwd string) []WriteTarget {
 	if len(args) == 0 || args[0] != "apply" {
 		return nil

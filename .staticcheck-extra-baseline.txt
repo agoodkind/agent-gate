@@ -69,12 +69,12 @@ panic_in_production: analysis skipped due to errors in package	# staticcheck-ext
 panic_in_production: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
 panic_in_production: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
 panic_in_production: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z
-pipeline/concern.go:51:14: do not use any; define a deeply enumerated named type	# staticcheck-extra:first_added=2026-05-08T16:10:11Z last_seen=2026-05-08T20:50:35Z
-pipeline/concern.go:51:6: type Input expands to any (empty interface), which is forbidden; define a deeply enumerated named type instead	# staticcheck-extra:first_added=2026-05-08T16:10:11Z last_seen=2026-05-08T20:50:35Z
-pipeline/concern.go:55:16: do not use any; define a deeply enumerated named type	# staticcheck-extra:first_added=2026-05-08T16:10:11Z last_seen=2026-05-08T20:50:35Z
-pipeline/concern.go:55:6: type Outcome expands to any (empty interface), which is forbidden; define a deeply enumerated named type instead	# staticcheck-extra:first_added=2026-05-08T16:10:11Z last_seen=2026-05-08T20:50:35Z
-pipeline/concern.go:60:34: signature uses Input, which expands to any (empty interface); define a deeply enumerated named type	# staticcheck-extra:first_added=2026-05-08T16:10:11Z last_seen=2026-05-08T20:50:35Z
-pipeline/concern.go:60:42: signature uses Outcome, which expands to any (empty interface); define a deeply enumerated named type	# staticcheck-extra:first_added=2026-05-08T16:10:11Z last_seen=2026-05-08T20:50:35Z
+pipeline/condition.go:51:14: do not use any; define a deeply enumerated named type	# staticcheck-extra:first_added=2026-05-08T16:10:11Z last_seen=2026-05-08T20:50:35Z
+pipeline/condition.go:51:6: type Input expands to any (empty interface), which is forbidden; define a deeply enumerated named type instead	# staticcheck-extra:first_added=2026-05-08T16:10:11Z last_seen=2026-05-08T20:50:35Z
+pipeline/condition.go:55:16: do not use any; define a deeply enumerated named type	# staticcheck-extra:first_added=2026-05-08T16:10:11Z last_seen=2026-05-08T20:50:35Z
+pipeline/condition.go:55:6: type Outcome expands to any (empty interface), which is forbidden; define a deeply enumerated named type instead	# staticcheck-extra:first_added=2026-05-08T16:10:11Z last_seen=2026-05-08T20:50:35Z
+pipeline/condition.go:60:34: signature uses Input, which expands to any (empty interface); define a deeply enumerated named type	# staticcheck-extra:first_added=2026-05-08T16:10:11Z last_seen=2026-05-08T20:50:35Z
+pipeline/condition.go:60:42: signature uses Outcome, which expands to any (empty interface); define a deeply enumerated named type	# staticcheck-extra:first_added=2026-05-08T16:10:11Z last_seen=2026-05-08T20:50:35Z
 pipeline/orchestrator.go:22:2: struct field type Outcome expands to any (empty interface); define a deeply enumerated named type	# staticcheck-extra:first_added=2026-05-08T16:10:11Z last_seen=2026-05-08T20:50:35Z
 pipeline/orchestrator.go:29:52: signature uses Input, which expands to any (empty interface); define a deeply enumerated named type	# staticcheck-extra:first_added=2026-05-08T16:10:11Z last_seen=2026-05-08T20:50:35Z
 slog_error_without_err: analysis skipped due to errors in package	# staticcheck-extra:first_added=2026-05-08T20:50:35Z last_seen=2026-05-08T20:50:35Z

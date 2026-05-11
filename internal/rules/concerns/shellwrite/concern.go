@@ -7,7 +7,7 @@ import (
 )
 
 // FieldAccessor is the subset of the rules.FieldSet view used by this
-// Concern. It is exported so callers can pass any compatible accessor
+// Condition. It is exported so callers can pass any compatible accessor
 // without importing the rules package and creating an import cycle.
 type FieldAccessor interface {
 	String(selector config.FieldSelector) string
