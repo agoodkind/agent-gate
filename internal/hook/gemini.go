@@ -113,6 +113,12 @@ func GeminiBlockText(eventName, text string) []byte {
 	return append(bytes, '\n')
 }
 
+// renderGeminiResponse encodes a daemon decision for the Gemini CLI hook
+// protocol. BeforeTool supports a decision field that blocks the tool call.
+//
+// AfterTool behavior is undocumented in the public reference as of
+// 2026-05-10; the capability table treats AfterTool as observe-only until
+// the gemini-cli source confirms otherwise. See internal/hook/capability.go.
 func renderGeminiResponse(request ResponseRequest) Response {
 	if request.Decision == ResponseDecisionBlock {
 		return Response{
