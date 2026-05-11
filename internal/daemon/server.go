@@ -83,6 +83,8 @@ func New(log *slog.Logger, cfg *config.Config) (*Server, error) {
 		return nil, fmt.Errorf("invalid hook config: %w", errs[0])
 	}
 
+	hook.WarnCapabilityDowngrades(context.Background(), log, cfg)
+
 	snapshot, err := newRuntimeSnapshot(context.Background(), cfg, log)
 	if err != nil {
 		log.Error("failed to create runtime snapshot", slog.Any("err", err))
