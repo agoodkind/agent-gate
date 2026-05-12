@@ -51,6 +51,8 @@ prefer = "sqlite" # sqlite | jsonl
 #   events            - hook event names this rule applies to (empty = all)
 #   field_paths       - dot-path(s) into the JSON payload to inspect;
 #                       first non-empty value found across all paths is tested
+#                       tool_response uses searchable text for structured objects,
+#                       so image payload bytes are not scanned as output text
 #   pattern           - PCRE2 regex matched against the extracted field value
 #   (action above; "block" by default, set to "audit" for record-only)
 #   violation_message - message sent back to the AI and written to the audit log

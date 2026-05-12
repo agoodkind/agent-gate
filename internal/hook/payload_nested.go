@@ -1,8 +1,10 @@
 package hook
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -359,6 +361,11 @@ type TextOrObject struct {
 	JSON string
 }
 
+type (
+	searchableJSONArray  []json.RawMessage
+	searchableJSONObject map[string]json.RawMessage
+)
+
 // UnmarshalJSON parses a JSON string into Text or stores raw object bytes
 // in JSON.
 func (value *TextOrObject) UnmarshalJSON(data []byte) error {
@@ -378,6 +385,121 @@ func (value *TextOrObject) UnmarshalJSON(data []byte) error {
 // String returns the textual view of the value, preferring Text over JSON.
 func (value TextOrObject) String() string {
 	return firstNonEmpty(value.Text, value.JSON)
+}
+
+// SearchableText returns the semantic text view used by rule matching.
+func (value TextOrObject) SearchableText() string {
+	if value.Text != "" {
+		return value.Text
+	}
+	if value.JSON == "" {
+		return ""
+	}
+
+	rawJSON := json.RawMessage(value.JSON)
+	if !json.Valid(rawJSON) {
+		return value.JSON
+	}
+
+	var builder strings.Builder
+	appendSearchableJSONText(&builder, "", rawJSON)
+	return strings.TrimRight(builder.String(), "\n")
+}
+
+func appendSearchableJSONText(builder *strings.Builder, key string, rawJSON json.RawMessage) {
+	trimmed := bytes.TrimSpace(rawJSON)
+	if len(trimmed) == 0 {
+		return
+	}
+
+	switch trimmed[0] {
+	case '{':
+		var values searchableJSONObject
+		if err := json.Unmarshal(trimmed, &values); err != nil {
+			appendSearchableScalar(builder, key, string(trimmed))
+			return
+		}
+		appendSearchableJSONMap(builder, values)
+	case '[':
+		var values searchableJSONArray
+		if err := json.Unmarshal(trimmed, &values); err != nil {
+			appendSearchableScalar(builder, key, string(trimmed))
+			return
+		}
+		for _, item := range values {
+			appendSearchableJSONText(builder, "", item)
+		}
+	case '"':
+		var value string
+		if err := json.Unmarshal(trimmed, &value); err != nil {
+			appendSearchableScalar(builder, key, string(trimmed))
+			return
+		}
+		appendSearchableScalar(builder, key, value)
+	case 't', 'f':
+		var value bool
+		if err := json.Unmarshal(trimmed, &value); err != nil {
+			appendSearchableScalar(builder, key, string(trimmed))
+			return
+		}
+		appendSearchableScalar(builder, key, strconv.FormatBool(value))
+	case 'n':
+		return
+	default:
+		appendSearchableScalar(builder, key, string(trimmed))
+	}
+}
+
+func appendSearchableJSONMap(builder *strings.Builder, values searchableJSONObject) {
+	for key, value := range values {
+		if skipsSearchableJSONField(values, key) {
+			continue
+		}
+		appendSearchableJSONText(builder, key, value)
+	}
+}
+
+func skipsSearchableJSONField(values searchableJSONObject, key string) bool {
+	if key != "data" {
+		return false
+	}
+	return isImagePayload(values)
+}
+
+func isImagePayload(values searchableJSONObject) bool {
+	if searchableJSONString(values["type"]) == "image" {
+		return true
+	}
+	if strings.HasPrefix(searchableJSONString(values["mimeType"]), "image/") {
+		return true
+	}
+	if strings.HasPrefix(searchableJSONString(values["mime_type"]), "image/") {
+		return true
+	}
+	return false
+}
+
+func searchableJSONString(rawJSON json.RawMessage) string {
+	if len(rawJSON) == 0 {
+		return ""
+	}
+	var value string
+	if err := json.Unmarshal(rawJSON, &value); err != nil {
+		return ""
+	}
+	return value
+}
+
+func appendSearchableScalar(builder *strings.Builder, key string, value string) {
+	if value == "" {
+		return
+	}
+	if key != "" {
+		builder.WriteString(key)
+		builder.WriteString(": ")
+	}
+	builder.WriteString(value)
+	builder.WriteByte('\n')
 }
 
 // PermissionSuggestion is a single Claude-side permission suggestion.

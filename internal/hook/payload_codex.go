@@ -116,7 +116,7 @@ func (p CodexPermissionRequestPayload) Fields() rules.FieldSet {
 // Fields renders the payload as a [rules.FieldSet].
 func (p CodexPostToolUsePayload) Fields() rules.FieldSet {
 	fields := codexToolFields(p.baseFields(), p.TurnID, p.ToolName, p.ToolUseID, p.ToolInput)
-	fields.ToolResponse = p.ToolResponse.String()
+	fields.ToolResponse = p.ToolResponse.SearchableText()
 	return fields
 }
 

@@ -134,7 +134,7 @@ func (p GeminiBeforeToolPayload) Fields() rules.FieldSet {
 // Fields renders the payload as a [rules.FieldSet].
 func (p GeminiAfterToolPayload) Fields() rules.FieldSet {
 	fields := geminiToolFields(p.baseFields(), p.ToolName, p.OriginalRequestName, p.MCPContext, p.ToolInput)
-	fields.ToolResponse = p.ToolResponse.String()
+	fields.ToolResponse = p.ToolResponse.SearchableText()
 	return fields
 }
 

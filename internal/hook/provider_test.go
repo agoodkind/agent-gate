@@ -322,6 +322,53 @@ func TestEvaluateHot_BlocksCursorPostToolSecretOutput(t *testing.T) {
 	}
 }
 
+func TestEvaluateHot_AllowsCodexPostToolImageDataJWTShape(t *testing.T) {
+	rule := testProviderRule(t,
+		"no-secrets-in-output",
+		`\beyJ[A-Za-z0-9+/=_-]{80,}`,
+		[]string{"PostToolUse"},
+		[]string{"tool_response"},
+		"Tool output contains credential material.",
+	)
+	cfg := &config.Config{Rules: []config.Rule{rule}}
+	imageData := "eyJ" + strings.Repeat("A", 100)
+	rawJSON := []byte(`{"hook_event_name":"PostToolUse","session_id":"s1","turn_id":"t1","tool_name":"mcp__computer_use__get_app_state","tool_use_id":"call_1","cwd":"/repo","tool_input":{},"tool_response":{"content":[{"type":"text","text":"visible output"},{"type":"image","mimeType":"image/png","data":` + strconv.Quote(imageData) + `}]}}`)
+
+	evaluation := hook.EvaluateHot(context.Background(), rawJSON, cfg, hook.SystemCodex, func(string) string { return "" })
+	if evaluation.ExitCode != 0 {
+		t.Fatalf("ExitCode = %d, want 0 for Codex hook response", evaluation.ExitCode)
+	}
+	stdout := string(evaluation.Stdout)
+	if strings.Contains(stdout, `"continue":false`) || strings.Contains(stdout, "no-secrets-in-output") {
+		t.Fatalf("Codex post-tool image response was blocked: %s", string(evaluation.Stdout))
+	}
+}
+
+func TestEvaluateHot_BlocksCodexPostToolTextSecretInStructuredResponse(t *testing.T) {
+	rule := testProviderRule(t,
+		"no-secrets-in-output",
+		`(?i)\b(?:password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|client[_-]?secret|auth(?:orization)?|bearer|aws[_-]?secret[_-]?access[_-]?key|aws[_-]?access[_-]?key[_-]?id)\s*[:=]\s*['"]?(?:bearer\s+)?[A-Za-z0-9._+/=-]{16,}`,
+		[]string{"PostToolUse"},
+		[]string{"tool_response"},
+		"Tool output contains credential material.",
+	)
+	cfg := &config.Config{Rules: []config.Rule{rule}}
+	secretText := "token: " + strings.Repeat("a", 20)
+	rawJSON := []byte(`{"hook_event_name":"PostToolUse","session_id":"s1","turn_id":"t1","tool_name":"mcp__computer_use__get_app_state","tool_use_id":"call_1","cwd":"/repo","tool_input":{},"tool_response":{"content":[{"type":"text","text":` + strconv.Quote(secretText) + `},{"type":"image","mimeType":"image/png","data":"not-scanned"}]}}`)
+
+	evaluation := hook.EvaluateHot(context.Background(), rawJSON, cfg, hook.SystemCodex, func(string) string { return "" })
+	if evaluation.ExitCode != 0 {
+		t.Fatalf("ExitCode = %d, want 0 for Codex hook response", evaluation.ExitCode)
+	}
+	stdout := string(evaluation.Stdout)
+	if !strings.Contains(stdout, `"continue":false`) {
+		t.Fatalf("Codex response did not stop post-tool output: %s", stdout)
+	}
+	if !strings.Contains(stdout, "no-secrets-in-output") {
+		t.Fatalf("Codex response missing rule diagnostic: %s", stdout)
+	}
+}
+
 func TestWriteDeferredAudit_AllowSkipsReceivedAndRawPayload(t *testing.T) {
 	cfg := &config.Config{}
 	rawJSON := []byte(`{"hook_event_name":"PreToolUse","session_id":"s1","tool_name":"Shell","tool_use_id":"call_1","cwd":"/repo","tool_input":{"command":"echo ok"}}`)

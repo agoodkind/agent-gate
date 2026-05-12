@@ -294,7 +294,7 @@ func (p ClaudePreToolUsePayload) Fields() rules.FieldSet {
 // Fields renders the payload as a [rules.FieldSet].
 func (p ClaudePostToolUsePayload) Fields() rules.FieldSet {
 	fields := claudeToolFields(p.baseFields(), p.ToolName, p.ToolUseID, p.ToolInput)
-	fields.ToolResponse = p.ToolResponse.String()
+	fields.ToolResponse = p.ToolResponse.SearchableText()
 	return fields
 }
 
