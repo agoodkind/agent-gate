@@ -2,6 +2,8 @@ package rules
 
 import (
 	"context"
+	"fmt"
+	"log/slog"
 	"math"
 	"os"
 	"path/filepath"
@@ -15,6 +17,7 @@ import (
 	diffconcern "goodkind.io/agent-gate/internal/rules/concerns/diff"
 	concernlimit "goodkind.io/agent-gate/internal/rules/concerns/limit"
 	regexconcern "goodkind.io/agent-gate/internal/rules/concerns/regex"
+	shellreadconcern "goodkind.io/agent-gate/internal/rules/concerns/shellread"
 	shellwriteconcern "goodkind.io/agent-gate/internal/rules/concerns/shellwrite"
 	"goodkind.io/agent-gate/pipeline"
 )
@@ -64,7 +67,7 @@ func EvaluateAll(ctx context.Context, system, eventName string, fields FieldSet,
 		Scheduler:  pipeline.FixedScheduler{SlotCount: 1},
 		Sentinel:   pipeline.NoopSentinel{},
 	}
-	results, _ := orch.Run(ctx, nil)
+	results, _ := orch.Run(ctx, pipeline.Input{})
 	return aggregateResults(results, fields)
 }
 
@@ -203,7 +206,7 @@ func buildRuleRegexConditions(fields *FieldSet, rulesSlice []config.Rule, system
 // explicit decision here.
 func isMatchingConditionKind(c *config.Condition) bool {
 	switch conditionKind(c) {
-	case config.ConditionKindRegex, config.ConditionKindDiff, config.ConditionKindShellWrite:
+	case config.ConditionKindRegex, config.ConditionKindDiff, config.ConditionKindShellRead, config.ConditionKindShellWrite:
 		return true
 	case config.ConditionKindCommand, config.ConditionKindProject:
 		// Gate-only kinds. They must pass for the rule to fire but they do
@@ -294,6 +297,8 @@ type ruleOutcome struct {
 	gateMatched      bool
 }
 
+func (ruleOutcome) PipelineOutcome() {}
+
 func (r *ruleRegexCondition) Profile() pipeline.Profile {
 	return pipeline.Profile{
 		Name:         r.name,
@@ -374,6 +379,15 @@ func (r *ruleRegexCondition) Execute(_ context.Context, _ pipeline.Input) (pipel
 	case config.ConditionKindShellWrite:
 		return ruleOutcome{
 			violations:       evalShellWriteCondition(r.fields, c, r.rule),
+			rule:             r.rule,
+			isConditionBased: true,
+			gateMatched:      true,
+		}, nil
+	case config.ConditionKindShellRead:
+		violations := evalShellReadCondition(r.fields, c, r.rule, matchLimit)
+		r.budget.Consume(len(violations))
+		return ruleOutcome{
+			violations:       violations,
 			rule:             r.rule,
 			isConditionBased: true,
 			gateMatched:      true,
@@ -504,10 +518,72 @@ func evalShellWriteCondition(fields *FieldSet, c *config.Condition, rule *config
 	return out
 }
 
+// evalShellReadCondition runs the shell_read_secret Condition for one
+// condition and returns its match violations in the rules.Violation shape.
+func evalShellReadCondition(fields *FieldSet, c *config.Condition, rule *config.Rule, limit int) []Violation {
+	if limit <= 0 {
+		return nil
+	}
+	commandSelector := config.FieldToolInputCommand
+	for _, sel := range c.Selectors() {
+		if sel.Selector != config.FieldSelectorInvalid {
+			commandSelector = sel.Selector
+			break
+		}
+	}
+	matches := shellreadconcern.EvalShellReadSecretMatches(
+		fields,
+		commandSelector,
+		c.CompiledPattern(),
+		c.CompiledPathPattern(),
+		c.MaxBytes,
+		c.RemotePolicy,
+		c.ReadSpecs,
+	)
+	if len(matches) == 0 {
+		return nil
+	}
+	if len(matches) > limit {
+		matches = matches[:limit]
+	}
+	out := make([]Violation, len(matches))
+	for i, m := range matches {
+		out[i] = Violation{
+			RuleName:  rule.Name,
+			Message:   rule.ViolationMessage,
+			AuditOnly: rule.AuditOnly,
+			Redact:    rule.RedactDiagnostics,
+			FieldPath: m.FieldPath,
+			FilePath:  m.FilePath,
+			Value:     m.Value,
+			Start:     m.Start,
+			End:       m.End,
+		}
+	}
+	return out
+}
+
 // evalSimpleRule runs the top-level pattern for a rule with no conditions.
 func evalSimpleRule(fields *FieldSet, rule *config.Rule, limit int) []Violation {
+	if simpleRuleNotPatternMatches(fields, rule) {
+		return nil
+	}
 	matches := regexconcern.EvalFieldMatches(fields, rule.Selectors(), rule.Compiled(), rule.DiagnosticGroup, limit)
 	return matchesToViolations(matches, rule)
+}
+
+func simpleRuleNotPatternMatches(fields *FieldSet, rule *config.Rule) bool {
+	notPattern := rule.CompiledNot()
+	if notPattern == nil {
+		return false
+	}
+	for _, selector := range rule.Selectors() {
+		value := fields.String(selector.Selector)
+		if value != "" && notPattern.MatchString(value) {
+			return true
+		}
+	}
+	return false
 }
 
 // matchesToViolations converts MatchResult values from the concern package into
@@ -599,6 +675,10 @@ func allConditionsMatch(fields FieldSet, conditions []config.Condition) bool {
 			if !shellWriteConditionGateMatch(fields, c) {
 				return false
 			}
+		case config.ConditionKindShellRead:
+			if !shellReadConditionGateMatch(fields, c) {
+				return false
+			}
 		default:
 			return false
 		}
@@ -624,6 +704,7 @@ func diffConditionGateMatch(fields FieldSet, c *config.Condition) bool {
 		Conditions:        nil,
 		FieldPaths:        nil,
 		Pattern:           "",
+		NotPattern:        "",
 		Action:            config.ActionBlock,
 		ViolationMessage:  "",
 		DiagnosticGroup:   0,
@@ -657,6 +738,30 @@ func shellWriteConditionGateMatch(fields FieldSet, c *config.Condition) bool {
 		}
 	}
 	return len(shellwriteconcern.EvalShellWriteMatches(&fields, commandSelector, c.Globs)) > 0
+}
+
+// shellReadConditionGateMatch reports whether the shell-read condition would
+// emit any match for the current fields.
+func shellReadConditionGateMatch(fields FieldSet, c *config.Condition) bool {
+	return len(evalShellReadCondition(&fields, c, &config.Rule{
+		Name:              "",
+		Description:       "",
+		Events:            nil,
+		ClaudeEvents:      nil,
+		CursorEvents:      nil,
+		CodexEvents:       nil,
+		GeminiEvents:      nil,
+		Conditions:        nil,
+		FieldPaths:        nil,
+		Pattern:           "",
+		NotPattern:        "",
+		Action:            config.ActionBlock,
+		ViolationMessage:  "",
+		DiagnosticGroup:   0,
+		RedactDiagnostics: false,
+		AuditOnly:         false,
+		DisableIfEnv:      nil,
+	}, 1)) > 0
 }
 
 type conditionContext struct {
@@ -1100,8 +1205,14 @@ var cmdChainRe = regex.MustCompile(`&&|\|\||;|\n`)
 // Requires cd at the start of the segment (after trimming whitespace).
 var cdCommandRe = regex.MustCompile(`^cd\s+(.+)$`)
 
-func osUserHomeDir() (string, error) {
-	return os.UserHomeDir()
+// ReadUserHomeDir returns the current user's home directory.
+func ReadUserHomeDir() (string, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		slog.Warn("read user home dir failed", "error", err)
+		return "", fmt.Errorf("read user home dir: %w", err)
+	}
+	return homeDir, nil
 }
 
 // ApplyCdChain walks the segments of a shell command chain in order, applying

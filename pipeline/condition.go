@@ -45,14 +45,13 @@ type Profile struct {
 	MemoTTL      time.Duration
 }
 
-// Input is the per-Run payload supplied to every Condition. The framework stays
-// neutral about caller payload shape; later landings narrow this at the call
-// sites that build Orchestrators.
-type Input = any
+// Input is the per-Run payload supplied to every Condition.
+type Input struct{}
 
-// Outcome is whatever a Condition produces. Callers narrow with a type assertion
-// right after Execute.
-type Outcome = any
+// Outcome marks values that a Condition can return.
+type Outcome interface {
+	PipelineOutcome()
+}
 
 // Condition is the unit of work scheduled by the Orchestrator.
 type Condition interface {

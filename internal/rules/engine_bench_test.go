@@ -9,7 +9,7 @@ package rules_test
 // The per-rule regression (+24%) exceeds the 5% threshold. The cost is
 // architectural: 19 rules produce 19 ruleRegexCondition heap allocations
 // (interface boxing for pipeline.Condition), 19 ruleOutcome values boxed as
-// pipeline.Outcome (any), make([]Result, 19) in Orchestrator.Run, and one
+// pipeline.Outcome values, make([]Result, 19) in Orchestrator.Run, and one
 // []pipeline.Condition{...} slice. The batch approach paid those costs once.
 // The per-rule design is the correct long-term structure for per-Condition
 // scheduling, cost classification, and timing (landings 8+). Landing 8

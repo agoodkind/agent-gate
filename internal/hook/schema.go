@@ -24,6 +24,19 @@ func makeSchema(base []string, extra ...string) EventSchema {
 	return s
 }
 
+func combinePaths(parts ...[]string) []string {
+	total := 0
+	for _, part := range parts {
+		total += len(part)
+	}
+
+	paths := make([]string, 0, total)
+	for _, part := range parts {
+		paths = append(paths, part...)
+	}
+	return paths
+}
+
 // virtualFields lists the virtual dot-paths synthesised by the rules engine.
 // They are always valid regardless of event, so schema checks skip them.
 var virtualFields = []string{"effective_cwd", "cmd_segments"}
@@ -67,14 +80,16 @@ var toolInputPaths = []string{
 var cursorSchema map[CursorEvent]EventSchema
 
 func init() {
-	toolUseBase := append(cursorEnvelope,
-		append(toolInputPaths,
-			"tool_name",
-			"cwd",
-		)...,
-	)
+	cursorSchema = buildCursorSchema()
+	claudeSchema = buildClaudeSchema()
+	codexSchema = buildCodexSchema()
+	geminiSchema = buildGeminiSchema()
+}
 
-	cursorSchema = map[CursorEvent]EventSchema{
+func buildCursorSchema() map[CursorEvent]EventSchema {
+	toolUseBase := combinePaths(cursorEnvelope, toolInputPaths, []string{"tool_name", "cwd"})
+
+	return map[CursorEvent]EventSchema{
 		CursorSessionStart: makeSchema(cursorEnvelope),
 		CursorSessionEnd:   makeSchema(cursorEnvelope),
 
@@ -150,15 +165,13 @@ var (
 	geminiSchema map[GeminiEvent]EventSchema
 )
 
-func init() {
-	claudeToolUseBase := append(claudeEnvelope,
-		append(claudeToolInputPaths,
-			"tool_name",
-			"tool_use_id",
-		)...,
-	)
+func buildClaudeSchema() map[ClaudeEvent]EventSchema {
+	claudeToolUseBase := combinePaths(claudeEnvelope, claudeToolInputPaths, []string{
+		"tool_name",
+		"tool_use_id",
+	})
 
-	claudeSchema = map[ClaudeEvent]EventSchema{
+	return map[ClaudeEvent]EventSchema{
 		// source: startup | resume | clear | compact; model present on subagent starts.
 		ClaudeSessionStart: makeSchema(claudeEnvelope, "source", "model"),
 		// reason: clear | resume | logout | prompt_input_exit | other | bypass_permissions_disabled
@@ -224,7 +237,9 @@ func init() {
 
 		ClaudeTeammateIdle: makeSchema(claudeEnvelope, "teammate_name", "team_name"),
 	}
+}
 
+func buildCodexSchema() map[CodexEvent]EventSchema {
 	codexEnvelope := []string{
 		"hook_event_name",
 		"session_id",
@@ -244,15 +259,13 @@ func init() {
 		"tool_input.query",
 		"tool_input.pattern",
 	}
-	codexToolBase := append(codexEnvelope,
-		append(codexToolInputPaths,
-			"turn_id",
-			"tool_name",
-			"tool_use_id",
-		)...,
-	)
+	codexToolBase := combinePaths(codexEnvelope, codexToolInputPaths, []string{
+		"turn_id",
+		"tool_name",
+		"tool_use_id",
+	})
 
-	codexSchema = map[CodexEvent]EventSchema{
+	return map[CodexEvent]EventSchema{
 		CodexSessionStart:      makeSchema(codexEnvelope, "source"),
 		CodexPreToolUse:        makeSchema(codexToolBase),
 		CodexPermissionRequest: makeSchema(codexToolBase, "tool_input.description"),
@@ -260,7 +273,9 @@ func init() {
 		CodexUserPromptSubmit:  makeSchema(codexEnvelope, "turn_id", "prompt"),
 		CodexStop:              makeSchema(codexEnvelope, "turn_id", "stop_hook_active", "last_assistant_message"),
 	}
+}
 
+func buildGeminiSchema() map[GeminiEvent]EventSchema {
 	geminiEnvelope := []string{
 		"hook_event_name",
 		"session_id",
@@ -280,15 +295,13 @@ func init() {
 		"tool_input.query",
 		"tool_input.description",
 	}
-	geminiToolBase := append(geminiEnvelope,
-		append(geminiToolInputPaths,
-			"tool_name",
-			"mcp_context",
-			"original_request_name",
-		)...,
-	)
+	geminiToolBase := combinePaths(geminiEnvelope, geminiToolInputPaths, []string{
+		"tool_name",
+		"mcp_context",
+		"original_request_name",
+	})
 
-	geminiSchema = map[GeminiEvent]EventSchema{
+	return map[GeminiEvent]EventSchema{
 		GeminiBeforeTool:          makeSchema(geminiToolBase),
 		GeminiAfterTool:           makeSchema(geminiToolBase, "tool_response"),
 		GeminiBeforeAgent:         makeSchema(geminiEnvelope, "prompt"),
@@ -327,92 +340,133 @@ func ValidPaths(system, eventName string) EventSchema {
 func ValidateConfig(cfg *config.Config) []error {
 	var errs []error
 	for i := range cfg.Rules {
-		r := &cfg.Rules[i]
-
-		// Collect all field_paths from the rule (top-level and per-condition).
-		var allPaths []string
-		allPaths = append(allPaths, r.FieldPaths...)
-		for j := range r.Conditions {
-			switch config.ConditionKind(r.Conditions[j].Kind) {
-			case "", config.ConditionKindRegex, config.ConditionKindCommand, config.ConditionKindProject,
-				config.ConditionKindDiff, config.ConditionKindShellWrite:
-			default:
-				errs = append(errs, fmt.Errorf("rule %q: condition %d has unknown kind %q", r.Name, j, r.Conditions[j].Kind))
-			}
-			allPaths = append(allPaths, r.Conditions[j].FieldPaths...)
-		}
-		if len(allPaths) == 0 {
-			continue
-		}
-
-		// Determine the applicable (system, event) pairs.
-		type pair struct{ system, event string }
-		var applicable []pair
-
-		addEvents := func(system string, events []string) {
-			for _, ev := range events {
-				applicable = append(applicable, pair{system, ev})
-			}
-		}
-
-		allEmpty := len(r.Events) == 0 &&
-			len(r.ClaudeEvents) == 0 &&
-			len(r.CursorEvents) == 0 &&
-			len(r.CodexEvents) == 0 &&
-			len(r.GeminiEvents) == 0
-
-		if allEmpty {
-			// Applies to every known event on all systems.
-			for ev := range cursorSchema {
-				applicable = append(applicable, pair{"cursor", string(ev)})
-			}
-			for ev := range claudeSchema {
-				applicable = append(applicable, pair{"claude", string(ev)})
-			}
-			for ev := range codexSchema {
-				applicable = append(applicable, pair{"codex", string(ev)})
-			}
-			for ev := range geminiSchema {
-				applicable = append(applicable, pair{"gemini", string(ev)})
-			}
-		} else {
-			// Shared events apply to all systems.
-			for _, ev := range r.Events {
-				applicable = append(applicable, pair{"cursor", ev})
-				applicable = append(applicable, pair{"claude", ev})
-				applicable = append(applicable, pair{"codex", ev})
-				applicable = append(applicable, pair{"gemini", ev})
-			}
-			addEvents("claude", r.ClaudeEvents)
-			addEvents("cursor", r.CursorEvents)
-			addEvents("codex", r.CodexEvents)
-			addEvents("gemini", r.GeminiEvents)
-		}
-
-		// For each field_path, verify it is valid for at least one applicable event.
-		for _, fieldPath := range allPaths {
-			if config.CompileFieldSelector(fieldPath) == config.FieldSelectorInvalid {
-				errs = append(errs, fmt.Errorf("rule %q: field_path %q has no typed selector", r.Name, fieldPath))
-				continue
-			}
-			if slices.Contains(virtualFields, fieldPath) {
-				continue // virtual fields are always valid
-			}
-			valid := false
-			for _, p := range applicable {
-				schema := ValidPaths(p.system, p.event)
-				if schema == nil {
-					continue
-				}
-				if schema[fieldPath] {
-					valid = true
-					break
-				}
-			}
-			if !valid {
-				errs = append(errs, fmt.Errorf("rule %q: field_path %q is not valid for any applicable event", r.Name, fieldPath))
-			}
-		}
+		errs = append(errs, validateRuleConfig(&cfg.Rules[i])...)
 	}
 	return errs
+}
+
+func validateRuleConfig(r *config.Rule) []error {
+	errs := validateConditionKinds(r)
+	allPaths := collectRuleFieldPaths(r)
+	if len(allPaths) == 0 {
+		return errs
+	}
+
+	applicable := applicableEventPairs(r)
+	for _, fieldPath := range allPaths {
+		errs = append(errs, validateFieldPathForRule(r, fieldPath, applicable)...)
+	}
+	return errs
+}
+
+func collectRuleFieldPaths(r *config.Rule) []string {
+	allPaths := make([]string, 0, len(r.FieldPaths))
+	allPaths = append(allPaths, r.FieldPaths...)
+	for j := range r.Conditions {
+		allPaths = append(allPaths, r.Conditions[j].FieldPaths...)
+	}
+	return allPaths
+}
+
+func validateConditionKinds(r *config.Rule) []error {
+	var errs []error
+	for j := range r.Conditions {
+		if isKnownConditionKind(r.Conditions[j].Kind) {
+			continue
+		}
+		errs = append(errs, fmt.Errorf("rule %q: condition %d has unknown kind %q", r.Name, j, r.Conditions[j].Kind))
+	}
+	return errs
+}
+
+func isKnownConditionKind(kind string) bool {
+	switch config.ConditionKind(kind) {
+	case "", config.ConditionKindRegex, config.ConditionKindCommand, config.ConditionKindProject,
+		config.ConditionKindDiff, config.ConditionKindShellRead, config.ConditionKindShellWrite:
+		return true
+	default:
+		return false
+	}
+}
+
+type schemaEventPair struct {
+	system string
+	event  string
+}
+
+func applicableEventPairs(r *config.Rule) []schemaEventPair {
+	if ruleHasNoEventFilters(r) {
+		return allEventPairs()
+	}
+
+	applicable := make([]schemaEventPair, 0, len(r.Events)*4+
+		len(r.ClaudeEvents)+len(r.CursorEvents)+len(r.CodexEvents)+len(r.GeminiEvents))
+	for _, ev := range r.Events {
+		applicable = append(applicable,
+			schemaEventPair{"cursor", ev},
+			schemaEventPair{"claude", ev},
+			schemaEventPair{"codex", ev},
+			schemaEventPair{"gemini", ev},
+		)
+	}
+	applicable = appendEventPairs(applicable, "claude", r.ClaudeEvents)
+	applicable = appendEventPairs(applicable, "cursor", r.CursorEvents)
+	applicable = appendEventPairs(applicable, "codex", r.CodexEvents)
+	applicable = appendEventPairs(applicable, "gemini", r.GeminiEvents)
+	return applicable
+}
+
+func ruleHasNoEventFilters(r *config.Rule) bool {
+	return len(r.Events) == 0 &&
+		len(r.ClaudeEvents) == 0 &&
+		len(r.CursorEvents) == 0 &&
+		len(r.CodexEvents) == 0 &&
+		len(r.GeminiEvents) == 0
+}
+
+func allEventPairs() []schemaEventPair {
+	applicable := make([]schemaEventPair, 0,
+		len(cursorSchema)+len(claudeSchema)+len(codexSchema)+len(geminiSchema))
+	applicable = appendSchemaEvents(applicable, "cursor", cursorSchema)
+	applicable = appendSchemaEvents(applicable, "claude", claudeSchema)
+	applicable = appendSchemaEvents(applicable, "codex", codexSchema)
+	applicable = appendSchemaEvents(applicable, "gemini", geminiSchema)
+	return applicable
+}
+
+func appendEventPairs(applicable []schemaEventPair, system string, events []string) []schemaEventPair {
+	for _, ev := range events {
+		applicable = append(applicable, schemaEventPair{system, ev})
+	}
+	return applicable
+}
+
+func appendSchemaEvents[E ~string](applicable []schemaEventPair, system string, schema map[E]EventSchema) []schemaEventPair {
+	for ev := range schema {
+		applicable = append(applicable, schemaEventPair{system, string(ev)})
+	}
+	return applicable
+}
+
+func validateFieldPathForRule(r *config.Rule, fieldPath string, applicable []schemaEventPair) []error {
+	if config.CompileFieldSelector(fieldPath) == config.FieldSelectorInvalid {
+		return []error{fmt.Errorf("rule %q: field_path %q has no typed selector", r.Name, fieldPath)}
+	}
+	if slices.Contains(virtualFields, fieldPath) {
+		return nil
+	}
+	if fieldPathApplies(fieldPath, applicable) {
+		return nil
+	}
+	return []error{fmt.Errorf("rule %q: field_path %q is not valid for any applicable event", r.Name, fieldPath)}
+}
+
+func fieldPathApplies(fieldPath string, applicable []schemaEventPair) bool {
+	for _, p := range applicable {
+		schema := ValidPaths(p.system, p.event)
+		if schema != nil && schema[fieldPath] {
+			return true
+		}
+	}
+	return false
 }

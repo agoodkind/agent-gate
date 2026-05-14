@@ -125,10 +125,36 @@ type Condition struct {
 	// The match uses [path/filepath.Match] semantics.
 	Globs []string `toml:"globs"`
 
-	compiled    *regex.Regexp
-	compiledNot *regex.Regexp
-	selectors   []FieldSelectorSpec
-	fieldPairs  []FieldPairSpec
+	// Shell-read-secret condition fields. Pattern matches file contents,
+	// PathPattern matches risky paths when content probing is not possible,
+	// and ReadSpecs describes how command argv shapes expose paths.
+	PathPattern  string          `toml:"path_pattern"`
+	MaxBytes     int             `toml:"max_bytes"`
+	RemotePolicy string          `toml:"remote_policy"`
+	ReadSpecs    []ShellReadSpec `toml:"read_specs"`
+
+	compiled     *regex.Regexp
+	compiledNot  *regex.Regexp
+	compiledPath *regex.Regexp
+	selectors    []FieldSelectorSpec
+	fieldPairs   []FieldPairSpec
+}
+
+// ShellReadSpec describes one configurable shell command shape for the
+// shell_read_secret condition kind.
+type ShellReadSpec struct {
+	Name                        string   `toml:"name"`
+	Argv0                       []string `toml:"argv0"`
+	PathArgStart                int      `toml:"path_arg_start"`
+	PathArgStartIfFlags         []string `toml:"path_arg_start_if_flags"`
+	PathArgStartIfFlagsValue    int      `toml:"path_arg_start_if_flags_value"`
+	SkipPositionals             int      `toml:"skip_positionals"`
+	SkipFlagsWithValues         []string `toml:"skip_flags_with_values"`
+	SkipFlagValuesAsPositionals []string `toml:"skip_flag_values_as_positionals"`
+	NestedCommand               bool     `toml:"nested_command"`
+	NestedCommandFlag           string   `toml:"nested_command_flag"`
+	NestedRemote                bool     `toml:"nested_remote"`
+	RemoteSources               bool     `toml:"remote_sources"`
 }
 
 // FieldPairSpec carries the compiled selectors for a [Condition.FieldPair].
@@ -153,6 +179,7 @@ const (
 	ConditionKindDiff       ConditionKind = "diff"
 	ConditionKindProject    ConditionKind = "project"
 	ConditionKindRegex      ConditionKind = "regex"
+	ConditionKindShellRead  ConditionKind = "shell_read_secret"
 	ConditionKindShellWrite ConditionKind = "shell_write"
 )
 
@@ -161,6 +188,10 @@ func (c *Condition) CompiledPattern() *regex.Regexp { return c.compiled }
 
 // CompiledNotPattern returns the pre-compiled regex for NotPattern, or nil if unset.
 func (c *Condition) CompiledNotPattern() *regex.Regexp { return c.compiledNot }
+
+// CompiledPathPattern returns the pre-compiled path regex for shell-read-secret
+// conditions, or nil if unset.
+func (c *Condition) CompiledPathPattern() *regex.Regexp { return c.compiledPath }
 
 // Selectors returns the compiled [FieldSelectorSpec] list for the condition.
 func (c *Condition) Selectors() []FieldSelectorSpec { return c.selectors }
@@ -186,9 +217,14 @@ func NewCondition(fieldPaths []string, pattern, notPattern string) (Condition, e
 		ForbidAny:       nil,
 		FieldPair:       "",
 		Globs:           nil,
+		PathPattern:     "",
+		MaxBytes:        0,
+		RemotePolicy:    "",
+		ReadSpecs:       nil,
 		selectors:       CompileFieldSelectorSpecs(fieldPaths),
 		compiled:        nil,
 		compiledNot:     nil,
+		compiledPath:    nil,
 		fieldPairs:      nil,
 	}
 	if pattern != "" {
@@ -268,6 +304,7 @@ type Rule struct {
 	// FieldPaths and Pattern are used when Conditions is empty (simple rules).
 	FieldPaths []string `toml:"field_paths"`
 	Pattern    string   `toml:"pattern"`
+	NotPattern string   `toml:"not_pattern"`
 	// Action selects the rule's effect when it matches. Valid values are
 	// "block" (default) and "audit". The legacy "class" field is no longer
 	// accepted; its old "sync" maps to action="block" and "deferred" maps to
@@ -292,8 +329,9 @@ type Rule struct {
 	// opt-out (for example a maintenance refresh of a baseline file).
 	DisableIfEnv []string `toml:"disable_if_env"`
 
-	compiled  *regex.Regexp
-	selectors []FieldSelectorSpec
+	compiled    *regex.Regexp
+	compiledNot *regex.Regexp
+	selectors   []FieldSelectorSpec
 }
 
 // Rule action values.
@@ -313,6 +351,12 @@ func (r *Rule) Compiled() *regex.Regexp {
 	return r.compiled
 }
 
+// CompiledNot returns the pre-compiled regex for the top-level NotPattern, or
+// nil when the rule does not define a top-level allow pattern.
+func (r *Rule) CompiledNot() *regex.Regexp {
+	return r.compiledNot
+}
+
 // Selectors returns the compiled [FieldSelectorSpec] list for the rule.
 func (r *Rule) Selectors() []FieldSelectorSpec { return r.selectors }
 
@@ -323,6 +367,7 @@ func NewSimpleRule(name, pattern string, compiled *regex.Regexp, events, fieldPa
 		Name:              name,
 		Description:       "",
 		Pattern:           pattern,
+		NotPattern:        "",
 		Events:            events,
 		ClaudeEvents:      nil,
 		CursorEvents:      nil,
@@ -337,6 +382,7 @@ func NewSimpleRule(name, pattern string, compiled *regex.Regexp, events, fieldPa
 		AuditOnly:         false,
 		DisableIfEnv:      nil,
 		compiled:          compiled,
+		compiledNot:       nil,
 		selectors:         CompileFieldSelectorSpecs(fieldPaths),
 	}
 }
@@ -540,6 +586,14 @@ func compileRule(log *slog.Logger, r *Rule) error {
 		return fmt.Errorf("rule %q: compile pattern %q: %w", r.Name, r.Pattern, err)
 	}
 	r.compiled = re
+	if r.NotPattern != "" {
+		notRe, notErr := regex.Compile(r.NotPattern)
+		if notErr != nil {
+			log.Error("compile rule not_pattern failed", "rule", r.Name, "not_pattern", r.NotPattern, "err", notErr)
+			return fmt.Errorf("rule %q: compile not_pattern %q: %w", r.Name, r.NotPattern, notErr)
+		}
+		r.compiledNot = notRe
+	}
 	return validateDiagnosticGroup(fmt.Sprintf("rule %q", r.Name), r.DiagnosticGroup, r.compiled)
 }
 
@@ -570,7 +624,7 @@ func compileCondition(log *slog.Logger, ruleName string, index int, c *Condition
 		c.Kind = "regex"
 	}
 	switch ConditionKind(c.Kind) {
-	case ConditionKindRegex, ConditionKindCommand, ConditionKindProject, ConditionKindDiff, ConditionKindShellWrite:
+	case ConditionKindRegex, ConditionKindCommand, ConditionKindProject, ConditionKindDiff, ConditionKindShellRead, ConditionKindShellWrite:
 	default:
 		return fmt.Errorf("rule %q condition %d: unknown kind %q", ruleName, index, c.Kind)
 	}
@@ -593,12 +647,57 @@ func compileCondition(log *slog.Logger, ruleName string, index int, c *Condition
 		}
 		c.compiledNot = re
 	}
+	if c.PathPattern != "" {
+		re, err := regex.Compile(c.PathPattern)
+		if err != nil {
+			log.Error("compile rule condition path_pattern failed", "rule", ruleName, "condition_index", index, "path_pattern", c.PathPattern, "err", err)
+			return fmt.Errorf("rule %q condition %d: compile path_pattern %q: %w", ruleName, index, c.PathPattern, err)
+		}
+		c.compiledPath = re
+	}
 	if c.FieldPair != "" {
 		pair, err := ParseFieldPair(c.FieldPair)
 		if err != nil {
 			return fmt.Errorf("rule %q condition %d: %w", ruleName, index, err)
 		}
 		c.fieldPairs = []FieldPairSpec{pair}
+	}
+	if err := validateShellReadSpecConfig(ruleName, index, c); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateShellReadSpecConfig(ruleName string, index int, c *Condition) error {
+	if ConditionKind(c.Kind) != ConditionKindShellRead {
+		return nil
+	}
+	if c.CompiledPattern() == nil {
+		return fmt.Errorf("rule %q condition %d: shell_read_secret requires pattern", ruleName, index)
+	}
+	if c.CompiledPathPattern() == nil {
+		return fmt.Errorf("rule %q condition %d: shell_read_secret requires path_pattern", ruleName, index)
+	}
+	if c.MaxBytes < 0 {
+		return fmt.Errorf("rule %q condition %d: max_bytes must be non-negative", ruleName, index)
+	}
+	if len(c.ReadSpecs) == 0 {
+		return fmt.Errorf("rule %q condition %d: shell_read_secret requires at least one read_specs entry", ruleName, index)
+	}
+	for specIndex := range c.ReadSpecs {
+		spec := c.ReadSpecs[specIndex]
+		if len(spec.Argv0) == 0 {
+			return fmt.Errorf("rule %q condition %d read_specs %d: argv0 is required", ruleName, index, specIndex)
+		}
+		if spec.PathArgStart < 0 {
+			return fmt.Errorf("rule %q condition %d read_specs %d: path_arg_start must be non-negative", ruleName, index, specIndex)
+		}
+		if spec.PathArgStartIfFlagsValue < 0 {
+			return fmt.Errorf("rule %q condition %d read_specs %d: path_arg_start_if_flags_value must be non-negative", ruleName, index, specIndex)
+		}
+		if spec.SkipPositionals < 0 {
+			return fmt.Errorf("rule %q condition %d read_specs %d: skip_positionals must be non-negative", ruleName, index, specIndex)
+		}
 	}
 	return nil
 }

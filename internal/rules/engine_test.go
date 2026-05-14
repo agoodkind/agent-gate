@@ -419,6 +419,192 @@ func TestEvaluate_LossyLogSamplingAllowed(t *testing.T) {
 	}
 }
 
+func TestEvaluate_SimpleRuleNotPattern(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.toml")
+	configText := `
+[[rules]]
+name = "rg-requires-path"
+events = ["PreToolUse"]
+field_paths = ["tool_input.command"]
+pattern = '(?m)(?:^|[;&]|\&\&|\|\|)\s*rg(?:\s+-[^\s]+|\s+\x2d\x2d[^\s=]+(?:=\S+)?)*\s+\S+\s*(?:$|[;&]|\&\&|\|\||\|)'
+not_pattern = '(?m)(?:^|[;&]|\&\&|\|\|)\s*rg\b.*\s(?:\.|/[^\s;&<]*|~[^\s;&<]*|\x2d\x2dfiles\b|\x2d\x2dhelp\b|\x2d\x2dversion\b|\x2d\x2dtype-list\b|-(?:\s|$))'
+action = "block"
+violation_message = "rg path required"
+`
+	if err := os.WriteFile(configPath, []byte(configText), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	cfg, err := config.LoadExisting(configPath)
+	if err != nil {
+		t.Fatalf("LoadExisting: %v", err)
+	}
+	rule := cfg.Rules[0]
+
+	allowed := rules.Evaluate(context.Background(), "codex", "PreToolUse", testFields(map[string]any{
+		"tool_input": map[string]any{"command": "rg -n config|secret /Users/agoodkind/.codex/memories/MEMORY.md"},
+	}), []config.Rule{rule})
+	if allowed != nil {
+		t.Fatalf("expected explicit path allow, got %q", allowed.RuleName)
+	}
+
+	allowedQuoted := rules.Evaluate(context.Background(), "codex", "PreToolUse", testFields(map[string]any{
+		"tool_input": map[string]any{"command": `rg -n "config.toml|secret|secrets|api_key|token|file path|file_path|path support|adapter\..*key" /Users/agoodkind/.codex/memories/MEMORY.md`},
+	}), []config.Rule{rule})
+	if allowedQuoted != nil {
+		t.Fatalf("expected quoted pattern with explicit path allow, got %q", allowedQuoted.RuleName)
+	}
+
+	blocked := rules.Evaluate(context.Background(), "codex", "PreToolUse", testFields(map[string]any{
+		"tool_input": map[string]any{"command": "rg -n config|secret"},
+	}), []config.Rule{rule})
+	if blocked == nil {
+		t.Fatalf("expected pathless rg violation")
+	}
+}
+
+func shellReadSecretRule(t *testing.T) config.Rule {
+	t.Helper()
+	configPath := filepath.Join(t.TempDir(), "config.toml")
+	configText := `
+[[rules]]
+name = "no-shell-read-secrets"
+events = ["PreToolUse", "beforeShellExecution"]
+action = "block"
+redact_diagnostics = true
+violation_message = "Do not read secret-bearing files into the agent transcript."
+
+[[rules.conditions]]
+kind = "shell_read_secret"
+field_paths = ["tool_input.command", "command"]
+pattern = '''(?i)\b(?:api[_-]?key|token|secret|password)\s*[:=]'''
+path_pattern = '''(?i)(?:^|[/~])(?:\.env|credentials|config\.toml)$|(?:^|[/~])\.aws/credentials$|(?:^|[/~])\.config/clyde/config\.toml$|(?:secret|token|password|api[_-]?key)'''
+max_bytes = 1048576
+remote_policy = "block_risky"
+
+[[rules.conditions.read_specs]]
+name = "plain-readers"
+argv0 = ["cat", "less", "more", "strings"]
+path_arg_start = 1
+
+[[rules.conditions.read_specs]]
+name = "search-readers"
+argv0 = ["grep", "rg"]
+path_arg_start = 1
+skip_positionals = 1
+skip_flags_with_values = ["-e", "--regexp", "-f", "--file", "-g", "--glob"]
+skip_flag_values_as_positionals = ["-e", "--regexp", "-f", "--file"]
+
+[[rules.conditions.read_specs]]
+name = "shell-c"
+argv0 = ["bash", "sh", "zsh"]
+nested_command = true
+nested_command_flag = "-c"
+
+[[rules.conditions.read_specs]]
+name = "ssh"
+argv0 = ["ssh"]
+path_arg_start = 2
+path_arg_start_if_flags = ["-p"]
+path_arg_start_if_flags_value = 4
+skip_flags_with_values = ["-p", "-i", "-F", "-l"]
+nested_command = true
+nested_remote = true
+
+[[rules.conditions.read_specs]]
+name = "remote-copy"
+argv0 = ["scp", "rsync"]
+path_arg_start = 1
+skip_flags_with_values = ["-P", "-e", "-i", "-F"]
+remote_sources = true
+`
+	if err := os.WriteFile(configPath, []byte(configText), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	cfg, err := config.LoadExisting(configPath)
+	if err != nil {
+		t.Fatalf("LoadExisting: %v", err)
+	}
+	return cfg.Rules[0]
+}
+
+func TestEvaluate_ShellReadSecretBlocksLocalContent(t *testing.T) {
+	root := t.TempDir()
+	secretConfig := filepath.Join(root, "config.toml")
+	writeFile(t, secretConfig, "api_key = \"redacted\"\n")
+	rule := shellReadSecretRule(t)
+
+	v := rules.Evaluate(context.Background(), "codex", "PreToolUse", testFields(map[string]any{
+		"cwd":        root,
+		"tool_input": map[string]any{"command": "cat config.toml"},
+	}), []config.Rule{rule})
+	if v == nil {
+		t.Fatal("expected local content violation")
+	}
+}
+
+func TestEvaluate_ShellReadSecretAllowsCleanLocalFile(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "README.md"), "public project notes\n")
+	rule := shellReadSecretRule(t)
+
+	v := rules.Evaluate(context.Background(), "codex", "PreToolUse", testFields(map[string]any{
+		"cwd":        root,
+		"tool_input": map[string]any{"command": "rg -n api_key README.md"},
+	}), []config.Rule{rule})
+	if v != nil {
+		t.Fatalf("expected clean local file allow, got %q", v.RuleName)
+	}
+}
+
+func TestEvaluate_ShellReadSecretBlocksRiskyLocalProbeMiss(t *testing.T) {
+	root := t.TempDir()
+	rule := shellReadSecretRule(t)
+
+	v := rules.Evaluate(context.Background(), "codex", "PreToolUse", testFields(map[string]any{
+		"cwd":        root,
+		"tool_input": map[string]any{"command": "cat .env"},
+	}), []config.Rule{rule})
+	if v == nil {
+		t.Fatal("expected risky path probe-miss violation")
+	}
+}
+
+func TestEvaluate_ShellReadSecretBlocksRemoteRiskyPath(t *testing.T) {
+	rule := shellReadSecretRule(t)
+
+	v := rules.Evaluate(context.Background(), "codex", "PreToolUse", testFields(map[string]any{
+		"cwd":        "/work",
+		"tool_input": map[string]any{"command": "ssh -p 2222 host 'grep TOKEN ~/.config/clyde/config.toml'"},
+	}), []config.Rule{rule})
+	if v == nil {
+		t.Fatal("expected remote risky path violation")
+	}
+}
+
+func TestEvaluate_ShellReadSecretBlocksRemoteCopySource(t *testing.T) {
+	rule := shellReadSecretRule(t)
+
+	v := rules.Evaluate(context.Background(), "codex", "PreToolUse", testFields(map[string]any{
+		"cwd":        "/work",
+		"tool_input": map[string]any{"command": "scp host:~/.aws/credentials ."},
+	}), []config.Rule{rule})
+	if v == nil {
+		t.Fatal("expected remote copy source violation")
+	}
+}
+
+func TestEvaluate_ShellReadSecretAllowsRemoteNonRiskyCommand(t *testing.T) {
+	rule := shellReadSecretRule(t)
+
+	v := rules.Evaluate(context.Background(), "codex", "PreToolUse", testFields(map[string]any{
+		"cwd":        "/work",
+		"tool_input": map[string]any{"command": "ssh host uptime"},
+	}), []config.Rule{rule})
+	if v != nil {
+		t.Fatalf("expected remote uptime allow, got %q", v.RuleName)
+	}
+}
+
 const secretReadPathPattern = `(?i)(?:(?:^|[/\\])[^/\\\n]*(?:1password|onepassword|op[ _.-]?export|app[ _.-]?store|asc[ _.-]?api|api[ _.-]?key|private[ _.-]?key|secret|credential|credentials|token|password|passwd|auth)[^/\\\n]*(?:[/\\].*)?\.(?:json|p8|pem|key|pkcs8|p12|pfx)$|(?:^|[/\\])[^/\\\n]*\.(?:p8|pem|key|pkcs8|p12|pfx)$)`
 
 func secretReadPathRule(t *testing.T) config.Rule {
@@ -436,26 +622,17 @@ func secretOutputRule(t *testing.T) config.Rule {
 	t.Helper()
 	return loadRule(t,
 		"no-secrets-in-output",
-		`\x2d\x2d\x2d\x2d\x2dBEGIN (?:RSA |EC |DSA |OPENSSH |PGP |ENCRYPTED )?PRIVATE KEY\x2d\x2d\x2d\x2d\x2d`,
+		deterministicSecretOutputPattern,
 		[]string{"PostToolUse", "postToolUse", "AfterTool"},
 		[]string{"tool_response", "tool_output"},
 		"Tool output contains credential material.",
 	)
 }
+
+const deterministicSecretOutputPattern = `(\x24ANSIBLE_VAULT;\d+\.\d+;[A-Z0-9]+|\x2d\x2d\x2d\x2d\x2dBEGIN (?:RSA |EC |DSA |OPENSSH |PGP |ENCRYPTED )?PRIVATE KEY\x2d\x2d\x2d\x2d\x2d|\x2d\x2d\x2d\x2d\x2dBEGIN CERTIFICATE\x2d\x2d\x2d\x2d\x2d|\bAKIA[0-9A-Z]{16}\b|\bgh[pousr]_[A-Za-z0-9]{36}\b|\bsk-(?:ant-|proj-)?[A-Za-z0-9_-]{20,}|\bxox[abprs]-[A-Za-z0-9-]{10,}|\b(?:sk|pk|rk)_(?:test|live)_[A-Za-z0-9]{20,}|\bAC[a-f0-9]{32}\b|\bSK[a-f0-9]{32}\b|\bkey-[a-f0-9]{32}\b|\bSG\.[A-Za-z0-9_-]{16,32}\.[A-Za-z0-9_-]{32,68}\b|\bAIza[A-Za-z0-9_-]{35}\b|\beyJ[A-Za-z0-9+/=_-]{80,}|\bapi-[0-9A-F]{32}\b)`
 
 func syntheticPrivateKeyHeader() string {
 	return "-----BEGIN " + "PRIVATE KEY-----"
-}
-
-func knownSecretAssignmentRule(t *testing.T) config.Rule {
-	t.Helper()
-	return loadRule(t,
-		"no-secrets-in-output",
-		`(?i)\b(?:password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|client[_-]?secret|auth(?:orization)?|bearer|aws[_-]?secret[_-]?access[_-]?key|aws[_-]?access[_-]?key[_-]?id)\s*[:=]\s*['"]?(?:bearer\s+)?[A-Za-z0-9._+/=-]{16,}`,
-		[]string{"PostToolUse", "postToolUse", "AfterTool"},
-		[]string{"tool_response", "tool_output"},
-		"Tool output contains credential material.",
-	)
 }
 
 func TestEvaluate_CredentialFileReadPathsBlocked(t *testing.T) {
@@ -602,20 +779,31 @@ func TestEvaluate_SecretOutputBlocksPrivateKey(t *testing.T) {
 	}
 }
 
-func TestEvaluate_SecretOutputAssignmentBlocksKnownCredentialValue(t *testing.T) {
-	rule := knownSecretAssignmentRule(t)
-	secretValue := strings.Repeat("a", 20)
+func TestEvaluate_SecretOutputBlocksDeterministicCredentialValues(t *testing.T) {
+	rule := secretOutputRule(t)
+	values := []string{
+		"$" + "ANSIBLE_VAULT;1.1;AES256",
+		"AKIA" + strings.Repeat("A", 16),
+		"ghp_" + strings.Repeat("A", 36),
+		"sk-" + "ant-" + strings.Repeat("A", 20),
+		"sk-" + "proj-" + strings.Repeat("A", 20),
+		"SG." + strings.Repeat("A", 20) + "." + strings.Repeat("B", 40),
+		"AIza" + strings.Repeat("A", 35),
+		"eyJ" + strings.Repeat("A", 80),
+	}
 
-	v := rules.Evaluate(context.Background(), "codex", "PostToolUse", rules.FieldSet{
-		ToolResponse: "export " + "AWS_SECRET_ACCESS_KEY=" + secretValue,
-	}, []config.Rule{rule})
-	if v == nil {
-		t.Fatal("expected known credential assignment violation")
+	for _, value := range values {
+		v := rules.Evaluate(context.Background(), "codex", "PostToolUse", rules.FieldSet{
+			ToolResponse: "output: " + value,
+		}, []config.Rule{rule})
+		if v == nil {
+			t.Fatalf("expected deterministic credential violation for %q", value[:min(len(value), 12)])
+		}
 	}
 }
 
-func TestEvaluate_SecretOutputAssignmentAllowsGenericMakeContractText(t *testing.T) {
-	rule := knownSecretAssignmentRule(t)
+func TestEvaluate_SecretOutputAllowsGenericSourceAndContractText(t *testing.T) {
+	rule := secretOutputRule(t)
 
 	cases := []struct {
 		name  string
@@ -636,6 +824,30 @@ func TestEvaluate_SecretOutputAssignmentAllowsGenericMakeContractText(t *testing
 		{
 			name:  "generic uppercase token assignment",
 			value: "BASELINE_TOKEN=sample",
+		},
+		{
+			name:  "generic long assignment",
+			value: "AWS_SECRET_ACCESS_KEY=" + strings.Repeat("a", 20),
+		},
+		{
+			name:  "rust auth provider parameter",
+			value: "pub fn new(provider: Provider, auth: SharedAuthProvider) -> Self",
+		},
+		{
+			name:  "rust token type field",
+			value: "token: CancellationToken",
+		},
+		{
+			name:  "rust secret type field",
+			value: "secret" + ": SharedSecret",
+		},
+		{
+			name:  "rust authorization header type field",
+			value: "authorization: HeaderValue",
+		},
+		{
+			name:  "rust cookie header type field",
+			value: "cookie: HeaderValue",
 		},
 	}
 
@@ -837,7 +1049,6 @@ func TestCheckedRuleNames(t *testing.T) {
 }
 
 // loadConditionRule builds the no-git-write-from-home-cwd rule used in production.
-// loadConditionRule builds the no-git-write-from-home-cwd rule used in production.
 // Uses "effective_cwd" so that cd chains are simulated before matching.
 func loadConditionRule(t *testing.T) config.Rule {
 	t.Helper()
@@ -852,7 +1063,7 @@ func loadConditionRule(t *testing.T) config.Rule {
 	cmdCond, err := config.NewCondition(
 		[]string{"cmd_segments"},
 		`(?m)^git\s+(add|commit|push|reset|rm|mv|rebase|merge|stash|clean|restore|switch|tag)`,
-		`(\s-C\s[/~.]|\s + testDoubleHyphen() + git-dir=|\s + testDoubleHyphen() + work-tree=)`,
+		`(\s-C\s[/~.]|\s`+testDoubleHyphen()+`git-dir=|\s`+testDoubleHyphen()+`work-tree=)`,
 	)
 	if err != nil {
 		t.Fatalf("compile cmd condition: %v", err)
@@ -1018,7 +1229,7 @@ func TestApplyCdChain(t *testing.T) {
 // emdashDashPattern is the Unicode dash class used by no-emdashes rules in these tests.
 const (
 	emdashDashPattern        = `[\x{2010}-\x{2015}\x{2212}\x{2E3A}\x{2E3B}\x{FE31}\x{FE32}\x{FE58}\x{FE63}\x{FF0D}]`
-	doubleHyphenProsePattern = `(?m)(?|(?:` + "`" + `[^` + "`" + `\n]+` + "`" + `|\b(?!(?:bash|sh|zsh|fish|exec|command|env|xargs|sudo|doas|go|git|make|npm|pnpm|yarn|node|python|python3|ruby|perl|cargo|docker|kubectl|helm|terraform|ansible|rg|grep|sed|awk|jq|curl|ssh|scp|rsync)\b)[A-Za-z][A-Za-z0-9_./-]*)\s+(--)(?=\s+[A-Za-z][A-Za-z0-9_./-]*)(?![^\n]*\s--[A-Za-z0-9_][A-Za-z0-9_-]*(?:=|\b))|(?<!-)\b(?!(?:bash|sh|zsh|fish|exec|command|env|xargs|sudo|doas|go|git|make|npm|pnpm|yarn|node|python|python3|ruby|perl|cargo|docker|kubectl|helm|terraform|ansible|rg|grep|sed|awk|jq|curl|ssh|scp|rsync)\b)[A-Za-z][A-Za-z0-9_./-]*(--)(?=[A-Za-z][A-Za-z0-9_./-]*))`
+	doubleHyphenProsePattern = `(?m)(?|(?:` + "`" + `[^` + "`" + `\n]+` + "`" + `|\b(?!(?:bash|sh|zsh|fish|exec|command|env|xargs|sudo|doas|go|git|make|npm|pnpm|yarn|node|python|python3|ruby|perl|cargo|docker|kubectl|helm|terraform|ansible|rg|grep|sed|awk|jq|curl|ssh|scp|rsync)\b)[A-Za-z][A-Za-z0-9_./-]*)\s+(--)(?=\s+[A-Za-z][A-Za-z0-9_./-]*)(?![^\n]*\s--[A-Za-z0-9_][A-Za-z0-9_-]*(?:=|\b))|(?<![-/_.])\b(?!(?:bash|sh|zsh|fish|exec|command|env|xargs|sudo|doas|go|git|make|npm|pnpm|yarn|node|python|python3|ruby|perl|cargo|docker|kubectl|helm|terraform|ansible|rg|grep|sed|awk|jq|curl|ssh|scp|rsync)\b)[A-Za-z][A-Za-z0-9_./-]*(--)(?=[A-Za-z][A-Za-z0-9_./-]*))`
 )
 
 func TestEmdashDashPatternMatchesU2011(t *testing.T) {
@@ -1029,7 +1240,7 @@ func TestEmdashDashPatternMatchesU2011(t *testing.T) {
 	}
 }
 
-// emdashMainRule returns the broad no-emdashes rule (tool_input.prompt excluded; see emdashPromptUnlessTaskRule).
+// emdashMainRule returns the broad no-emdashes rule (tool_input.prompt excluded; see emdashPromptUnlessSubagentLaunchRule).
 func emdashMainRule(t *testing.T) config.Rule {
 	t.Helper()
 	return loadRule(t,
@@ -1041,8 +1252,8 @@ func emdashMainRule(t *testing.T) config.Rule {
 	)
 }
 
-// emdashPromptUnlessTaskRule blocks typographic dashes in tool_input.prompt unless tool_name is Task (sub-agent).
-func emdashPromptUnlessTaskRule(t *testing.T) config.Rule {
+// emdashPromptUnlessSubagentLaunchRule blocks typographic dashes in tool_input.prompt unless the prompt launches a subagent.
+func emdashPromptUnlessSubagentLaunchRule(t *testing.T) config.Rule {
 	t.Helper()
 	promptCond, err := config.NewCondition(
 		[]string{"tool_input.prompt"},
@@ -1055,13 +1266,13 @@ func emdashPromptUnlessTaskRule(t *testing.T) config.Rule {
 	toolCond, err := config.NewCondition(
 		[]string{"tool_name"},
 		"",
-		`(?i)^task$`,
+		`(?i)^(task|agent)$`,
 	)
 	if err != nil {
 		t.Fatalf("compile tool_name condition: %v", err)
 	}
 	return config.Rule{
-		Name:             "no-emdashes-tool-input-prompt-unless-subagent-task",
+		Name:             "no-emdashes-tool-input-prompt-unless-subagent-launch",
 		ClaudeEvents:     []string{"PreToolUse"},
 		CursorEvents:     []string{"preToolUse"},
 		Conditions:       []config.Condition{promptCond, toolCond},
@@ -1073,7 +1284,7 @@ func emdashPromptUnlessTaskRule(t *testing.T) config.Rule {
 // emdashRules returns the main no-emdashes rule plus the conditional prompt rule (production order).
 func emdashRules(t *testing.T) []config.Rule {
 	t.Helper()
-	return []config.Rule{emdashMainRule(t), emdashPromptUnlessTaskRule(t)}
+	return []config.Rule{emdashMainRule(t), emdashPromptUnlessSubagentLaunchRule(t)}
 }
 
 // TestEvaluate_EmdashBlocked verifies that Unicode dash variants are blocked.
@@ -1205,7 +1416,7 @@ func TestEvaluate_EmdashBlocked(t *testing.T) {
 			},
 		},
 		{
-			name:  "em dash in tool_input.prompt with non-Task tool_name",
+			name:  "em dash in tool_input.prompt with normal tool_name",
 			event: "PreToolUse",
 			payload: map[string]any{
 				"tool_name": "Write",
@@ -1296,10 +1507,10 @@ func TestEvaluate_EmdashAllowed(t *testing.T) {
 			},
 		},
 		{
-			name:  "em dash in Task tool prompt (Cursor preToolUse)",
-			event: "preToolUse",
+			name:  "em dash in Agent tool prompt (Claude PreToolUse)",
+			event: "PreToolUse",
 			payload: map[string]any{
-				"tool_name": "Task",
+				"tool_name": "Agent",
 				"tool_input": map[string]any{
 					"prompt": "Sub-agent brief \u2014 with a dash.",
 				},
@@ -1501,6 +1712,13 @@ func TestEvaluate_DoubleHyphenProseAllowed(t *testing.T) {
 				"tool_input": map[string]any{"new_string": "Use well-formed words and kebab-case identifiers."},
 			},
 		},
+		{
+			name:  "claude project path with doubled hyphen",
+			event: "PreToolUse",
+			payload: map[string]any{
+				"tool_input": map[string]any{"new_string": "~/.claude/projects/-Users-agoodkind--dotfiles/59d024c1-9a71-4668-928f-79655de2e53a.jsonl"},
+			},
+		},
 	}
 
 	for _, tc := range cases {
@@ -1685,10 +1903,136 @@ func makeGoThroughMakeRule() config.Rule {
 	}
 }
 
+func makeSwiftBuildThroughMakeRule() config.Rule {
+	return config.Rule{
+		Name:         "use-make-not-swift-build-direct",
+		ClaudeEvents: []string{"PreToolUse"},
+		CursorEvents: []string{"preToolUse", "beforeShellExecution"},
+		CodexEvents:  []string{"PreToolUse"},
+		GeminiEvents: []string{"BeforeTool"},
+		Conditions: []config.Condition{
+			{
+				Kind:        "command",
+				Argv0:       "swift",
+				Subcommands: []string{"build"},
+				StripEnv:    true,
+				StripArgs:   []string{"env", "time", "command", "xcrun"},
+				CwdFlags:    []string{"--package-path"},
+			},
+			{
+				Kind:        "project",
+				RootMarkers: []string{"Package.swift"},
+				RequireAny:  []string{"Makefile", "makefile", "GNUmakefile"},
+			},
+		},
+		Action:           "block",
+		ViolationMessage: "Use make.",
+	}
+}
+
 func writeFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("write %s: %v", path, err)
+	}
+}
+
+func TestEvaluate_CommandAndProjectConditions_SwiftBuildThroughMake(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "Package.swift"), "// swift-tools-version: 6.0\n")
+	writeFile(t, filepath.Join(root, "Makefile"), "build:\n\tswift build\n")
+
+	noMakefile := t.TempDir()
+	writeFile(t, filepath.Join(noMakefile, "Package.swift"), "// swift-tools-version: 6.0\n")
+
+	outside := t.TempDir()
+	rule := makeSwiftBuildThroughMakeRule()
+	cases := []struct {
+		name    string
+		system  string
+		event   string
+		payload map[string]any
+		want    bool
+	}{
+		{
+			name:   "swift build in package with makefile",
+			system: "codex",
+			event:  "PreToolUse",
+			payload: map[string]any{
+				"cwd":        root,
+				"tool_input": map[string]any{"command": "swift build -c release"},
+			},
+			want: true,
+		},
+		{
+			name:   "swift package path build uses command cwd",
+			system: "codex",
+			event:  "PreToolUse",
+			payload: map[string]any{
+				"cwd":        outside,
+				"tool_input": map[string]any{"command": "swift --package-path " + root + " build -c release"},
+			},
+			want: true,
+		},
+		{
+			name:   "xcrun wrapper swift build in package with makefile",
+			system: "claude",
+			event:  "PreToolUse",
+			payload: map[string]any{
+				"cwd":        root,
+				"tool_input": map[string]any{"command": "xcrun swift build"},
+			},
+			want: true,
+		},
+		{
+			name:   "swift build without makefile is allowed",
+			system: "codex",
+			event:  "PreToolUse",
+			payload: map[string]any{
+				"cwd":        noMakefile,
+				"tool_input": map[string]any{"command": "swift build"},
+			},
+			want: false,
+		},
+		{
+			name:   "swift test is allowed",
+			system: "codex",
+			event:  "PreToolUse",
+			payload: map[string]any{
+				"cwd":        root,
+				"tool_input": map[string]any{"command": "swift test"},
+			},
+			want: false,
+		},
+		{
+			name:   "swift tool script is allowed",
+			system: "codex",
+			event:  "PreToolUse",
+			payload: map[string]any{
+				"cwd":        root,
+				"tool_input": map[string]any{"command": "swift Tools/lmd-dev.swift build Release"},
+			},
+			want: false,
+		},
+		{
+			name:   "make build is allowed",
+			system: "codex",
+			event:  "PreToolUse",
+			payload: map[string]any{
+				"cwd":        root,
+				"tool_input": map[string]any{"command": "make build"},
+			},
+			want: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			v := rules.Evaluate(context.Background(), tc.system, tc.event, testFields(tc.payload), []config.Rule{rule})
+			if got := v != nil; got != tc.want {
+				t.Fatalf("blocked = %v, want %v; violation = %#v", got, tc.want, v)
+			}
+		})
 	}
 }
 

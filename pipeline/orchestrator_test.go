@@ -14,6 +14,10 @@ type countingCondition struct {
 	err     error
 }
 
+type testOutcome string
+
+func (testOutcome) PipelineOutcome() {}
+
 func (c *countingCondition) Profile() Profile {
 	return Profile{Name: c.name}
 }
@@ -32,11 +36,11 @@ func TestOrchestratorRunSingleCondition(t *testing.T) {
 		name:    "alpha",
 		calls:   &calls,
 		order:   &order,
-		outcome: "ok",
+		outcome: testOutcome("ok"),
 		err:     nil,
 	}
 	orch := &Orchestrator{Conditions: []Condition{condition}}
-	results, err := orch.Run(context.Background(), nil)
+	results, err := orch.Run(context.Background(), Input{})
 	if err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	}
@@ -50,7 +54,7 @@ func TestOrchestratorRunSingleCondition(t *testing.T) {
 	if got.ConditionName != "alpha" {
 		t.Fatalf("ConditionName mismatch: %q", got.ConditionName)
 	}
-	if got.Outcome != "ok" {
+	if got.Outcome != testOutcome("ok") {
 		t.Fatalf("Outcome mismatch: %v", got.Outcome)
 	}
 	if got.Err != nil {
@@ -78,7 +82,7 @@ func TestOrchestratorRunPreservesOrder(t *testing.T) {
 		})
 	}
 	orch := &Orchestrator{Conditions: conditions}
-	results, err := orch.Run(context.Background(), nil)
+	results, err := orch.Run(context.Background(), Input{})
 	if err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	}
@@ -113,7 +117,7 @@ func TestOrchestratorRunCapturesError(t *testing.T) {
 		err:   boom,
 	}
 	orch := &Orchestrator{Conditions: []Condition{condition}}
-	results, err := orch.Run(context.Background(), nil)
+	results, err := orch.Run(context.Background(), Input{})
 	if err != nil {
 		t.Fatalf("Run itself should not return aggregated error in Landing 1, got %v", err)
 	}

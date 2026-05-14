@@ -300,7 +300,7 @@ func TestEvaluateHot_BlocksCursorBeforeReadFileCredentialPath(t *testing.T) {
 func TestEvaluateHot_BlocksCursorPostToolSecretOutput(t *testing.T) {
 	rule := testProviderRule(t,
 		"no-secrets-in-output",
-		`\x2d\x2d\x2d\x2d\x2dBEGIN (?:RSA |EC |DSA |OPENSSH |PGP |ENCRYPTED )?PRIVATE KEY\x2d\x2d\x2d\x2d\x2d`,
+		`\x2d\x2d\x2d\x2d\x2dBEGIN (?:RSA |EC |DSA |OPENSSH |PGP |ENCRYPTED )?PRIVATE KEY\x2d\x2d\x2d\x2d\x2d|\bsk-(?:ant-|proj-)?[A-Za-z0-9_-]{20,}|\beyJ[A-Za-z0-9+/=_-]{80,}`,
 		[]string{"postToolUse"},
 		[]string{"tool_output"},
 		"Tool output contains credential material.",
@@ -347,13 +347,13 @@ func TestEvaluateHot_AllowsCodexPostToolImageDataJWTShape(t *testing.T) {
 func TestEvaluateHot_BlocksCodexPostToolTextSecretInStructuredResponse(t *testing.T) {
 	rule := testProviderRule(t,
 		"no-secrets-in-output",
-		`(?i)\b(?:password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|client[_-]?secret|auth(?:orization)?|bearer|aws[_-]?secret[_-]?access[_-]?key|aws[_-]?access[_-]?key[_-]?id)\s*[:=]\s*['"]?(?:bearer\s+)?[A-Za-z0-9._+/=-]{16,}`,
+		`\bsk-(?:ant-|proj-)?[A-Za-z0-9_-]{20,}|\beyJ[A-Za-z0-9+/=_-]{80,}`,
 		[]string{"PostToolUse"},
 		[]string{"tool_response"},
 		"Tool output contains credential material.",
 	)
 	cfg := &config.Config{Rules: []config.Rule{rule}}
-	secretText := "token: " + strings.Repeat("a", 20)
+	secretText := "token: " + "sk-" + "ant-" + strings.Repeat("a", 20)
 	rawJSON := []byte(`{"hook_event_name":"PostToolUse","session_id":"s1","turn_id":"t1","tool_name":"mcp__computer_use__get_app_state","tool_use_id":"call_1","cwd":"/repo","tool_input":{},"tool_response":{"content":[{"type":"text","text":` + strconv.Quote(secretText) + `},{"type":"image","mimeType":"image/png","data":"not-scanned"}]}}`)
 
 	evaluation := hook.EvaluateHot(context.Background(), rawJSON, cfg, hook.SystemCodex, func(string) string { return "" })

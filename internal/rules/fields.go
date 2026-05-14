@@ -288,7 +288,7 @@ func (fields FieldSet) effectiveCWD() string {
 	if command == "" {
 		return cwd
 	}
-	home, err := osUserHomeDir()
+	home, err := ReadUserHomeDir()
 	if err != nil {
 		home = cwd
 	}
