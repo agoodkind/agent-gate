@@ -8,8 +8,8 @@ import (
 )
 
 // EventSchema is the set of valid dot-path field names for a single event.
-// Virtual fields (effective_cwd, cmd_segments) are handled separately and are
-// always considered valid; they do not appear in this map.
+// Virtual fields are handled separately and are always considered valid; they
+// do not appear in this map.
 type EventSchema map[string]bool
 
 // makeSchema builds an EventSchema from a base slice plus optional extra paths.
@@ -37,9 +37,15 @@ func combinePaths(parts ...[]string) []string {
 	return paths
 }
 
-// virtualFields lists the virtual dot-paths synthesised by the rules engine.
+// virtualFields lists the virtual dot-paths synthesized by the rules engine.
 // They are always valid regardless of event, so schema checks skip them.
-var virtualFields = []string{"effective_cwd", "cmd_segments"}
+var virtualFields = []string{
+	"effective_cwd",
+	"cmd_segments",
+	"cmd_comments",
+	"cmd_double_hyphen_prose",
+	"cmd_redirections",
+}
 
 type schemaSystem string
 

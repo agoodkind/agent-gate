@@ -7,6 +7,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"goodkind.io/agent-gate/internal/config"
 	concernlimit "goodkind.io/agent-gate/internal/rules/concerns/limit"
 )
 
@@ -34,6 +35,50 @@ func FormatViolations(violations []Violation) string {
 		violations = violations[:maxDiagnosticMatches]
 	}
 
+	messageOnly, detailed := splitDiagnosticFormats(violations)
+
+	var b strings.Builder
+	writeMessageOnlyDiagnostics(&b, messageOnly)
+	if len(detailed) > 0 {
+		if b.Len() > 0 {
+			b.WriteString("\n\n")
+		}
+		writeDetailedDiagnostics(&b, detailed)
+	}
+	if omitted > 0 && len(detailed) > 0 {
+		fmt.Fprintf(&b, "\n\n... %d more %s omitted\n", omitted, plural(omitted, "violation", "violations"))
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func splitDiagnosticFormats(violations []Violation) ([]Violation, []Violation) {
+	var messageOnly []Violation
+	var detailed []Violation
+	for _, violation := range violations {
+		if violation.DiagnosticFormat == config.DiagnosticFormatMessageOnly {
+			messageOnly = append(messageOnly, violation)
+			continue
+		}
+		detailed = append(detailed, violation)
+	}
+	return messageOnly, detailed
+}
+
+func writeMessageOnlyDiagnostics(b *strings.Builder, violations []Violation) {
+	seen := make(map[string]bool)
+	for _, violation := range violations {
+		if violation.Message == "" || seen[violation.Message] {
+			continue
+		}
+		seen[violation.Message] = true
+		if b.Len() > 0 {
+			b.WriteString("\n")
+		}
+		b.WriteString(violation.Message)
+	}
+}
+
+func writeDetailedDiagnostics(b *strings.Builder, violations []Violation) {
 	keys := legendKeys(violations)
 	occurrences := make([]diagnosticOccurrence, 0, len(violations))
 	for _, v := range violations {
@@ -42,14 +87,9 @@ func FormatViolations(violations []Violation) string {
 		occurrences = append(occurrences, occ)
 	}
 
-	var b strings.Builder
-	fmt.Fprintf(&b, "agent-gate blocked %d %s:\n", len(violations)+omitted, plural(len(violations)+omitted, "violation", "violations"))
-	writeLegend(&b, occurrences)
-	writeSourceDiagnostics(&b, occurrences)
-	if omitted > 0 {
-		fmt.Fprintf(&b, "\n... %d more %s omitted\n", omitted, plural(omitted, "violation", "violations"))
-	}
-	return strings.TrimRight(b.String(), "\n")
+	fmt.Fprintf(b, "agent-gate blocked %d %s:\n", len(violations), plural(len(violations), "violation", "violations"))
+	writeLegend(b, occurrences)
+	writeSourceDiagnostics(b, occurrences)
 }
 
 func writeSourceDiagnostics(b *strings.Builder, occurrences []diagnosticOccurrence) {

@@ -317,6 +317,9 @@ type Rule struct {
 	// DiagnosticGroup selects which capture group supplies diagnostic spans.
 	// Zero means the full match.
 	DiagnosticGroup int `toml:"diagnostic_group"`
+	// DiagnosticFormat selects how blocking diagnostics are rendered.
+	// Empty and "detailed" keep the standard rule and match diagnostics.
+	DiagnosticFormat string `toml:"diagnostic_format"`
 	// RedactDiagnostics hides matched source text in block messages and audit
 	// logs for rules that inspect secret-bearing fields.
 	RedactDiagnostics bool `toml:"redact_diagnostics"`
@@ -343,6 +346,15 @@ const (
 	ActionBlock = "block"
 	// ActionAudit logs the violation to the audit layer without blocking.
 	ActionAudit = "audit"
+)
+
+// Rule diagnostic format values.
+const (
+	// DiagnosticFormatDetailed is the default line, column, match, and rule
+	// diagnostic format.
+	DiagnosticFormatDetailed = "detailed"
+	// DiagnosticFormatMessageOnly renders only the configured violation message.
+	DiagnosticFormatMessageOnly = "message_only"
 )
 
 // Compiled returns the pre-compiled regex for the top-level Pattern.
@@ -378,6 +390,7 @@ func NewSimpleRule(name, pattern string, compiled *regex.Regexp, events, fieldPa
 		Action:            action,
 		ViolationMessage:  violationMessage,
 		DiagnosticGroup:   0,
+		DiagnosticFormat:  DiagnosticFormatDetailed,
 		RedactDiagnostics: false,
 		AuditOnly:         false,
 		DisableIfEnv:      nil,
@@ -571,6 +584,9 @@ func compileRule(log *slog.Logger, r *Rule) error {
 	if err := normalizeRuleAction(r); err != nil {
 		return fmt.Errorf("rule %q: %w", r.Name, err)
 	}
+	if err := normalizeRuleDiagnosticFormat(r); err != nil {
+		return fmt.Errorf("rule %q: %w", r.Name, err)
+	}
 	if len(r.Conditions) > 0 {
 		for j := range r.Conditions {
 			if err := compileCondition(log, r.Name, j, &r.Conditions[j]); err != nil {
@@ -614,6 +630,23 @@ func normalizeRuleAction(r *Rule) error {
 		return fmt.Errorf("unknown action %q (expected %q or %q)", r.Action, ActionBlock, ActionAudit)
 	}
 	return nil
+}
+
+func normalizeRuleDiagnosticFormat(r *Rule) error {
+	if r.DiagnosticFormat == "" {
+		r.DiagnosticFormat = DiagnosticFormatDetailed
+	}
+	switch r.DiagnosticFormat {
+	case DiagnosticFormatDetailed, DiagnosticFormatMessageOnly:
+		return nil
+	default:
+		return fmt.Errorf(
+			"unknown diagnostic_format %q (expected %q or %q)",
+			r.DiagnosticFormat,
+			DiagnosticFormatDetailed,
+			DiagnosticFormatMessageOnly,
+		)
+	}
 }
 
 // compileCondition fills in compiled regex and selector state for one

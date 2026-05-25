@@ -73,6 +73,13 @@ var capabilityTable = map[capabilityKey]Capability{
 	{SystemClaude, "SubagentStop"}:       CapabilityObserve,
 	{SystemClaude, "UserPromptSubmit"}:   CapabilityBlock,
 
+	// GitHub Copilot Chat uses Claude-style event names and response
+	// semantics, with VS Code-shaped tool payloads.
+	{SystemCopilot, "PreToolUse"}:       CapabilityBlock,
+	{SystemCopilot, "PostToolUse"}:      CapabilityObserve,
+	{SystemCopilot, "Stop"}:             CapabilityObserve,
+	{SystemCopilot, "UserPromptSubmit"}: CapabilityBlock,
+
 	// Codex: PreToolUse blocks; PostToolUse substitutes the result.
 	{SystemCodex, "PreToolUse"}:        CapabilityBlock,
 	{SystemCodex, "PostToolUse"}:       CapabilitySubstitute,

@@ -48,8 +48,8 @@ func TestCanBlock_NewProviders(t *testing.T) {
 		{hook.SystemCodex, "PreToolUse", true},
 		{hook.SystemCodex, "SessionStart", false},
 		{hook.SystemCursor, "postToolUse", true},
-		{hook.SystemCursor, "afterMCPExecution", true},
-		{hook.SystemCursor, "afterAgentResponse", true},
+		{hook.SystemCursor, "afterMCPExecution", false},
+		{hook.SystemCursor, "afterAgentResponse", false},
 		{hook.SystemGemini, "BeforeTool", true},
 		{hook.SystemGemini, "BeforeToolSelection", false},
 		{hook.SystemGemini, "Notification", false},
@@ -213,8 +213,8 @@ func TestCodexBlockResponses(t *testing.T) {
 	}
 
 	got = string(hook.CodexBlock("Stop", "r", "blocked"))
-	if !strings.Contains(got, `"decision":"block"`) {
-		t.Fatalf("CodexBlock(Stop) missing block decision: %s", got)
+	if strings.TrimSpace(got) != "{}" {
+		t.Fatalf("CodexBlock(Stop) should allow for observe-only event: %s", got)
 	}
 
 	got = string(hook.CodexBlock("PostToolUse", "r", "blocked"))
@@ -228,8 +228,8 @@ func TestCodexBlockResponses(t *testing.T) {
 
 func TestBlockTextResponses(t *testing.T) {
 	diagnostic := "agent-gate blocked 2 violations:\n\nassistant_message\n1 | alpha xx\n  |       ^A"
-	if got := string(hook.CodexBlockText("Stop", diagnostic)); !strings.Contains(got, "agent-gate blocked 2 violations") || !strings.Contains(got, "alpha xx") {
-		t.Fatalf("CodexBlockText missing diagnostic: %s", got)
+	if got := strings.TrimSpace(string(hook.CodexBlockText("Stop", diagnostic))); got != "{}" {
+		t.Fatalf("CodexBlockText(Stop) should allow for observe-only event: %s", got)
 	}
 	if got := string(hook.CursorBlockText(diagnostic)); !strings.Contains(got, `"permission":"deny"`) || !strings.Contains(got, "alpha xx") {
 		t.Fatalf("CursorBlockText missing deny diagnostic: %s", got)
@@ -270,6 +270,29 @@ func TestEvaluateHot_BlocksCodexCredentialFileRead(t *testing.T) {
 	}
 	if !strings.Contains(stdout, "no-credential-file-reads") {
 		t.Fatalf("Codex response missing rule diagnostic: %s", stdout)
+	}
+}
+
+func TestEvaluateHotWithEventID_BlocksCodexWithVisibleEventID(t *testing.T) {
+	rule := testProviderRule(t,
+		"no-bad-command",
+		`bad-command`,
+		[]string{"PreToolUse"},
+		[]string{"tool_input.command"},
+		"Do not run bad-command.",
+	)
+	cfg := &config.Config{Rules: []config.Rule{rule}}
+	rawJSON := []byte(`{"hook_event_name":"PreToolUse","session_id":"s1","turn_id":"t1","tool_name":"Bash","tool_use_id":"call_1","cwd":"/repo","tool_input":{"command":"bad-command"}}`)
+
+	evaluation := hook.EvaluateHotWithEventID(context.Background(), rawJSON, cfg, hook.SystemCodex, func(string) string { return "" }, "intake_test")
+	if evaluation.ExitCode != 0 {
+		t.Fatalf("ExitCode = %d, want 0 for Codex hook response", evaluation.ExitCode)
+	}
+	if !strings.Contains(string(evaluation.Stdout), "agent-gate event_id: intake_test") {
+		t.Fatalf("Codex response missing event_id: %s", string(evaluation.Stdout))
+	}
+	if evaluation.Deferred.EventID != "intake_test" {
+		t.Fatalf("Deferred.EventID = %q, want intake_test", evaluation.Deferred.EventID)
 	}
 }
 
@@ -395,6 +418,28 @@ func TestWriteDeferredAudit_AuditOnlySkipsReceivedAndRawPayload(t *testing.T) {
 	rawJSON := []byte(`{"hook_event_name":"PreToolUse","session_id":"s1","tool_name":"Shell","tool_use_id":"call_1","cwd":"/repo","tool_input":{"command":"echo ok"}}`)
 
 	evaluation := hook.EvaluateHot(context.Background(), rawJSON, cfg, hook.SystemCodex, func(string) string { return "" })
+	sink := &recordingAuditSink{}
+	hook.WriteDeferredAudit(context.Background(), evaluation.Deferred, sink)
+
+	if got := sink.snapshot(); strings.Join(got, ",") != "hook.audit_violation,hook.allowed" {
+		t.Fatalf("messages = %#v, want audit_violation then allow", got)
+	}
+}
+
+func TestWriteDeferredAudit_CodexStopBlockingRuleDowngradesToAudit(t *testing.T) {
+	cfg := &config.Config{Rules: []config.Rule{testProviderRule(t,
+		"stop-text-rule",
+		`blocked`,
+		[]string{"Stop"},
+		[]string{"last_assistant_message"},
+		"Stop text matched.",
+	)}}
+	rawJSON := []byte(`{"hook_event_name":"Stop","session_id":"s1","turn_id":"t1","cwd":"/repo","stop_hook_active":false,"last_assistant_message":"blocked"}`)
+
+	evaluation := hook.EvaluateHot(context.Background(), rawJSON, cfg, hook.SystemCodex, func(string) string { return "" })
+	if strings.TrimSpace(string(evaluation.Stdout)) != "{}" {
+		t.Fatalf("Codex Stop should allow, got %s", string(evaluation.Stdout))
+	}
 	sink := &recordingAuditSink{}
 	hook.WriteDeferredAudit(context.Background(), evaluation.Deferred, sink)
 

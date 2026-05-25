@@ -29,6 +29,71 @@ violation_message = "blocked"
 	}
 }
 
+func TestLoadDefaultsRuleDiagnosticFormat(t *testing.T) {
+	setConfigHome(t, `[[rules]]
+name = "default-format"
+events = ["Stop"]
+field_paths = ["assistant_message"]
+pattern = "blocked"
+action = "block"
+violation_message = "blocked"
+`)
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if len(cfg.Rules) != 1 {
+		t.Fatalf("loaded rules = %#v", cfg.Rules)
+	}
+	if cfg.Rules[0].DiagnosticFormat != config.DiagnosticFormatDetailed {
+		t.Fatalf("DiagnosticFormat = %q, want %q", cfg.Rules[0].DiagnosticFormat, config.DiagnosticFormatDetailed)
+	}
+}
+
+func TestLoadAcceptsMessageOnlyDiagnosticFormat(t *testing.T) {
+	setConfigHome(t, `[[rules]]
+name = "message-only"
+events = ["Stop"]
+field_paths = ["assistant_message"]
+pattern = "blocked"
+action = "block"
+diagnostic_format = "message_only"
+violation_message = "blocked"
+`)
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if len(cfg.Rules) != 1 {
+		t.Fatalf("loaded rules = %#v", cfg.Rules)
+	}
+	if cfg.Rules[0].DiagnosticFormat != config.DiagnosticFormatMessageOnly {
+		t.Fatalf("DiagnosticFormat = %q, want %q", cfg.Rules[0].DiagnosticFormat, config.DiagnosticFormatMessageOnly)
+	}
+}
+
+func TestLoadRejectsUnknownDiagnosticFormat(t *testing.T) {
+	setConfigHome(t, `[[rules]]
+name = "bad-format"
+events = ["Stop"]
+field_paths = ["assistant_message"]
+pattern = "blocked"
+action = "block"
+diagnostic_format = "compact"
+violation_message = "blocked"
+`)
+
+	_, err := config.Load()
+	if err == nil {
+		t.Fatal("Load() returned nil error for unknown diagnostic_format")
+	}
+	if !strings.Contains(err.Error(), `unknown diagnostic_format "compact"`) {
+		t.Fatalf("Load() error = %v", err)
+	}
+}
+
 func TestLoadRejectsInvalidDiagnosticGroup(t *testing.T) {
 	setConfigHome(t, `[[rules]]
 name = "bad-group"

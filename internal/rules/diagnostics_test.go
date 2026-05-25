@@ -91,6 +91,98 @@ func TestFormatViolationsLineNumberedLegend(t *testing.T) {
 	}
 }
 
+func TestFormatViolationsMessageOnlyOmitsSourceDetails(t *testing.T) {
+	message := "Rewrite the blocked passage as complete sentences."
+	value := "alpha xx\nrun tests bad-token\nx marks"
+	got := rules.FormatViolations([]rules.Violation{
+		{
+			RuleName:         "no-fused-thoughts",
+			Message:          message,
+			DiagnosticFormat: config.DiagnosticFormatMessageOnly,
+			FieldPath:        "assistant_message",
+			Value:            value,
+			Start:            6,
+			End:              8,
+		},
+		{
+			RuleName:         "no-fused-thoughts",
+			Message:          message,
+			DiagnosticFormat: config.DiagnosticFormatMessageOnly,
+			FieldPath:        "assistant_message",
+			Value:            value,
+			Start:            26,
+			End:              27,
+		},
+	})
+
+	if got != message {
+		t.Fatalf("FormatViolations() = %q, want %q", got, message)
+	}
+	for _, blocked := range []string{
+		"agent-gate blocked",
+		"Rules:",
+		"Matches:",
+		"no-fused-thoughts",
+		"line:",
+		"column:",
+		"match:",
+		"text:",
+		"alpha xx",
+		"run tests",
+	} {
+		if strings.Contains(got, blocked) {
+			t.Fatalf("message-only diagnostic contains %q:\n%s", blocked, got)
+		}
+	}
+}
+
+func TestFormatViolationsMixedMessageOnlyAndDetailed(t *testing.T) {
+	message := "Rewrite the blocked passage as complete sentences."
+	value := "alpha xx\nrun tests bad-token\nx marks"
+	got := rules.FormatViolations([]rules.Violation{
+		{
+			RuleName:         "no-fused-thoughts",
+			Message:          message,
+			DiagnosticFormat: config.DiagnosticFormatMessageOnly,
+			FieldPath:        "assistant_message",
+			Value:            value,
+			Start:            6,
+			End:              8,
+		},
+		{
+			RuleName:  "no-bad-token",
+			Message:   "bad token is blocked.",
+			FieldPath: "assistant_message",
+			Value:     value,
+			Start:     19,
+			End:       28,
+		},
+	})
+
+	messageIndex := strings.Index(got, message)
+	detailedIndex := strings.Index(got, "agent-gate blocked 1 violation:")
+	if messageIndex != 0 {
+		t.Fatalf("message-only diagnostic did not render first:\n%s", got)
+	}
+	if detailedIndex < 0 || detailedIndex <= messageIndex {
+		t.Fatalf("detailed diagnostic did not render after message-only diagnostic:\n%s", got)
+	}
+	if strings.Contains(got[:detailedIndex], "no-fused-thoughts") {
+		t.Fatalf("message-only prefix leaked rule name:\n%s", got)
+	}
+	for _, want := range []string{
+		"A = no-bad-token",
+		"line: 2",
+		"column: 11",
+		"match: \"bad-token\"",
+		"text: \"run tests bad-token\"",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("mixed diagnostic missing %q:\n%s", want, got)
+		}
+	}
+}
+
 func TestFormatViolationsReportsCaptureGroupSpan(t *testing.T) {
 	value := "prefix bad suffix"
 	start := strings.Index(value, "bad")

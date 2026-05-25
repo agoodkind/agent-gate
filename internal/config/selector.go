@@ -32,6 +32,14 @@ const (
 	FieldEffectiveCWD
 	// FieldCmdSegments selects the chained command segments.
 	FieldCmdSegments
+	// FieldCmdComments selects unquoted shell comments from command fields.
+	FieldCmdComments
+	// FieldCmdDoubleHyphenProse selects command tokens where ASCII double
+	// hyphen appears outside flag or separator syntax.
+	FieldCmdDoubleHyphenProse
+	// FieldCmdRedirections selects unsafe shell redirections from command
+	// fields after stripping comments and quoted script content.
+	FieldCmdRedirections
 	// FieldPermissionMode selects the active permission mode.
 	FieldPermissionMode
 	// FieldAgentID selects the agent identifier.
@@ -218,6 +226,9 @@ var fieldSelectorByPath = map[string]FieldSelector{
 	"cwd":                          FieldCWD,
 	"effective_cwd":                FieldEffectiveCWD,
 	"cmd_segments":                 FieldCmdSegments,
+	"cmd_comments":                 FieldCmdComments,
+	"cmd_double_hyphen_prose":      FieldCmdDoubleHyphenProse,
+	"cmd_redirections":             FieldCmdRedirections,
 	"permission_mode":              FieldPermissionMode,
 	"agent_id":                     FieldAgentID,
 	"agent_type":                   FieldAgentType,

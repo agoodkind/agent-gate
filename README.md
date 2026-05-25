@@ -134,12 +134,12 @@ Each `[[rules]]` block defines one enforcement rule. Agent-gate evaluates every 
 ```toml
 [[rules]]
 name        = "no-shell-redirection"
-description = "Block shell output/error redirection"
+description = "Block direct shell output/error redirections that suppress, buffer, or truncate command output"
 events      = ["PreToolUse", "beforeShellExecution"]
-field_paths = ["tool_input.command", "command"]
-pattern     = '(\d+>&\d+|>&\d+|&>|\|&|>/dev/null)'
+field_paths = ["cmd_redirections"]
+pattern     = '.+'
 action      = "block"
-violation_message = "Shell redirection is not permitted."
+violation_message = "Direct shell output redirection is not permitted here."
 ```
 
 | Field | Description |
@@ -154,6 +154,7 @@ violation_message = "Shell redirection is not permitted."
 | `pattern` | PCRE2 regex matched against the extracted field value. |
 | `action` | `"block"` (default) stops the tool call where the protocol allows it. `"audit"` records the violation without blocking. The legacy `class` field is no longer accepted. |
 | `violation_message` | Returned to the LLM and written to the audit log. |
+| `diagnostic_format` | `"detailed"` by default. `"message_only"` returns only `violation_message`. |
 | `conditions` | Multi-condition AND rules. Each condition has a `kind`; missing `kind` means `regex` for compatibility. |
 
 ### Virtual fields
@@ -162,6 +163,9 @@ The rule engine supports virtual field paths for advanced matching:
 
 - `effective_cwd`: Computes the actual operation directory from the best available source. It prefers normalized operation-level cwd values such as `tool_input.workdir`, transcript function-call arguments, or an existing `effective_cwd`, then falls back to top-level `cwd` and simulates `cd` chains in the command.
 - `cmd_segments`: Splits shell commands on `&&`, `||`, `;`, and newlines for per-segment matching.
+- `cmd_comments`: Extracts unquoted shell comments from command fields so prose rules can scan comments without treating command flags or option separators as prose.
+- `cmd_double_hyphen_prose`: Extracts command tokens where ASCII double hyphen is not acting as a flag or option separator, so prose rules can still catch command arguments like `this--is` without blocking normal shell syntax.
+- `cmd_redirections`: Extracts direct shell output redirections that are unsafe for interactive agent work, while ignoring quoted script content, heredoc bodies, and standard-stream-only duplication.
 
 ### Condition Kinds
 
@@ -175,22 +179,23 @@ Example:
 
 ```toml
 [[rules]]
-name = "go-build-test-through-make"
-description = "Require make for Go build/test in Go modules that provide a Makefile"
+name = "go-build-through-make"
+description = "Require make build for Go build in Go modules that provide a Makefile"
 claude_events = ["PreToolUse"]
 cursor_events = ["preToolUse", "beforeShellExecution"]
 codex_events = ["PreToolUse"]
 gemini_events = ["BeforeTool"]
 action = "block"
-violation_message = "This Go project has a Makefile. Use the appropriate make target instead of calling go build or go test directly."
+violation_message = "Run make build instead of go build in Go modules that provide a Makefile."
 
 [[rules.conditions]]
 kind = "command"
 argv0 = "go"
-subcommands = ["build", "test"]
+subcommands = ["build"]
 strip_env = true
 strip_args = ["env", "time", "command"]
 cwd_flags = ["-C"]
+pattern = '^build(?:\s|$)'
 
 [[rules.conditions]]
 kind = "project"

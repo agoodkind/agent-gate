@@ -80,6 +80,28 @@ func emdashDaemonTestConfig(t testing.TB) *config.Config {
 	}
 }
 
+func codexStopAuditDaemonTestConfig(t testing.TB) *config.Config {
+	t.Helper()
+	re, err := regex.Compile(`this--is`)
+	if err != nil {
+		t.Fatalf("compile regex: %v", err)
+	}
+	return &config.Config{
+		Audit: config.Audit{Enabled: boolPtr(true)},
+		Rules: []config.Rule{
+			config.NewSimpleRule(
+				"stop-double-hyphen",
+				`this--is`,
+				re,
+				[]string{"Stop"},
+				[]string{"last_assistant_message"},
+				"block",
+				"Rewrite the stop text.",
+			),
+		},
+	}
+}
+
 func TestEvaluateHook_DaemonOwnsEnforcement(t *testing.T) {
 	setDaemonTestDirs(t)
 	srv, err := New(newDiscardLogger(), daemonTestConfig(t))
@@ -237,9 +259,9 @@ func TestHotPathBlocksBeforeDeferredQueue(t *testing.T) {
 	defer srv.Close()
 
 	hotCalled := false
-	setHotEvaluatorForTest(t, srv, func(ctx context.Context, rawJSON []byte, cfg *config.Config, hint hook.HookSystem, getenv func(string) string) hook.HotEvaluation {
+	setHotEvaluatorForTest(t, srv, func(ctx context.Context, rawJSON []byte, cfg *config.Config, hint hook.HookSystem, getenv func(string) string, eventID string) hook.HotEvaluation {
 		hotCalled = true
-		return hook.EvaluateHot(ctx, rawJSON, cfg, hint, getenv)
+		return hook.EvaluateHotWithEventID(ctx, rawJSON, cfg, hint, getenv, eventID)
 	})
 	replaceIntakeStoreForTest(t, srv, failingIntakeStore{})
 
@@ -460,6 +482,41 @@ func TestEvaluateHook_CopilotStopTranscriptAssistantTextIsEvaluated(t *testing.T
 	}
 	if !strings.Contains(string(resp.StdoutData), "{}") {
 		t.Fatalf("stdout = %q, want Claude allow response", string(resp.StdoutData))
+	}
+}
+
+func TestEvaluateHook_CodexStopBlockingRuleDowngradesToAudit(t *testing.T) {
+	setDaemonTestDirs(t)
+	cfg := codexStopAuditDaemonTestConfig(t)
+	srv, err := New(newDiscardLogger(), cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer srv.Close()
+
+	rawJSON := []byte(`{"session_id":"s1","hook_event_name":"Stop","turn_id":"t1","cwd":"/repo","stop_hook_active":false,"last_assistant_message":"this--is ugly"}`)
+	resp, err := srv.EvaluateHook(context.Background(), &daemonpb.EvaluateHookRequest{
+		RawJson:        rawJSON,
+		ProviderHint:   "codex",
+		Cwd:            "/repo",
+		EnvFingerprint: map[string]string{"CODEX_THREAD_ID": "test-thread"},
+	})
+	if err != nil {
+		t.Fatalf("EvaluateHook: %v", err)
+	}
+	if string(resp.StdoutData) != "{}\n" {
+		t.Fatalf("stdout = %q, want allow response", string(resp.StdoutData))
+	}
+	waitForNoPendingIntake(t, srv)
+	waitForAuditMessages(t, cfg, "hook.audit_violation", "hook.allowed")
+	events, _, err := audit.Query(cfg, audit.QueryFilter{Limit: 20})
+	if err != nil {
+		t.Fatalf("audit.Query: %v", err)
+	}
+	for _, event := range events {
+		if event.Message == "hook.blocked" {
+			t.Fatalf("unexpected hook.blocked event: %+v", event)
+		}
 	}
 }
 
@@ -732,7 +789,7 @@ func fillDeferredProcessorQueue(t testing.TB, srv *Server) {
 	snapshot.deferredProcessor.events <- "occupied"
 }
 
-func setHotEvaluatorForTest(t testing.TB, srv *Server, evaluator func(context.Context, []byte, *config.Config, hook.HookSystem, func(string) string) hook.HotEvaluation) {
+func setHotEvaluatorForTest(t testing.TB, srv *Server, evaluator func(context.Context, []byte, *config.Config, hook.HookSystem, func(string) string, string) hook.HotEvaluation) {
 	t.Helper()
 	snapshot := srv.runtime.Load()
 	if snapshot == nil {

@@ -107,11 +107,43 @@ func TestRenderResponseBlocksRemainProviderSpecific(t *testing.T) {
 	}
 }
 
+func TestRenderResponseBlockIncludesEventID(t *testing.T) {
+	tests := []struct {
+		name       string
+		system     hook.HookSystem
+		eventName  string
+		wantStdout bool
+	}{
+		{name: "claude", system: hook.SystemClaude, eventName: "PreToolUse", wantStdout: false},
+		{name: "cursor", system: hook.SystemCursor, eventName: "preToolUse", wantStdout: true},
+		{name: "codex", system: hook.SystemCodex, eventName: "PreToolUse", wantStdout: true},
+		{name: "gemini", system: hook.SystemGemini, eventName: "BeforeTool", wantStdout: true},
+		{name: "unknown", system: hook.SystemUnknown, eventName: "PreToolUse", wantStdout: false},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			request := blockRequest(testCase.system, testCase.eventName)
+			request.EventID = "intake_test"
+			response := hook.RenderResponse(request)
+			haystack := string(response.Stderr)
+			if testCase.wantStdout {
+				haystack = string(response.Stdout)
+			}
+			if !strings.Contains(haystack, "agent-gate event_id: intake_test") {
+				t.Fatalf("response missing event_id: stdout=%q stderr=%q", string(response.Stdout), string(response.Stderr))
+			}
+		})
+	}
+}
+
 func blockRequest(system hook.HookSystem, eventName string) hook.ResponseRequest {
 	return hook.ResponseRequest{
 		System:         system,
 		EventName:      eventName,
 		Decision:       hook.ResponseDecisionBlock,
 		DiagnosticText: "blocked",
+		EventID:        "",
+		FailOpenReason: "",
 	}
 }

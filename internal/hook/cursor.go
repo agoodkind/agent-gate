@@ -55,36 +55,6 @@ const (
 	CursorAfterTabFileEdit CursorEvent = "afterTabFileEdit"
 )
 
-// CanBlockCursor returns true for Cursor events where agent-gate should emit a
-// permission:"deny" response instead of reducing a match to audit-only.
-func CanBlockCursor(eventName string) bool {
-	switch CursorEvent(eventName) {
-	case CursorPreToolUse,
-		CursorPostToolUse,
-		CursorPostToolUseFailure,
-		CursorBeforeShellExecution,
-		CursorBeforeMCPExecution,
-		CursorAfterMCPExecution,
-		CursorBeforeReadFile,
-		CursorSubagentStart,
-		CursorBeforeSubmitPrompt,
-		CursorAfterAgentResponse,
-		CursorBeforeTabFileRead:
-		return true
-	case CursorSessionStart,
-		CursorSessionEnd,
-		CursorAfterShellExecution,
-		CursorAfterFileEdit,
-		CursorSubagentStop,
-		CursorPreCompact,
-		CursorStop,
-		CursorAfterAgentThought,
-		CursorAfterTabFileEdit:
-		return false
-	}
-	return false
-}
-
 // cursorResponse is the JSON structure Cursor reads from stdout.
 // Field names are snake_case per Cursor hooks documentation.
 type cursorResponse struct {

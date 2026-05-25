@@ -12,6 +12,8 @@ func TestLookupCapabilityKnownPairs(t *testing.T) {
 	}{
 		{"claude pre blocks", SystemClaude, "PreToolUse", CapabilityBlock},
 		{"claude post observe", SystemClaude, "PostToolUse", CapabilityObserve},
+		{"copilot pre blocks", SystemCopilot, "PreToolUse", CapabilityBlock},
+		{"copilot post observe", SystemCopilot, "PostToolUse", CapabilityObserve},
 		{"codex pre blocks", SystemCodex, "PreToolUse", CapabilityBlock},
 		{"codex post substitutes", SystemCodex, "PostToolUse", CapabilitySubstitute},
 		{"cursor pre blocks", SystemCursor, "preToolUse", CapabilityBlock},

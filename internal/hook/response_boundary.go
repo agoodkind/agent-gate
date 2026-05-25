@@ -36,6 +36,7 @@ type ResponseRequest struct {
 	EventName      string
 	Decision       ResponseDecision
 	DiagnosticText string
+	EventID        string
 	FailOpenReason FailOpenReason
 }
 
@@ -50,6 +51,9 @@ type Response struct {
 // RenderResponse turns a provider-neutral response declaration into the
 // bytes and exit code expected by the invoking provider.
 func RenderResponse(request ResponseRequest) Response {
+	if request.Decision == ResponseDecisionBlock {
+		request.DiagnosticText = diagnosticWithEventID(request.DiagnosticText, request.EventID)
+	}
 	switch request.System {
 	case SystemCursor:
 		return renderCursorResponse(request)
@@ -66,6 +70,16 @@ func RenderResponse(request ResponseRequest) Response {
 	}
 }
 
+func diagnosticWithEventID(text, eventID string) string {
+	if eventID == "" {
+		return text
+	}
+	if text == "" {
+		return "agent-gate event_id: " + eventID
+	}
+	return text + "\n\nagent-gate event_id: " + eventID
+}
+
 // FailOpenResponse emits a non-blocking response for hook transport,
 // availability, or internal failures. Policy decisions from the daemon should
 // not use this path.
@@ -75,6 +89,7 @@ func FailOpenResponse(system HookSystem, eventName string, diagnosticText string
 		EventName:      eventName,
 		Decision:       ResponseDecisionAllow,
 		DiagnosticText: diagnosticText,
+		EventID:        "",
 		FailOpenReason: reason,
 	})
 }

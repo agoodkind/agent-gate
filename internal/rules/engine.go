@@ -27,15 +27,16 @@ import (
 // when available; they stay empty for rule classes that have no specific span
 // to point at (such as fallback violations from gate-only condition rules).
 type Violation struct {
-	RuleName  string
-	Message   string
-	AuditOnly bool
-	Redact    bool
-	FieldPath string
-	FilePath  string
-	Value     string
-	Start     int
-	End       int
+	RuleName         string
+	Message          string
+	AuditOnly        bool
+	Redact           bool
+	DiagnosticFormat string
+	FieldPath        string
+	FilePath         string
+	Value            string
+	Start            int
+	End              int
 }
 
 // Evaluate iterates over all rules and returns the first Violation whose
@@ -473,15 +474,16 @@ func diffMatchesToViolations(matches []diffconcern.MatchResult, rule *config.Rul
 	out := make([]Violation, len(matches))
 	for i, m := range matches {
 		out[i] = Violation{
-			RuleName:  rule.Name,
-			Message:   rule.ViolationMessage,
-			AuditOnly: rule.AuditOnly,
-			Redact:    rule.RedactDiagnostics,
-			FieldPath: m.FieldPath,
-			FilePath:  m.FilePath,
-			Value:     m.Value,
-			Start:     m.Start,
-			End:       m.End,
+			RuleName:         rule.Name,
+			Message:          rule.ViolationMessage,
+			AuditOnly:        rule.AuditOnly,
+			Redact:           rule.RedactDiagnostics,
+			DiagnosticFormat: rule.DiagnosticFormat,
+			FieldPath:        m.FieldPath,
+			FilePath:         m.FilePath,
+			Value:            m.Value,
+			Start:            m.Start,
+			End:              m.End,
 		}
 	}
 	return out
@@ -504,15 +506,16 @@ func evalShellWriteCondition(fields *FieldSet, c *config.Condition, rule *config
 	out := make([]Violation, len(matches))
 	for i, m := range matches {
 		out[i] = Violation{
-			RuleName:  rule.Name,
-			Message:   rule.ViolationMessage,
-			AuditOnly: rule.AuditOnly,
-			Redact:    rule.RedactDiagnostics,
-			FieldPath: m.FieldPath,
-			FilePath:  m.FilePath,
-			Value:     m.Value,
-			Start:     m.Start,
-			End:       m.End,
+			RuleName:         rule.Name,
+			Message:          rule.ViolationMessage,
+			AuditOnly:        rule.AuditOnly,
+			Redact:           rule.RedactDiagnostics,
+			DiagnosticFormat: rule.DiagnosticFormat,
+			FieldPath:        m.FieldPath,
+			FilePath:         m.FilePath,
+			Value:            m.Value,
+			Start:            m.Start,
+			End:              m.End,
 		}
 	}
 	return out
@@ -549,15 +552,16 @@ func evalShellReadCondition(fields *FieldSet, c *config.Condition, rule *config.
 	out := make([]Violation, len(matches))
 	for i, m := range matches {
 		out[i] = Violation{
-			RuleName:  rule.Name,
-			Message:   rule.ViolationMessage,
-			AuditOnly: rule.AuditOnly,
-			Redact:    rule.RedactDiagnostics,
-			FieldPath: m.FieldPath,
-			FilePath:  m.FilePath,
-			Value:     m.Value,
-			Start:     m.Start,
-			End:       m.End,
+			RuleName:         rule.Name,
+			Message:          rule.ViolationMessage,
+			AuditOnly:        rule.AuditOnly,
+			Redact:           rule.RedactDiagnostics,
+			DiagnosticFormat: rule.DiagnosticFormat,
+			FieldPath:        m.FieldPath,
+			FilePath:         m.FilePath,
+			Value:            m.Value,
+			Start:            m.Start,
+			End:              m.End,
 		}
 	}
 	return out
@@ -595,15 +599,16 @@ func matchesToViolations(matches []regexconcern.MatchResult, rule *config.Rule) 
 	violations := make([]Violation, len(matches))
 	for i, m := range matches {
 		violations[i] = Violation{
-			RuleName:  rule.Name,
-			Message:   rule.ViolationMessage,
-			AuditOnly: rule.AuditOnly,
-			Redact:    rule.RedactDiagnostics,
-			FieldPath: m.FieldPath,
-			FilePath:  m.FilePath,
-			Value:     m.Value,
-			Start:     m.Start,
-			End:       m.End,
+			RuleName:         rule.Name,
+			Message:          rule.ViolationMessage,
+			AuditOnly:        rule.AuditOnly,
+			Redact:           rule.RedactDiagnostics,
+			DiagnosticFormat: rule.DiagnosticFormat,
+			FieldPath:        m.FieldPath,
+			FilePath:         m.FilePath,
+			Value:            m.Value,
+			Start:            m.Start,
+			End:              m.End,
 		}
 	}
 	return violations
@@ -621,15 +626,16 @@ func conditionFallbackViolation(fields FieldSet, rule *config.Rule) Violation {
 	}
 	end := min(len(value), 1)
 	return Violation{
-		RuleName:  rule.Name,
-		Message:   rule.ViolationMessage,
-		AuditOnly: rule.AuditOnly,
-		Redact:    rule.RedactDiagnostics,
-		FieldPath: fieldPath,
-		FilePath:  fields.FilePathValue(),
-		Value:     value,
-		Start:     0,
-		End:       end,
+		RuleName:         rule.Name,
+		Message:          rule.ViolationMessage,
+		AuditOnly:        rule.AuditOnly,
+		Redact:           rule.RedactDiagnostics,
+		DiagnosticFormat: rule.DiagnosticFormat,
+		FieldPath:        fieldPath,
+		FilePath:         fields.FilePathValue(),
+		Value:            value,
+		Start:            0,
+		End:              end,
 	}
 }
 
@@ -708,6 +714,7 @@ func diffConditionGateMatch(fields FieldSet, c *config.Condition) bool {
 		Action:            config.ActionBlock,
 		ViolationMessage:  "",
 		DiagnosticGroup:   0,
+		DiagnosticFormat:  config.DiagnosticFormatDetailed,
 		RedactDiagnostics: false,
 		AuditOnly:         false,
 		DisableIfEnv:      nil,
@@ -758,6 +765,7 @@ func shellReadConditionGateMatch(fields FieldSet, c *config.Condition) bool {
 		Action:            config.ActionBlock,
 		ViolationMessage:  "",
 		DiagnosticGroup:   0,
+		DiagnosticFormat:  config.DiagnosticFormatDetailed,
 		RedactDiagnostics: false,
 		AuditOnly:         false,
 		DisableIfEnv:      nil,

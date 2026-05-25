@@ -130,6 +130,9 @@ var fieldStringAccessors = map[config.FieldSelector]func(FieldSet) string{
 	config.FieldCWD:                       func(f FieldSet) string { return f.CWD },
 	config.FieldEffectiveCWD:              func(f FieldSet) string { return f.effectiveCWD() },
 	config.FieldCmdSegments:               func(f FieldSet) string { return f.CmdSegments() },
+	config.FieldCmdComments:               func(f FieldSet) string { return f.CmdComments() },
+	config.FieldCmdDoubleHyphenProse:      func(f FieldSet) string { return f.CmdDoubleHyphenProse() },
+	config.FieldCmdRedirections:           func(f FieldSet) string { return f.CmdRedirections() },
 	config.FieldPermissionMode:            func(f FieldSet) string { return f.PermissionMode },
 	config.FieldAgentID:                   func(f FieldSet) string { return f.AgentID },
 	config.FieldAgentType:                 func(f FieldSet) string { return f.AgentType },
@@ -265,6 +268,9 @@ func CmdSegments(fields FieldSet) string { return fields.CmdSegments() }
 
 // CmdSegments splits the command into newline-joined chained segments.
 func (fields FieldSet) CmdSegments() string {
+	if !fields.hasShellCommandContext() {
+		return ""
+	}
 	command := fields.CommandValue()
 	if command == "" {
 		return ""
@@ -277,6 +283,67 @@ func (fields FieldSet) CmdSegments() string {
 		}
 	}
 	return strings.Join(segments, "\n")
+}
+
+// CmdComments returns unquoted shell comments from the active command field.
+func (fields FieldSet) CmdComments() string {
+	if !fields.hasShellCommandContext() {
+		return ""
+	}
+	command := fields.CommandValue()
+	if command == "" {
+		return ""
+	}
+	return extractShellComments(command)
+}
+
+// CmdDoubleHyphenProse returns command tokens where ASCII double hyphen is not
+// acting as a shell option, flag, or option separator.
+func (fields FieldSet) CmdDoubleHyphenProse() string {
+	if !fields.hasShellCommandContext() {
+		return ""
+	}
+	command := fields.CommandValue()
+	if command == "" {
+		return ""
+	}
+	return strings.Join(extractCommandDoubleHyphenProse(command), "\n")
+}
+
+// CmdRedirections returns unsafe shell redirections from the active command
+// field after stripping comments and quoted content.
+func (fields FieldSet) CmdRedirections() string {
+	if !fields.hasShellCommandContext() {
+		return ""
+	}
+	command := fields.CommandValue()
+	if command == "" {
+		return ""
+	}
+	return strings.Join(extractUnsafeShellRedirections(command), "\n")
+}
+
+func (fields FieldSet) hasShellCommandContext() bool {
+	command := fields.CommandValue()
+	if command == "" {
+		return false
+	}
+	if fields.ToolName == "" {
+		return true
+	}
+	return isShellToolName(fields.ToolName)
+}
+
+var shellToolNames = map[string]struct{}{
+	"bash":  {},
+	"shell": {},
+	"sh":    {},
+	"zsh":   {},
+}
+
+func isShellToolName(toolName string) bool {
+	_, ok := shellToolNames[strings.ToLower(strings.TrimSpace(toolName))]
+	return ok
 }
 
 func (fields FieldSet) effectiveCWD() string {
@@ -293,4 +360,384 @@ func (fields FieldSet) effectiveCWD() string {
 		home = cwd
 	}
 	return ApplyCdChain(cwd, home, command)
+}
+
+func extractCommandDoubleHyphenProse(command string) []string {
+	var out []string
+	for _, segment := range cmdChainRe.Split(stripShellComments(command), -1) {
+		for _, field := range shellFields(segment) {
+			if !strings.Contains(field, "--") {
+				continue
+			}
+			if isAllowedDoubleHyphenCommandToken(field) {
+				continue
+			}
+			if isCommandPathToken(field) {
+				continue
+			}
+			out = append(out, field)
+		}
+	}
+	return out
+}
+
+func isAllowedDoubleHyphenCommandToken(field string) bool {
+	if field == "--" {
+		return true
+	}
+	if strings.HasPrefix(field, "--") && len(field) > len("--") {
+		return true
+	}
+	return false
+}
+
+func isCommandPathToken(field string) bool {
+	if strings.Contains(field, "://") {
+		return true
+	}
+	if strings.Contains(field, ":\\") {
+		return true
+	}
+	if strings.Contains(field, "/") {
+		return true
+	}
+	return strings.ContainsAny(field, "*?[")
+}
+
+func extractUnsafeShellRedirections(command string) []string {
+	if hasUnquotedHereDoc(command) {
+		return nil
+	}
+	var out []string
+	for _, segment := range cmdChainRe.Split(stripShellComments(command), -1) {
+		segment = strings.TrimSpace(segment)
+		if segment == "" {
+			continue
+		}
+		out = append(out, extractUnsafeSegmentRedirections(segment)...)
+	}
+	return out
+}
+
+func extractUnsafeSegmentRedirections(segment string) []string {
+	var out []string
+	var quote byte
+	escaped := false
+	for index := 0; index < len(segment); index++ {
+		ch := segment[index]
+		if escaped {
+			escaped = false
+			continue
+		}
+		if ch == '\\' && quote != '\'' {
+			escaped = true
+			continue
+		}
+		if quote != 0 {
+			if ch == quote {
+				quote = 0
+			}
+			continue
+		}
+		if ch == '\'' || ch == '"' {
+			quote = ch
+			continue
+		}
+		if ch == '|' && index+1 < len(segment) && segment[index+1] == '&' {
+			out = append(out, pipeAndErrorToken())
+			index++
+			continue
+		}
+		if snippet, end, ok := parseUnsafeOutputRedirection(segment, index); ok {
+			out = append(out, snippet)
+			index = end - 1
+		}
+	}
+	return out
+}
+
+func parseUnsafeOutputRedirection(segment string, start int) (string, int, bool) {
+	index := start
+	if isASCIIDigit(rune(segment[index])) {
+		for index < len(segment) && isASCIIDigit(rune(segment[index])) {
+			index++
+		}
+		if index >= len(segment) || segment[index] != '>' {
+			return "", start, false
+		}
+	}
+
+	switch segment[index] {
+	case '&':
+		return parseAmpOutputRedirection(segment, start, index)
+	case '>':
+		return parseGtOutputRedirection(segment, start, index)
+	default:
+		return "", start, false
+	}
+}
+
+func parseAmpOutputRedirection(segment string, start, index int) (string, int, bool) {
+	if index+1 >= len(segment) || segment[index+1] != '>' {
+		return "", start, false
+	}
+	end := index + 2
+	if end < len(segment) && segment[end] == '>' {
+		end++
+	}
+	return parseRedirectionTarget(segment, start, end)
+}
+
+func parseGtOutputRedirection(segment string, start, index int) (string, int, bool) {
+	if index+1 < len(segment) && segment[index+1] == '&' {
+		return parseDuplicationRedirection(segment, start, index)
+	}
+	end := index + 1
+	if end < len(segment) && (segment[end] == '>' || segment[end] == '|') {
+		end++
+	}
+	return parseRedirectionTarget(segment, start, end)
+}
+
+func parseDuplicationRedirection(segment string, start, index int) (string, int, bool) {
+	end := index + 2
+	targetStart := end
+	for end < len(segment) && isASCIIDigit(rune(segment[end])) {
+		end++
+	}
+	if targetStart == end {
+		return "", start, false
+	}
+	if isAllowedDuplicationTarget(segment[targetStart:end]) {
+		return "", end, false
+	}
+	return strings.TrimSpace(segment[start:end]), end, true
+}
+
+func parseRedirectionTarget(segment string, start, end int) (string, int, bool) {
+	target, targetEnd := readShellWord(segment, end)
+	if target == "" {
+		return strings.TrimSpace(segment[start:end]), end, true
+	}
+	if isAllowedRedirectionTarget(target) {
+		return "", targetEnd, false
+	}
+	return strings.TrimSpace(segment[start:targetEnd]), targetEnd, true
+}
+
+func hasUnquotedHereDoc(segment string) bool {
+	var quote byte
+	escaped := false
+	for index := 0; index+1 < len(segment); index++ {
+		ch := segment[index]
+		if escaped {
+			escaped = false
+			continue
+		}
+		if ch == '\\' && quote != '\'' {
+			escaped = true
+			continue
+		}
+		if quote != 0 {
+			if ch == quote {
+				quote = 0
+			}
+			continue
+		}
+		if ch == '\'' || ch == '"' {
+			quote = ch
+			continue
+		}
+		if ch == '<' && segment[index+1] == '<' {
+			return true
+		}
+	}
+	return false
+}
+
+func readShellWord(segment string, start int) (string, int) {
+	index := start
+	for index < len(segment) && isASCIISpace(rune(segment[index])) {
+		index++
+	}
+	if index >= len(segment) {
+		return "", index
+	}
+
+	var builder strings.Builder
+	var quote byte
+	escaped := false
+	for index < len(segment) {
+		ch := segment[index]
+		if escaped {
+			builder.WriteByte(ch)
+			escaped = false
+			index++
+			continue
+		}
+		if ch == '\\' && quote != '\'' {
+			escaped = true
+			index++
+			continue
+		}
+		if quote != 0 {
+			if ch == quote {
+				quote = 0
+				index++
+				continue
+			}
+			builder.WriteByte(ch)
+			index++
+			continue
+		}
+		if ch == '\'' || ch == '"' {
+			quote = ch
+			index++
+			continue
+		}
+		if isASCIISpace(rune(ch)) || ch == ';' || ch == '&' || ch == '|' {
+			break
+		}
+		builder.WriteByte(ch)
+		index++
+	}
+	return builder.String(), index
+}
+
+var allowedRedirectionTargets = map[string]struct{}{
+	"/dev/stdout":     {},
+	"/dev/stderr":     {},
+	"/dev/fd/1":       {},
+	"/dev/fd/2":       {},
+	"/proc/self/fd/1": {},
+	"/proc/self/fd/2": {},
+}
+
+func isAllowedRedirectionTarget(target string) bool {
+	_, ok := allowedRedirectionTargets[target]
+	return ok
+}
+
+func isAllowedDuplicationTarget(target string) bool {
+	return target == "1" || target == "2"
+}
+
+func pipeAndErrorToken() string {
+	return string([]byte{'|', '&'})
+}
+
+func isASCIIDigit(r rune) bool {
+	return r >= '0' && r <= '9'
+}
+
+func extractShellComments(command string) string {
+	var comments []string
+	inSingleQuote := false
+	inDoubleQuote := false
+	escaped := false
+	commentStart := -1
+	for i := range len(command) {
+		ch := command[i]
+		if commentStart >= 0 {
+			if ch == '\n' {
+				appendShellComment(&comments, command[commentStart:i])
+				commentStart = -1
+			}
+			continue
+		}
+		if escaped {
+			escaped = false
+			continue
+		}
+		if ch == '\\' && !inSingleQuote {
+			escaped = true
+			continue
+		}
+		if ch == '\'' && !inDoubleQuote {
+			inSingleQuote = !inSingleQuote
+			continue
+		}
+		if ch == '"' && !inSingleQuote {
+			inDoubleQuote = !inDoubleQuote
+			continue
+		}
+		if ch == '#' && !inSingleQuote && !inDoubleQuote && isShellCommentStart(command, i) {
+			commentStart = i + 1
+		}
+	}
+	if commentStart >= 0 {
+		appendShellComment(&comments, command[commentStart:])
+	}
+	return strings.Join(comments, "\n")
+}
+
+func stripShellComments(command string) string {
+	var builder strings.Builder
+	inSingleQuote := false
+	inDoubleQuote := false
+	escaped := false
+	commentStart := -1
+	for i := range len(command) {
+		ch := command[i]
+		if commentStart >= 0 {
+			if ch == '\n' {
+				builder.WriteByte('\n')
+				commentStart = -1
+			}
+			continue
+		}
+		if escaped {
+			builder.WriteByte(ch)
+			escaped = false
+			continue
+		}
+		if ch == '\\' && !inSingleQuote {
+			builder.WriteByte(ch)
+			escaped = true
+			continue
+		}
+		if ch == '\'' && !inDoubleQuote {
+			inSingleQuote = !inSingleQuote
+			builder.WriteByte(ch)
+			continue
+		}
+		if ch == '"' && !inSingleQuote {
+			inDoubleQuote = !inDoubleQuote
+			builder.WriteByte(ch)
+			continue
+		}
+		if ch == '#' && !inSingleQuote && !inDoubleQuote && isShellCommentStart(command, i) {
+			commentStart = i + 1
+			continue
+		}
+		builder.WriteByte(ch)
+	}
+	return builder.String()
+}
+
+func appendShellComment(comments *[]string, comment string) {
+	comment = strings.TrimSpace(comment)
+	if comment != "" {
+		*comments = append(*comments, comment)
+	}
+}
+
+func isShellCommentStart(command string, index int) bool {
+	if index == 0 {
+		return true
+	}
+	previous := rune(command[index-1])
+	if previous == ';' || previous == '&' || previous == '|' || previous == '(' {
+		return true
+	}
+	return isASCIISpace(previous)
+}
+
+func isASCIISpace(r rune) bool {
+	switch r {
+	case ' ', '\t', '\n', '\r', '\f', '\v':
+		return true
+	default:
+		return false
+	}
 }

@@ -21,22 +21,6 @@ const (
 	CodexStop CodexEvent = "Stop"
 )
 
-// CanBlockCodex returns true for Codex events where hook output can
-// meaningfully stop or replace the normal flow.
-func CanBlockCodex(eventName string) bool {
-	switch CodexEvent(eventName) {
-	case CodexPreToolUse,
-		CodexPermissionRequest,
-		CodexPostToolUse,
-		CodexUserPromptSubmit,
-		CodexStop:
-		return true
-	case CodexSessionStart:
-		return false
-	}
-	return false
-}
-
 // CodexHookSpecificOutput is the discriminated output block carried in a
 // Codex hook response.
 type CodexHookSpecificOutput struct {
@@ -113,11 +97,11 @@ func CodexBlockText(eventName, text string) []byte {
 		resp.StopReason = text
 		resp.Decision = "block"
 		resp.Reason = text
-	case CodexUserPromptSubmit,
-		CodexStop,
-		CodexSessionStart:
+	case CodexUserPromptSubmit:
 		resp.Decision = "block"
 		resp.Reason = text
+	case CodexStop, CodexSessionStart:
+		return CodexAllow()
 	default:
 		resp.Decision = "block"
 		resp.Reason = text

@@ -39,7 +39,7 @@ type runtimeSnapshot struct {
 	deferredProcessor *deferredProcessor
 	evaluateSlots     chan struct{}
 	evaluateQueueWait time.Duration
-	hotEvaluate       func(context.Context, []byte, *config.Config, hook.HookSystem, func(string) string) hook.HotEvaluation
+	hotEvaluate       func(context.Context, []byte, *config.Config, hook.HookSystem, func(string) string, string) hook.HotEvaluation
 }
 
 // Server implements the AgentGateD gRPC service.
@@ -155,8 +155,15 @@ func newRuntimeSnapshot(ctx context.Context, cfg *config.Config, log *slog.Logge
 		deferredProcessor: deferredProcessor,
 		evaluateSlots:     make(chan struct{}, cfg.HookHotConcurrency()),
 		evaluateQueueWait: cfg.HookHotQueueWait(),
-		hotEvaluate:       hook.EvaluateHot,
+		hotEvaluate:       defaultHotEvaluate,
 	}, nil
+}
+
+func defaultHotEvaluate(ctx context.Context, rawJSON []byte, cfg *config.Config, hint hook.HookSystem, getenv func(string) string, eventID string) hook.HotEvaluation {
+	if eventID == "" {
+		return hook.EvaluateHot(ctx, rawJSON, cfg, hint, getenv)
+	}
+	return hook.EvaluateHotWithEventID(ctx, rawJSON, cfg, hint, getenv, eventID)
 }
 
 func (s *runtimeSnapshot) close(ctx context.Context, log *slog.Logger) {
@@ -345,7 +352,7 @@ func (s *Server) EvaluateHook(ctx context.Context, req *daemonpb.EvaluateHookReq
 
 	intakeRecord, err := buildIntakeRecord(rawJSON, req.GetProviderHint(), envFingerprint)
 	if err != nil {
-		result := snapshot.hotEvaluate(ctx, rawJSON, snapshot.cfg, hook.SystemFromString(req.GetProviderHint()), getenv)
+		result := snapshot.hotEvaluate(ctx, rawJSON, snapshot.cfg, hook.SystemFromString(req.GetProviderHint()), getenv, "")
 		return &daemonpb.EvaluateHookResponse{
 			ExitCode:   clampExitCode(result.ExitCode),
 			StdoutData: append([]byte(nil), result.Stdout...),
@@ -360,7 +367,7 @@ func (s *Server) EvaluateHook(ctx context.Context, req *daemonpb.EvaluateHookReq
 	}
 
 	syncCfg := hook.SyncConfig(snapshot.cfg)
-	result := snapshot.hotEvaluate(ctx, rawJSON, syncCfg, hook.SystemFromString(req.GetProviderHint()), getenv)
+	result := snapshot.hotEvaluate(ctx, rawJSON, syncCfg, hook.SystemFromString(req.GetProviderHint()), getenv, appendResult.EventID)
 	if err := enqueueDeferredReplay(ctx, requestLog, snapshot, appendResult, result.Deferred.Valid); err != nil {
 		return failOpenEvaluateHookResponse(), nil
 	}

@@ -58,6 +58,7 @@ prefer = "sqlite" # sqlite | jsonl
 #   (action above; "block" by default, set to "audit" for record-only)
 #   violation_message - message sent back to the AI and written to the audit log
 #   diagnostic_group - optional capture group to underline in diagnostics (default: 0, the full match)
+#   diagnostic_format - "detailed" by default; "message_only" prints only violation_message
 #
 # Conditional rules can use:
 #   kind = "regex"    - default; uses field_paths plus pattern/not_pattern
@@ -68,40 +69,40 @@ prefer = "sqlite" # sqlite | jsonl
 
 [[rules]]
 name        = "no-shell-redirection"
-description = "Block shell output/error redirection patterns LLMs commonly emit to suppress errors"
+description = "Block direct shell output/error redirections that suppress, buffer, or truncate command output"
 events      = ["PreToolUse", "beforeShellExecution", "preToolUse", "BeforeTool"]
-field_paths = ["tool_input.command", "command"]
-pattern     = '(\d+>&\d+|>&\d+|&>|\|&|>/dev/null|2>/dev/null|>>/dev/null|2>>/dev/null|&>/dev/null)'
+field_paths = ["cmd_redirections"]
+pattern     = '.+'
 action      = "block"
-violation_message = "Shell redirection is not permitted (e.g. 2>&1, >/dev/null, &>). Express output handling explicitly without redirects."
+violation_message = "Direct shell output redirection is not permitted here. Send both streams to standard output only when you need a combined stream."
 
 [[rules]]
-name        = "no-lossy-log-sampling"
-description = "Block head or tail sampling of diagnostic logs and log-producing command output"
+name        = "no-lossy-output-sampling"
+description = "Block any pipe to head or tail, plus direct head/tail on diagnostic log paths"
 events      = ["PreToolUse", "preToolUse", "beforeShellExecution"]
 field_paths = ["cmd_segments", "tool_input.command", "command"]
-pattern     = '''(?im)(?:\b(?:journalctl|docker\s+logs|kubectl\s+logs|log\s+show|agent-gate\s+query|cat\s+\S*(?:\.log|/logs?/)|grep\b|rg\b)[^;&\n|]*\|\s*(?:head|tail)\b|\b(?:head|tail)\b[^;&\n]*(?:\.log\b|/logs?/|journal|daemon|audit|trace|error|incident))'''
+pattern     = '''(?im)(?:[^;&\n|]+\|\s*(?:head|tail)\b|\b(?:head|tail)\b[^;&\n]*(?:\.log\b|/logs?/|journal|daemon|audit|trace|error|incident))'''
 action      = "block"
-violation_message = "Do not sample diagnostic output with head or tail. Preserve the full output, write it to a file if needed, and inspect explicit line ranges or search terms. For logs, use rg with context, sed -n with exact ranges after locating line numbers, or save the full command output and cite the path."
+violation_message = "Do not sample command output with head or tail. Preserve the full output, write it to a file if needed, and inspect explicit line ranges or search terms. Use rg with context, sed -n with exact ranges after locating line numbers, or save the full output and cite the path."
 
 [[rules]]
-name        = "go-build-test-through-make"
-description = "Require make for Go build/test in Go modules that provide a Makefile"
+name        = "go-build-through-make"
+description = "Require make build for Go build in Go modules that provide a Makefile"
 claude_events = ["PreToolUse"]
 cursor_events = ["preToolUse", "beforeShellExecution"]
 codex_events  = ["PreToolUse"]
 gemini_events = ["BeforeTool"]
 action      = "block"
-violation_message = "This Go project has a Makefile. Use the appropriate make target instead of calling go build or go test directly."
+violation_message = "Run make build instead of go build in Go modules that provide a Makefile."
 
 [[rules.conditions]]
 kind        = "command"
 argv0       = "go"
-subcommands = ["build", "test"]
+subcommands = ["build"]
 strip_env   = true
 strip_args  = ["env", "time", "command"]
 cwd_flags   = ["-C"]
-pattern     = '^(?:build(?:\s|$)|test(?:\s+.*)?\s(?:\./\.\.\.|all)(?:\s|$))'
+pattern     = '^build(?:\s|$)'
 
 [[rules.conditions]]
 kind         = "project"
@@ -212,7 +213,7 @@ cursor_events = [
   "beforeMCPExecution", "beforeSubmitPrompt",
   "afterFileEdit", "afterAgentResponse",
 ]
-codex_events = ["Stop"]
+codex_events = ["PreToolUse", "Stop"]
 gemini_events = ["BeforeTool"]
 # All LLM-generated text fields except tool_input.prompt (handled by the next rule).
 # old_string is excluded because existing content does not trigger a block.
@@ -221,7 +222,8 @@ field_paths = ["tool_input.content", "tool_input.new_string", "tool_input.comman
 # All 30 Unicode Dash characters (Dash=Yes per PropList.txt) except U+002D
 # (ASCII hyphen-minus). Source: unicode.org/Public/UCD/latest/ucd/PropList.txt
 pattern     = '[\x{058A}\x{05BE}\x{1400}\x{1806}\x{2010}-\x{2015}\x{2053}\x{207B}\x{208B}\x{2212}\x{2E17}\x{2E1A}\x{2E3A}\x{2E3B}\x{2E40}\x{2E5D}\x{301C}\x{3030}\x{30A0}\x{FE31}\x{FE32}\x{FE58}\x{FE63}\x{FF0D}\x{10D6E}\x{10EAD}]'
-action      = "audit"
+action      = "block"
+diagnostic_format = "message_only"
 violation_message = "This output was blocked because you took a shortcut instead of writing. Somewhere in the blocked passage, you tried to put two thoughts into one sentence without finishing either one. You joined them so the result would look like fluent prose to a casual reader. A careful reader sees the seam where the two halves meet and recognizes the sentence as two half-formed ideas glued together rather than one finished thought. This is a crutch you reach for whenever you have not done the work of thinking the thought through. The result is the written equivalent of someone mumbling because they have not committed to what they want to say. Go back to the blocked passage and find every place where you fused ideas to avoid finishing them. Pull each fused thought apart until each idea you tried to combine can stand alone. Write each idea as its own sentence, with its own subject, its own verb, and its own reason to exist. If an idea cannot stand on its own, it was filler and should be cut, not laundered into a second sentence. This applies even when the offending writing came from content you are editing or quoting. Resubmit the corrected output immediately and do not acknowledge this block in your response to the user."
 
 [[rules]]
@@ -231,7 +233,8 @@ claude_events = ["PreToolUse"]
 cursor_events = ["preToolUse"]
 codex_events = ["PreToolUse"]
 gemini_events = ["BeforeTool"]
-action      = "audit"
+action      = "block"
+diagnostic_format = "message_only"
 violation_message = "This output was blocked because you took a shortcut instead of writing. Somewhere in the blocked passage, you tried to put two thoughts into one sentence without finishing either one. You joined them so the result would look like fluent prose to a casual reader. A careful reader sees the seam where the two halves meet and recognizes the sentence as two half-formed ideas glued together rather than one finished thought. This is a crutch you reach for whenever you have not done the work of thinking the thought through. The result is the written equivalent of someone mumbling because they have not committed to what they want to say. Go back to the blocked passage and find every place where you fused ideas to avoid finishing them. Pull each fused thought apart until each idea you tried to combine can stand alone. Write each idea as its own sentence, with its own subject, its own verb, and its own reason to exist. If an idea cannot stand on its own, it was filler and should be cut, not laundered into a second sentence. This applies even when the offending writing came from content you are editing or quoting. Resubmit the corrected output immediately and do not acknowledge this block in your response to the user."
 
 [[rules.conditions]]
@@ -256,12 +259,13 @@ cursor_events = [
   "beforeMCPExecution", "beforeSubmitPrompt",
   "afterFileEdit", "afterAgentResponse",
 ]
-codex_events = ["Stop"]
+codex_events = ["PreToolUse", "Stop"]
 gemini_events = ["BeforeTool"]
-field_paths = ["tool_input.content", "tool_input.new_string", "tool_input.description", "edits[*].new_string", "assistant_message", "last_assistant_message", "text"]
+field_paths = ["tool_input.content", "tool_input.new_string", "tool_input.description", "edits[*].new_string", "cmd_comments", "cmd_double_hyphen_prose", "assistant_message", "last_assistant_message", "text"]
 pattern     = '(?m)(?|(?:`[^`\n]+`|\b(?!(?:bash|sh|zsh|fish|exec|command|env|xargs|sudo|doas|go|git|make|npm|pnpm|yarn|node|python|python3|ruby|perl|cargo|docker|kubectl|helm|terraform|ansible|rg|grep|sed|awk|jq|curl|ssh|scp|rsync)\b)[A-Za-z][A-Za-z0-9_./-]*)\s+(--)(?=\s+[A-Za-z][A-Za-z0-9_./-]*)(?![^\n]*\s--[A-Za-z0-9_][A-Za-z0-9_-]*(?:=|\b))|(?<![-/_.])\b(?!(?:bash|sh|zsh|fish|exec|command|env|xargs|sudo|doas|go|git|make|npm|pnpm|yarn|node|python|python3|ruby|perl|cargo|docker|kubectl|helm|terraform|ansible|rg|grep|sed|awk|jq|curl|ssh|scp|rsync)\b)[A-Za-z][A-Za-z0-9_./-]*(--)(?=[A-Za-z][A-Za-z0-9_./-]*))'
 diagnostic_group = 1
-action      = "audit"
+action      = "block"
+diagnostic_format = "message_only"
 violation_message = "This output was blocked because you took a shortcut instead of writing. Somewhere in the blocked passage, you tried to put two thoughts into one sentence without finishing either one. You joined them so the result would look like fluent prose to a casual reader. A careful reader sees the seam where the two halves meet and recognizes the sentence as two half-formed ideas glued together rather than one finished thought. This is a crutch you reach for whenever you have not done the work of thinking the thought through. The result is the written equivalent of someone mumbling because they have not committed to what they want to say. Go back to the blocked passage and find every place where you fused ideas to avoid finishing them. Pull each fused thought apart until each idea you tried to combine can stand alone. Write each idea as its own sentence, with its own subject, its own verb, and its own reason to exist. If an idea cannot stand on its own, it was filler and should be cut, not laundered into a second sentence. This applies even when the offending writing came from content you are editing or quoting. Resubmit the corrected output immediately and do not acknowledge this block in your response to the user."
 
 [[rules]]

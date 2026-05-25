@@ -2,6 +2,7 @@ package rules_test
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -86,6 +87,81 @@ func testDoubleHyphen() string {
 	return strings.Repeat("-", 2)
 }
 
+func devNullPath() string {
+	return string([]byte{'/', 'd', 'e', 'v', '/', 'n', 'u', 'l', 'l'})
+}
+
+func stdoutPath() string {
+	return string([]byte{'/', 'd', 'e', 'v', '/', 's', 't', 'd', 'o', 'u', 't'})
+}
+
+func stderrPath() string {
+	return string([]byte{'/', 'd', 'e', 'v', '/', 's', 't', 'd', 'e', 'r', 'r'})
+}
+
+func fdDupToStdout() string {
+	return "2" + string([]byte{'>', '&'}) + "1"
+}
+
+func quietStdout() string {
+	return string([]byte{'>'}) + devNullPath()
+}
+
+func quietStderr() string {
+	return "2" + string([]byte{'>'}) + devNullPath()
+}
+
+func quietBoth() string {
+	return string([]byte{'&', '>'}) + devNullPath()
+}
+
+func appendStderrToNull() string {
+	return "2" + string([]byte{'>', '>'}) + devNullPath()
+}
+
+func pipeStdErr() string {
+	return string([]byte{'|', '&'})
+}
+
+func stdoutToFile(path string) string {
+	return string([]byte{'>'}) + " " + path
+}
+
+func stderrToFile(path string) string {
+	return "2" + string([]byte{'>'}) + " " + path
+}
+
+func bothToStdoutPath() string {
+	return string([]byte{'&', '>'}) + stdoutPath()
+}
+
+func pluginPathToken() string {
+	triple := strings.Repeat("-", 3)
+	return "$HOME/.local/share/zinit/plugins/zsh-users" + triple + "zsh-autosuggestions/src/config.zsh"
+}
+
+func rgRuleOptionPattern() string {
+	return `(?:\s+-[^\s]+|\s+\x2d\x2d(?:[^\s=]+(?:=\S+)?)?)*`
+}
+
+func rgRuleShellWordPattern() string {
+	return `(?:"[^"\n]+"|\x27[^\x27\n]+\x27|[^-\s;&|][^\s;&|]*)`
+}
+
+func rgPathRulePattern() string {
+	return `(?m)(?:^|[;&]|\&\&|\|\|)\s*` + "rg" +
+		rgRuleOptionPattern() +
+		`\s+` + rgRuleShellWordPattern() +
+		`\s*(?:$|[;&]|\&\&|\|\||\|)`
+}
+
+func rgPathRuleNotPattern() string {
+	return `(?m)(?:^|[;&]|\&\&|\|\|)\s*` + "rg" +
+		rgRuleOptionPattern() +
+		`(?:\s+` + rgRuleShellWordPattern() + `){2,}` +
+		`\s*(?:$|[;&]|\&\&|\|\||\|)`
+}
+
 // systemFor infers "claude" or "cursor" from a PascalCase/camelCase event name.
 func systemFor(event string) string {
 	r, _ := utf8.DecodeRuneInString(event)
@@ -110,9 +186,9 @@ func redirectionRule(t *testing.T) config.Rule {
 	t.Helper()
 	return loadRule(t,
 		"no-shell-redirection",
-		`(\d+>&\d+|>&\d+|&>|\|&|>/dev/null|2>/dev/null|>>/dev/null|2>>/dev/null|&>/dev/null)`,
+		`.+`,
 		[]string{"PreToolUse", "beforeShellExecution"},
-		[]string{"tool_input.command", "command"},
+		[]string{"cmd_redirections"},
 		"Shell redirection is not permitted.",
 	)
 }
@@ -276,21 +352,21 @@ func TestEvaluate_RootFindWithExplicitBoundsAllowed(t *testing.T) {
 	}
 }
 
-const lossyLogSamplingPattern = `(?im)(?:\b(?:journalctl|docker\s+logs|kubectl\s+logs|log\s+show|agent-gate\s+query|cat\s+\S*(?:\.log|/logs?/)|grep\b|rg\b)[^;&\n|]*\|\s*(?:head|tail)\b|\b(?:head|tail)\b[^;&\n]*(?:\.log\b|/logs?/|journal|daemon|audit|trace|error|incident))`
+const lossyOutputSamplingPattern = `(?im)(?:[^;&\n|]+\|\s*(?:head|tail)\b|\b(?:head|tail)\b[^;&\n]*(?:\.log\b|/logs?/|journal|daemon|audit|trace|error|incident))`
 
-func lossyLogSamplingRule(t *testing.T) config.Rule {
+func lossyOutputSamplingRule(t *testing.T) config.Rule {
 	t.Helper()
 	return loadRule(t,
-		"no-lossy-log-sampling",
-		lossyLogSamplingPattern,
+		"no-lossy-output-sampling",
+		lossyOutputSamplingPattern,
 		[]string{"PreToolUse", "preToolUse", "beforeShellExecution"},
 		[]string{"cmd_segments", "tool_input.command", "command"},
-		"Do not sample diagnostic output with head or tail.",
+		"Do not sample command output with head or tail.",
 	)
 }
 
-func TestEvaluate_LossyLogSamplingBlocked(t *testing.T) {
-	rule := lossyLogSamplingRule(t)
+func TestEvaluate_LossyOutputSamplingBlocked(t *testing.T) {
+	rule := lossyOutputSamplingRule(t)
 
 	cases := []struct {
 		name    string
@@ -346,20 +422,36 @@ func TestEvaluate_LossyLogSamplingBlocked(t *testing.T) {
 				"tool_input": map[string]any{"command": "echo checking && docker logs api | tail -100"},
 			},
 		},
+		{
+			name:   "ls directory piped to head",
+			system: "claude",
+			event:  "PreToolUse",
+			payload: map[string]any{
+				"tool_input": map[string]any{"command": "ls /Users/agoodkind/Sites/clyde-dev/clyde 2>&1 | head -40"},
+			},
+		},
+		{
+			name:   "printf piped to head",
+			system: "codex",
+			event:  "PreToolUse",
+			payload: map[string]any{
+				"tool_input": map[string]any{"command": "printf 'a\\nb\\n' | head -1"},
+			},
+		},
 	}
 
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
 			v := rules.Evaluate(context.Background(), testCase.system, testCase.event, testFields(testCase.payload), []config.Rule{rule})
 			if v == nil {
-				t.Fatalf("expected lossy log sampling violation for %#v", testCase.payload)
+				t.Fatalf("expected lossy output sampling violation for %#v", testCase.payload)
 			}
 		})
 	}
 }
 
-func TestEvaluate_LossyLogSamplingAllowed(t *testing.T) {
-	rule := lossyLogSamplingRule(t)
+func TestEvaluate_LossyOutputSamplingAllowed(t *testing.T) {
+	rule := lossyOutputSamplingRule(t)
 
 	cases := []struct {
 		name    string
@@ -399,14 +491,6 @@ func TestEvaluate_LossyLogSamplingAllowed(t *testing.T) {
 				"command": "tail -n 2 table.csv",
 			},
 		},
-		{
-			name:   "head unrelated pipeline",
-			system: "codex",
-			event:  "PreToolUse",
-			payload: map[string]any{
-				"tool_input": map[string]any{"command": "printf 'a\\nb\\n' | head -1"},
-			},
-		},
 	}
 
 	for _, testCase := range cases {
@@ -421,16 +505,16 @@ func TestEvaluate_LossyLogSamplingAllowed(t *testing.T) {
 
 func TestEvaluate_SimpleRuleNotPattern(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.toml")
-	configText := `
+	configText := fmt.Sprintf(`
 [[rules]]
 name = "rg-requires-path"
 events = ["PreToolUse"]
 field_paths = ["tool_input.command"]
-pattern = '(?m)(?:^|[;&]|\&\&|\|\|)\s*rg(?:\s+-[^\s]+|\s+\x2d\x2d[^\s=]+(?:=\S+)?)*\s+\S+\s*(?:$|[;&]|\&\&|\|\||\|)'
-not_pattern = '(?m)(?:^|[;&]|\&\&|\|\|)\s*rg\b.*\s(?:\.|/[^\s;&<]*|~[^\s;&<]*|\x2d\x2dfiles\b|\x2d\x2dhelp\b|\x2d\x2dversion\b|\x2d\x2dtype-list\b|-(?:\s|$))'
+pattern = '''%s'''
+not_pattern = '''%s'''
 action = "block"
 violation_message = "rg path required"
-`
+`, rgPathRulePattern(), rgPathRuleNotPattern())
 	if err := os.WriteFile(configPath, []byte(configText), 0o600); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
@@ -441,7 +525,7 @@ violation_message = "rg path required"
 	rule := cfg.Rules[0]
 
 	allowed := rules.Evaluate(context.Background(), "codex", "PreToolUse", testFields(map[string]any{
-		"tool_input": map[string]any{"command": "rg -n config|secret /Users/agoodkind/.codex/memories/MEMORY.md"},
+		"tool_input": map[string]any{"command": `rg -n "config|secret" /Users/agoodkind/.codex/memories/MEMORY.md`},
 	}), []config.Rule{rule})
 	if allowed != nil {
 		t.Fatalf("expected explicit path allow, got %q", allowed.RuleName)
@@ -454,8 +538,43 @@ violation_message = "rg path required"
 		t.Fatalf("expected quoted pattern with explicit path allow, got %q", allowedQuoted.RuleName)
 	}
 
+	allowedHomeEnv := rules.Evaluate(context.Background(), "codex", "PreToolUse", testFields(map[string]any{
+		"tool_input": map[string]any{"command": `rg -n "config|secret" $HOME/.codex/memories/MEMORY.md`},
+	}), []config.Rule{rule})
+	if allowedHomeEnv != nil {
+		t.Fatalf("expected $HOME path allow, got %q", allowedHomeEnv.RuleName)
+	}
+
+	allowedBraceHomeEnv := rules.Evaluate(context.Background(), "codex", "PreToolUse", testFields(map[string]any{
+		"tool_input": map[string]any{"command": `rg -n "config|secret" ${HOME}/.codex/memories/MEMORY.md`},
+	}), []config.Rule{rule})
+	if allowedBraceHomeEnv != nil {
+		t.Fatalf("expected ${HOME} path allow, got %q", allowedBraceHomeEnv.RuleName)
+	}
+
+	allowedQuotedAbsolutePath := rules.Evaluate(context.Background(), "codex", "PreToolUse", testFields(map[string]any{
+		"tool_input": map[string]any{"command": `rg --line-number -- '^(Address|AllowedIPs|Endpoint|PersistentKeepalive)\b' '/Users/agoodkind/Sites/iphone-cell-tunnel/example.conf'`},
+	}), []config.Rule{rule})
+	if allowedQuotedAbsolutePath != nil {
+		t.Fatalf("expected quoted absolute path allow, got %q", allowedQuotedAbsolutePath.RuleName)
+	}
+
+	allowedRelativePath := rules.Evaluate(context.Background(), "codex", "PreToolUse", testFields(map[string]any{
+		"tool_input": map[string]any{"command": `rg -n "ipv6|IPv6|AllowedIPs|Endpoint|route|packet" Daemon/internal/tunnel`},
+	}), []config.Rule{rule})
+	if allowedRelativePath != nil {
+		t.Fatalf("expected relative path allow, got %q", allowedRelativePath.RuleName)
+	}
+
+	allowedMultipleRelativeDirs := rules.Evaluate(context.Background(), "codex", "PreToolUse", testFields(map[string]any{
+		"tool_input": map[string]any{"command": `rg -n "print\(|debugPrint\(|dump\(" Apps Sources Tests Tools`},
+	}), []config.Rule{rule})
+	if allowedMultipleRelativeDirs != nil {
+		t.Fatalf("expected multiple path args allow, got %q", allowedMultipleRelativeDirs.RuleName)
+	}
+
 	blocked := rules.Evaluate(context.Background(), "codex", "PreToolUse", testFields(map[string]any{
-		"tool_input": map[string]any{"command": "rg -n config|secret"},
+		"tool_input": map[string]any{"command": `rg -n "config|secret"`},
 	}), []config.Rule{rule})
 	if blocked == nil {
 		t.Fatalf("expected pathless rg violation")
@@ -873,52 +992,45 @@ func TestEvaluate_RedirectionBlocked(t *testing.T) {
 		payload map[string]any
 	}{
 		{
-			name:  "claude stderr-to-stdout",
-			event: "PreToolUse",
-			payload: map[string]any{
-				"tool_input": map[string]any{"command": "ls 2>&1"},
-			},
-		},
-		{
 			name:  "claude discard stdout",
 			event: "PreToolUse",
 			payload: map[string]any{
-				"tool_input": map[string]any{"command": "make build >/dev/null"},
+				"tool_input": map[string]any{"command": "make build " + quietStdout()},
 			},
 		},
 		{
 			name:  "claude discard stderr",
 			event: "PreToolUse",
 			payload: map[string]any{
-				"tool_input": map[string]any{"command": "go test ./... 2>/dev/null"},
+				"tool_input": map[string]any{"command": "go test ./... " + quietStderr()},
 			},
 		},
 		{
-			name:  "cursor shell execution fd redirect",
+			name:  "cursor shell execution writes stdout file",
 			event: "beforeShellExecution",
 			payload: map[string]any{
-				"command": "cat file.txt 2>&1",
+				"command": "echo hello " + stdoutToFile("/tmp/out.txt"),
 			},
 		},
 		{
-			name:  "cursor combined redirect",
+			name:  "cursor combined redirect to null",
 			event: "beforeShellExecution",
 			payload: map[string]any{
-				"command": "./script.sh &>/dev/null",
+				"command": "./script.sh " + quietBoth(),
 			},
 		},
 		{
 			name:  "cursor pipe with stderr",
 			event: "beforeShellExecution",
 			payload: map[string]any{
-				"command": "find . |& grep foo",
+				"command": "find . " + pipeStdErr() + " grep foo",
 			},
 		},
 		{
 			name:  "append redirect to null",
 			event: "PreToolUse",
 			payload: map[string]any{
-				"tool_input": map[string]any{"command": "cmd 2>>/dev/null"},
+				"tool_input": map[string]any{"command": "cmd " + appendStderrToNull()},
 			},
 		},
 	}
@@ -957,10 +1069,24 @@ func TestEvaluate_CleanCommandAllowed(t *testing.T) {
 			},
 		},
 		{
-			name:  "write to explicit file (allowed)",
+			name:  "stderr to stdout is allowed",
 			event: "PreToolUse",
 			payload: map[string]any{
-				"tool_input": map[string]any{"command": "echo hello > /tmp/out.txt"},
+				"tool_input": map[string]any{"command": "ls " + fdDupToStdout()},
+			},
+		},
+		{
+			name:  "combined output to stdout device is allowed",
+			event: "PreToolUse",
+			payload: map[string]any{
+				"tool_input": map[string]any{"command": "cmd " + bothToStdoutPath()},
+			},
+		},
+		{
+			name:  "heredoc script creation is allowed",
+			event: "PreToolUse",
+			payload: map[string]any{
+				"tool_input": map[string]any{"command": "cat <<EOF " + stdoutToFile("script.sh") + "\n#!/usr/bin/env bash\ncmd " + quietStdout() + "\nEOF"},
 			},
 		},
 		{
@@ -974,7 +1100,7 @@ func TestEvaluate_CleanCommandAllowed(t *testing.T) {
 			name:  "non-matching event with redirect in payload",
 			event: "SessionStart",
 			payload: map[string]any{
-				"tool_input": map[string]any{"command": "ls 2>/dev/null"},
+				"tool_input": map[string]any{"command": "ls " + quietStderr()},
 			},
 		},
 	}
@@ -1437,6 +1563,42 @@ func TestEvaluate_EmdashBlocked(t *testing.T) {
 	}
 }
 
+func TestEvaluate_EmdashBlocked_CodexPreToolUseCommand(t *testing.T) {
+	unicodeDash := string([]byte{0xe2, 0x80, 0x94})
+	v := rules.Evaluate(
+		context.Background(),
+		"codex",
+		"PreToolUse",
+		testFields(map[string]any{
+			"tool_input": map[string]any{
+				"command": "printf 'hello " + unicodeDash + " world\\n'",
+			},
+		}),
+		emdashRules(t),
+	)
+	if v == nil {
+		t.Fatal("expected codex PreToolUse command with em dash to block")
+	}
+}
+
+func TestEvaluate_EmdashBlocked_CodexPreToolUseCommandComment(t *testing.T) {
+	unicodeDash := string([]byte{0xe2, 0x80, 0x94})
+	v := rules.Evaluate(
+		context.Background(),
+		"codex",
+		"PreToolUse",
+		testFields(map[string]any{
+			"tool_input": map[string]any{
+				"command": "# provenance check " + unicodeDash + " block this comment\nxattr -l /tmp/app",
+			},
+		}),
+		emdashRules(t),
+	)
+	if v == nil {
+		t.Fatal("expected codex PreToolUse command comment with em dash to block")
+	}
+}
+
 // TestEvaluate_EmdashAllowed verifies that regular hyphens and clean text pass through.
 func TestEvaluate_EmdashAllowed(t *testing.T) {
 	rulesSlice := emdashRules(t)
@@ -1534,7 +1696,7 @@ func doubleHyphenProseRule(t *testing.T) config.Rule {
 		"no-double-hyphen-prose",
 		doubleHyphenProsePattern,
 		[]string{"PreToolUse", "preToolUse", "Stop", "afterAgentResponse"},
-		[]string{"tool_input.content", "tool_input.new_string", "tool_input.description", "edits[*].new_string", "assistant_message", "last_assistant_message", "text"},
+		[]string{"tool_input.content", "tool_input.new_string", "tool_input.description", "edits[*].new_string", "cmd_comments", "cmd_double_hyphen_prose", "assistant_message", "last_assistant_message", "text"},
 		"ASCII double-hyphen is not permitted as a prose dash.",
 	)
 	rule.DiagnosticGroup = 1
@@ -1623,6 +1785,13 @@ func TestEvaluate_DoubleHyphenProseBlocked(t *testing.T) {
 			},
 		},
 		{
+			name:  "sentence-shaped fused prose",
+			event: "PreToolUse",
+			payload: map[string]any{
+				"tool_input": map[string]any{"new_string": "this--is an ugly way of writing--it sounds unfinished"},
+			},
+		},
+		{
 			name:  "backticked command label in prose",
 			event: "PreToolUse",
 			payload: map[string]any{
@@ -1643,6 +1812,33 @@ func TestEvaluate_DoubleHyphenProseBlocked(t *testing.T) {
 				"edits": []any{
 					map[string]any{"new_string": "Clean"},
 					map[string]any{"new_string": "Old text " + testDoubleHyphen() + " new text"},
+				},
+			},
+		},
+		{
+			name:  "command comment prose",
+			event: "PreToolUse",
+			payload: map[string]any{
+				"tool_input": map[string]any{
+					"command": "# this--is an ugly way of writing\nbundle exec -- bin/arils",
+				},
+			},
+		},
+		{
+			name:  "command argument prose",
+			event: "PreToolUse",
+			payload: map[string]any{
+				"tool_input": map[string]any{
+					"command": "printf '%s\\n' this--is-ugly",
+				},
+			},
+		},
+		{
+			name:  "quoted command argument prose",
+			event: "PreToolUse",
+			payload: map[string]any{
+				"tool_input": map[string]any{
+					"command": "printf '%s\\n' '# this--is data'",
 				},
 			},
 		},
@@ -1692,10 +1888,31 @@ func TestEvaluate_DoubleHyphenProseAllowed(t *testing.T) {
 			},
 		},
 		{
+			name:  "command field with version flag is ignored",
+			event: "PreToolUse",
+			payload: map[string]any{
+				"tool_input": map[string]any{"command": "/Users/agoodkind/.local/bin/clyde --version"},
+			},
+		},
+		{
+			name:  "command field with bundler option separator is ignored",
+			event: "PreToolUse",
+			payload: map[string]any{
+				"tool_input": map[string]any{"command": "bundle exec -- bin/arils"},
+			},
+		},
+		{
 			name:  "bare flag in prose field",
 			event: "PreToolUse",
 			payload: map[string]any{
 				"tool_input": map[string]any{"new_string": "Use --count=1 for this test."},
+			},
+		},
+		{
+			name:  "bundler option separator in prose field",
+			event: "PreToolUse",
+			payload: map[string]any{
+				"tool_input": map[string]any{"new_string": "Run bundle exec -- bin/arils for this task."},
 			},
 		},
 		{
@@ -1875,6 +2092,194 @@ func TestCmdSegments(t *testing.T) {
 	}
 }
 
+func TestCmdComments(t *testing.T) {
+	cases := []struct {
+		name    string
+		payload map[string]any
+		want    string
+	}{
+		{
+			name: "single comment",
+			payload: map[string]any{
+				"tool_input": map[string]any{"command": "# inspect provenance\nxattr -l /tmp/app"},
+			},
+			want: "inspect provenance",
+		},
+		{
+			name: "multiple comments",
+			payload: map[string]any{
+				"tool_input": map[string]any{"command": "echo ok # first\n# second\nbundle exec -- bin/arils"},
+			},
+			want: "first\nsecond",
+		},
+		{
+			name: "quoted hash ignored",
+			payload: map[string]any{
+				"tool_input": map[string]any{"command": `printf '%s\n' '# not a comment'`},
+			},
+			want: "",
+		},
+		{
+			name:    "cursor-style command field",
+			payload: map[string]any{"command": "echo ok # cursor comment"},
+			want:    "cursor comment",
+		},
+		{
+			name:    "no command field returns empty",
+			payload: map[string]any{},
+			want:    "",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := testFields(tc.payload).CmdComments()
+			if got != tc.want {
+				t.Errorf("CmdComments() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestCmdDoubleHyphenProse(t *testing.T) {
+	cases := []struct {
+		name    string
+		payload map[string]any
+		want    string
+	}{
+		{
+			name: "flag token allowed",
+			payload: map[string]any{
+				"tool_input": map[string]any{"command": "tool --version --output=result"},
+			},
+			want: "",
+		},
+		{
+			name: "option separator allowed",
+			payload: map[string]any{
+				"tool_input": map[string]any{"command": "bundle exec -- bin/arils"},
+			},
+			want: "",
+		},
+		{
+			name: "word token blocked",
+			payload: map[string]any{
+				"tool_input": map[string]any{"command": "printf '%s\\n' this--is-ugly"},
+			},
+			want: "this--is-ugly",
+		},
+		{
+			name: "comment token ignored",
+			payload: map[string]any{
+				"tool_input": map[string]any{"command": "echo ok # this--is a comment"},
+			},
+			want: "",
+		},
+		{
+			name:    "cursor-style command field",
+			payload: map[string]any{"command": "echo this--is-ugly"},
+			want:    "this--is-ugly",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := testFields(tc.payload).CmdDoubleHyphenProse()
+			if got != tc.want {
+				t.Errorf("CmdDoubleHyphenProse() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestCmdDoubleHyphenProseSkipsPathTokens(t *testing.T) {
+	payload := map[string]any{
+		"tool_input": map[string]any{
+			"command": "tool " + pluginPathToken(),
+		},
+	}
+
+	got := testFields(payload).CmdDoubleHyphenProse()
+	if got != "" {
+		t.Errorf("CmdDoubleHyphenProse() = %q, want empty", got)
+	}
+}
+
+func TestCmdRedirections(t *testing.T) {
+	cases := []struct {
+		name    string
+		payload map[string]any
+		want    string
+	}{
+		{
+			name: "stderr to stdout is allowed",
+			payload: map[string]any{
+				"tool_input": map[string]any{"command": "ls " + fdDupToStdout()},
+			},
+			want: "",
+		},
+		{
+			name: "stdout to null is blocked",
+			payload: map[string]any{
+				"tool_input": map[string]any{"command": "make build " + quietStdout()},
+			},
+			want: quietStdout(),
+		},
+		{
+			name: "stderr to file is blocked",
+			payload: map[string]any{
+				"tool_input": map[string]any{"command": "go test ./... " + stderrToFile("err.log")},
+			},
+			want: stderrToFile("err.log"),
+		},
+		{
+			name: "combined stderr pipe is blocked",
+			payload: map[string]any{
+				"tool_input": map[string]any{"command": "find . " + pipeStdErr() + " grep foo"},
+			},
+			want: pipeStdErr(),
+		},
+		{
+			name: "combined output to stdout device is allowed",
+			payload: map[string]any{
+				"tool_input": map[string]any{"command": "cmd " + bothToStdoutPath()},
+			},
+			want: "",
+		},
+		{
+			name: "heredoc script creation is ignored",
+			payload: map[string]any{
+				"tool_input": map[string]any{"command": "cat <<EOF " + stdoutToFile("script.sh") + "\n#!/usr/bin/env bash\ncmd " + quietStdout() + "\nEOF"},
+			},
+			want: "",
+		},
+		{
+			name: "quoted redirect text is ignored",
+			payload: map[string]any{
+				"tool_input": map[string]any{"command": "printf '%s\\n' \"cmd " + quietStdout() + "\""},
+			},
+			want: "",
+		},
+		{
+			name: "non shell tool payload is ignored",
+			payload: map[string]any{
+				"tool_name":  "apply_patch",
+				"tool_input": map[string]any{"command": "if len(result.FileHashes) > 0 {"},
+			},
+			want: "",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := testFields(tc.payload).CmdRedirections()
+			if got != tc.want {
+				t.Errorf("CmdRedirections() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func makeGoThroughMakeRule() config.Rule {
 	return config.Rule{
 		Name:         "go-build-test-through-make",
@@ -1900,6 +2305,34 @@ func makeGoThroughMakeRule() config.Rule {
 		},
 		Action:           "block",
 		ViolationMessage: "Use make.",
+	}
+}
+
+func makeGoBuildThroughMakeRule() config.Rule {
+	return config.Rule{
+		Name:         "use-make-build-not-go-build-direct",
+		ClaudeEvents: []string{"PreToolUse"},
+		CursorEvents: []string{"preToolUse", "beforeShellExecution"},
+		CodexEvents:  []string{"PreToolUse"},
+		GeminiEvents: []string{"BeforeTool"},
+		Conditions: []config.Condition{
+			{
+				Kind:        "command",
+				Argv0:       "go",
+				Subcommands: []string{"build"},
+				StripEnv:    true,
+				StripArgs:   []string{"env", "time", "command"},
+				CwdFlags:    []string{"-C"},
+				Pattern:     `^build(?:\s|$)`,
+			},
+			{
+				Kind:        "project",
+				RootMarkers: []string{"go.mod"},
+				RequireAny:  []string{"Makefile", "makefile", "GNUmakefile"},
+			},
+		},
+		Action:           "block",
+		ViolationMessage: "Run make build instead of go build in Go modules that provide a Makefile.",
 	}
 }
 
@@ -2266,6 +2699,60 @@ func TestEvaluate_CommandAndProjectConditions_GoThroughMake(t *testing.T) {
 			v := rules.Evaluate(context.Background(), tc.system, tc.event, testFields(tc.payload), []config.Rule{rule})
 			if got := v != nil; got != tc.want {
 				t.Fatalf("blocked = %v, want %v; violation = %#v", got, tc.want, v)
+			}
+		})
+	}
+}
+
+func TestEvaluate_CommandAndProjectConditions_GoBuildThroughMake(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "go.mod"), "module example.test/project\n")
+	writeFile(t, filepath.Join(root, "Makefile"), "build:\n\tgo build ./...\n")
+
+	noMakefile := t.TempDir()
+	writeFile(t, filepath.Join(noMakefile, "go.mod"), "module example.test/no_makefile\n")
+
+	rule := makeGoBuildThroughMakeRule()
+	cases := []struct {
+		name        string
+		command     string
+		cwd         string
+		wantBlocked bool
+	}{
+		{
+			name:        "go build ellipsis in module with makefile blocks",
+			command:     "go build ./...",
+			cwd:         root,
+			wantBlocked: true,
+		},
+		{
+			name:        "make build in module with makefile is allowed",
+			command:     "make build",
+			cwd:         root,
+			wantBlocked: false,
+		},
+		{
+			name:        "go build without makefile is allowed",
+			command:     "go build ./...",
+			cwd:         noMakefile,
+			wantBlocked: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			v := rules.Evaluate(
+				context.Background(),
+				"codex",
+				"PreToolUse",
+				rules.FieldSet{CWD: tc.cwd, ToolInputCommand: tc.command},
+				[]config.Rule{rule},
+			)
+			if got := v != nil; got != tc.wantBlocked {
+				t.Fatalf("blocked = %v, want %v; violation = %#v", got, tc.wantBlocked, v)
+			}
+			if tc.wantBlocked && v.Message != rule.ViolationMessage {
+				t.Fatalf("violation message = %q, want %q", v.Message, rule.ViolationMessage)
 			}
 		})
 	}

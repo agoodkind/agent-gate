@@ -31,27 +31,6 @@ const (
 	GeminiPreCompress GeminiEvent = "PreCompress"
 )
 
-// CanBlockGemini returns true for Gemini events where a deny/stop response
-// changes the tool, model, or turn lifecycle.
-func CanBlockGemini(eventName string) bool {
-	switch GeminiEvent(eventName) {
-	case GeminiBeforeTool,
-		GeminiAfterTool,
-		GeminiBeforeAgent,
-		GeminiAfterAgent,
-		GeminiBeforeModel,
-		GeminiAfterModel:
-		return true
-	case GeminiBeforeToolSelection,
-		GeminiSessionStart,
-		GeminiSessionEnd,
-		GeminiNotification,
-		GeminiPreCompress:
-		return false
-	}
-	return false
-}
-
 type geminiResponse struct {
 	SystemMessage  string `json:"systemMessage,omitempty"`
 	SuppressOutput *bool  `json:"suppressOutput,omitempty"`

@@ -21,6 +21,7 @@ type DeferredAuditEvent struct {
 	SystemString        string
 	EventName           string
 	SessionID           string
+	EventID             string
 	CWD                 string
 	Fields              rules.FieldSet
 	Rules               []config.Rule

@@ -11,6 +11,7 @@ import (
 	"goodkind.io/agent-gate/internal/config"
 	"goodkind.io/agent-gate/internal/hook"
 	"goodkind.io/agent-gate/internal/intake"
+	"goodkind.io/agent-gate/internal/rules"
 )
 
 type deferredProcessor struct {
@@ -149,7 +150,7 @@ func (p *deferredProcessor) rebuildDeferredAudit(ctx context.Context, record int
 	hint := hook.SystemFromString(record.System)
 
 	syncCfg := hook.SyncConfig(p.cfg)
-	syncEval := hook.EvaluateHot(ctx, record.RawPayload, syncCfg, hint, getenv)
+	syncEval := hook.EvaluateHotWithEventID(ctx, record.RawPayload, syncCfg, hint, getenv, record.EventID)
 	if !syncEval.Deferred.Valid {
 		if p.log != nil {
 			p.log.WarnContext(ctx, "replay sync evaluation produced invalid deferred event", "event_id", record.EventID)
@@ -164,9 +165,12 @@ func (p *deferredProcessor) rebuildDeferredAudit(ctx context.Context, record int
 
 	if len(deferredRules) > 0 {
 		deferredCfg := hook.DeferredConfig(p.cfg)
-		deferredEval := hook.EvaluateHot(ctx, record.RawPayload, deferredCfg, hint, getenv)
+		deferredEval := hook.EvaluateHotWithEventID(ctx, record.RawPayload, deferredCfg, hint, getenv, record.EventID)
 		if deferredEval.Deferred.Valid {
-			merged.AuditOnlyViolations = deferredEval.Deferred.AuditOnlyViolations
+			merged.AuditOnlyViolations = append(
+				append([]rules.Violation(nil), merged.AuditOnlyViolations...),
+				deferredEval.Deferred.AuditOnlyViolations...,
+			)
 		} else if p.log != nil {
 			p.log.WarnContext(ctx, "replay deferred evaluation produced invalid deferred event", "event_id", record.EventID)
 		}

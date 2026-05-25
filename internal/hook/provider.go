@@ -12,6 +12,12 @@ import (
 // EvaluateHot performs only provider detection, typed parsing, rule
 // evaluation, block diagnostics, and response rendering.
 func EvaluateHot(ctx context.Context, rawBytes []byte, cfg *config.Config, hint HookSystem, getenv func(string) string) HotEvaluation {
+	return EvaluateHotWithEventID(ctx, rawBytes, cfg, hint, getenv, "")
+}
+
+// EvaluateHotWithEventID is EvaluateHot with the durable intake event_id that
+// is included in block responses for query lookup.
+func EvaluateHotWithEventID(ctx context.Context, rawBytes []byte, cfg *config.Config, hint HookSystem, getenv func(string) string, eventID string) HotEvaluation {
 	detectionPayload, err := ParseDetectionPayload(rawBytes)
 	if err != nil {
 		return HotEvaluation{
@@ -32,7 +38,7 @@ func EvaluateHot(ctx context.Context, rawBytes []byte, cfg *config.Config, hint 
 		}
 	}
 
-	return evaluatePayloadHot(ctx, payload, rawBytes, cfg, getenv)
+	return evaluatePayloadHot(ctx, payload, rawBytes, cfg, getenv, eventID)
 }
 
 func emptyDeferredAuditEvent(system HookSystem) DeferredAuditEvent {
@@ -44,6 +50,7 @@ func emptyDeferredAuditEvent(system HookSystem) DeferredAuditEvent {
 		SystemString:        system.String(),
 		EventName:           "",
 		SessionID:           "",
+		EventID:             "",
 		CWD:                 "",
 		Fields:              fields,
 		Rules:               nil,
@@ -56,23 +63,10 @@ func emptyDeferredAuditEvent(system HookSystem) DeferredAuditEvent {
 
 // CanBlock returns true when the provider can meaningfully change the hook flow.
 func CanBlock(system HookSystem, eventName string) bool {
-	switch system {
-	case SystemClaude, SystemVSCode, SystemCopilot:
-		return CanBlockClaude(eventName)
-	case SystemCursor:
-		return CanBlockCursor(eventName)
-	case SystemCodex:
-		return CanBlockCodex(eventName)
-	case SystemGemini:
-		return CanBlockGemini(eventName)
-	case SystemUnknown:
-		return false
-	default:
-		return false
-	}
+	return LookupCapability(system, eventName) != CapabilityObserve
 }
 
-func evaluatePayloadHot(ctx context.Context, payload HookPayload, rawBytes []byte, cfg *config.Config, getenv func(string) string) HotEvaluation {
+func evaluatePayloadHot(ctx context.Context, payload HookPayload, rawBytes []byte, cfg *config.Config, getenv func(string) string, eventID string) HotEvaluation {
 	systemStr := payload.System.String()
 	eventName := payload.EventName()
 	fields := payload.Fields()
@@ -81,6 +75,10 @@ func evaluatePayloadHot(ctx context.Context, payload HookPayload, rawBytes []byt
 	blockingViolations := blockingMatches(violations)
 	auditOnlyViolations := auditOnlyMatches(violations)
 	canBlock := CanBlock(payload.System, eventName)
+	if len(blockingViolations) > 0 && !canBlock {
+		auditOnlyViolations = append(auditOnlyViolations, blockingViolations...)
+		blockingViolations = nil
+	}
 
 	decision := ResponseDecisionAllow
 	diagnostic := ""
@@ -92,13 +90,14 @@ func evaluatePayloadHot(ctx context.Context, payload HookPayload, rawBytes []byt
 			EventName:      eventName,
 			Decision:       ResponseDecisionBlock,
 			DiagnosticText: diagnostic,
+			EventID:        eventID,
 			FailOpenReason: "",
 		})
 		return HotEvaluation{
 			Stdout:   response.Stdout,
 			Stderr:   response.Stderr,
 			ExitCode: response.ExitCode,
-			Deferred: newDeferredAuditEvent(rawBytes, payload, fields, ruleSet, blockingViolations, auditOnlyViolations, decision, diagnostic),
+			Deferred: newDeferredAuditEvent(rawBytes, payload, fields, ruleSet, blockingViolations, auditOnlyViolations, decision, diagnostic, eventID),
 		}
 	}
 
@@ -107,13 +106,14 @@ func evaluatePayloadHot(ctx context.Context, payload HookPayload, rawBytes []byt
 		EventName:      eventName,
 		Decision:       ResponseDecisionAllow,
 		DiagnosticText: "",
+		EventID:        eventID,
 		FailOpenReason: "",
 	})
 	return HotEvaluation{
 		Stdout:   response.Stdout,
 		Stderr:   response.Stderr,
 		ExitCode: response.ExitCode,
-		Deferred: newDeferredAuditEvent(rawBytes, payload, fields, ruleSet, blockingViolations, auditOnlyViolations, decision, diagnostic),
+		Deferred: newDeferredAuditEvent(rawBytes, payload, fields, ruleSet, blockingViolations, auditOnlyViolations, decision, diagnostic, eventID),
 	}
 }
 
@@ -133,6 +133,7 @@ func newDeferredAuditEvent(
 	auditOnlyViolations []rules.Violation,
 	decision ResponseDecision,
 	diagnosticText string,
+	eventID string,
 ) DeferredAuditEvent {
 	return DeferredAuditEvent{
 		Valid:               true,
@@ -141,6 +142,7 @@ func newDeferredAuditEvent(
 		SystemString:        payload.System.String(),
 		EventName:           payload.EventName(),
 		SessionID:           payload.SessionID(),
+		EventID:             eventID,
 		CWD:                 payload.CWD(),
 		Fields:              fields,
 		Rules:               ruleSet,

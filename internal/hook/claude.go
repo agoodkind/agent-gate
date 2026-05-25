@@ -64,43 +64,6 @@ const (
 	ClaudeSessionEnd ClaudeEvent = "SessionEnd"
 )
 
-// CanBlockClaude returns true for Claude events where agent-gate should emit
-// the blocking stderr plus exit-code-2 response.
-func CanBlockClaude(eventName string) bool {
-	switch ClaudeEvent(eventName) {
-	case ClaudePreToolUse,
-		ClaudePermissionRequest,
-		ClaudeUserPromptSubmit:
-		return true
-	case ClaudeSessionStart,
-		ClaudePostToolUse,
-		ClaudePostToolUseFailure,
-		ClaudePermissionDenied,
-		ClaudeNotification,
-		ClaudeSubagentStart,
-		ClaudeSubagentStop,
-		ClaudeTaskCreated,
-		ClaudeTaskCompleted,
-		ClaudeStop,
-		ClaudeStopFailure,
-		ClaudePreCompact,
-		ClaudePostCompact,
-		ClaudeInstructionsLoaded,
-		ClaudeConfigChange,
-		ClaudeCwdChanged,
-		ClaudeFileChanged,
-		ClaudeWorktreeCreate,
-		ClaudeWorktreeRemove,
-		ClaudeElicitation,
-		ClaudeElicitationResult,
-		ClaudeSetup,
-		ClaudeTeammateIdle,
-		ClaudeSessionEnd:
-		return false
-	}
-	return false
-}
-
 // ClaudeAllow returns the stdout bytes for an allow response (exit 0).
 func ClaudeAllow() []byte {
 	return []byte("{}\n")
