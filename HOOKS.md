@@ -151,13 +151,17 @@ command = "/Users/agoodkind/.local/bin/agent-gate codex-hook"
 | Event               | Matcher                  |
 | ------------------- | ------------------------ |
 | `SessionStart`      | `startup\|resume\|clear` |
+| `SubagentStart`     | `.*`                     |
 | `PreToolUse`        | `.*`                     |
 | `PermissionRequest` | `.*`                     |
 | `PostToolUse`       | `.*`                     |
-| `Stop`              |                          |
+| `PreCompact`        |                          |
+| `PostCompact`       |                          |
 | `UserPromptSubmit`  |                          |
+| `SubagentStop`      |                          |
+| `Stop`              |                          |
 
-Codex hooks require `codex_hooks = true` under `[features]` in
+Codex hooks require `hooks = true` under `[features]` in
 `$HOME/.codex/config.toml`. The local Codex install on this machine is using
 that TOML format directly rather than a separate JSON hook file.
 
