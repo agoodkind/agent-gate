@@ -157,8 +157,11 @@ func rgPathRulePattern() string {
 
 func rgPathRuleNotPattern() string {
 	return `(?m)(?:^|[;&]|\&\&|\|\|)\s*` + "rg" +
+		`(?:` +
 		rgRuleOptionPattern() +
 		`(?:\s+` + rgRuleShellWordPattern() + `){2,}` +
+		`|(?=[^;&\n|]*\s+\x2d\x2d(?:files|help|version|type-list)(?:\s|$))[^;&\n|]*` +
+		`)` +
 		`\s*(?:$|[;&]|\&\&|\|\||\|)`
 }
 
@@ -352,7 +355,7 @@ func TestEvaluate_RootFindWithExplicitBoundsAllowed(t *testing.T) {
 	}
 }
 
-const lossyOutputSamplingPattern = `(?im)(?:[^;&\n|]+\|\s*(?:head|tail)\b|\b(?:head|tail)\b[^;&\n]*(?:\.log\b|/logs?/|journal|daemon|audit|trace|error|incident))`
+const lossyOutputSamplingPattern = `(?m)(?:[^;&\n|]+\|\s*(?:head|tail)\b|(?:^|[;&\n]|\|\|)\s*(?:head|tail)\b[^;&\n]*(?i:(?:\.log\b|/logs?/|journal|daemon|audit|trace|error|incident)))`
 
 func lossyOutputSamplingRule(t *testing.T) config.Rule {
 	t.Helper()
@@ -491,6 +494,22 @@ func TestEvaluate_LossyOutputSamplingAllowed(t *testing.T) {
 				"command": "tail -n 2 table.csv",
 			},
 		},
+		{
+			name:   "git checkout HEAD with log path argument",
+			system: "claude",
+			event:  "PreToolUse",
+			payload: map[string]any{
+				"tool_input": map[string]any{"command": "git checkout HEAD -- internal/cli/logs/inventory.go"},
+			},
+		},
+		{
+			name:   "git checkout lowercase head with log path argument",
+			system: "claude",
+			event:  "PreToolUse",
+			payload: map[string]any{
+				"tool_input": map[string]any{"command": "git checkout head -- internal/cli/logs/inventory.go"},
+			},
+		},
 	}
 
 	for _, testCase := range cases {
@@ -573,11 +592,34 @@ violation_message = "rg path required"
 		t.Fatalf("expected multiple path args allow, got %q", allowedMultipleRelativeDirs.RuleName)
 	}
 
+	for _, command := range []string{
+		`rg --files`,
+		`rg --files .`,
+		`rg --hidden --files .`,
+		`rg --type-list`,
+		`rg --help`,
+		`rg --version`,
+	} {
+		allowedFileMode := rules.Evaluate(context.Background(), "codex", "PreToolUse", testFields(map[string]any{
+			"tool_input": map[string]any{"command": command},
+		}), []config.Rule{rule})
+		if allowedFileMode != nil {
+			t.Fatalf("expected file-list/help command %q to allow, got %q", command, allowedFileMode.RuleName)
+		}
+	}
+
 	blocked := rules.Evaluate(context.Background(), "codex", "PreToolUse", testFields(map[string]any{
 		"tool_input": map[string]any{"command": `rg -n "config|secret"`},
 	}), []config.Rule{rule})
 	if blocked == nil {
 		t.Fatalf("expected pathless rg violation")
+	}
+
+	blockedFilesWithMatches := rules.Evaluate(context.Background(), "codex", "PreToolUse", testFields(map[string]any{
+		"tool_input": map[string]any{"command": `rg --files-with-matches "config|secret"`},
+	}), []config.Rule{rule})
+	if blockedFilesWithMatches == nil {
+		t.Fatalf("expected pathless rg --files-with-matches violation")
 	}
 }
 
