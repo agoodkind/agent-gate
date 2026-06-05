@@ -1867,20 +1867,20 @@ func TestEvaluate_DoubleHyphenProseBlocked(t *testing.T) {
 			},
 		},
 		{
-			name:  "command argument prose",
+			name:  "commit message prose",
 			event: "PreToolUse",
 			payload: map[string]any{
 				"tool_input": map[string]any{
-					"command": "printf '%s\\n' this--is-ugly",
+					"command": "git commit -m \"fix the bug" + testDoubleHyphen() + "it was null\"",
 				},
 			},
 		},
 		{
-			name:  "quoted command argument prose",
+			name:  "echo into prose file",
 			event: "PreToolUse",
 			payload: map[string]any{
 				"tool_input": map[string]any{
-					"command": "printf '%s\\n' '# this--is data'",
+					"command": "echo \"this" + testDoubleHyphen() + "is sloppy\" > notes.md",
 				},
 			},
 		},
@@ -2204,11 +2204,11 @@ func TestCmdDoubleHyphenProse(t *testing.T) {
 			want: "",
 		},
 		{
-			name: "word token blocked",
+			name: "bare command token ignored",
 			payload: map[string]any{
-				"tool_input": map[string]any{"command": "printf '%s\\n' this--is-ugly"},
+				"tool_input": map[string]any{"command": "echo this" + testDoubleHyphen() + "is-ugly"},
 			},
-			want: "this--is-ugly",
+			want: "",
 		},
 		{
 			name: "comment token ignored",
@@ -2218,9 +2218,9 @@ func TestCmdDoubleHyphenProse(t *testing.T) {
 			want: "",
 		},
 		{
-			name:    "cursor-style command field",
-			payload: map[string]any{"command": "echo this--is-ugly"},
-			want:    "this--is-ugly",
+			name:    "cursor-style commit message",
+			payload: map[string]any{"command": "git commit -m \"this" + testDoubleHyphen() + "is-ugly\""},
+			want:    "this" + testDoubleHyphen() + "is-ugly",
 		},
 	}
 
@@ -2244,6 +2244,51 @@ func TestCmdDoubleHyphenProseSkipsPathTokens(t *testing.T) {
 	got := testFields(payload).CmdDoubleHyphenProse()
 	if got != "" {
 		t.Errorf("CmdDoubleHyphenProse() = %q, want empty", got)
+	}
+}
+
+func TestCmdDoubleHyphenProse_ContextScoped(t *testing.T) {
+	dh := testDoubleHyphen()
+	hf := "models" + dh + "mlx-community" + dh + "gemma-4-31b-it-8bit"
+	cases := []struct {
+		name    string
+		command string
+		want    string
+	}{
+		// Non-prose command contexts: a bare shell command is code, so nothing
+		// is scanned no matter how many double hyphens it carries.
+		{"hf cache cleanup assignment", `keep_gemmas="` + hf + " models" + dh + "nomic-ai" + dh + `nomic-embed-code"; echo done`, ""},
+		{"hf bare ls", "ls models" + dh + "mlx-community" + dh + "gemma-4-31b-it-8bit", ""},
+		{"flags", "tool --version --output=result", ""},
+		{"option separator", "bundle exec -- bin/arils", ""},
+		{"bem search pattern", "rg block" + dh + "modifier src/", ""},
+		{"bare echo not redirected", "echo this" + dh + "is-ugly", ""},
+		{"bare printf not redirected", "printf fixed" + dh + "but", ""},
+		{"echo into code file", `echo "block` + dh + `modifier" > styles.css`, ""},
+		{"commit message identifier only", `git commit -m "bump ` + hf + `"`, ""},
+		{"patch envelope exempt", "apply_patch <<'EOF'\n*** Begin Patch\nfix the bug" + dh + "it\n*** End Patch\nEOF", ""},
+
+		// Prose-bearing contexts with a genuine fused double hyphen: emitted.
+		{"commit message glued", `git commit -m "fix the bug` + dh + `it was null"`, "fix the bug" + dh + "it was null"},
+		{"commit message spaced", `git commit -m "cache is full ` + dh + ` delete it"`, "cache is full " + dh + " delete it"},
+		{"commit drops identifier keeps prose", `git commit -m "bump models` + dh + "a" + dh + "b but fix bug" + dh + `it"`, "bump but fix bug" + dh + "it"},
+		{"gh pr body short flags", `gh pr create -t "x" -b "this` + dh + `is sloppy"`, "this" + dh + "is sloppy"},
+		{"gh release notes", `gh release create v1 --notes "ship` + dh + `it now"`, "ship" + dh + "it now"},
+		{"echo into markdown", `echo "the bug` + dh + `it persists" > notes.md`, "the bug" + dh + "it persists"},
+		{"printf into text append", `printf "done` + dh + `and broken" >> log.txt`, "done" + dh + "and broken"},
+		{"tee into readme", `echo "ship` + dh + `it now" | tee README.md`, "ship" + dh + "it now"},
+		{"heredoc into markdown", "cat > notes.md <<EOF\nrefactor done" + dh + "it works\nEOF", "refactor done" + dh + "it works"},
+		{"bem in commit message flagged", `git commit -m "rename block` + dh + `modifier here"`, "rename block" + dh + "modifier here"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			payload := map[string]any{"tool_input": map[string]any{"command": tc.command}}
+			got := testFields(payload).CmdDoubleHyphenProse()
+			if got != tc.want {
+				t.Errorf("CmdDoubleHyphenProse() = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 

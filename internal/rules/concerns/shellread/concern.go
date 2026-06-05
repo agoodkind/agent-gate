@@ -409,7 +409,7 @@ func resolvePath(cwd, path string) string {
 	if filepath.IsAbs(path) {
 		return path
 	}
-	if strings.HasPrefix(path, "~") {
+	if len(path) > 0 && path[0] == '~' {
 		return path
 	}
 	if cwd == "" {

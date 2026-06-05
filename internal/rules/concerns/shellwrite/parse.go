@@ -303,8 +303,7 @@ func gitTargets(args []string, raw, cwd string) []WriteTarget {
 // lastPositional returns the last argument that does not start with a dash.
 // Empty when no such argument exists.
 func lastPositional(args []string) string {
-	for index := len(args) - 1; index >= 0; index-- {
-		arg := args[index]
+	for _, arg := range slices.Backward(args) {
 		if isFlag(arg) {
 			continue
 		}
@@ -369,7 +368,7 @@ func resolvePath(cwd, path string) string {
 	if filepath.IsAbs(path) {
 		return path
 	}
-	if strings.HasPrefix(path, "~") {
+	if len(path) > 0 && path[0] == '~' {
 		return path
 	}
 	if cwd == "" {
