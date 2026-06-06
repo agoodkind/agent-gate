@@ -1,17 +1,13 @@
 package audit
 
 import (
-	"bufio"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/fs"
 	"log/slog"
 	"os"
-	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -37,31 +33,15 @@ type queryArg struct {
 	Value string
 }
 
-// Query returns audit events matching filter, choosing between the SQLite
-// and JSONL backends based on configuration. The returned source name is
-// either "sqlite" or "jsonl" so callers can surface which path served the
-// query.
+// Query returns audit events matching filter from the SQLite audit store. The
+// returned source name is always "sqlite"; it is retained for callers that
+// surface which backend served the query.
 func Query(cfg *config.Config, filter QueryFilter) ([]Event, string, error) {
-	prefer := "sqlite"
-	if cfg != nil {
-		prefer = cfg.AuditQueryPrefer()
-	}
-	if prefer == "sqlite" {
-		if events, err := querySQLite(cfg, filter); err == nil {
-			return events, "sqlite", nil
-		}
-		return queryJSONLWithSource(cfg, filter)
-	}
-	if events, source, err := queryJSONLWithSource(cfg, filter); err == nil {
-		return events, source, nil
-	}
 	events, err := querySQLite(cfg, filter)
-	return events, "sqlite", err
-}
-
-func queryJSONLWithSource(cfg *config.Config, filter QueryFilter) ([]Event, string, error) {
-	events, err := queryJSONL(cfg, filter)
-	return events, "jsonl", err
+	if err != nil {
+		return nil, "sqlite", err
+	}
+	return events, "sqlite", nil
 }
 
 func querySQLite(cfg *config.Config, filter QueryFilter) ([]Event, error) {
@@ -227,105 +207,4 @@ func sqliteViolations(ctx context.Context, db *sql.DB, eventID string) ([]Violat
 		return nil, fmt.Errorf("iterate audit violations: %w", err)
 	}
 	return out, nil
-}
-
-func queryJSONL(cfg *config.Config, filter QueryFilter) ([]Event, error) {
-	log := slog.Default()
-	dir := config.DefaultAuditEventsDir()
-	if cfg != nil {
-		dir = cfg.AuditEventsDir()
-	}
-	if _, err := os.Stat(dir); err != nil {
-		log.Warn("stat audit events dir failed", slog.String("dir", dir), slog.Any("err", err))
-		return nil, fmt.Errorf("stat audit events dir: %w", err)
-	}
-	var out []Event
-	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() || filepath.Base(path) != "events.jsonl" {
-			return err
-		}
-		events, err := scanEventFile(path, filter)
-		if err != nil {
-			return err
-		}
-		out = append(out, events...)
-		return nil
-	})
-	if err != nil {
-		log.Warn("walk audit events dir failed", slog.String("dir", dir), slog.Any("err", err))
-		return nil, fmt.Errorf("walk audit events dir: %w", err)
-	}
-	sortEventsDesc(out)
-	if filter.Limit > 0 && len(out) > filter.Limit {
-		out = out[:filter.Limit]
-	}
-	return out, nil
-}
-
-func scanEventFile(path string, filter QueryFilter) ([]Event, error) {
-	log := slog.Default()
-	f, err := os.Open(path)
-	if err != nil {
-		log.Warn("open audit events file failed", slog.String("path", path), slog.Any("err", err))
-		return nil, fmt.Errorf("open audit events file: %w", err)
-	}
-	defer func() { _ = f.Close() }()
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
-	var out []Event
-	for scanner.Scan() {
-		var event Event
-		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
-			log.Warn("decode audit event failed", slog.String("path", path), slog.Any("err", err))
-			return nil, fmt.Errorf("decode audit event: %w", err)
-		}
-		if eventMatches(event, filter) {
-			out = append(out, event)
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		log.Warn("scan audit events file failed", slog.String("path", path), slog.Any("err", err))
-		return nil, fmt.Errorf("scan audit events file: %w", err)
-	}
-	return out, nil
-}
-
-func eventMatches(event Event, filter QueryFilter) bool {
-	ts, _ := time.Parse(time.RFC3339Nano, event.Time)
-	if !filter.Since.IsZero() && ts.Before(filter.Since) {
-		return false
-	}
-	if !filter.Until.IsZero() && ts.After(filter.Until) {
-		return false
-	}
-	if filter.System != "" && event.System != filter.System {
-		return false
-	}
-	if filter.SessionID != "" && event.SessionID != filter.SessionID {
-		return false
-	}
-	if filter.EventName != "" && event.EventName != filter.EventName {
-		return false
-	}
-	if filter.ToolName != "" && event.ToolName != filter.ToolName {
-		return false
-	}
-	if filter.Decision != "" && event.Decision.Kind != filter.Decision {
-		return false
-	}
-	if filter.Rule != "" {
-		for _, v := range event.Violations {
-			if v.Rule == filter.Rule {
-				return true
-			}
-		}
-		return false
-	}
-	return true
-}
-
-func sortEventsDesc(events []Event) {
-	sort.Slice(events, func(i, j int) bool {
-		return events[i].Time > events[j].Time
-	})
 }

@@ -75,18 +75,6 @@ func DefaultConversationsDir() string {
 	return filepath.Join(DefaultStateDir(), "conversations")
 }
 
-// DefaultAuditEventsDir returns the XDG-derived directory for JSONL audit
-// events.
-func DefaultAuditEventsDir() string {
-	return filepath.Join(DefaultStateDir(), "events")
-}
-
-// DefaultAuditPayloadsDir returns the XDG-derived directory for raw hook
-// payload blobs.
-func DefaultAuditPayloadsDir() string {
-	return filepath.Join(DefaultStateDir(), "payloads")
-}
-
 // DefaultAuditSQLitePath returns the XDG-derived path to the audit
 // SQLite database.
 func DefaultAuditSQLitePath() string {

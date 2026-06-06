@@ -27,37 +27,23 @@ type Log struct {
 }
 
 // Audit holds mature audit event pipeline settings. Pointer bools allow the
-// config loader to distinguish "unset" from an explicit false.
+// config loader to distinguish "unset" from an explicit false. Audit decisions
+// are persisted to SQLite only; the operational agent-gate.jsonl log is for
+// debugging agent-gate itself, not audit output.
 type Audit struct {
 	Enabled *bool       `toml:"enabled"`
 	Level   string      `toml:"level"`
 	Outputs AuditOutput `toml:"outputs"`
-	Query   AuditQuery  `toml:"query"`
 }
 
-// AuditOutput selects which audit destinations are active.
+// AuditOutput selects audit destinations. SQLite is the sole sink.
 type AuditOutput struct {
-	JSONL  AuditJSONLOutput  `toml:"jsonl"`
 	SQLite AuditSQLiteOutput `toml:"sqlite"`
-}
-
-// AuditJSONLOutput configures the JSONL file audit sink.
-type AuditJSONLOutput struct {
-	Enabled          *bool  `toml:"enabled"`
-	EventsDir        string `toml:"events_dir"`
-	PayloadsDir      string `toml:"payloads_dir"`
-	WriteRawPayloads *bool  `toml:"write_raw_payloads"`
 }
 
 // AuditSQLiteOutput configures the SQLite audit sink.
 type AuditSQLiteOutput struct {
-	Enabled *bool  `toml:"enabled"`
-	Path    string `toml:"path"`
-}
-
-// AuditQuery configures the audit query subsystem.
-type AuditQuery struct {
-	Prefer string `toml:"prefer"`
+	Path string `toml:"path"`
 }
 
 // Performance holds optional tuning for latency-sensitive paths.
@@ -493,61 +479,12 @@ func (c *Config) AuditLevel() string {
 	return ""
 }
 
-// AuditJSONLEnabled reports whether the JSONL audit sink is enabled.
-func (c *Config) AuditJSONLEnabled() bool {
-	if c != nil && c.Audit.Outputs.JSONL.Enabled != nil {
-		return *c.Audit.Outputs.JSONL.Enabled
-	}
-	return true
-}
-
-// AuditSQLiteEnabled reports whether the SQLite audit sink is enabled.
-func (c *Config) AuditSQLiteEnabled() bool {
-	if c != nil && c.Audit.Outputs.SQLite.Enabled != nil {
-		return *c.Audit.Outputs.SQLite.Enabled
-	}
-	return false
-}
-
-// AuditWriteRawPayloads reports whether the JSONL sink should persist the
-// original raw hook payload as a content-addressed blob.
-func (c *Config) AuditWriteRawPayloads() bool {
-	if c != nil && c.Audit.Outputs.JSONL.WriteRawPayloads != nil {
-		return *c.Audit.Outputs.JSONL.WriteRawPayloads
-	}
-	return true
-}
-
-// AuditEventsDir returns the resolved JSONL audit events directory.
-func (c *Config) AuditEventsDir() string {
-	if c != nil && c.Audit.Outputs.JSONL.EventsDir != "" {
-		return c.Audit.Outputs.JSONL.EventsDir
-	}
-	return DefaultAuditEventsDir()
-}
-
-// AuditPayloadsDir returns the resolved raw-payload directory.
-func (c *Config) AuditPayloadsDir() string {
-	if c != nil && c.Audit.Outputs.JSONL.PayloadsDir != "" {
-		return c.Audit.Outputs.JSONL.PayloadsDir
-	}
-	return DefaultAuditPayloadsDir()
-}
-
 // AuditSQLitePath returns the resolved SQLite database path.
 func (c *Config) AuditSQLitePath() string {
 	if c != nil && c.Audit.Outputs.SQLite.Path != "" {
 		return c.Audit.Outputs.SQLite.Path
 	}
 	return DefaultAuditSQLitePath()
-}
-
-// AuditQueryPrefer returns the configured preferred audit query backend.
-func (c *Config) AuditQueryPrefer() string {
-	if c != nil && c.Audit.Query.Prefer != "" {
-		return c.Audit.Query.Prefer
-	}
-	return "sqlite"
 }
 
 // HookHotConcurrency returns the daemon admission limit for synchronous hook

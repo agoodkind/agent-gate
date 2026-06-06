@@ -181,14 +181,6 @@ func auditReceivedFields(ctx context.Context, event DeferredAuditEvent, sink aud
 
 	infoAttrs := audit.AttrsFromSlog(append(base, logAttrs(event.Fields)...))
 	sink.Log(ctx, event.SystemString, event.SessionID, event.EventName, "info", "hook.received", infoAttrs)
-
-	debugAttrs := audit.AttrsFromSlog([]slog.Attr{
-		slog.String("system", event.SystemString),
-		slog.String("event", event.EventName),
-		slog.String("session_id", event.SessionID),
-		slog.String("raw_payload", string(event.RawBytes)),
-	})
-	sink.Log(ctx, event.SystemString, event.SessionID, event.EventName, "debug", "hook.raw_payload", debugAttrs)
 }
 
 func writeDecisionAudit(ctx context.Context, event DeferredAuditEvent, sink audit.Sink) {

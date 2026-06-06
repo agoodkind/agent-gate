@@ -448,7 +448,7 @@ func TestWriteDeferredAudit_CodexStopBlockingRuleDowngradesToAudit(t *testing.T)
 	}
 }
 
-func TestWriteDeferredAudit_BlockKeepsReceivedAndRawPayload(t *testing.T) {
+func TestWriteDeferredAudit_BlockKeepsReceived(t *testing.T) {
 	cfg := &config.Config{Rules: []config.Rule{testProviderRule(t,
 		"block-shell-command",
 		`go test \./\.\.\.`,
@@ -462,8 +462,8 @@ func TestWriteDeferredAudit_BlockKeepsReceivedAndRawPayload(t *testing.T) {
 	sink := &recordingAuditSink{}
 	hook.WriteDeferredAudit(context.Background(), evaluation.Deferred, sink)
 
-	if got := sink.snapshot(); strings.Join(got, ",") != "hook.received,hook.raw_payload,hook.blocked" {
-		t.Fatalf("messages = %#v, want received, raw_payload, blocked", got)
+	if got := sink.snapshot(); strings.Join(got, ",") != "hook.received,hook.blocked" {
+		t.Fatalf("messages = %#v, want received then blocked", got)
 	}
 }
 

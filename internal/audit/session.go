@@ -15,7 +15,6 @@ import (
 	"sync"
 	"time"
 
-	lru "github.com/hashicorp/golang-lru/v2"
 	expirable "github.com/hashicorp/golang-lru/v2/expirable"
 	_ "github.com/mattn/go-sqlite3"
 
@@ -23,7 +22,6 @@ import (
 )
 
 const (
-	eventLogCacheSize = 16
 	dedupCacheSize    = 4096
 	dedupTTL          = 30 * time.Second
 	schemaVersion     = 1
@@ -193,29 +191,19 @@ func (el *EventLogger) Enabled() bool {
 }
 
 func (el *EventLogger) configureOutputs(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
-	if cfg == nil || cfg.AuditJSONLEnabled() {
-		eventsDir := config.DefaultAuditEventsDir()
-		payloadsDir := config.DefaultAuditPayloadsDir()
-		writeRaw := true
-		if cfg != nil {
-			eventsDir = cfg.AuditEventsDir()
-			payloadsDir = cfg.AuditPayloadsDir()
-			writeRaw = cfg.AuditWriteRawPayloads()
-		}
-		el.rawHash = writeRaw
-		s, err := newJSONLEventSink(eventsDir, payloadsDir, writeRaw, log)
-		if err != nil {
-			return err
-		}
-		el.outputs = append(el.outputs, s)
+	// SQLite is the sole audit sink. Decisions and violations are persisted to
+	// the same audit.db that backs intake; the operational agent-gate.jsonl log
+	// is for debugging agent-gate itself, not audit output.
+	el.rawHash = true
+	sqlitePath := config.DefaultAuditSQLitePath()
+	if cfg != nil {
+		sqlitePath = cfg.AuditSQLitePath()
 	}
-	if cfg != nil && cfg.AuditSQLiteEnabled() {
-		s, err := newSQLiteEventSink(ctx, cfg.AuditSQLitePath(), log)
-		if err != nil {
-			return err
-		}
-		el.outputs = append(el.outputs, s)
+	s, err := newSQLiteEventSink(ctx, sqlitePath, log)
+	if err != nil {
+		return err
 	}
+	el.outputs = append(el.outputs, s)
 	return nil
 }
 
@@ -518,123 +506,9 @@ func stringSliceAttr(attrs Attrs, key string) []string {
 	return value.Strings()
 }
 
-type jsonlEventSink struct {
-	eventsDir        string
-	payloadsDir      string
-	writeRawPayloads bool
-	cache            *lru.Cache[string, *os.File]
-	log              *slog.Logger
-}
-
-func newJSONLEventSink(eventsDir, payloadsDir string, writeRawPayloads bool, log *slog.Logger) (*jsonlEventSink, error) {
-	if log == nil {
-		log = slog.Default()
-	}
-	if err := os.MkdirAll(eventsDir, 0o755); err != nil {
-		log.Error("create audit events dir failed",
-			slog.String("events_dir", eventsDir),
-			slog.Any("err", err),
-		)
-		return nil, fmt.Errorf("create audit events dir %s: %w", eventsDir, err)
-	}
-	if writeRawPayloads {
-		if err := os.MkdirAll(payloadsDir, 0o755); err != nil {
-			log.Error("create audit payloads dir failed",
-				slog.String("payloads_dir", payloadsDir),
-				slog.Any("err", err),
-			)
-			return nil, fmt.Errorf("create audit payloads dir %s: %w", payloadsDir, err)
-		}
-	}
-	cache, err := lru.NewWithEvict[string, *os.File](eventLogCacheSize, func(_ string, f *os.File) {
-		_ = f.Close()
-	})
-	if err != nil {
-		log.Error("create audit event lru failed",
-			slog.Int("cache_size", eventLogCacheSize),
-			slog.Any("err", err),
-		)
-		return nil, fmt.Errorf("create audit event lru: %w", err)
-	}
-	return &jsonlEventSink{eventsDir: eventsDir, payloadsDir: payloadsDir, writeRawPayloads: writeRawPayloads, cache: cache, log: log}, nil
-}
-
-func (s *jsonlEventSink) Write(event Event, rawPayload string) error {
-	if s.writeRawPayloads && rawPayload != "" {
-		hash, err := s.writePayload(rawPayload)
-		if err != nil {
-			return err
-		}
-		event.RawPayloadHash = hash
-	}
-
-	line, err := json.Marshal(event)
-	if err != nil {
-		s.log.Warn("marshal audit event failed", slog.String("event_id", event.EventID), slog.Any("err", err))
-		return fmt.Errorf("marshal audit event: %w", err)
-	}
-	line = append(line, '\n')
-
-	f, err := s.fileFor(event.Time)
-	if err != nil {
-		return err
-	}
-	if _, err := f.Write(line); err != nil {
-		s.log.Warn("write audit event line failed", slog.String("event_id", event.EventID), slog.Any("err", err))
-		return fmt.Errorf("write audit event line: %w", err)
-	}
-	return nil
-}
-
-func (s *jsonlEventSink) writePayload(rawPayload string) (string, error) {
-	hash := strings.TrimPrefix(payloadHash(rawPayload), "sha256:")
-	dir := filepath.Join(s.payloadsDir, "sha256", hash[:2], hash[2:4])
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		s.log.Warn("create audit payload dir failed", slog.String("dir", dir), slog.Any("err", err))
-		return "", fmt.Errorf("create audit payload dir %s: %w", dir, err)
-	}
-	path := filepath.Join(dir, hash+".json")
-	if _, err := os.Stat(path); err == nil {
-		return "sha256:" + hash, nil
-	}
-	if err := os.WriteFile(path, []byte(rawPayload), 0o600); err != nil {
-		s.log.Warn("write audit payload failed", slog.String("path", path), slog.Any("err", err))
-		return "sha256:" + hash, fmt.Errorf("write audit payload %s: %w", path, err)
-	}
-	return "sha256:" + hash, nil
-}
-
 func payloadHash(rawPayload string) string {
 	sum := sha256.Sum256([]byte(rawPayload))
 	return "sha256:" + hex.EncodeToString(sum[:])
-}
-
-func (s *jsonlEventSink) fileFor(ts string) (*os.File, error) {
-	day := ts[:10]
-	if f, ok := s.cache.Get(day); ok {
-		return f, nil
-	}
-	dir := filepath.Join(s.eventsDir, day[:4], day[5:7], day[8:10])
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		s.log.Warn("create audit events dir failed", slog.String("dir", dir), slog.Any("err", err))
-		return nil, fmt.Errorf("create audit events dir %s: %w", dir, err)
-	}
-	path := filepath.Join(dir, "events.jsonl")
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-	if err != nil {
-		s.log.Warn("open audit events file failed", slog.String("path", path), slog.Any("err", err))
-		return nil, fmt.Errorf("open audit events file %s: %w", path, err)
-	}
-	s.cache.Add(day, f)
-	return f, nil
-}
-
-func (s *jsonlEventSink) Close() error {
-	if s == nil || s.cache == nil {
-		return nil
-	}
-	s.cache.Purge()
-	return nil
 }
 
 type sqliteEventSink struct {

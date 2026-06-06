@@ -12,11 +12,15 @@ level = "debug"   # debug | info | warn | error
 
 # ── Path overrides (optional) ────────────────────────────────────────────────
 #
-# By default agent-gate writes normalized audit events under:
+# Audit decisions (received / blocked / allowed / audit_violation) and their
+# violations are persisted to SQLite only, in:
 #
-#   $XDG_STATE_HOME/agent-gate/events/YYYY/MM/DD/events.jsonl
-#   $XDG_STATE_HOME/agent-gate/payloads/sha256/ab/cd/<hash>.json
+#   $XDG_STATE_HOME/agent-gate/sqlite/audit.db
 #                  ($XDG_STATE_HOME defaults to ~/.local/state)
+#
+# The same audit.db also backs the durable intake store (raw hook receipts,
+# including the full raw_payload per event). The operational agent-gate.jsonl
+# log is for debugging agent-gate itself, not audit output.
 #
 # conversations_dir is legacy and only kept for compatibility with older logs.
 
@@ -27,18 +31,8 @@ conversations_dir = ""   # example: "/var/log/agent-gate/conversations"
 enabled = true
 level = "debug"
 
-[audit.outputs.jsonl]
-enabled = true
-events_dir = ""
-payloads_dir = ""
-write_raw_payloads = true
-
 [audit.outputs.sqlite]
-enabled = false
-path = ""
-
-[audit.query]
-prefer = "sqlite" # sqlite | jsonl
+path = ""   # default: $XDG_STATE_HOME/agent-gate/sqlite/audit.db
 
 # ── Rules ────────────────────────────────────────────────────────────────────
 #

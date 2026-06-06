@@ -208,8 +208,8 @@ func TestRunQueryDecisionsPreservesAuditQueryBehavior(t *testing.T) {
 	if exitCode != 0 {
 		t.Fatalf("exitCode = %d, want 0; stderr=%q", exitCode, stderr)
 	}
-	if !strings.Contains(stdout, "source=jsonl rows=1") {
-		t.Fatalf("stdout = %q, want one JSONL-backed audit row", stdout)
+	if !strings.Contains(stdout, "source=sqlite rows=1") {
+		t.Fatalf("stdout = %q, want one SQLite-backed audit row", stdout)
 	}
 	if !strings.Contains(stdout, "use-make-not-go-direct") {
 		t.Fatalf("stdout = %q, want matched rule", stdout)

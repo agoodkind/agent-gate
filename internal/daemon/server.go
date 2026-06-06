@@ -67,7 +67,7 @@ func New(log *slog.Logger, cfg *config.Config) (*Server, error) {
 	if cfg == nil {
 		cfg = &config.Config{
 			Log:   config.Log{},
-			Audit: config.Audit{Enabled: nil, Level: "", Outputs: config.AuditOutput{}, Query: config.AuditQuery{}},
+			Audit: config.Audit{Enabled: nil, Level: "", Outputs: config.AuditOutput{SQLite: config.AuditSQLiteOutput{Path: ""}}},
 			Paths: config.Paths{},
 			Performance: config.Performance{
 				Hook: config.HookPerformance{

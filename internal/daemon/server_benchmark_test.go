@@ -67,15 +67,8 @@ func BenchmarkEvaluateHookAuditEnabledParallel(b *testing.B) {
 		Enabled: boolPtr(true),
 		Level:   "",
 		Outputs: config.AuditOutput{
-			JSONL: config.AuditJSONLOutput{
-				Enabled:          boolPtr(true),
-				EventsDir:        filepath.Join(b.TempDir(), "events"),
-				PayloadsDir:      filepath.Join(b.TempDir(), "payloads"),
-				WriteRawPayloads: boolPtr(false),
-			},
-			SQLite: config.AuditSQLiteOutput{Enabled: boolPtr(false), Path: ""},
+			SQLite: config.AuditSQLiteOutput{Path: filepath.Join(b.TempDir(), "sqlite", "audit.db")},
 		},
-		Query: config.AuditQuery{},
 	}
 	srv := newBenchmarkServer(b, cfg)
 	cwd := b.TempDir()
