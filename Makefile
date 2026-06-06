@@ -22,6 +22,13 @@ GKLOG_VPKG := goodkind.io/gklog/version
 # CGO=1 for the daemon's runtime requirements.
 export CGO_ENABLED := 1
 
+# Build tags. sqlite_fts5 makes mattn/go-sqlite3 compile the FTS5 extension,
+# which the durable intake store's command-search index depends on. Driving the
+# tag through GOFLAGS (rather than GO_BUILD_TAGS) makes every `go` subcommand
+# pick it up uniformly: the build path, the go-mk test helper, and vet all link
+# FTS5. Exported so recipe subprocesses inherit it.
+export GOFLAGS := -tags=sqlite_fts5
+
 # Daemon identity. go-service.mk reads these at parse time, so they must be
 # set BEFORE -include $(GO_MK).
 LAUNCHD_LABEL := io.goodkind.agent-gate
