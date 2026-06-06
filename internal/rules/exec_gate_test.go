@@ -281,3 +281,47 @@ func TestExecCanonicalCacheKeySharedAcrossSymlinkAliases(t *testing.T) {
 		t.Fatalf("symlink aliases should share one canonical cache entry, forked %d times", runner.Calls())
 	}
 }
+
+func TestExecStaleWhileRevalidate(t *testing.T) {
+	dir := t.TempDir()
+	rule := loadExecRule(t, execRuleTOML("cache_ttl_ms = 1"))
+	runner := &countingRunner{responses: []runnerResponse{
+		{res: execconcern.RunResult{ExitCode: 1}}, // cold: block
+		{res: execconcern.RunResult{ExitCode: 0}}, // background refresh: allow
+	}}
+	runtime := rules.NewExecRuntime(runner, nil)
+	ctx := rules.WithExecRuntime(context.Background(), runtime)
+	payload := map[string]any{
+		"effective_cwd": dir,
+		"tool_input":    map[string]any{"command": "grepcode here"},
+	}
+
+	cold := rules.EvaluateAll(ctx, "claude", "PreToolUse", testFields(payload), []config.Rule{rule}, nil)
+	if len(cold) == 0 {
+		t.Fatalf("cold event should block on the synchronous verdict")
+	}
+	if runner.Calls() != 1 {
+		t.Fatalf("cold event should fork once synchronously, got %d", runner.Calls())
+	}
+
+	time.Sleep(20 * time.Millisecond) // entry is now stale
+
+	stale := rules.EvaluateAll(ctx, "claude", "PreToolUse", testFields(payload), []config.Rule{rule}, nil)
+	if len(stale) == 0 {
+		t.Fatalf("stale event should serve the cached block while revalidating")
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for runner.Calls() < 2 {
+		if time.Now().After(deadline) {
+			t.Fatalf("background refresh never ran, calls=%d", runner.Calls())
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	time.Sleep(20 * time.Millisecond) // let the refresh's cacheStore settle
+
+	after := rules.EvaluateAll(ctx, "claude", "PreToolUse", testFields(payload), []config.Rule{rule}, nil)
+	if len(after) != 0 {
+		t.Fatalf("after the background refresh the cached verdict should allow, got %d violations", len(after))
+	}
+}

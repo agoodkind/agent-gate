@@ -21,24 +21,38 @@ import (
 const canonCacheTTL = 5 * time.Second
 
 // ExecRuntime holds the cross-event state for exec validator conditions: the
-// process runner, a path canonicalization cache, and the TTL result cache keyed
-// by canonical cache key. The daemon builds one ExecRuntime per config snapshot
-// and discards it on reload, which is how the result cache resets when config
-// changes. It is safe for concurrent use across events.
+// process runner, a path canonicalization cache, and the result cache keyed by
+// canonical cache key. The cache is stale-while-revalidate: a cold key forks
+// synchronously (the first event blocks on the real verdict), and once an entry
+// exists it is served immediately on every event, with a single background
+// refresh kicked off when the entry is older than the rule's cache_ttl_ms. The
+// daemon builds one ExecRuntime per config snapshot and discards it on reload,
+// which is how the cache resets when config changes. It is safe for concurrent
+// use across events.
 type ExecRuntime struct {
 	runner execconcern.Runner
 	canon  *canonpath.Cache
 	log    *slog.Logger
 	now    func() time.Time
 
-	mu    sync.Mutex
-	cache map[string]cachedVerdict
+	mu         sync.Mutex
+	cache      map[string]cachedVerdict
+	refreshing map[string]struct{}
 }
 
 type cachedVerdict struct {
 	verdict  execconcern.Verdict
-	expireAt time.Time
+	storedAt time.Time
 }
+
+// cacheState reports how a cache lookup resolved against the rule's TTL.
+type cacheState int
+
+const (
+	cacheMiss  cacheState = iota // no entry: the caller must fork synchronously.
+	cacheFresh                   // entry younger than the TTL: serve as-is.
+	cacheStale                   // entry past the TTL: serve, then refresh async.
+)
 
 // NewExecRuntime returns an ExecRuntime using runner to fork validators and
 // logging errors to log. A nil runner falls back to the production OS runner and
@@ -51,12 +65,13 @@ func NewExecRuntime(runner execconcern.Runner, log *slog.Logger) *ExecRuntime {
 		log = slog.Default()
 	}
 	return &ExecRuntime{
-		runner: runner,
-		canon:  canonpath.NewCache(canonCacheTTL),
-		log:    log,
-		now:    time.Now,
-		mu:     sync.Mutex{},
-		cache:  make(map[string]cachedVerdict),
+		runner:     runner,
+		canon:      canonpath.NewCache(canonCacheTTL),
+		log:        log,
+		now:        time.Now,
+		mu:         sync.Mutex{},
+		cache:      make(map[string]cachedVerdict),
+		refreshing: make(map[string]struct{}),
 	}
 }
 
@@ -174,23 +189,67 @@ func execConditionGateMatch(ctx context.Context, fields FieldSet, rule *config.R
 	cacheKey := keyView.Canonical
 
 	if c.CacheTTLMs > 0 {
-		if v, ok := runtime.cacheGet(c, cacheKey); ok {
+		v, state := runtime.cacheLookup(c, cacheKey)
+		switch state {
+		case cacheFresh:
 			if memo != nil {
 				memo.record(c, rule.Name, v)
 			}
 			return v.Block
+		case cacheStale:
+			// Serve the cached verdict now and refresh in the background so no
+			// event after the cold one ever blocks on the fork.
+			runtime.triggerRefresh(ctx, fields, rule, c, keyView, cacheKey)
+			if memo != nil {
+				memo.record(c, rule.Name, v)
+			}
+			return v.Block
+		case cacheMiss:
+			// Cold key: fall through to a synchronous fork.
 		}
 	}
 
 	verdict := runtime.runValidator(ctx, fields, rule, c, keyView, memo)
 
 	if !verdict.Errored && c.CacheTTLMs > 0 {
-		runtime.cacheStore(c, cacheKey, verdict, c.CacheTTLMs)
+		runtime.cacheStore(c, cacheKey, verdict)
 	}
 	if memo != nil {
 		memo.record(c, rule.Name, verdict)
 	}
 	return verdict.Block
+}
+
+// triggerRefresh forks the validator off the hot path to refresh a stale cache
+// entry, deduped so at most one refresh per key is in flight. The refresh is
+// detached from the request cancellation (the event already has its verdict)
+// and never caches an error outcome, so a transient failure keeps the last good
+// verdict instead of clearing it.
+func (r *ExecRuntime) triggerRefresh(ctx context.Context, fields FieldSet, rule *config.Rule, c *config.Condition, keyView execconcern.PathView, cacheKey string) {
+	key := cacheEntryKey(c, cacheKey)
+	r.mu.Lock()
+	if _, busy := r.refreshing[key]; busy {
+		r.mu.Unlock()
+		return
+	}
+	r.refreshing[key] = struct{}{}
+	r.mu.Unlock()
+
+	refreshCtx := context.WithoutCancel(ctx)
+	go func() {
+		defer func() {
+			r.mu.Lock()
+			delete(r.refreshing, key)
+			r.mu.Unlock()
+			if rec := recover(); rec != nil {
+				r.log.ErrorContext(refreshCtx, "exec validator refresh panic", "rule", rule.Name, "err", fmt.Errorf("panic: %v", rec))
+			}
+		}()
+		verdict := r.runValidator(refreshCtx, fields, rule, c, keyView, nil)
+		if !verdict.Errored {
+			r.cacheStore(c, cacheKey, verdict)
+		}
+	}()
 }
 
 func (r *ExecRuntime) runValidator(
@@ -258,24 +317,28 @@ func (r *ExecRuntime) buildInput(
 	}
 }
 
-func (r *ExecRuntime) cacheGet(c *config.Condition, cacheKey string) (execconcern.Verdict, bool) {
+// cacheLookup reports the cached verdict and whether it is missing, fresh, or
+// stale relative to the condition's cache_ttl_ms.
+func (r *ExecRuntime) cacheLookup(c *config.Condition, cacheKey string) (execconcern.Verdict, cacheState) {
 	key := cacheEntryKey(c, cacheKey)
 	now := r.now()
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	entry, ok := r.cache[key]
-	if !ok || !now.Before(entry.expireAt) {
-		return execconcern.Verdict{Block: false, Message: "", Errored: false}, false
+	if !ok {
+		return execconcern.Verdict{Block: false, Message: "", Errored: false}, cacheMiss
 	}
-	return entry.verdict, true
+	if now.Sub(entry.storedAt) < time.Duration(c.CacheTTLMs)*time.Millisecond {
+		return entry.verdict, cacheFresh
+	}
+	return entry.verdict, cacheStale
 }
 
-func (r *ExecRuntime) cacheStore(c *config.Condition, cacheKey string, verdict execconcern.Verdict, ttlMs int) {
+func (r *ExecRuntime) cacheStore(c *config.Condition, cacheKey string, verdict execconcern.Verdict) {
 	key := cacheEntryKey(c, cacheKey)
-	expireAt := r.now().Add(time.Duration(ttlMs) * time.Millisecond)
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.cache[key] = cachedVerdict{verdict: verdict, expireAt: expireAt}
+	r.cache[key] = cachedVerdict{verdict: verdict, storedAt: r.now()}
 }
 
 func cacheEntryKey(c *config.Condition, cacheKey string) string {
