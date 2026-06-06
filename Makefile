@@ -74,15 +74,34 @@ deploy:
 	$(MAKE) daemon-wait
 	$(MAKE) daemon-status
 
+# deploy-service restarts the supervised daemon. On macOS it fully unloads the
+# service (bootout), waits for the process to exit, then loads it again
+# (bootstrap), rather than `launchctl kickstart -k`. kickstart can start the new
+# instance before the old one releases the SQLite WAL lock, which makes the
+# daemon crash-loop on "database is locked" during the startup intake replay.
+# bootout + wait + bootstrap guarantees no instance overlap. Linux keeps
+# service-restart because systemctl restart is already overlap-free.
 deploy-service:
-	@$(MAKE) service-restart || { \
-		echo "service restart failed; installing user service"; \
-		$(MAKE) service-install; \
-		if [ "$$(uname)" = "Darwin" ]; then \
-			launchctl enable "$(LAUNCHD_DOMAIN)/$(LAUNCHD_LABEL)" || true; \
+	@if [ "$$(uname)" = "Darwin" ]; then \
+		echo "restarting $(LAUNCHD_LABEL): bootout + bootstrap"; \
+		launchctl bootout "$(LAUNCHD_DOMAIN)/$(LAUNCHD_LABEL)" 2>/dev/null || true; \
+		for _ in $$(seq 1 50); do \
+			launchctl print "$(LAUNCHD_DOMAIN)/$(LAUNCHD_LABEL)" >/dev/null 2>&1 || break; \
+			sleep 0.2; \
+		done; \
+		if ! launchctl bootstrap "$(LAUNCHD_DOMAIN)" "$(LAUNCHD_PLIST)" 2>/dev/null; then \
+			echo "bootstrap failed; (re)installing user service"; \
+			$(MAKE) service-install; \
+			launchctl enable "$(LAUNCHD_DOMAIN)/$(LAUNCHD_LABEL)" 2>/dev/null || true; \
+			launchctl bootstrap "$(LAUNCHD_DOMAIN)" "$(LAUNCHD_PLIST)" 2>/dev/null || true; \
 		fi; \
-		$(MAKE) service-restart; \
-	}
+	else \
+		$(MAKE) service-restart || { \
+			echo "service restart failed; installing user service"; \
+			$(MAKE) service-install; \
+			$(MAKE) service-restart; \
+		}; \
+	fi
 
 # install-release fetches the latest release via install.sh. Distinct from
 # canonical `make install` which atomically copies the locally-built binary
