@@ -35,8 +35,8 @@ func TestDetect_PriorityChain(t *testing.T) {
 		name    string
 		env     map[string]string
 		payload hook.DetectionPayload
-		hint    hook.HookSystem
-		want    hook.HookSystem
+		hint    hook.System
+		want    hook.System
 	}{
 		{name: "codex env beats claude env", env: map[string]string{"CODEX_THREAD_ID": "abc", "CLAUDE_CODE_ENTRYPOINT": "cli"}, payload: hook.DetectionPayload{HookEventName: "PreToolUse"}, want: hook.SystemCodex},
 		{name: "codex CI flag alone", env: map[string]string{"CODEX_CI": "1"}, payload: hook.DetectionPayload{HookEventName: "PreToolUse"}, want: hook.SystemCodex},

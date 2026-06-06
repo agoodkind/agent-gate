@@ -17,7 +17,7 @@ type HotEvaluation struct {
 type DeferredAuditEvent struct {
 	Valid               bool
 	RawBytes            []byte
-	System              HookSystem
+	System              System
 	SystemString        string
 	EventName           string
 	SessionID           string

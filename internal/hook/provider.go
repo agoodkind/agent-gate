@@ -11,13 +11,13 @@ import (
 
 // EvaluateHot performs only provider detection, typed parsing, rule
 // evaluation, block diagnostics, and response rendering.
-func EvaluateHot(ctx context.Context, rawBytes []byte, cfg *config.Config, hint HookSystem, getenv func(string) string) HotEvaluation {
+func EvaluateHot(ctx context.Context, rawBytes []byte, cfg *config.Config, hint System, getenv func(string) string) HotEvaluation {
 	return EvaluateHotWithEventID(ctx, rawBytes, cfg, hint, getenv, "")
 }
 
 // EvaluateHotWithEventID is EvaluateHot with the durable intake event_id that
 // is included in block responses for query lookup.
-func EvaluateHotWithEventID(ctx context.Context, rawBytes []byte, cfg *config.Config, hint HookSystem, getenv func(string) string, eventID string) HotEvaluation {
+func EvaluateHotWithEventID(ctx context.Context, rawBytes []byte, cfg *config.Config, hint System, getenv func(string) string, eventID string) HotEvaluation {
 	detectionPayload, err := ParseDetectionPayload(rawBytes)
 	if err != nil {
 		return HotEvaluation{
@@ -41,7 +41,7 @@ func EvaluateHotWithEventID(ctx context.Context, rawBytes []byte, cfg *config.Co
 	return evaluatePayloadHot(ctx, payload, rawBytes, cfg, getenv, eventID)
 }
 
-func emptyDeferredAuditEvent(system HookSystem) DeferredAuditEvent {
+func emptyDeferredAuditEvent(system System) DeferredAuditEvent {
 	var fields rules.FieldSet
 	return DeferredAuditEvent{
 		Valid:               false,
@@ -62,11 +62,11 @@ func emptyDeferredAuditEvent(system HookSystem) DeferredAuditEvent {
 }
 
 // CanBlock returns true when the provider can meaningfully change the hook flow.
-func CanBlock(system HookSystem, eventName string) bool {
+func CanBlock(system System, eventName string) bool {
 	return LookupCapability(system, eventName) != CapabilityObserve
 }
 
-func evaluatePayloadHot(ctx context.Context, payload HookPayload, rawBytes []byte, cfg *config.Config, getenv func(string) string, eventID string) HotEvaluation {
+func evaluatePayloadHot(ctx context.Context, payload Payload, rawBytes []byte, cfg *config.Config, getenv func(string) string, eventID string) HotEvaluation {
 	systemStr := payload.System.String()
 	eventName := payload.EventName()
 	fields := payload.Fields()
@@ -126,7 +126,7 @@ func rulesForConfig(cfg *config.Config) []config.Rule {
 
 func newDeferredAuditEvent(
 	rawBytes []byte,
-	payload HookPayload,
+	payload Payload,
 	fields rules.FieldSet,
 	ruleSet []config.Rule,
 	blockingViolations []rules.Violation,
@@ -270,16 +270,16 @@ func logAttrs(fields rules.FieldSet) []slog.Attr {
 		slog.String("agent_type", fields.AgentType),
 		slog.String("ti_command", fields.ToolInputCommand),
 		slog.String("ti_file_path", fields.ToolInputFilePath),
-		slog.String("ti_description", truncate(fields.ToolInputDescription, 200)),
-		slog.String("ti_content_snippet", truncate(fields.ToolInputContent, 200)),
-		slog.String("ti_old_string_snippet", truncate(fields.ToolInputOldString, 200)),
-		slog.String("ti_new_string_snippet", truncate(fields.ToolInputNewString, 200)),
+		slog.String("ti_description", truncate(fields.ToolInputDescription)),
+		slog.String("ti_content_snippet", truncate(fields.ToolInputContent)),
+		slog.String("ti_old_string_snippet", truncate(fields.ToolInputOldString)),
+		slog.String("ti_new_string_snippet", truncate(fields.ToolInputNewString)),
 		slog.String("ti_pattern", fields.ToolInputPattern),
 		slog.String("ti_url", fields.ToolInputURL),
 		slog.String("ti_query", fields.ToolInputQuery),
-		slog.String("prompt_snippet", truncate(fields.Prompt, 200)),
-		slog.String("message_snippet", truncate(fields.Message, 200)),
-		slog.String("reason", truncate(fields.Reason, 200)),
-		slog.String("last_assistant_message_snippet", truncate(fields.LastAssistantMessage, 200)),
+		slog.String("prompt_snippet", truncate(fields.Prompt)),
+		slog.String("message_snippet", truncate(fields.Message)),
+		slog.String("reason", truncate(fields.Reason)),
+		slog.String("last_assistant_message_snippet", truncate(fields.LastAssistantMessage)),
 	}
 }

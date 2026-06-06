@@ -6,7 +6,7 @@ func TestLookupCapabilityKnownPairs(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
 		name   string
-		system HookSystem
+		system System
 		event  string
 		want   Capability
 	}{

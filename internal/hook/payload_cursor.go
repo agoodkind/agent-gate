@@ -2,6 +2,7 @@ package hook
 
 import "goodkind.io/agent-gate/internal/rules"
 
+// CursorEnvelope holds the fields common to every Cursor hook payload.
 type CursorEnvelope struct {
 	ConversationID string         `json:"conversation_id"`
 	GenerationID   string         `json:"generation_id"`
@@ -14,32 +15,40 @@ type CursorEnvelope struct {
 	TranscriptPath NullableString `json:"transcript_path"`
 }
 
+// EventName returns the Cursor hook event name.
 func (e CursorEnvelope) EventName() string { return string(e.HookEvent) }
+
+// SessionID returns the Cursor session id.
 func (e CursorEnvelope) SessionID() string { return e.Session }
-func (e CursorEnvelope) CWD() string       { return "" }
+
+// CWD returns the working directory, which the envelope does not carry.
+func (e CursorEnvelope) CWD() string { return "" }
 
 func (e CursorEnvelope) baseFields() rules.FieldSet {
-	return rules.FieldSet{
-		HookEventName:  string(e.HookEvent),
-		SessionID:      e.Session,
-		ConversationID: e.ConversationID,
-		GenerationID:   e.GenerationID,
-		Model:          e.Model,
-		CursorVersion:  e.CursorVersion,
-		UserEmail:      e.UserEmail,
-		TranscriptPath: e.TranscriptPath.String(),
-	}
+	var fields rules.FieldSet
+	fields.HookEventName = string(e.HookEvent)
+	fields.SessionID = e.Session
+	fields.ConversationID = e.ConversationID
+	fields.GenerationID = e.GenerationID
+	fields.Model = e.Model
+	fields.CursorVersion = e.CursorVersion
+	fields.UserEmail = e.UserEmail
+	fields.TranscriptPath = e.TranscriptPath.String()
+	return fields
 }
 
 type (
+	// CursorSessionStartPayload is the Cursor sessionStart hook payload.
 	CursorSessionStartPayload struct{ CursorEnvelope }
-	CursorSessionEndPayload   struct {
+	// CursorSessionEndPayload is the Cursor sessionEnd hook payload.
+	CursorSessionEndPayload struct {
 		CursorEnvelope
 		Reason      string `json:"reason"`
 		FinalStatus string `json:"final_status"`
 	}
 )
 
+// CursorPreToolUsePayload is the Cursor preToolUse hook payload.
 type CursorPreToolUsePayload struct {
 	CursorEnvelope
 	ToolName  string          `json:"tool_name"`
@@ -48,6 +57,8 @@ type CursorPreToolUsePayload struct {
 	Cwd       string          `json:"cwd"`
 	Duration  Number          `json:"duration"`
 }
+
+// CursorPostToolUsePayload is the Cursor postToolUse hook payload.
 type CursorPostToolUsePayload struct {
 	CursorEnvelope
 	ToolName   string          `json:"tool_name"`
@@ -57,6 +68,8 @@ type CursorPostToolUsePayload struct {
 	Duration   Number          `json:"duration"`
 	Cwd        string          `json:"cwd"`
 }
+
+// CursorPostToolUseFailurePayload is the Cursor postToolUseFailure hook payload.
 type CursorPostToolUseFailurePayload struct {
 	CursorEnvelope
 	ToolName     string          `json:"tool_name"`
@@ -68,12 +81,16 @@ type CursorPostToolUseFailurePayload struct {
 	Duration     Number          `json:"duration"`
 	Cwd          string          `json:"cwd"`
 }
+
+// CursorBeforeShellExecutionPayload is the Cursor beforeShellExecution hook payload.
 type CursorBeforeShellExecutionPayload struct {
 	CursorEnvelope
 	Command string `json:"command"`
 	Cwd     string `json:"cwd"`
 	Sandbox bool   `json:"sandbox"`
 }
+
+// CursorAfterShellExecutionPayload is the Cursor afterShellExecution hook payload.
 type CursorAfterShellExecutionPayload struct {
 	CursorEnvelope
 	Command  string `json:"command"`
@@ -82,6 +99,8 @@ type CursorAfterShellExecutionPayload struct {
 	Sandbox  bool   `json:"sandbox"`
 	Duration Number `json:"duration"`
 }
+
+// CursorBeforeMCPExecutionPayload is the Cursor beforeMCPExecution hook payload.
 type CursorBeforeMCPExecutionPayload struct {
 	CursorEnvelope
 	ToolName  string          `json:"tool_name"`
@@ -89,6 +108,8 @@ type CursorBeforeMCPExecutionPayload struct {
 	ToolUseID string          `json:"tool_use_id"`
 	Cwd       string          `json:"cwd"`
 }
+
+// CursorAfterMCPExecutionPayload is the Cursor afterMCPExecution hook payload.
 type CursorAfterMCPExecutionPayload struct {
 	CursorEnvelope
 	ToolName   string          `json:"tool_name"`
@@ -98,26 +119,36 @@ type CursorAfterMCPExecutionPayload struct {
 	ResultJSON string          `json:"result_json"`
 	Cwd        string          `json:"cwd"`
 }
+
+// CursorBeforeReadFilePayload is the Cursor beforeReadFile hook payload.
 type CursorBeforeReadFilePayload struct {
 	CursorEnvelope
 	FilePath string `json:"file_path"`
 	Cwd      string `json:"cwd"`
 }
+
+// CursorBeforeTabFileReadPayload is the Cursor beforeTabFileRead hook payload.
 type CursorBeforeTabFileReadPayload struct {
 	CursorEnvelope
 	FilePath string `json:"file_path"`
 	Cwd      string `json:"cwd"`
 }
+
+// CursorAfterFileEditPayload is the Cursor afterFileEdit hook payload.
 type CursorAfterFileEditPayload struct {
 	CursorEnvelope
 	FilePath string `json:"file_path"`
 	Edits    []Edit `json:"edits"`
 }
+
+// CursorAfterTabFileEditPayload is the Cursor afterTabFileEdit hook payload.
 type CursorAfterTabFileEditPayload struct {
 	CursorEnvelope
 	FilePath string `json:"file_path"`
 	Edits    []Edit `json:"edits"`
 }
+
+// CursorBeforeSubmitPromptPayload is the Cursor beforeSubmitPrompt hook payload.
 type CursorBeforeSubmitPromptPayload struct {
 	CursorEnvelope
 	Prompt      string       `json:"prompt"`
@@ -125,6 +156,8 @@ type CursorBeforeSubmitPromptPayload struct {
 	Cwd         string       `json:"cwd"`
 	Attachments []Attachment `json:"attachments"`
 }
+
+// CursorSubagentStartPayload is the Cursor subagentStart hook payload.
 type CursorSubagentStartPayload struct {
 	CursorEnvelope
 	SubagentID           string `json:"subagent_id"`
@@ -135,6 +168,8 @@ type CursorSubagentStartPayload struct {
 	IsParallelWorker     bool   `json:"is_parallel_worker"`
 	IsBackgroundAgent    bool   `json:"is_background_agent"`
 }
+
+// CursorSubagentStopPayload is the Cursor subagentStop hook payload.
 type CursorSubagentStopPayload struct {
 	CursorEnvelope
 	SubagentID           string         `json:"subagent_id"`
@@ -147,6 +182,8 @@ type CursorSubagentStopPayload struct {
 	ToolCallCount        int            `json:"tool_call_count"`
 	DurationMS           int            `json:"duration_ms"`
 }
+
+// CursorPreCompactPayload is the Cursor preCompact hook payload.
 type CursorPreCompactPayload struct {
 	CursorEnvelope
 	Trigger             string `json:"trigger"`
@@ -156,6 +193,8 @@ type CursorPreCompactPayload struct {
 	MessagesToCompact   int    `json:"messages_to_compact"`
 	IsFirstCompaction   bool   `json:"is_first_compaction"`
 }
+
+// CursorStopPayload is the Cursor stop hook payload.
 type CursorStopPayload struct {
 	CursorEnvelope
 	Status           string `json:"status"`
@@ -166,6 +205,8 @@ type CursorStopPayload struct {
 	CacheReadTokens  int    `json:"cache_read_tokens"`
 	CacheWriteTokens int    `json:"cache_write_tokens"`
 }
+
+// CursorAfterAgentResponsePayload is the Cursor afterAgentResponse hook payload.
 type CursorAfterAgentResponsePayload struct {
 	CursorEnvelope
 	Text             string `json:"text"`
@@ -175,6 +216,8 @@ type CursorAfterAgentResponsePayload struct {
 	CacheReadTokens  int    `json:"cache_read_tokens"`
 	CacheWriteTokens int    `json:"cache_write_tokens"`
 }
+
+// CursorAfterAgentThoughtPayload is the Cursor afterAgentThought hook payload.
 type CursorAfterAgentThoughtPayload struct {
 	CursorEnvelope
 	Text             string `json:"text"`
@@ -218,7 +261,10 @@ func cursorAttachmentStrings(attachments []Attachment, extract func(Attachment) 
 	return values
 }
 
+// Fields returns the rule-engine fields for the payload.
 func (p CursorSessionStartPayload) Fields() rules.FieldSet { return p.baseFields() }
+
+// Fields returns the rule-engine fields for the payload.
 func (p CursorSessionEndPayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.Reason = p.Reason
@@ -226,16 +272,19 @@ func (p CursorSessionEndPayload) Fields() rules.FieldSet {
 	return fields
 }
 
+// Fields returns the rule-engine fields for the payload.
 func (p CursorPreToolUsePayload) Fields() rules.FieldSet {
 	return cursorToolFields(p.baseFields(), p.ToolName, p.ToolUseID, p.ToolInput, p.Cwd)
 }
 
+// Fields returns the rule-engine fields for the payload.
 func (p CursorPostToolUsePayload) Fields() rules.FieldSet {
 	fields := cursorToolFields(p.baseFields(), p.ToolName, p.ToolUseID, p.ToolInput, p.Cwd)
 	fields.ToolOutput = p.ToolOutput
 	return fields
 }
 
+// Fields returns the rule-engine fields for the payload.
 func (p CursorPostToolUseFailurePayload) Fields() rules.FieldSet {
 	fields := cursorToolFields(p.baseFields(), p.ToolName, p.ToolUseID, p.ToolInput, p.Cwd)
 	fields.ErrorMessage = p.ErrorMessage
@@ -244,6 +293,7 @@ func (p CursorPostToolUseFailurePayload) Fields() rules.FieldSet {
 	return fields
 }
 
+// Fields returns the rule-engine fields for the payload.
 func (p CursorBeforeShellExecutionPayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.Command = p.Command
@@ -251,6 +301,7 @@ func (p CursorBeforeShellExecutionPayload) Fields() rules.FieldSet {
 	return fields
 }
 
+// Fields returns the rule-engine fields for the payload.
 func (p CursorAfterShellExecutionPayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.Command = p.Command
@@ -259,16 +310,19 @@ func (p CursorAfterShellExecutionPayload) Fields() rules.FieldSet {
 	return fields
 }
 
+// Fields returns the rule-engine fields for the payload.
 func (p CursorBeforeMCPExecutionPayload) Fields() rules.FieldSet {
 	return cursorToolFields(p.baseFields(), p.ToolName, p.ToolUseID, p.ToolInput, p.Cwd)
 }
 
+// Fields returns the rule-engine fields for the payload.
 func (p CursorAfterMCPExecutionPayload) Fields() rules.FieldSet {
 	fields := cursorToolFields(p.baseFields(), p.ToolName, p.ToolUseID, p.ToolInput, p.Cwd)
 	fields.ToolOutput = p.ToolOutput
 	return fields
 }
 
+// Fields returns the rule-engine fields for the payload.
 func (p CursorBeforeReadFilePayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.FilePath = p.FilePath
@@ -276,6 +330,7 @@ func (p CursorBeforeReadFilePayload) Fields() rules.FieldSet {
 	return fields
 }
 
+// Fields returns the rule-engine fields for the payload.
 func (p CursorBeforeTabFileReadPayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.FilePath = p.FilePath
@@ -283,6 +338,7 @@ func (p CursorBeforeTabFileReadPayload) Fields() rules.FieldSet {
 	return fields
 }
 
+// Fields returns the rule-engine fields for the payload.
 func (p CursorAfterFileEditPayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.FilePath = p.FilePath
@@ -293,10 +349,12 @@ func (p CursorAfterFileEditPayload) Fields() rules.FieldSet {
 	return fields
 }
 
+// Fields returns the rule-engine fields for the payload.
 func (p CursorAfterTabFileEditPayload) Fields() rules.FieldSet {
 	return CursorAfterFileEditPayload(p).Fields()
 }
 
+// Fields returns the rule-engine fields for the payload.
 func (p CursorBeforeSubmitPromptPayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.Prompt = p.Prompt
@@ -307,6 +365,7 @@ func (p CursorBeforeSubmitPromptPayload) Fields() rules.FieldSet {
 	return fields
 }
 
+// Fields returns the rule-engine fields for the payload.
 func (p CursorSubagentStartPayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.TaskID = p.SubagentID
@@ -315,6 +374,7 @@ func (p CursorSubagentStartPayload) Fields() rules.FieldSet {
 	return fields
 }
 
+// Fields returns the rule-engine fields for the payload.
 func (p CursorSubagentStopPayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.TaskID = p.SubagentID
@@ -325,18 +385,21 @@ func (p CursorSubagentStopPayload) Fields() rules.FieldSet {
 	return fields
 }
 
+// Fields returns the rule-engine fields for the payload.
 func (p CursorPreCompactPayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.Trigger = p.Trigger
 	return fields
 }
 
+// Fields returns the rule-engine fields for the payload.
 func (p CursorStopPayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.Status = p.Status
 	return fields
 }
 
+// Fields returns the rule-engine fields for the payload.
 func (p CursorAfterAgentResponsePayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.Text = p.Text
@@ -344,6 +407,7 @@ func (p CursorAfterAgentResponsePayload) Fields() rules.FieldSet {
 	return fields
 }
 
+// Fields returns the rule-engine fields for the payload.
 func (p CursorAfterAgentThoughtPayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.Text = p.Text

@@ -50,7 +50,7 @@ func (c Capability) String() string {
 
 // capabilityKey is the lookup key for the capability table.
 type capabilityKey struct {
-	system HookSystem
+	system System
 	event  string
 }
 
@@ -112,7 +112,7 @@ var capabilityTable = map[capabilityKey]Capability{
 // Pairs not in the table return CapabilityObserve. The caller is responsible
 // for matching the canonical event name used in the per-provider section of
 // HOOKS.md.
-func LookupCapability(system HookSystem, event string) Capability {
+func LookupCapability(system System, event string) Capability {
 	if c, ok := capabilityTable[capabilityKey{system, event}]; ok {
 		return c
 	}

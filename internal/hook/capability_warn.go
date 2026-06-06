@@ -14,7 +14,7 @@ import (
 // audit.
 type CapabilityDowngrade struct {
 	Rule     string
-	System   HookSystem
+	System   System
 	Event    string
 	Declared string
 	Effect   string
@@ -64,7 +64,7 @@ func WarnCapabilityDowngrades(ctx context.Context, log *slog.Logger, cfg *config
 }
 
 type ruleSubscription struct {
-	system HookSystem
+	system System
 	event  string
 }
 
@@ -90,7 +90,7 @@ func ruleSubscriptions(rule *config.Rule) []ruleSubscription {
 		// Events without a provider prefix: the daemon routes the same event
 		// name to whichever provider sent the hook payload. To warn
 		// accurately, look the event up under every system that has it.
-		for _, sys := range []HookSystem{SystemClaude, SystemCodex, SystemCursor, SystemGemini} {
+		for _, sys := range []System{SystemClaude, SystemCodex, SystemCursor, SystemGemini} {
 			if _, ok := capabilityTable[capabilityKey{sys, e}]; ok {
 				out = append(out, ruleSubscription{sys, e})
 			}

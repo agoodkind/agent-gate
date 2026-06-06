@@ -51,7 +51,7 @@ func ruleVisiblePath(path string) bool {
 }
 
 func TestKnownEventsDecodeToConcretePayloads(t *testing.T) {
-	checkEvent := func(system HookSystem, eventName string) {
+	checkEvent := func(system System, eventName string) {
 		t.Helper()
 		rawPayload := []byte(`{"hook_event_name":"` + eventName + `"}`)
 		payload, err := ParseHookPayload(system, rawPayload)

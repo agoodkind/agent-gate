@@ -10,7 +10,7 @@ import (
 func TestFailOpenResponseRendering(t *testing.T) {
 	tests := []struct {
 		name       string
-		system     hook.HookSystem
+		system     hook.System
 		wantStdout string
 	}{
 		{name: "claude", system: hook.SystemClaude, wantStdout: "{}\n"},
@@ -110,7 +110,7 @@ func TestRenderResponseBlocksRemainProviderSpecific(t *testing.T) {
 func TestRenderResponseBlockIncludesEventID(t *testing.T) {
 	tests := []struct {
 		name       string
-		system     hook.HookSystem
+		system     hook.System
 		eventName  string
 		wantStdout bool
 	}{
@@ -137,7 +137,7 @@ func TestRenderResponseBlockIncludesEventID(t *testing.T) {
 	}
 }
 
-func blockRequest(system hook.HookSystem, eventName string) hook.ResponseRequest {
+func blockRequest(system hook.System, eventName string) hook.ResponseRequest {
 	return hook.ResponseRequest{
 		System:         system,
 		EventName:      eventName,

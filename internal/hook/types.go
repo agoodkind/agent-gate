@@ -1,12 +1,12 @@
 package hook
 
-// HookSystem identifies which tool invoked agent-gate.
+// System identifies which tool invoked agent-gate.
 //
 // SystemUnknown is a real classification, not a sentinel for "not yet
 // decided". It means detection ran every priority layer and none matched, so
 // detection gaps are visible in the audit log rather than silently
 // misattributed.
-type HookSystem int
+type System int
 
 type hookSystemName string
 
@@ -19,10 +19,10 @@ const (
 	hookSystemNameVSCode  hookSystemName = "vscode"
 )
 
-// HookSystem variants. Each constant tags a single detected agent host.
+// System variants. Each constant tags a single detected agent host.
 const (
 	// SystemUnknown means detection ran but no agent host matched.
-	SystemUnknown HookSystem = iota
+	SystemUnknown System = iota
 	// SystemClaude identifies the Anthropic Claude CLI/desktop host.
 	SystemClaude
 	// SystemCursor identifies the Cursor IDE host.
@@ -38,8 +38,10 @@ const (
 )
 
 // String returns a lowercase label suitable for audit output.
-func (s HookSystem) String() string {
+func (s System) String() string {
 	switch s {
+	case SystemUnknown:
+		return "unknown"
 	case SystemClaude:
 		return "claude"
 	case SystemCursor:
@@ -57,9 +59,9 @@ func (s HookSystem) String() string {
 	}
 }
 
-// SystemFromString parses the lowercase label produced by [HookSystem.String].
+// SystemFromString parses the lowercase label produced by [System.String].
 // Unknown labels yield [SystemUnknown].
-func SystemFromString(s string) HookSystem {
+func SystemFromString(s string) System {
 	switch hookSystemName(s) {
 	case hookSystemNameClaude:
 		return SystemClaude

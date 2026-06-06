@@ -2,16 +2,16 @@ package hook
 
 import "goodkind.io/agent-gate/internal/rules"
 
-// HookPayload is the demultiplexed pair of agent host plus event payload.
-type HookPayload struct {
-	System HookSystem
-	Event  HookEvent
+// Payload is the demultiplexed pair of agent host plus event payload.
+type Payload struct {
+	System System
+	Event  Event
 }
 
-// HookEvent is the closed interface implemented by every concrete hook
+// Event is the closed interface implemented by every concrete hook
 // payload. Implementations expose the canonical event name, session id,
 // working directory, and a flattened [rules.FieldSet] for rule evaluation.
-type HookEvent interface {
+type Event interface {
 	EventName() string
 	SessionID() string
 	CWD() string
@@ -49,36 +49,36 @@ func (p UnknownPayload) Fields() rules.FieldSet {
 	return fields
 }
 
-// EventName forwards to the embedded [HookEvent], or returns the empty
+// EventName forwards to the embedded [Event], or returns the empty
 // string when no event is set.
-func (p HookPayload) EventName() string {
+func (p Payload) EventName() string {
 	if p.Event == nil {
 		return ""
 	}
 	return p.Event.EventName()
 }
 
-// SessionID forwards to the embedded [HookEvent], or returns the empty
+// SessionID forwards to the embedded [Event], or returns the empty
 // string when no event is set.
-func (p HookPayload) SessionID() string {
+func (p Payload) SessionID() string {
 	if p.Event == nil {
 		return ""
 	}
 	return p.Event.SessionID()
 }
 
-// CWD forwards to the embedded [HookEvent], or returns the empty string
+// CWD forwards to the embedded [Event], or returns the empty string
 // when no event is set.
-func (p HookPayload) CWD() string {
+func (p Payload) CWD() string {
 	if p.Event == nil {
 		return ""
 	}
 	return p.Event.CWD()
 }
 
-// Fields forwards to the embedded [HookEvent], or returns a zero-value
+// Fields forwards to the embedded [Event], or returns a zero-value
 // [rules.FieldSet] when no event is set.
-func (p HookPayload) Fields() rules.FieldSet {
+func (p Payload) Fields() rules.FieldSet {
 	if p.Event == nil {
 		var empty rules.FieldSet
 		return empty

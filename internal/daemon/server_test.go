@@ -259,7 +259,7 @@ func TestHotPathBlocksBeforeDeferredQueue(t *testing.T) {
 	defer srv.Close()
 
 	hotCalled := false
-	setHotEvaluatorForTest(t, srv, func(ctx context.Context, rawJSON []byte, cfg *config.Config, hint hook.HookSystem, getenv func(string) string, eventID string) hook.HotEvaluation {
+	setHotEvaluatorForTest(t, srv, func(ctx context.Context, rawJSON []byte, cfg *config.Config, hint hook.System, getenv func(string) string, eventID string) hook.HotEvaluation {
 		hotCalled = true
 		return hook.EvaluateHotWithEventID(ctx, rawJSON, cfg, hint, getenv, eventID)
 	})
@@ -793,7 +793,7 @@ func fillDeferredProcessorQueue(t testing.TB, srv *Server) {
 	snapshot.deferredProcessor.events <- "occupied"
 }
 
-func setHotEvaluatorForTest(t testing.TB, srv *Server, evaluator func(context.Context, []byte, *config.Config, hook.HookSystem, func(string) string, string) hook.HotEvaluation) {
+func setHotEvaluatorForTest(t testing.TB, srv *Server, evaluator func(context.Context, []byte, *config.Config, hook.System, func(string) string, string) hook.HotEvaluation) {
 	t.Helper()
 	snapshot := srv.runtime.Load()
 	if snapshot == nil {

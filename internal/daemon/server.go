@@ -40,7 +40,7 @@ type runtimeSnapshot struct {
 	deferredProcessor *deferredProcessor
 	evaluateSlots     chan struct{}
 	evaluateQueueWait time.Duration
-	hotEvaluate       func(context.Context, []byte, *config.Config, hook.HookSystem, func(string) string, string) hook.HotEvaluation
+	hotEvaluate       func(context.Context, []byte, *config.Config, hook.System, func(string) string, string) hook.HotEvaluation
 	execRuntime       *rules.ExecRuntime
 }
 
@@ -66,9 +66,9 @@ func New(log *slog.Logger, cfg *config.Config) (*Server, error) {
 	}
 	if cfg == nil {
 		cfg = &config.Config{
-			Log:   config.Log{},
+			Log:   config.Log{Level: ""},
 			Audit: config.Audit{Enabled: nil, Level: "", Outputs: config.AuditOutput{SQLite: config.AuditSQLiteOutput{Path: ""}}},
-			Paths: config.Paths{},
+			Paths: config.Paths{ConversationsDir: ""},
 			Performance: config.Performance{
 				Hook: config.HookPerformance{
 					HotConcurrency:     0,
@@ -77,7 +77,8 @@ func New(log *slog.Logger, cfg *config.Config) (*Server, error) {
 					DeferredWorkers:    0,
 				},
 			},
-			Rules: nil,
+			Telemetry: config.TelemetryConfig{OTLPEndpoint: "", SlowOpThresholdMs: 0},
+			Rules:     nil,
 		}
 	}
 	if errs := hook.ValidateConfig(cfg); len(errs) > 0 {
@@ -166,7 +167,7 @@ func newRuntimeSnapshot(ctx context.Context, cfg *config.Config, log *slog.Logge
 	}, nil
 }
 
-func defaultHotEvaluate(ctx context.Context, rawJSON []byte, cfg *config.Config, hint hook.HookSystem, getenv func(string) string, eventID string) hook.HotEvaluation {
+func defaultHotEvaluate(ctx context.Context, rawJSON []byte, cfg *config.Config, hint hook.System, getenv func(string) string, eventID string) hook.HotEvaluation {
 	if eventID == "" {
 		return hook.EvaluateHot(ctx, rawJSON, cfg, hint, getenv)
 	}

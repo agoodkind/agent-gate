@@ -32,7 +32,7 @@ const (
 // response boundary. Provider renderers own the concrete stdout, stderr, and
 // exit-code shape for their system.
 type ResponseRequest struct {
-	System         HookSystem
+	System         System
 	EventName      string
 	Decision       ResponseDecision
 	DiagnosticText string
@@ -83,7 +83,7 @@ func diagnosticWithEventID(text, eventID string) string {
 // FailOpenResponse emits a non-blocking response for hook transport,
 // availability, or internal failures. Policy decisions from the daemon should
 // not use this path.
-func FailOpenResponse(system HookSystem, eventName string, diagnosticText string, reason FailOpenReason) Response {
+func FailOpenResponse(system System, eventName string, diagnosticText string, reason FailOpenReason) Response {
 	return RenderResponse(ResponseRequest{
 		System:         system,
 		EventName:      eventName,

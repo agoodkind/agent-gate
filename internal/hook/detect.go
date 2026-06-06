@@ -42,14 +42,14 @@ func ParseDetectionPayload(rawBytes []byte) (DetectionPayload, error) {
 // chain of fingerprints over the environment, the payload, and an
 // optional CLI subcommand hint. The first layer that returns a positive
 // match wins.
-func Detect(p DetectionPayload, hint HookSystem) HookSystem {
+func Detect(p DetectionPayload, hint System) System {
 	return DetectWithEnv(p, hint, os.Getenv)
 }
 
 // DetectWithEnv is Detect with an explicit environment source. Hook
 // enforcement runs in the daemon, so provider env fingerprints must come from
 // the hook subprocess request rather than the daemon process environment.
-func DetectWithEnv(p DetectionPayload, hint HookSystem, getenv func(string) string) HookSystem {
+func DetectWithEnv(p DetectionPayload, hint System, getenv func(string) string) System {
 	if getenv == nil {
 		getenv = os.Getenv
 	}

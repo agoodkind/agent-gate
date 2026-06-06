@@ -40,7 +40,7 @@ func (s *recordingAuditSink) snapshot() []string {
 
 func TestCanBlock_NewProviders(t *testing.T) {
 	tests := []struct {
-		system hook.HookSystem
+		system hook.System
 		event  string
 		want   bool
 	}{

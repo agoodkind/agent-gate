@@ -12,12 +12,20 @@ import (
 // decodePayload is a generic helper that unmarshals JSON into dst and wraps
 // the resulting error with a context message, so call sites can return the
 // error directly without spelling out the wrap each time.
-func decodePayload[T HookEvent](rawBytes []byte, dst *T) error {
+func decodePayload[T Event](rawBytes []byte, dst *T) error {
 	if err := json.Unmarshal(rawBytes, dst); err != nil {
 		slog.Warn("decode hook payload failed", slog.Any("err", err))
 		return fmt.Errorf("decode hook payload: %w", err)
 	}
 	return nil
+}
+
+// decodeJSONPayload decodes rawBytes into a fresh value of the concrete payload
+// type T and returns it as an [Event], so per-event switch arms collapse to a
+// single return expression instead of a var-declare-then-return pair.
+func decodeJSONPayload[T Event](rawBytes []byte) (Event, error) {
+	var payload T
+	return payload, decodePayload(rawBytes, &payload)
 }
 
 // VSCodePayload is the hook payload shape used by VS Code (and the shared
@@ -82,41 +90,41 @@ func (p CopilotPayload) Fields() rules.FieldSet {
 	return fields
 }
 
-// ParseHookPayload decodes raw JSON bytes into a typed [HookPayload]
+// ParseHookPayload decodes raw JSON bytes into a typed [Payload]
 // dispatched on the given agent host. Decoding errors are returned wrapped
 // with context so call sites do not need to wrap them again.
-func ParseHookPayload(system HookSystem, rawBytes []byte) (HookPayload, error) {
+func ParseHookPayload(system System, rawBytes []byte) (Payload, error) {
 	eventName, err := eventNameFromBytes(rawBytes)
 	if err != nil {
-		return HookPayload{}, err
+		return Payload{}, err
 	}
 	switch system {
 	case SystemCursor:
 		event, err := parseCursorPayload(eventName, rawBytes)
-		return HookPayload{System: system, Event: event}, err
+		return Payload{System: system, Event: event}, err
 	case SystemClaude:
 		event, err := parseClaudePayload(eventName, rawBytes)
-		return HookPayload{System: system, Event: event}, err
+		return Payload{System: system, Event: event}, err
 	case SystemCodex:
 		event, err := parseCodexPayload(eventName, rawBytes)
-		return HookPayload{System: system, Event: event}, err
+		return Payload{System: system, Event: event}, err
 	case SystemGemini:
 		event, err := parseGeminiPayload(eventName, rawBytes)
-		return HookPayload{System: system, Event: event}, err
+		return Payload{System: system, Event: event}, err
 	case SystemVSCode:
 		var event VSCodePayload
 		err := decodePayload(rawBytes, &event)
-		return HookPayload{System: system, Event: event}, err
+		return Payload{System: system, Event: event}, err
 	case SystemCopilot:
 		var event CopilotPayload
 		err := decodePayload(rawBytes, &event)
-		return HookPayload{System: system, Event: enrichCopilotPayload(event)}, err
+		return Payload{System: system, Event: enrichCopilotPayload(event)}, err
 	case SystemUnknown:
 		fallthrough
 	default:
 		var event UnknownPayload
 		err := decodePayload(rawBytes, &event)
-		return HookPayload{System: system, Event: event}, err
+		return Payload{System: system, Event: event}, err
 	}
 }
 
@@ -131,164 +139,115 @@ func eventNameFromBytes(rawBytes []byte) (string, error) {
 	return envelope.HookEventName, nil
 }
 
-func parseCursorPayload(eventName string, rawBytes []byte) (HookEvent, error) {
+func parseCursorPayload(eventName string, rawBytes []byte) (Event, error) {
 	switch CursorEvent(eventName) {
 	case CursorSessionStart:
-		var payload CursorSessionStartPayload
-		return payload, decodePayload(rawBytes, &payload)
+		return decodeJSONPayload[CursorSessionStartPayload](rawBytes)
 	case CursorSessionEnd:
-		var payload CursorSessionEndPayload
-		return payload, decodePayload(rawBytes, &payload)
+		return decodeJSONPayload[CursorSessionEndPayload](rawBytes)
 	case CursorPreToolUse:
-		var payload CursorPreToolUsePayload
-		return payload, decodePayload(rawBytes, &payload)
+		return decodeJSONPayload[CursorPreToolUsePayload](rawBytes)
 	case CursorPostToolUse:
-		var payload CursorPostToolUsePayload
-		return payload, decodePayload(rawBytes, &payload)
+		return decodeJSONPayload[CursorPostToolUsePayload](rawBytes)
 	case CursorPostToolUseFailure:
-		var payload CursorPostToolUseFailurePayload
-		return payload, decodePayload(rawBytes, &payload)
+		return decodeJSONPayload[CursorPostToolUseFailurePayload](rawBytes)
 	case CursorBeforeShellExecution:
-		var payload CursorBeforeShellExecutionPayload
-		return payload, decodePayload(rawBytes, &payload)
+		return decodeJSONPayload[CursorBeforeShellExecutionPayload](rawBytes)
 	case CursorAfterShellExecution:
-		var payload CursorAfterShellExecutionPayload
-		return payload, decodePayload(rawBytes, &payload)
+		return decodeJSONPayload[CursorAfterShellExecutionPayload](rawBytes)
 	case CursorBeforeMCPExecution:
-		var payload CursorBeforeMCPExecutionPayload
-		return payload, decodePayload(rawBytes, &payload)
+		return decodeJSONPayload[CursorBeforeMCPExecutionPayload](rawBytes)
 	case CursorAfterMCPExecution:
-		var payload CursorAfterMCPExecutionPayload
-		return payload, decodePayload(rawBytes, &payload)
+		return decodeJSONPayload[CursorAfterMCPExecutionPayload](rawBytes)
 	case CursorBeforeReadFile:
-		var payload CursorBeforeReadFilePayload
-		return payload, decodePayload(rawBytes, &payload)
+		return decodeJSONPayload[CursorBeforeReadFilePayload](rawBytes)
 	case CursorBeforeTabFileRead:
-		var payload CursorBeforeTabFileReadPayload
-		return payload, decodePayload(rawBytes, &payload)
+		return decodeJSONPayload[CursorBeforeTabFileReadPayload](rawBytes)
 	case CursorAfterFileEdit:
-		var payload CursorAfterFileEditPayload
-		return payload, decodePayload(rawBytes, &payload)
+		return decodeJSONPayload[CursorAfterFileEditPayload](rawBytes)
 	case CursorAfterTabFileEdit:
-		var payload CursorAfterTabFileEditPayload
-		return payload, decodePayload(rawBytes, &payload)
+		return decodeJSONPayload[CursorAfterTabFileEditPayload](rawBytes)
 	case CursorBeforeSubmitPrompt:
-		var payload CursorBeforeSubmitPromptPayload
-		return payload, decodePayload(rawBytes, &payload)
+		return decodeJSONPayload[CursorBeforeSubmitPromptPayload](rawBytes)
 	case CursorSubagentStart:
-		var payload CursorSubagentStartPayload
-		return payload, decodePayload(rawBytes, &payload)
+		return decodeJSONPayload[CursorSubagentStartPayload](rawBytes)
 	case CursorSubagentStop:
-		var payload CursorSubagentStopPayload
-		return payload, decodePayload(rawBytes, &payload)
+		return decodeJSONPayload[CursorSubagentStopPayload](rawBytes)
 	case CursorPreCompact:
-		var payload CursorPreCompactPayload
-		return payload, decodePayload(rawBytes, &payload)
+		return decodeJSONPayload[CursorPreCompactPayload](rawBytes)
 	case CursorStop:
-		var payload CursorStopPayload
-		return payload, decodePayload(rawBytes, &payload)
+		return decodeJSONPayload[CursorStopPayload](rawBytes)
 	case CursorAfterAgentResponse:
-		var payload CursorAfterAgentResponsePayload
-		return payload, decodePayload(rawBytes, &payload)
+		return decodeJSONPayload[CursorAfterAgentResponsePayload](rawBytes)
 	case CursorAfterAgentThought:
-		var payload CursorAfterAgentThoughtPayload
-		return payload, decodePayload(rawBytes, &payload)
+		return decodeJSONPayload[CursorAfterAgentThoughtPayload](rawBytes)
 	default:
-		var payload UnknownPayload
-		return payload, decodePayload(rawBytes, &payload)
+		return decodeJSONPayload[UnknownPayload](rawBytes)
 	}
 }
 
-func parseClaudePayload(eventName string, rawBytes []byte) (HookEvent, error) {
+func parseClaudePayload(eventName string, rawBytes []byte) (Event, error) {
 	switch ClaudeEvent(eventName) {
 	case ClaudeSessionStart:
-		var payload ClaudeSessionStartPayload
-		return payload, decodePayload(rawBytes, &payload)
+		return decodeJSONPayload[ClaudeSessionStartPayload](rawBytes)
 	case ClaudeSessionEnd:
-		var payload ClaudeSessionEndPayload
-		return payload, decodePayload(rawBytes, &payload)
+		return decodeJSONPayload[ClaudeSessionEndPayload](rawBytes)
 	case ClaudeSetup:
-		var payload ClaudeSetupPayload
-		return payload, decodePayload(rawBytes, &payload)
+		return decodeJSONPayload[ClaudeSetupPayload](rawBytes)
 	case ClaudePreToolUse:
-		var payload ClaudePreToolUsePayload
-		return payload, decodePayload(rawBytes, &payload)
+		return decodeJSONPayload[ClaudePreToolUsePayload](rawBytes)
 	case ClaudePostToolUse:
-		var payload ClaudePostToolUsePayload
-		return payload, decodePayload(rawBytes, &payload)
+		return decodeJSONPayload[ClaudePostToolUsePayload](rawBytes)
 	case ClaudePostToolUseFailure:
-		var payload ClaudePostToolUseFailurePayload
-		return payload, decodePayload(rawBytes, &payload)
+		return decodeJSONPayload[ClaudePostToolUseFailurePayload](rawBytes)
 	case ClaudePermissionRequest:
-		var payload ClaudePermissionRequestPayload
-		return payload, decodePayload(rawBytes, &payload)
+		return decodeJSONPayload[ClaudePermissionRequestPayload](rawBytes)
 	case ClaudePermissionDenied:
-		var payload ClaudePermissionDeniedPayload
-		return payload, decodePayload(rawBytes, &payload)
+		return decodeJSONPayload[ClaudePermissionDeniedPayload](rawBytes)
 	case ClaudeUserPromptSubmit:
-		var payload ClaudeUserPromptSubmitPayload
-		return payload, decodePayload(rawBytes, &payload)
+		return decodeJSONPayload[ClaudeUserPromptSubmitPayload](rawBytes)
 	case ClaudeStop:
-		var payload ClaudeStopPayload
-		return payload, decodePayload(rawBytes, &payload)
+		return decodeJSONPayload[ClaudeStopPayload](rawBytes)
 	case ClaudeStopFailure:
-		var payload ClaudeStopFailurePayload
-		return payload, decodePayload(rawBytes, &payload)
+		return decodeJSONPayload[ClaudeStopFailurePayload](rawBytes)
 	case ClaudeSubagentStart:
-		var payload ClaudeSubagentStartPayload
-		return payload, decodePayload(rawBytes, &payload)
+		return decodeJSONPayload[ClaudeSubagentStartPayload](rawBytes)
 	case ClaudeSubagentStop:
-		var payload ClaudeSubagentStopPayload
-		return payload, decodePayload(rawBytes, &payload)
+		return decodeJSONPayload[ClaudeSubagentStopPayload](rawBytes)
 	case ClaudeTaskCreated:
-		var payload ClaudeTaskCreatedPayload
-		return payload, decodePayload(rawBytes, &payload)
+		return decodeJSONPayload[ClaudeTaskCreatedPayload](rawBytes)
 	case ClaudeTaskCompleted:
-		var payload ClaudeTaskCompletedPayload
-		return payload, decodePayload(rawBytes, &payload)
+		return decodeJSONPayload[ClaudeTaskCompletedPayload](rawBytes)
 	case ClaudeNotification:
-		var payload ClaudeNotificationPayload
-		return payload, decodePayload(rawBytes, &payload)
+		return decodeJSONPayload[ClaudeNotificationPayload](rawBytes)
 	case ClaudePreCompact:
-		var payload ClaudePreCompactPayload
-		return payload, decodePayload(rawBytes, &payload)
+		return decodeJSONPayload[ClaudePreCompactPayload](rawBytes)
 	case ClaudePostCompact:
-		var payload ClaudePostCompactPayload
-		return payload, decodePayload(rawBytes, &payload)
+		return decodeJSONPayload[ClaudePostCompactPayload](rawBytes)
 	case ClaudeInstructionsLoaded:
-		var payload ClaudeInstructionsLoadedPayload
-		return payload, decodePayload(rawBytes, &payload)
+		return decodeJSONPayload[ClaudeInstructionsLoadedPayload](rawBytes)
 	case ClaudeConfigChange:
-		var payload ClaudeConfigChangePayload
-		return payload, decodePayload(rawBytes, &payload)
+		return decodeJSONPayload[ClaudeConfigChangePayload](rawBytes)
 	case ClaudeCwdChanged:
-		var payload ClaudeCwdChangedPayload
-		return payload, decodePayload(rawBytes, &payload)
+		return decodeJSONPayload[ClaudeCwdChangedPayload](rawBytes)
 	case ClaudeFileChanged:
-		var payload ClaudeFileChangedPayload
-		return payload, decodePayload(rawBytes, &payload)
+		return decodeJSONPayload[ClaudeFileChangedPayload](rawBytes)
 	case ClaudeWorktreeCreate:
-		var payload ClaudeWorktreeCreatePayload
-		return payload, decodePayload(rawBytes, &payload)
+		return decodeJSONPayload[ClaudeWorktreeCreatePayload](rawBytes)
 	case ClaudeWorktreeRemove:
-		var payload ClaudeWorktreeRemovePayload
-		return payload, decodePayload(rawBytes, &payload)
+		return decodeJSONPayload[ClaudeWorktreeRemovePayload](rawBytes)
 	case ClaudeElicitation:
-		var payload ClaudeElicitationPayload
-		return payload, decodePayload(rawBytes, &payload)
+		return decodeJSONPayload[ClaudeElicitationPayload](rawBytes)
 	case ClaudeElicitationResult:
-		var payload ClaudeElicitationResultPayload
-		return payload, decodePayload(rawBytes, &payload)
+		return decodeJSONPayload[ClaudeElicitationResultPayload](rawBytes)
 	case ClaudeTeammateIdle:
-		var payload ClaudeTeammateIdlePayload
-		return payload, decodePayload(rawBytes, &payload)
+		return decodeJSONPayload[ClaudeTeammateIdlePayload](rawBytes)
 	default:
-		var payload UnknownPayload
-		return payload, decodePayload(rawBytes, &payload)
+		return decodeJSONPayload[UnknownPayload](rawBytes)
 	}
 }
 
-func parseCodexPayload(eventName string, rawBytes []byte) (HookEvent, error) {
+func parseCodexPayload(eventName string, rawBytes []byte) (Event, error) {
 	switch CodexEvent(eventName) {
 	case CodexSessionStart:
 		var payload CodexSessionStartPayload
@@ -314,7 +273,7 @@ func parseCodexPayload(eventName string, rawBytes []byte) (HookEvent, error) {
 	}
 }
 
-func parseGeminiPayload(eventName string, rawBytes []byte) (HookEvent, error) {
+func parseGeminiPayload(eventName string, rawBytes []byte) (Event, error) {
 	switch GeminiEvent(eventName) {
 	case GeminiBeforeTool:
 		var payload GeminiBeforeToolPayload

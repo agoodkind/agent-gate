@@ -1,11 +1,15 @@
 package hook
 
-func truncate(s string, max int) string {
-	if max <= 0 || len(s) <= max {
+// snippetMaxLen bounds the length of audit-log string snippets so a single
+// oversized field cannot dominate a log line.
+const snippetMaxLen = 200
+
+// truncate shortens s to snippetMaxLen runes, replacing the tail with an
+// ellipsis when it overflows.
+func truncate(s string) string {
+	const ellipsis = "..."
+	if len(s) <= snippetMaxLen {
 		return s
 	}
-	if max <= 3 {
-		return s[:max]
-	}
-	return s[:max-3] + "..."
+	return s[:snippetMaxLen-len(ellipsis)] + ellipsis
 }

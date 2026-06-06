@@ -429,7 +429,7 @@ func printSeenTable(result intake.QueryResult) {
 }
 
 // runHook handles hook mode: read stdin, forward to daemon, mirror response.
-func runHook(systemHint hook.HookSystem) int {
+func runHook(systemHint hook.System) int {
 	runtime := hookRuntime{
 		stdin:   os.Stdin,
 		stdout:  os.Stdout,
@@ -446,7 +446,7 @@ func defaultHookConnector(ctx context.Context) (hookClient, error) {
 	return connectDaemon(ctx)
 }
 
-func runHookWithRuntime(systemHint hook.HookSystem, runtime hookRuntime) (exitCode int) {
+func runHookWithRuntime(systemHint hook.System, runtime hookRuntime) (exitCode int) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			diagnostic := fmt.Sprintf("agent-gate: panic: %v", recovered)
