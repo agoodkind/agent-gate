@@ -321,6 +321,8 @@ func CompileFieldSelector(path string) FieldSelector {
 	return FieldSelectorInvalid
 }
 
+// CompileFieldSelectorSpecs compiles dotted field paths into their closed
+// selector specs, skipping paths that do not map to a known field.
 func CompileFieldSelectorSpecs(paths []string) []FieldSelectorSpec {
 	selectors := make([]FieldSelectorSpec, 0, len(paths))
 	for _, path := range paths {

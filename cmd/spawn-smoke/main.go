@@ -1,3 +1,5 @@
+// Command spawn-smoke replays a recorded hook payload through the daemon for
+// local smoke testing of the evaluation path.
 package main
 
 import (

@@ -298,7 +298,7 @@ func matchWithLimits(pattern, subject string, matchLimit, depthLimit uint32) (bo
 	return false, pcre2MatchError(rc)
 }
 
-// HandleMatch runs pcre2_match for a compiled handle (opaque unsafe.Pointer).
+// HandleMatch runs pcre2_match for a compiled handle (opaque [unsafe.Pointer]).
 func HandleMatch(handle unsafe.Pointer, subject string, startOffset int) int {
 	if handle == nil {
 		return -2
