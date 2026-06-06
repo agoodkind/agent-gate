@@ -402,3 +402,38 @@ violation_message = "Existing content contains typographic dashes. The LLM shoul
 # cache_ttl_ms = 30000            # reuse the verdict per codebase for 30s
 # block_on     = "nonzero"        # exit 0 = allow (approved); nonzero = block
 # on_error     = "open"           # timeout/spawn-failure allows and logs loudly
+
+# --- exec example: redirect code grep to lm-semantic-search when indexed -------
+# When the agent greps/rg's over code in a codebase that lm-semantic-search has
+# already indexed, block and tell it to use the lm-semantic-search MCP instead.
+# The validator (examples/validators/lm-semantic-search-indexed.sh) asks the
+# lm-semantic-search daemon for the codebase's index status.
+#
+# Caching is stale-while-revalidate: the first grep per codebase forks the
+# validator synchronously (cold = sync block), and every later grep is served
+# from cache instantly while a single background refresh runs once the entry is
+# older than cache_ttl_ms. A TTL is required so a newly created or cleared index
+# is noticed within roughly that window.
+#
+# [[rules]]
+# name        = "grep-code-use-semantic-search"
+# description = "Redirect code grep/rg to lm-semantic-search when the codebase is indexed"
+# claude_events = ["PreToolUse"]
+# cursor_events = ["beforeShellExecution", "preToolUse"]
+# codex_events  = ["PreToolUse"]
+# gemini_events = ["BeforeTool"]
+# action      = "block"
+# violation_message = "This codebase is indexed by lm-semantic-search. Use the lm-semantic-search MCP (search_code) instead of grep/rg."
+#
+# [[rules.conditions]]
+# kind        = "regex"
+# field_paths = ["tool_input.command"]
+# pattern     = '\b(?:grep|rg)\b.*\.(?:go|ts|tsx|js|jsx|py|rb|rs|java|swift|kt|cc|cpp|hpp|proto)\b'
+#
+# [[rules.conditions]]
+# kind         = "exec"
+# command      = ["/Users/you/.config/agent-gate/validators/lm-semantic-search-indexed.sh"]
+# cache_key    = "effective_cwd"
+# cache_ttl_ms = 60000            # refresh the index verdict per codebase ~every 60s
+# block_on     = "nonzero"        # exit 1 = indexed -> block; exit 0 = allow
+# on_error     = "open"           # timeout/spawn-failure allows the grep
