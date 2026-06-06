@@ -62,13 +62,15 @@ func EvaluateAll(ctx context.Context, system, eventName string, fields FieldSet,
 	if len(conditions) == 0 {
 		return nil
 	}
+	memo := newExecEventMemo(system, eventName)
+	evalCtx := withExecEventMemo(ctx, memo)
 	orch := &pipeline.Orchestrator{
 		Conditions: conditions,
 		Scheduler:  pipeline.FixedScheduler{SlotCount: 1},
 		Sentinel:   pipeline.NoopSentinel{},
 	}
-	results, _ := orch.Run(ctx, pipeline.Input{})
-	return aggregateResults(results, fields)
+	results, _ := orch.Run(evalCtx, pipeline.Input{})
+	return aggregateResults(results, fields, memo)
 }
 
 // envGuardFires returns true when getenv reports any of keys as non-empty.
@@ -89,7 +91,7 @@ func envGuardFires(getenv func(string) string, keys []string) bool {
 // aggregateResults flattens Orchestrator results into Violation values.
 // For condition-based rules where the gate fired but all regex conditions produced
 // zero matches, one fallback violation is emitted per rule.
-func aggregateResults(results []pipeline.Result, fields FieldSet) []Violation {
+func aggregateResults(results []pipeline.Result, fields FieldSet, memo *execEventMemo) []Violation {
 	// Track which condition-based rules fired but produced no regex matches.
 	// Key is rule pointer (same slice element across conditions for one rule).
 	type ruleState struct {
@@ -131,7 +133,22 @@ func aggregateResults(results []pipeline.Result, fields FieldSet) []Violation {
 			violations = append(violations, conditionFallbackViolation(fields, rs.rule))
 		}
 	}
+	applyExecMessageOverrides(violations, memo)
 	return violations
+}
+
+// applyExecMessageOverrides rewrites the message of every violation whose rule
+// had a blocking exec validator emit a stdout line, so the script's specific
+// reason replaces the static violation_message for that event.
+func applyExecMessageOverrides(violations []Violation, memo *execEventMemo) {
+	if memo == nil {
+		return
+	}
+	for i := range violations {
+		if msg, ok := memo.overrideFor(violations[i].RuleName); ok && msg != "" {
+			violations[i].Message = msg
+		}
+	}
 }
 
 // buildRuleRegexConditions builds one Condition per evaluation unit.
@@ -208,7 +225,7 @@ func isMatchingConditionKind(c *config.Condition) bool {
 	switch conditionKind(c) {
 	case config.ConditionKindRegex, config.ConditionKindDiff, config.ConditionKindShellRead, config.ConditionKindShellWrite:
 		return true
-	case config.ConditionKindCommand, config.ConditionKindProject:
+	case config.ConditionKindCommand, config.ConditionKindProject, config.ConditionKindExec:
 		// Gate-only kinds. They must pass for the rule to fire but they do
 		// not by themselves emit per-match diagnostics, so they are evaluated
 		// as part of the gate inside [allConditionsMatch] and surfaced via
@@ -308,7 +325,7 @@ func (r *ruleRegexCondition) Profile() pipeline.Profile {
 	}
 }
 
-func (r *ruleRegexCondition) Execute(_ context.Context, _ pipeline.Input) (pipeline.Outcome, error) {
+func (r *ruleRegexCondition) Execute(ctx context.Context, _ pipeline.Input) (pipeline.Outcome, error) {
 	if r.condIdx == -1 {
 		return ruleOutcome{
 			violations:       evalSimpleRule(r.fields, r.rule, r.budget.Remaining()),
@@ -321,7 +338,7 @@ func (r *ruleRegexCondition) Execute(_ context.Context, _ pipeline.Input) (pipel
 	// The fallback violation is returned inline when the gate passes; aggregateResults
 	// sees matchCount > 0 and does not add another fallback.
 	if r.condIdx == -2 {
-		if !allConditionsMatch(*r.fields, r.rule.Conditions) {
+		if !allConditionsMatch(ctx, *r.fields, r.rule, r.rule.Conditions) {
 			return ruleOutcome{
 				violations:       nil,
 				rule:             r.rule,
@@ -339,7 +356,7 @@ func (r *ruleRegexCondition) Execute(_ context.Context, _ pipeline.Input) (pipel
 	// condIdx >= 0: one matching-kind condition. The full gate must pass before
 	// matches are evaluated. aggregateResults adds a single fallback when all
 	// matching conditions for the rule produce zero violations in aggregate.
-	if !allConditionsMatch(*r.fields, r.rule.Conditions) {
+	if !allConditionsMatch(ctx, *r.fields, r.rule, r.rule.Conditions) {
 		return ruleOutcome{
 			violations:       nil,
 			rule:             r.rule,
@@ -392,7 +409,7 @@ func (r *ruleRegexCondition) Execute(_ context.Context, _ pipeline.Input) (pipel
 			isConditionBased: true,
 			gateMatched:      true,
 		}, nil
-	case config.ConditionKindCommand, config.ConditionKindProject:
+	case config.ConditionKindCommand, config.ConditionKindProject, config.ConditionKindExec:
 		// Gate-only kinds are handled by [allConditionsMatch] above and
 		// produce no per-condition Condition. Reaching this arm means
 		// [buildRuleRegexConditions] mis-routed a condition; emit nothing
@@ -645,8 +662,8 @@ func conditionFallbackViolation(fields FieldSet, rule *config.Rule) Violation {
 //
 // Empty extracted values are handled only by Pattern and NotPattern, so optional
 // fields (for example tool_name when absent) can use not_pattern alone.
-func allConditionsMatch(fields FieldSet, conditions []config.Condition) bool {
-	ctx := conditionContext{commandCwds: nil}
+func allConditionsMatch(ctx context.Context, fields FieldSet, rule *config.Rule, conditions []config.Condition) bool {
+	condCtx := conditionContext{commandCwds: nil}
 	for i := range conditions {
 		c := &conditions[i]
 		if conditionKind(c) != config.ConditionKindCommand {
@@ -656,7 +673,7 @@ func allConditionsMatch(fields FieldSet, conditions []config.Condition) bool {
 		if !ok {
 			return false
 		}
-		ctx.commandCwds = append(ctx.commandCwds, cwds...)
+		condCtx.commandCwds = append(condCtx.commandCwds, cwds...)
 	}
 
 	for i := range conditions {
@@ -669,7 +686,7 @@ func allConditionsMatch(fields FieldSet, conditions []config.Condition) bool {
 		case config.ConditionKindCommand:
 			continue
 		case config.ConditionKindProject:
-			if !projectConditionMatch(fields, c, ctx) {
+			if !projectConditionMatch(fields, c, condCtx) {
 				return false
 			}
 		case config.ConditionKindDiff:
@@ -682,6 +699,13 @@ func allConditionsMatch(fields FieldSet, conditions []config.Condition) bool {
 			}
 		case config.ConditionKindShellRead:
 			if !shellReadConditionGateMatch(fields, c) {
+				return false
+			}
+		case config.ConditionKindExec:
+			// Exec runs last in config order because it is the only kind that
+			// forks a process; placing it after the cheap conditions means the
+			// short-circuit above keeps it from running on non-candidates.
+			if !execConditionGateMatch(ctx, fields, rule, c) {
 				return false
 			}
 		default:

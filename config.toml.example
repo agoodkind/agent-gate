@@ -376,3 +376,35 @@ violation_message = "Existing content contains typographic dashes. The LLM shoul
 # path_arg_start = 1
 # skip_flags_with_values = ["-P", "-e", "-i", "-F"]
 # remote_sources = true
+
+# --- External validator (exec condition) -------------------------------------
+# Run an operator-supplied program synchronously as the authoritative gate
+# behind a cheap regex/command pre-filter. The cheap conditions narrow
+# candidates; the program makes the runtime-dynamic decision a static pattern
+# cannot express, so the rule is false-positive free (it blocks only when both
+# the pattern matches AND the program confirms). The program runs inside the
+# daemon with no shell, receives the decision context as stdin JSON plus
+# AGENT_GATE_* env vars, and its exit code decides the gate. Place the exec
+# condition LAST so the gate short-circuit keeps it from forking on
+# non-candidates. See examples/validators/check-approved-codebase.sh.
+#
+# [[rules]]
+# name        = "grep-codebase-approval"
+# description = "Require approval for grep/rg over code files targeting a codebase"
+# claude_events = ["PreToolUse"]
+# action      = "block"
+# violation_message = "This codebase is not on the approved list."
+#
+# [[rules.conditions]]
+# kind        = "regex"
+# field_paths = ["tool_input.command"]
+# pattern     = '\b(?:grep|rg)\b.*\.(?:go|ts|tsx|js|py|rb|rs|java|swift)\b'
+#
+# [[rules.conditions]]
+# kind         = "exec"
+# command      = ["/Users/you/.config/agent-gate/validators/check-approved-codebase.sh"]
+# timeout_ms   = 1500             # bounded; capped below the 5s hook deadline
+# cache_key    = "effective_cwd"  # canonicalized to its real path before keying
+# cache_ttl_ms = 30000            # reuse the verdict per codebase for 30s
+# block_on     = "nonzero"        # exit 0 = allow (approved); nonzero = block
+# on_error     = "open"           # timeout/spawn-failure allows and logs loudly

@@ -16,6 +16,7 @@ type intakeStore interface {
 	MarkDeferredComplete(context.Context, string) error
 	ReplayPending(context.Context, func(intake.Record) error) error
 	ListPending(context.Context) ([]string, error)
+	UpdateHotEvalLatency(context.Context, string, int64) error
 	Close() error
 }
 
@@ -122,6 +123,19 @@ func (s *sqliteIntakeStore) ListPending(ctx context.Context) ([]string, error) {
 		eventIDs = append(eventIDs, record.EventID)
 	}
 	return eventIDs, nil
+}
+
+func (s *sqliteIntakeStore) UpdateHotEvalLatency(ctx context.Context, eventID string, latencyMicros int64) error {
+	if s == nil || s.store == nil {
+		return fmt.Errorf("intake store is nil")
+	}
+	if err := s.store.UpdateHotEvalLatency(ctx, eventID, latencyMicros); err != nil {
+		if s.log != nil {
+			s.log.WarnContext(ctx, "update intake hot eval latency failed", "event_id", eventID, "err", err)
+		}
+		return fmt.Errorf("update intake hot_eval_latency_us %q: %w", eventID, err)
+	}
+	return nil
 }
 
 func (s *sqliteIntakeStore) Close() error {

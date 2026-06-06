@@ -1,0 +1,308 @@
+package rules
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"path/filepath"
+	"strings"
+	"sync"
+	"time"
+
+	"goodkind.io/agent-gate/internal/config"
+	"goodkind.io/agent-gate/internal/rules/canonpath"
+	execconcern "goodkind.io/agent-gate/internal/rules/concerns/exec"
+)
+
+// canonCacheTTL bounds how long a path-to-realpath mapping is memoized. Real
+// paths rarely change, and the same working directories repeat heavily across
+// events, so a short window removes redundant lstat syscalls without holding a
+// stale result long enough to matter.
+const canonCacheTTL = 5 * time.Second
+
+// ExecRuntime holds the cross-event state for exec validator conditions: the
+// process runner, a path canonicalization cache, and the TTL result cache keyed
+// by canonical cache key. The daemon builds one ExecRuntime per config snapshot
+// and discards it on reload, which is how the result cache resets when config
+// changes. It is safe for concurrent use across events.
+type ExecRuntime struct {
+	runner execconcern.Runner
+	canon  *canonpath.Cache
+	log    *slog.Logger
+	now    func() time.Time
+
+	mu    sync.Mutex
+	cache map[string]cachedVerdict
+}
+
+type cachedVerdict struct {
+	verdict  execconcern.Verdict
+	expireAt time.Time
+}
+
+// NewExecRuntime returns an ExecRuntime using runner to fork validators and
+// logging errors to log. A nil runner falls back to the production OS runner and
+// a nil log falls back to the default logger.
+func NewExecRuntime(runner execconcern.Runner, log *slog.Logger) *ExecRuntime {
+	if runner == nil {
+		runner = execconcern.OSRunner{}
+	}
+	if log == nil {
+		log = slog.Default()
+	}
+	return &ExecRuntime{
+		runner: runner,
+		canon:  canonpath.NewCache(canonCacheTTL),
+		log:    log,
+		now:    time.Now,
+		mu:     sync.Mutex{},
+		cache:  make(map[string]cachedVerdict),
+	}
+}
+
+var (
+	defaultExecRuntimeOnce sync.Once
+	defaultExecRuntimeInst *ExecRuntime
+)
+
+// defaultExecRuntime returns the process-wide runtime used when no per-snapshot
+// runtime is supplied (for example by non-daemon callers of EvaluateAll). It
+// uses the real OS runner.
+func defaultExecRuntime() *ExecRuntime {
+	defaultExecRuntimeOnce.Do(func() {
+		defaultExecRuntimeInst = NewExecRuntime(nil, nil)
+	})
+	return defaultExecRuntimeInst
+}
+
+type execRuntimeKey struct{}
+
+type execEventMemoKey struct{}
+
+// WithExecRuntime returns a context carrying runtime so exec conditions
+// evaluated under it reuse the same caches and runner.
+func WithExecRuntime(ctx context.Context, runtime *ExecRuntime) context.Context {
+	return context.WithValue(ctx, execRuntimeKey{}, runtime)
+}
+
+func execRuntimeFromContext(ctx context.Context) *ExecRuntime {
+	if ctx == nil {
+		return nil
+	}
+	runtime, _ := ctx.Value(execRuntimeKey{}).(*ExecRuntime)
+	return runtime
+}
+
+// execEventMemo guarantees one validator fork per event per condition and
+// carries the per-rule message overrides emitted by blocking validators. It is
+// created once per EvaluateAll call. Conditions run sequentially within one
+// event (single scheduler slot), but the mutex keeps it safe regardless.
+type execEventMemo struct {
+	system    string
+	eventName string
+
+	mu        sync.Mutex
+	verdicts  map[*config.Condition]execconcern.Verdict
+	overrides map[string]string
+}
+
+func newExecEventMemo(system string, eventName string) *execEventMemo {
+	return &execEventMemo{
+		system:    system,
+		eventName: eventName,
+		mu:        sync.Mutex{},
+		verdicts:  make(map[*config.Condition]execconcern.Verdict),
+		overrides: make(map[string]string),
+	}
+}
+
+func (m *execEventMemo) lookup(c *config.Condition) (execconcern.Verdict, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	v, ok := m.verdicts[c]
+	return v, ok
+}
+
+func (m *execEventMemo) record(c *config.Condition, ruleName string, v execconcern.Verdict) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.verdicts[c] = v
+	if v.Block && v.Message != "" {
+		m.overrides[ruleName] = v.Message
+	}
+}
+
+func (m *execEventMemo) overrideFor(ruleName string) (string, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	msg, ok := m.overrides[ruleName]
+	return msg, ok
+}
+
+func withExecEventMemo(ctx context.Context, memo *execEventMemo) context.Context {
+	return context.WithValue(ctx, execEventMemoKey{}, memo)
+}
+
+func execEventMemoFromContext(ctx context.Context) *execEventMemo {
+	if ctx == nil {
+		return nil
+	}
+	memo, _ := ctx.Value(execEventMemoKey{}).(*execEventMemo)
+	return memo
+}
+
+// execConditionGateMatch runs the exec validator for one condition and reports
+// whether it blocks. The result is memoized per event so the command forks at
+// most once per event, and cached across events by canonical cache key so a hot
+// working set forks rarely. Error outcomes are never cached and are logged.
+func execConditionGateMatch(ctx context.Context, fields FieldSet, rule *config.Rule, c *config.Condition) bool {
+	memo := execEventMemoFromContext(ctx)
+	if memo != nil {
+		if v, ok := memo.lookup(c); ok {
+			return v.Block
+		}
+	}
+
+	runtime := execRuntimeFromContext(ctx)
+	if runtime == nil {
+		runtime = defaultExecRuntime()
+	}
+
+	cwd := fields.BaseCWD()
+	keyValue := fields.String(c.CacheKeySelector().Selector)
+	keyView := canonicalizePathField(runtime.canon, cwd, keyValue)
+	cacheKey := keyView.Canonical
+
+	if c.CacheTTLMs > 0 {
+		if v, ok := runtime.cacheGet(c, cacheKey); ok {
+			if memo != nil {
+				memo.record(c, rule.Name, v)
+			}
+			return v.Block
+		}
+	}
+
+	verdict := runtime.runValidator(ctx, fields, rule, c, keyView, memo)
+
+	if !verdict.Errored && c.CacheTTLMs > 0 {
+		runtime.cacheStore(c, cacheKey, verdict, c.CacheTTLMs)
+	}
+	if memo != nil {
+		memo.record(c, rule.Name, verdict)
+	}
+	return verdict.Block
+}
+
+func (r *ExecRuntime) runValidator(
+	ctx context.Context,
+	fields FieldSet,
+	rule *config.Rule,
+	c *config.Condition,
+	keyView execconcern.PathView,
+	memo *execEventMemo,
+) execconcern.Verdict {
+	in := r.buildInput(fields, rule, c, keyView, memo)
+	stdin, env, err := execconcern.BuildRequest(in)
+	if err != nil {
+		r.log.WarnContext(ctx, "exec validator request build failed",
+			"rule", rule.Name, "on_error", c.OnError, "err", err)
+		return execconcern.Verdict{Block: c.OnError == config.OnErrorClosed, Message: "", Errored: true}
+	}
+
+	timeout := time.Duration(c.TimeoutMs) * time.Millisecond
+	res, runErr := r.runner.Run(ctx, c.Command, timeout, stdin, env)
+	verdict := execconcern.Interpret(c, res, runErr)
+	if verdict.Errored {
+		r.log.WarnContext(ctx, "exec validator errored",
+			"rule", rule.Name, "on_error", c.OnError, "block", verdict.Block, "err", runErr)
+	}
+	return verdict
+}
+
+func (r *ExecRuntime) buildInput(
+	fields FieldSet,
+	rule *config.Rule,
+	c *config.Condition,
+	keyView execconcern.PathView,
+	memo *execEventMemo,
+) execconcern.Input {
+	cwd := fields.BaseCWD()
+	system := ""
+	eventName := ""
+	if memo != nil {
+		system = memo.system
+		eventName = memo.eventName
+	}
+	command := fields.String(config.FieldToolInputCommand)
+	if command == "" {
+		command = fields.String(config.FieldCommand)
+	}
+	matched := make([]execconcern.FieldValue, 0, len(c.Selectors()))
+	for _, sel := range c.Selectors() {
+		value := fields.String(sel.Selector)
+		if value == "" {
+			continue
+		}
+		matched = append(matched, execconcern.FieldValue{Field: sel.Path, Value: value})
+	}
+	return execconcern.Input{
+		Event:        eventName,
+		System:       system,
+		ToolName:     fields.String(config.FieldToolName),
+		Rule:         rule.Name,
+		Command:      command,
+		EffectiveCWD: canonicalizePathField(r.canon, cwd, fields.String(config.FieldEffectiveCWD)),
+		FilePath:     canonicalizePathField(r.canon, cwd, fields.FilePathValue()),
+		CacheKey:     keyView,
+		Matched:      matched,
+	}
+}
+
+func (r *ExecRuntime) cacheGet(c *config.Condition, cacheKey string) (execconcern.Verdict, bool) {
+	key := cacheEntryKey(c, cacheKey)
+	now := r.now()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	entry, ok := r.cache[key]
+	if !ok || !now.Before(entry.expireAt) {
+		return execconcern.Verdict{Block: false, Message: "", Errored: false}, false
+	}
+	return entry.verdict, true
+}
+
+func (r *ExecRuntime) cacheStore(c *config.Condition, cacheKey string, verdict execconcern.Verdict, ttlMs int) {
+	key := cacheEntryKey(c, cacheKey)
+	expireAt := r.now().Add(time.Duration(ttlMs) * time.Millisecond)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.cache[key] = cachedVerdict{verdict: verdict, expireAt: expireAt}
+}
+
+func cacheEntryKey(c *config.Condition, cacheKey string) string {
+	return fmt.Sprintf("%p\x00%s", c, cacheKey)
+}
+
+// canonicalizePathField resolves a path-like field value to its canonical real
+// path. A non-path value (no separators, not absolute) is used verbatim as the
+// key with IsCanonical false, so a non-path cache key still works as a literal.
+func canonicalizePathField(cache *canonpath.Cache, cwd string, value string) execconcern.PathView {
+	if value == "" {
+		return execconcern.PathView{Raw: "", Canonical: "", IsCanonical: false}
+	}
+	if !looksLikePath(value) {
+		return execconcern.PathView{Raw: value, Canonical: value, IsCanonical: false}
+	}
+	result := cache.Resolve(cwd, value)
+	return execconcern.PathView{
+		Raw:         result.Raw,
+		Canonical:   result.Canonical,
+		IsCanonical: result.IsCanonical,
+	}
+}
+
+func looksLikePath(value string) bool {
+	return filepath.IsAbs(value) ||
+		strings.HasPrefix(value, "./") ||
+		strings.HasPrefix(value, "../") ||
+		strings.Contains(value, "/")
+}

@@ -23,6 +23,7 @@ import (
 	"goodkind.io/agent-gate/internal/config"
 	"goodkind.io/agent-gate/internal/hook"
 	"goodkind.io/agent-gate/internal/intake"
+	"goodkind.io/agent-gate/internal/rules"
 	"goodkind.io/agent-gate/internal/version"
 )
 
@@ -40,6 +41,7 @@ type runtimeSnapshot struct {
 	evaluateSlots     chan struct{}
 	evaluateQueueWait time.Duration
 	hotEvaluate       func(context.Context, []byte, *config.Config, hook.HookSystem, func(string) string, string) hook.HotEvaluation
+	execRuntime       *rules.ExecRuntime
 }
 
 // Server implements the AgentGateD gRPC service.
@@ -156,6 +158,7 @@ func newRuntimeSnapshot(ctx context.Context, cfg *config.Config, log *slog.Logge
 		evaluateSlots:     make(chan struct{}, cfg.HookHotConcurrency()),
 		evaluateQueueWait: cfg.HookHotQueueWait(),
 		hotEvaluate:       defaultHotEvaluate,
+		execRuntime:       rules.NewExecRuntime(nil, log),
 	}, nil
 }
 
@@ -337,6 +340,8 @@ func (s *Server) EvaluateHook(ctx context.Context, req *daemonpb.EvaluateHookReq
 	}
 	defer s.releaseEvaluateSlot(snapshot)
 
+	ctx = rules.WithExecRuntime(ctx, snapshot.execRuntime)
+
 	rawJSON := req.GetRawJson()
 	if cwd := req.GetCwd(); cwd != "" {
 		rawJSON = injectCWD(rawJSON, cwd)
@@ -367,7 +372,9 @@ func (s *Server) EvaluateHook(ctx context.Context, req *daemonpb.EvaluateHookReq
 	}
 
 	syncCfg := hook.SyncConfig(snapshot.cfg)
+	evalStart := hotEvalNow()
 	result := snapshot.hotEvaluate(ctx, rawJSON, syncCfg, hook.SystemFromString(req.GetProviderHint()), getenv, appendResult.EventID)
+	s.recordHotEvalLatency(ctx, snapshot, appendResult.EventID, hotEvalNow().Sub(evalStart).Microseconds())
 	if err := enqueueDeferredReplay(ctx, requestLog, snapshot, appendResult, result.Deferred.Valid); err != nil {
 		return failOpenEvaluateHookResponse(), nil
 	}
@@ -376,6 +383,28 @@ func (s *Server) EvaluateHook(ctx context.Context, req *daemonpb.EvaluateHookReq
 		StdoutData: append([]byte(nil), result.Stdout...),
 		StderrData: append([]byte(nil), result.Stderr...),
 	}, nil
+}
+
+// recordHotEvalLatency writes the synchronous evaluation latency back to the
+// durable intake row off the hot path. It is best-effort: the response has
+// already been computed, so a failed or late write only loses one latency
+// sample and never affects enforcement. The write is detached from the request
+// cancellation (the response is already sent) while preserving context values.
+func (s *Server) recordHotEvalLatency(ctx context.Context, snapshot *runtimeSnapshot, eventID string, latencyMicros int64) {
+	if snapshot == nil || snapshot.intakeStore == nil || eventID == "" {
+		return
+	}
+	writeCtx := context.WithoutCancel(ctx)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				s.log.Error("recovered in hot eval latency writer", "err", fmt.Errorf("panic: %v", r))
+			}
+		}()
+		if err := snapshot.intakeStore.UpdateHotEvalLatency(writeCtx, eventID, latencyMicros); err != nil {
+			s.log.WarnContext(writeCtx, "record hot eval latency failed", "event_id", eventID, "err", err)
+		}
+	}()
 }
 
 func buildIntakeRecord(rawJSON []byte, providerHint string, envFingerprint map[string]string) (intake.Record, error) {
@@ -507,6 +536,8 @@ func failOpenEvaluateHookResponse() *daemonpb.EvaluateHookResponse {
 }
 
 var auditNow = time.Now
+
+var hotEvalNow = time.Now
 
 func (s *Server) logEvaluateOverload(ctx context.Context, snapshot *runtimeSnapshot) {
 	if s == nil || s.log == nil || snapshot == nil {

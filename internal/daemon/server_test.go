@@ -747,6 +747,10 @@ func (failingIntakeStore) ListPending(context.Context) ([]string, error) {
 	return nil, errors.New("list failed")
 }
 
+func (failingIntakeStore) UpdateHotEvalLatency(context.Context, string, int64) error {
+	return errors.New("update latency failed")
+}
+
 func (failingIntakeStore) Close() error {
 	return nil
 }

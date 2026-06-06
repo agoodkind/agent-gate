@@ -133,12 +133,29 @@ type Condition struct {
 	RemotePolicy string          `toml:"remote_policy"`
 	ReadSpecs    []ShellReadSpec `toml:"read_specs"`
 
-	compiled     *regex.Regexp
-	compiledNot  *regex.Regexp
-	compiledPath *regex.Regexp
-	selectors    []FieldSelectorSpec
-	fieldPairs   []FieldPairSpec
+	// Exec condition fields. Command is the argv executed synchronously as an
+	// external validator (no shell). TimeoutMs bounds the run. CacheKey is a
+	// field selector whose canonicalized value keys the cross-event result
+	// cache, held for CacheTTLMs. BlockOn selects which exit codes block, and
+	// OnError selects the gate behavior when the validator errors.
+	Command    []string `toml:"command"`
+	TimeoutMs  int      `toml:"timeout_ms"`
+	CacheKey   string   `toml:"cache_key"`
+	CacheTTLMs int      `toml:"cache_ttl_ms"`
+	BlockOn    string   `toml:"block_on"`
+	OnError    string   `toml:"on_error"`
+
+	compiled         *regex.Regexp
+	compiledNot      *regex.Regexp
+	compiledPath     *regex.Regexp
+	selectors        []FieldSelectorSpec
+	fieldPairs       []FieldPairSpec
+	cacheKeySelector FieldSelectorSpec
 }
+
+// CacheKeySelector returns the compiled field selector that keys the exec
+// condition's cross-event result cache.
+func (c *Condition) CacheKeySelector() FieldSelectorSpec { return c.cacheKeySelector }
 
 // ShellReadSpec describes one configurable shell command shape for the
 // shell_read_secret condition kind.
@@ -177,10 +194,33 @@ type ConditionKind string
 const (
 	ConditionKindCommand    ConditionKind = "command"
 	ConditionKindDiff       ConditionKind = "diff"
+	ConditionKindExec       ConditionKind = "exec"
 	ConditionKindProject    ConditionKind = "project"
 	ConditionKindRegex      ConditionKind = "regex"
 	ConditionKindShellRead  ConditionKind = "shell_read_secret"
 	ConditionKindShellWrite ConditionKind = "shell_write"
+)
+
+// Exec condition block_on variants decide which exit codes block.
+const (
+	BlockOnNonzero = "nonzero"
+	BlockOnZero    = "zero"
+)
+
+// Exec condition on_error variants decide what an error (timeout, spawn
+// failure, or signal) does to the gate.
+const (
+	OnErrorOpen   = "open"
+	OnErrorClosed = "closed"
+)
+
+// Exec condition defaults and bounds. The timeout is capped well below the 5s
+// hook client deadline at internal/daemon/client.go so a slow validator cannot
+// stall the hook past its own timeout.
+const (
+	DefaultExecTimeoutMs = 1500
+	MaxExecTimeoutMs     = 4000
+	DefaultExecCacheKey  = "effective_cwd"
 )
 
 // CompiledPattern returns the pre-compiled regex for Pattern.
@@ -201,31 +241,38 @@ func (c *Condition) Selectors() []FieldSelectorSpec { return c.selectors }
 func NewCondition(fieldPaths []string, pattern, notPattern string) (Condition, error) {
 	log := slog.Default()
 	c := Condition{
-		Kind:            "regex",
-		FieldPaths:      fieldPaths,
-		Pattern:         pattern,
-		NotPattern:      notPattern,
-		DiagnosticGroup: 0,
-		Argv0:           "",
-		Subcommands:     nil,
-		StripEnv:        false,
-		StripArgs:       nil,
-		CwdFlags:        nil,
-		RootMarkers:     nil,
-		RequireAny:      nil,
-		RequireAll:      nil,
-		ForbidAny:       nil,
-		FieldPair:       "",
-		Globs:           nil,
-		PathPattern:     "",
-		MaxBytes:        0,
-		RemotePolicy:    "",
-		ReadSpecs:       nil,
-		selectors:       CompileFieldSelectorSpecs(fieldPaths),
-		compiled:        nil,
-		compiledNot:     nil,
-		compiledPath:    nil,
-		fieldPairs:      nil,
+		Kind:             "regex",
+		FieldPaths:       fieldPaths,
+		Pattern:          pattern,
+		NotPattern:       notPattern,
+		DiagnosticGroup:  0,
+		Argv0:            "",
+		Subcommands:      nil,
+		StripEnv:         false,
+		StripArgs:        nil,
+		CwdFlags:         nil,
+		RootMarkers:      nil,
+		RequireAny:       nil,
+		RequireAll:       nil,
+		ForbidAny:        nil,
+		FieldPair:        "",
+		Globs:            nil,
+		PathPattern:      "",
+		MaxBytes:         0,
+		RemotePolicy:     "",
+		ReadSpecs:        nil,
+		Command:          nil,
+		TimeoutMs:        0,
+		CacheKey:         "",
+		CacheTTLMs:       0,
+		BlockOn:          "",
+		OnError:          "",
+		selectors:        CompileFieldSelectorSpecs(fieldPaths),
+		compiled:         nil,
+		compiledNot:      nil,
+		compiledPath:     nil,
+		fieldPairs:       nil,
+		cacheKeySelector: FieldSelectorSpec{Path: "", Selector: FieldSelectorInvalid},
 	}
 	if pattern != "" {
 		re, err := regex.Compile(pattern)
@@ -657,7 +704,7 @@ func compileCondition(log *slog.Logger, ruleName string, index int, c *Condition
 		c.Kind = "regex"
 	}
 	switch ConditionKind(c.Kind) {
-	case ConditionKindRegex, ConditionKindCommand, ConditionKindProject, ConditionKindDiff, ConditionKindShellRead, ConditionKindShellWrite:
+	case ConditionKindRegex, ConditionKindCommand, ConditionKindProject, ConditionKindDiff, ConditionKindShellRead, ConditionKindShellWrite, ConditionKindExec:
 	default:
 		return fmt.Errorf("rule %q condition %d: unknown kind %q", ruleName, index, c.Kind)
 	}
@@ -698,6 +745,58 @@ func compileCondition(log *slog.Logger, ruleName string, index int, c *Condition
 	if err := validateShellReadSpecConfig(ruleName, index, c); err != nil {
 		return err
 	}
+	if err := compileExecConfig(ruleName, index, c); err != nil {
+		return err
+	}
+	return nil
+}
+
+// compileExecConfig validates the exec condition fields, applies defaults, and
+// compiles the cache-key field selector. Non-exec conditions are left
+// untouched.
+func compileExecConfig(ruleName string, index int, c *Condition) error {
+	if ConditionKind(c.Kind) != ConditionKindExec {
+		return nil
+	}
+	if len(c.Command) == 0 || strings.TrimSpace(c.Command[0]) == "" {
+		return fmt.Errorf("rule %q condition %d: exec requires a non-empty command", ruleName, index)
+	}
+	if c.TimeoutMs == 0 {
+		c.TimeoutMs = DefaultExecTimeoutMs
+	}
+	if c.TimeoutMs < 0 {
+		return fmt.Errorf("rule %q condition %d: timeout_ms must be non-negative", ruleName, index)
+	}
+	if c.TimeoutMs > MaxExecTimeoutMs {
+		return fmt.Errorf("rule %q condition %d: timeout_ms %d exceeds max %d", ruleName, index, c.TimeoutMs, MaxExecTimeoutMs)
+	}
+	if c.CacheTTLMs < 0 {
+		return fmt.Errorf("rule %q condition %d: cache_ttl_ms must be non-negative", ruleName, index)
+	}
+	if c.BlockOn == "" {
+		c.BlockOn = BlockOnNonzero
+	}
+	switch c.BlockOn {
+	case BlockOnNonzero, BlockOnZero:
+	default:
+		return fmt.Errorf("rule %q condition %d: block_on %q must be %q or %q", ruleName, index, c.BlockOn, BlockOnNonzero, BlockOnZero)
+	}
+	if c.OnError == "" {
+		c.OnError = OnErrorOpen
+	}
+	switch c.OnError {
+	case OnErrorOpen, OnErrorClosed:
+	default:
+		return fmt.Errorf("rule %q condition %d: on_error %q must be %q or %q", ruleName, index, c.OnError, OnErrorOpen, OnErrorClosed)
+	}
+	if strings.TrimSpace(c.CacheKey) == "" {
+		c.CacheKey = DefaultExecCacheKey
+	}
+	specs := CompileFieldSelectorSpecs([]string{c.CacheKey})
+	if len(specs) == 0 || specs[0].Selector == FieldSelectorInvalid {
+		return fmt.Errorf("rule %q condition %d: cache_key %q is not a valid field selector", ruleName, index, c.CacheKey)
+	}
+	c.cacheKeySelector = specs[0]
 	return nil
 }
 

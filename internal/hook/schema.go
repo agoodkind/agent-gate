@@ -388,7 +388,8 @@ func validateConditionKinds(r *config.Rule) []error {
 func isKnownConditionKind(kind string) bool {
 	switch config.ConditionKind(kind) {
 	case "", config.ConditionKindRegex, config.ConditionKindCommand, config.ConditionKindProject,
-		config.ConditionKindDiff, config.ConditionKindShellRead, config.ConditionKindShellWrite:
+		config.ConditionKindDiff, config.ConditionKindShellRead, config.ConditionKindShellWrite,
+		config.ConditionKindExec:
 		return true
 	default:
 		return false
