@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -98,8 +99,8 @@ type Event struct {
 	EventName      string      `json:"event_name"`
 	ToolUseID      string      `json:"tool_use_id,omitempty"`
 	ToolName       string      `json:"tool_name,omitempty"`
-	Operation      Operation   `json:"operation,omitempty"`
-	Decision       Decision    `json:"decision,omitempty"`
+	Operation      Operation   `json:"operation,omitzero"`
+	Decision       Decision    `json:"decision,omitzero"`
 	Violations     []Violation `json:"violations,omitempty"`
 	RawPayloadHash string      `json:"raw_payload_hash,omitempty"`
 }
@@ -368,6 +369,7 @@ func (realAuditClock) Now() time.Time {
 func normalizeEvent(system, sessionID, eventName, level, msg string, attrs Attrs) Event {
 	now := auditNow().UTC().Format(time.RFC3339Nano)
 	event := Event{
+		EventID:       "",
 		SchemaVersion: schemaVersion,
 		Time:          now,
 		Level:         level,
@@ -386,9 +388,12 @@ func normalizeEvent(system, sessionID, eventName, level, msg string, attrs Attrs
 		},
 		Decision: Decision{
 			Kind:         stringAttr(attrs, "decision", decisionFromMessage(msg)),
+			CanBlock:     false,
 			RulesChecked: stringSliceAttr(attrs, "rules_checked"),
 			RulesMatched: stringSliceAttr(attrs, "blocking_rules"),
 		},
+		Violations:     nil,
+		RawPayloadHash: "",
 	}
 	if event.System == "" {
 		event.System = "unknown"
@@ -432,7 +437,7 @@ func violationsFromAttrs(rules []string, decision string, attrs Attrs) []Violati
 	message := stringAttr(attrs, "violation_message", "")
 	out := make([]Violation, 0, len(rules))
 	for _, rule := range rules {
-		out = append(out, Violation{Rule: rule, Mode: mode, Message: message})
+		out = append(out, Violation{Rule: rule, Mode: mode, FieldPath: "", FilePath: "", Start: 0, End: 0, Message: message})
 	}
 	return out
 }
@@ -731,9 +736,13 @@ func flattenAttr(prefix string, attr slog.Attr, out Attrs) {
 	case slog.KindInt64:
 		out[key] = NewIntValue(value.Int64())
 	case slog.KindUint64:
-		out[key] = NewIntValue(int64(value.Uint64()))
+		if u := value.Uint64(); u <= math.MaxInt64 {
+			out[key] = NewIntValue(int64(u))
+		}
 	case slog.KindFloat64:
 		out[key] = NewFloatValue(value.Float64())
+	case slog.KindDuration, slog.KindTime, slog.KindLogValuer:
+		out[key] = NewStringValue(value.String())
 	case slog.KindAny:
 		switch stringsValue := value.Any().(type) {
 		case []string:

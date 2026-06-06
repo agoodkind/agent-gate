@@ -2,6 +2,8 @@
 package regex
 
 import (
+	"math"
+
 	"goodkind.io/agent-gate/internal/config"
 )
 
@@ -35,6 +37,11 @@ func EvalFieldMatches(fields FieldAccessor, selectors []config.FieldSelectorSpec
 		return nil
 	}
 
+	group := uint32(0)
+	if diagnosticGroup > 0 && diagnosticGroup <= math.MaxUint32 {
+		group = uint32(diagnosticGroup)
+	}
+
 	var matches []MatchResult
 	filePath := fields.FilePathValue()
 	remaining := limit
@@ -46,7 +53,7 @@ func EvalFieldMatches(fields FieldAccessor, selectors []config.FieldSelectorSpec
 		if value == "" {
 			continue
 		}
-		re.ForEachStringGroupIndex(value, remaining, uint32(diagnosticGroup), func(start int, end int) bool {
+		re.ForEachStringGroupIndex(value, remaining, group, func(start int, end int) bool {
 			matches = append(matches, MatchResult{
 				FieldPath: selector.Path,
 				FilePath:  filePath,

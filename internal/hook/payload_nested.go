@@ -32,7 +32,7 @@ func (s *NullableString) UnmarshalJSON(data []byte) error {
 }
 
 // String returns the wrapped string value, or the empty string when null.
-func (s NullableString) String() string {
+func (s *NullableString) String() string {
 	return s.Value
 }
 
@@ -383,12 +383,12 @@ func (value *TextOrObject) UnmarshalJSON(data []byte) error {
 }
 
 // String returns the textual view of the value, preferring Text over JSON.
-func (value TextOrObject) String() string {
+func (value *TextOrObject) String() string {
 	return firstNonEmpty(value.Text, value.JSON)
 }
 
 // SearchableText returns the semantic text view used by rule matching.
-func (value TextOrObject) SearchableText() string {
+func (value *TextOrObject) SearchableText() string {
 	if value.Text != "" {
 		return value.Text
 	}

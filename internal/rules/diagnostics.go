@@ -1,3 +1,5 @@
+// Package rules evaluates hook payloads against the configured rule set and
+// renders the resulting violations as line-numbered diagnostics.
 package rules
 
 import (
@@ -165,19 +167,15 @@ func writeLegend(b *strings.Builder, occurrences []diagnosticOccurrence) {
 func occurrenceFor(v Violation) diagnosticOccurrence {
 	line, lineStart, lineText := lineForOffset(v.Value, v.Start)
 	startInLine := v.Start - lineStart
-	endInLine := v.End - lineStart
-	if endInLine < startInLine {
-		endInLine = startInLine
-	}
-	if endInLine > len(lineText) {
-		endInLine = len(lineText)
-	}
+	endInLine := max(v.End-lineStart, startInLine)
+	endInLine = min(endInLine, len(lineText))
 
 	prefix := lineText[:startInLine]
 	match := lineText[startInLine:endInLine]
 
 	return diagnosticOccurrence{
 		Violation: v,
+		Key:       "",
 		Line:      line,
 		Column:    utf8.RuneCountInString(prefix) + 1,
 		LineText:  clippedLineText(visibleText(lineText), utf8.RuneCountInString(prefix), visibleWidth(match)),
@@ -222,14 +220,8 @@ func clippedLineText(line string, matchStart int, matchWidth int) string {
 	if matchWidth < 1 {
 		matchWidth = 1
 	}
-	start := matchStart - 30
-	if start < 0 {
-		start = 0
-	}
-	end := matchStart + matchWidth + 30
-	if end > len(lineRunes) {
-		end = len(lineRunes)
-	}
+	start := max(matchStart-30, 0)
+	end := min(matchStart+matchWidth+30, len(lineRunes))
 	prefix := ""
 	if start > 0 {
 		prefix = "..."
