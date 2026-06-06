@@ -37,6 +37,11 @@ LOG_PATH      := $(or $(XDG_STATE_HOME),$(HOME)/.local/state)/agent-gate/agent-g
 BUNDLE_ID             ?= io.goodkind.agent-gate
 CODESIGN_ENTITLEMENTS := packaging/macos/agent-gate.entitlements
 
+# go-mk's release command signs darwin binaries with quill and reads the
+# hardened-runtime entitlements (which let the Homebrew PCRE2 dylib load) from
+# RELEASE_ENTITLEMENTS.
+RELEASE_ENTITLEMENTS  := $(CODESIGN_ENTITLEMENTS)
+
 # Pipeline modules
 GO_MK_MODULES := go-build.mk go-release.mk go-service.mk
 
