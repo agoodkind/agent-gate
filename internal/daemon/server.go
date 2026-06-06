@@ -113,20 +113,24 @@ func New(log *slog.Logger, cfg *config.Config) (*Server, error) {
 }
 
 func newRuntimeSnapshot(ctx context.Context, cfg *config.Config, log *slog.Logger) (*runtimeSnapshot, error) {
-	eventLogger, err := audit.NewEventLoggerContext(ctx, cfg, log)
+	// The intake store is created first so the audit event logger can share its
+	// single SQLite connection pool. One pool serializes intake and audit writes
+	// to audit.db, avoiding the cross-pool SQLITE_BUSY that two pools hit during
+	// the startup replay.
+	intakeStore, err := newSQLiteIntakeStore(ctx, cfg, log)
+	if err != nil {
+		return nil, fmt.Errorf("create intake store: %w", err)
+	}
+
+	eventLogger, err := audit.NewEventLoggerWithOptions(ctx, cfg, log, audit.LoggerOptions{
+		QueueLimit: 0,
+		SharedDB:   intakeStore.Handle(),
+	})
 	if err != nil {
 		if log != nil {
 			log.WarnContext(ctx, "create event logger failed", "err", err)
 		}
 		return nil, fmt.Errorf("create event logger: %w", err)
-	}
-
-	intakeStore, err := newSQLiteIntakeStore(ctx, cfg, log)
-	if err != nil {
-		if eventLogger != nil {
-			_ = eventLogger.Close()
-		}
-		return nil, fmt.Errorf("create intake store: %w", err)
 	}
 
 	var sink audit.Sink

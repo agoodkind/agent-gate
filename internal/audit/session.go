@@ -65,8 +65,9 @@ type EventLogger struct {
 	lastDrop time.Time
 	stopping bool
 
-	wg  sync.WaitGroup
-	log *slog.Logger
+	wg       sync.WaitGroup
+	log      *slog.Logger
+	sharedDB *sql.DB
 }
 
 type eventWrite struct {
@@ -75,8 +76,12 @@ type eventWrite struct {
 }
 
 // LoggerOptions tunes queue behavior for tests and high-throughput daemon use.
+// SharedDB, when set, makes the SQLite sink write through an existing handle
+// (the intake store's) instead of opening its own, so audit and intake writes
+// share one serialized connection pool.
 type LoggerOptions struct {
 	QueueLimit int
+	SharedDB   *sql.DB
 }
 
 // Event is one normalized audit record. It is the canonical schema written
@@ -131,11 +136,6 @@ type eventSink interface {
 	Close() error
 }
 
-// NewEventLoggerContext constructs an [EventLogger] using ctx for setup I/O.
-func NewEventLoggerContext(ctx context.Context, cfg *config.Config, log *slog.Logger) (*EventLogger, error) {
-	return NewEventLoggerWithOptions(ctx, cfg, log, LoggerOptions{QueueLimit: 0})
-}
-
 // NewEventLoggerWithOptions constructs an [EventLogger] with explicit queue
 // tuning. Zero-valued options select production defaults.
 func NewEventLoggerWithOptions(ctx context.Context, cfg *config.Config, log *slog.Logger, options LoggerOptions) (*EventLogger, error) {
@@ -155,6 +155,7 @@ func NewEventLoggerWithOptions(ctx context.Context, cfg *config.Config, log *slo
 	el.enabled = true
 	el.limit = queueLimit
 	el.log = log
+	el.sharedDB = options.SharedDB
 	el.cond = sync.NewCond(&el.mu)
 	el.dedup = expirable.NewLRU[string, struct{}](dedupCacheSize, nil, dedupTTL)
 
@@ -193,8 +194,18 @@ func (el *EventLogger) Enabled() bool {
 func (el *EventLogger) configureOutputs(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	// SQLite is the sole audit sink. Decisions and violations are persisted to
 	// the same audit.db that backs intake; the operational agent-gate.jsonl log
-	// is for debugging agent-gate itself, not audit output.
+	// is for debugging agent-gate itself, not audit output. When a shared handle
+	// is supplied the sink writes through the intake store's connection pool so
+	// the two writers serialize instead of contending.
 	el.rawHash = true
+	if el.sharedDB != nil {
+		s, err := newSQLiteEventSinkFromDB(ctx, el.sharedDB, log)
+		if err != nil {
+			return err
+		}
+		el.outputs = append(el.outputs, s)
+		return nil
+	}
 	sqlitePath := config.DefaultAuditSQLitePath()
 	if cfg != nil {
 		sqlitePath = cfg.AuditSQLitePath()
@@ -512,8 +523,9 @@ func payloadHash(rawPayload string) string {
 }
 
 type sqliteEventSink struct {
-	db  *sql.DB
-	log *slog.Logger
+	db     *sql.DB
+	log    *slog.Logger
+	ownsDB bool
 }
 
 func newSQLiteEventSink(ctx context.Context, path string, log *slog.Logger) (*sqliteEventSink, error) {
@@ -536,9 +548,24 @@ func newSQLiteEventSink(ctx context.Context, path string, log *slog.Logger) (*sq
 	// intake replay that drives audit writes.
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
-	s := &sqliteEventSink{db: db, log: log}
+	s := &sqliteEventSink{db: db, log: log, ownsDB: true}
 	if err := s.init(ctx); err != nil {
 		_ = db.Close()
+		return nil, err
+	}
+	return s, nil
+}
+
+// newSQLiteEventSinkFromDB builds a sink that writes through an already-open
+// shared handle (the intake store's). It does not own the handle, so Close
+// leaves it open for the owner to close. Sharing one pool serializes audit and
+// intake writes and removes their cross-pool lock contention.
+func newSQLiteEventSinkFromDB(ctx context.Context, db *sql.DB, log *slog.Logger) (*sqliteEventSink, error) {
+	if log == nil {
+		log = slog.Default()
+	}
+	s := &sqliteEventSink{db: db, log: log, ownsDB: false}
+	if err := s.init(ctx); err != nil {
 		return nil, err
 	}
 	return s, nil
@@ -666,7 +693,7 @@ func boolInt(v bool) int {
 }
 
 func (s *sqliteEventSink) Close() error {
-	if s == nil || s.db == nil {
+	if s == nil || s.db == nil || !s.ownsDB {
 		return nil
 	}
 	if err := s.db.Close(); err != nil {

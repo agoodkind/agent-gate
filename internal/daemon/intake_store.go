@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"log/slog"
 
@@ -136,6 +137,13 @@ func (s *sqliteIntakeStore) UpdateHotEvalLatency(ctx context.Context, eventID st
 		return fmt.Errorf("update intake hot_eval_latency_us %q: %w", eventID, err)
 	}
 	return nil
+}
+
+func (s *sqliteIntakeStore) Handle() *sql.DB {
+	if s == nil || s.store == nil {
+		return nil
+	}
+	return s.store.Handle()
 }
 
 func (s *sqliteIntakeStore) Close() error {

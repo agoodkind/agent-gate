@@ -32,7 +32,7 @@ func testConfig(t *testing.T) *config.Config {
 
 func TestEventLogger_WritesSQLiteAndDedups(t *testing.T) {
 	cfg := testConfig(t)
-	logger, err := audit.NewEventLoggerContext(context.Background(), cfg, nil)
+	logger, err := audit.NewEventLoggerWithOptions(context.Background(), cfg, nil, audit.LoggerOptions{QueueLimit: 0})
 	if err != nil {
 		t.Fatalf("NewEventLogger: %v", err)
 	}
@@ -75,7 +75,7 @@ func TestEventLogger_WritesSQLiteAndDedups(t *testing.T) {
 
 func TestQuery_SQLite(t *testing.T) {
 	cfg := testConfig(t)
-	logger, err := audit.NewEventLoggerContext(context.Background(), cfg, nil)
+	logger, err := audit.NewEventLoggerWithOptions(context.Background(), cfg, nil, audit.LoggerOptions{QueueLimit: 0})
 	if err != nil {
 		t.Fatalf("NewEventLogger: %v", err)
 	}

@@ -179,7 +179,7 @@ func TestRunQuerySeenAcceptsSharedAndIntakeFilters(t *testing.T) {
 
 func TestRunQueryDecisionsPreservesAuditQueryBehavior(t *testing.T) {
 	setupQueryEnvironment(t)
-	logger, err := audit.NewEventLoggerContext(context.Background(), &config.Config{}, nil)
+	logger, err := audit.NewEventLoggerWithOptions(context.Background(), &config.Config{}, nil, audit.LoggerOptions{QueueLimit: 0})
 	if err != nil {
 		t.Fatalf("NewEventLoggerContext: %v", err)
 	}

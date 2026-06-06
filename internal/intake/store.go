@@ -131,6 +131,17 @@ func configureSQLite(db *sql.DB) {
 	db.SetMaxIdleConns(1)
 }
 
+// Handle returns the underlying SQLite handle so a co-located writer, namely the
+// audit event sink, can share this store's single connection pool. Sharing one
+// pool serializes all writes to audit.db and avoids the cross-pool SQLITE_BUSY
+// contention that two independent pools hit during the startup intake replay.
+func (s *Store) Handle() *sql.DB {
+	if s == nil {
+		return nil
+	}
+	return s.db
+}
+
 // Close closes the underlying SQLite handle.
 func (s *Store) Close() error {
 	if s == nil || s.db == nil {
