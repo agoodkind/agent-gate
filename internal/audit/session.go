@@ -529,6 +529,13 @@ func newSQLiteEventSink(ctx context.Context, path string, log *slog.Logger) (*sq
 		log.WarnContext(ctx, "open audit sqlite db failed", slog.String("path", path), slog.Any("err", err))
 		return nil, fmt.Errorf("open audit sqlite db: %w", err)
 	}
+	// The audit sink shares audit.db with the durable intake store (two separate
+	// connection pools to one WAL file). Match the intake store's single
+	// serialized connection so the two writers wait on busy_timeout instead of
+	// failing with SQLITE_BUSY when they contend, for example during the startup
+	// intake replay that drives audit writes.
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
 	s := &sqliteEventSink{db: db, log: log}
 	if err := s.init(ctx); err != nil {
 		_ = db.Close()
@@ -539,6 +546,8 @@ func newSQLiteEventSink(ctx context.Context, path string, log *slog.Logger) (*sq
 
 func (s *sqliteEventSink) init(ctx context.Context) error {
 	stmts := []string{
+		`pragma busy_timeout = 5000`,
+		`pragma journal_mode = wal`,
 		`create table if not exists events (
 			event_id text primary key,
 			schema_version integer,
