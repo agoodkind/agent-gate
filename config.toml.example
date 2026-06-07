@@ -428,7 +428,9 @@ violation_message = "Existing content contains typographic dashes. The LLM shoul
 # [[rules.conditions]]
 # kind        = "regex"
 # field_paths = ["tool_input.command"]
-# pattern     = '\b(?:grep|rg)\b.*\.(?:go|ts|tsx|js|jsx|py|rb|rs|java|swift|kt|cc|cpp|hpp|proto)\b'
+# # Fire on any grep-family invocation and let the file-accurate exec validator
+# # decide. Requiring a code extension here lets `rg -n X Sources` launder past.
+# pattern     = '\b(?:grep|egrep|fgrep|rgrep|rg|ripgrep|ag)\b'
 #
 # [[rules.conditions]]
 # kind         = "exec"
