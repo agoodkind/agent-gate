@@ -47,6 +47,7 @@ type Input struct {
 	EffectiveCWD PathView     `json:"effective_cwd"`
 	FilePath     PathView     `json:"file_path"`
 	CacheKey     PathView     `json:"cache_key"`
+	ReadTargets  []PathView   `json:"read_targets"`
 	Matched      []FieldValue `json:"matched"`
 }
 
@@ -95,8 +96,28 @@ func BuildRequest(in Input) (stdin []byte, env []string, err error) {
 		"AGENT_GATE_CWD=" + in.EffectiveCWD.Canonical,
 		"AGENT_GATE_FILE_PATH=" + in.FilePath.Canonical,
 		"AGENT_GATE_CACHE_KEY=" + in.CacheKey.Canonical,
+		"AGENT_GATE_READ_TARGETS=" + readTargetsEnv(in.ReadTargets),
 	}
 	return stdin, env, nil
+}
+
+// readTargetsEnv renders the canonical real path of each read target on its own
+// line so a validator can iterate them with one path per line. The pre-symlink
+// Raw path is used as a fallback when a target could not be canonicalized (for
+// example a /tmp path that does not exist).
+func readTargetsEnv(targets []PathView) string {
+	lines := make([]string, 0, len(targets))
+	for _, target := range targets {
+		path := target.Canonical
+		if path == "" {
+			path = target.Raw
+		}
+		if path == "" {
+			continue
+		}
+		lines = append(lines, path)
+	}
+	return strings.Join(lines, "\n")
 }
 
 // Interpret maps a run outcome to a gate verdict per the condition's block_on

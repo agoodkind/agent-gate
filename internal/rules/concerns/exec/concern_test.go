@@ -59,7 +59,11 @@ func TestBuildRequestCarriesJSONAndEnv(t *testing.T) {
 		EffectiveCWD: PathView{Raw: "/raw/cwd", Canonical: "/real/cwd", IsCanonical: true},
 		FilePath:     PathView{Raw: "/raw/file", Canonical: "/real/file", IsCanonical: true},
 		CacheKey:     PathView{Raw: "/raw/cwd", Canonical: "/real/cwd", IsCanonical: true},
-		Matched:      []FieldValue{{Field: "tool_input.command", Value: "grep -rn foo ."}},
+		ReadTargets: []PathView{
+			{Raw: "/raw/a.go", Canonical: "/real/a.go", IsCanonical: true},
+			{Raw: "/tmp/missing.go", Canonical: "", IsCanonical: false},
+		},
+		Matched: []FieldValue{{Field: "tool_input.command", Value: "grep -rn foo ."}},
 	}
 
 	stdin, env, err := BuildRequest(in)
@@ -77,6 +81,9 @@ func TestBuildRequestCarriesJSONAndEnv(t *testing.T) {
 	if decoded.CacheKey.IsCanonical != true {
 		t.Fatalf("expected cache_key canonical flag preserved")
 	}
+	if len(decoded.ReadTargets) != 2 || decoded.ReadTargets[0].Canonical != "/real/a.go" {
+		t.Fatalf("decoded read_targets not preserved: %+v", decoded.ReadTargets)
+	}
 
 	wantEnv := []string{
 		"AGENT_GATE_EVENT=PreToolUse",
@@ -85,6 +92,8 @@ func TestBuildRequestCarriesJSONAndEnv(t *testing.T) {
 		"AGENT_GATE_RULE=grep-codebase-approval",
 		"AGENT_GATE_CWD=/real/cwd",
 		"AGENT_GATE_FILE_PATH=/real/file",
+		// Canonical path for the resolvable target, Raw fallback for the /tmp one.
+		"AGENT_GATE_READ_TARGETS=/real/a.go\n/tmp/missing.go",
 	}
 	for _, want := range wantEnv {
 		if !slices.Contains(env, want) {

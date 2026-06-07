@@ -58,6 +58,18 @@ func TestExecConditionAppliesDefaults(t *testing.T) {
 	}
 }
 
+func TestExecConditionCacheKeyCmdReadTargetsCompiles(t *testing.T) {
+	body := strings.Replace(validExecRule, `command = ["/bin/true"]`, `command = ["/bin/true"]`+"\ncache_key = \"cmd_read_targets\"", 1)
+	cfg, err := writeExecConfig(t, body)
+	if err != nil {
+		t.Fatalf("LoadExisting: %v", err)
+	}
+	cond := cfg.Rules[0].Conditions[1]
+	if cond.CacheKeySelector().Selector != config.FieldCmdReadTargets {
+		t.Fatalf("expected cache_key to compile to cmd_read_targets selector")
+	}
+}
+
 func TestExecConditionMissingCommandFails(t *testing.T) {
 	body := strings.Replace(validExecRule, `command = ["/bin/true"]`, "", 1)
 	_, err := writeExecConfig(t, body)

@@ -12,6 +12,7 @@ import (
 	"goodkind.io/agent-gate/internal/config"
 	"goodkind.io/agent-gate/internal/rules/canonpath"
 	execconcern "goodkind.io/agent-gate/internal/rules/concerns/exec"
+	"goodkind.io/agent-gate/internal/rules/concerns/shellread"
 )
 
 // canonCacheTTL bounds how long a path-to-realpath mapping is memoized. Real
@@ -313,8 +314,24 @@ func (r *ExecRuntime) buildInput(
 		EffectiveCWD: canonicalizePathField(r.canon, cwd, fields.String(config.FieldEffectiveCWD)),
 		FilePath:     canonicalizePathField(r.canon, cwd, fields.FilePathValue()),
 		CacheKey:     keyView,
+		ReadTargets:  r.readTargetViews(cwd, command),
 		Matched:      matched,
 	}
+}
+
+// readTargetViews canonicalizes the effective filesystem targets of a
+// grep/rg-style command so the validator can check each path's index status
+// rather than the working directory.
+func (r *ExecRuntime) readTargetViews(cwd, command string) []execconcern.PathView {
+	targets := shellread.ExtractCodeSearchTargets(command, cwd)
+	views := make([]execconcern.PathView, 0, len(targets))
+	for _, target := range targets {
+		if target.Remote || target.Path == "" {
+			continue
+		}
+		views = append(views, canonicalizePathField(r.canon, cwd, target.Path))
+	}
+	return views
 }
 
 // cacheLookup reports the cached verdict and whether it is missing, fresh, or
