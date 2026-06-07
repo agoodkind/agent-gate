@@ -82,6 +82,15 @@ A small query surface over the classified tree:
 
 agent-gate's grep gate becomes "give me `ReadTargets` with resolvability and scope cwd." `cd "$VAR" && grep .` then falls out as `UNRESOLVABLE`, so the gate fails open by construction rather than by a string-scan patch.
 
+## Scope bounding (criticality)
+
+This is the rule that keeps the project finite. The unbounded part (every language, tool, and shell dialect) lives behind a safe fallback and is only ever filled in on demand.
+
+- **Non-goals.** Not a general shell interpreter or evaluator, not full zsh, not every language or tool. Complete coverage is never required for correctness.
+- **Safe fallback makes coverage optional.** Anything unparsed is `Opaque`, and any path whose cwd or operands cannot be resolved is reported `Resolvable:false`. Consumers treat unresolvable as fail open (allow). Adding a grammar or dispatch entry only ever increases precision; the project can stop at any coverage level and still be correct.
+- **Coverage is pull-based, not push-based.** A grammar or dispatch entry enters the curated set only when a real command in the agent-gate audit log needs it. The default is `Opaque`.
+- **Phasing enforces the bound.** Phase 1's curated set is exactly one host grammar (bash) and zero embedded-language recursion; `ssh`/`bash -c`/`python -c` are `Opaque` and therefore allowed, which already removes the known false positives (all of which were over-blocking). Phase 2 and later add recursion one dispatch entry at a time, each justified by an audit-log command that currently launders through an unparsed embedder, and each addition adds blocking precision rather than risking new false positives.
+
 ## Build order
 
 - **Phase 0 (enabler):** extract `tree-sitter-foundation` from lms and refactor the lms splitter onto it. Pure refactor, no behavior change. This is the riskiest coupling, so it lands and is verified first.
