@@ -136,6 +136,7 @@ var fieldStringAccessors = map[config.FieldSelector]func(FieldSet) string{
 	config.FieldCmdComments:               func(f FieldSet) string { return f.CmdComments() },
 	config.FieldCmdDoubleHyphenProse:      func(f FieldSet) string { return f.CmdDoubleHyphenProse() },
 	config.FieldCmdRedirections:           func(f FieldSet) string { return f.CmdRedirections() },
+	config.FieldCmdReadTargets:            func(f FieldSet) string { return f.CmdReadTargets() },
 	config.FieldPermissionMode:            func(f FieldSet) string { return f.PermissionMode },
 	config.FieldAgentID:                   func(f FieldSet) string { return f.AgentID },
 	config.FieldAgentType:                 func(f FieldSet) string { return f.AgentType },

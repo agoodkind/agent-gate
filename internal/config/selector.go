@@ -40,6 +40,9 @@ const (
 	// FieldCmdRedirections selects unsafe shell redirections from command
 	// fields after stripping comments and quoted script content.
 	FieldCmdRedirections
+	// FieldCmdReadTargets selects the effective filesystem targets of a
+	// grep/rg-style command (the paths it reads), newline-joined.
+	FieldCmdReadTargets
 	// FieldPermissionMode selects the active permission mode.
 	FieldPermissionMode
 	// FieldAgentID selects the agent identifier.
@@ -229,6 +232,7 @@ var fieldSelectorByPath = map[string]FieldSelector{
 	"cmd_comments":                 FieldCmdComments,
 	"cmd_double_hyphen_prose":      FieldCmdDoubleHyphenProse,
 	"cmd_redirections":             FieldCmdRedirections,
+	"cmd_read_targets":             FieldCmdReadTargets,
 	"permission_mode":              FieldPermissionMode,
 	"agent_id":                     FieldAgentID,
 	"agent_type":                   FieldAgentType,
