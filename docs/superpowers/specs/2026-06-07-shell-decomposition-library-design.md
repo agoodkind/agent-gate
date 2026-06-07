@@ -16,6 +16,8 @@ This session hit three false positives from those leaks:
 
 The fix is to parse, not pattern-match. The library returns a tree. agent-gate asks it questions like "what paths does this read?"
 
+The read gate is the first use, not the only one. The same tree must describe what an agent writes and patches, not only what it reads. A heredoc that creates a file, a `sed -i` edit, a patch envelope, and code inside `python -c` are all the agent authoring or running code. So embedded code content is first-class. The library parses it with the same grammars and classifies it, rather than treating it as a leaf to skip.
+
 ## Decisions
 
 - Standalone library. `shelldecomp` holds the shell logic. The tree-sitter setup lives in a shared module.
@@ -147,7 +149,7 @@ bash/sh/zsh   FlagValue -c, Shell, NewScope      210
 parallel      Trailing, AsCommand                  1
 ```
 
-Language-embedders hide foreign code. Classify the leaf, recurse later:
+Language-embedders hide foreign code. That code is what the agent runs or writes, so it is parsed and classified with the same grammars, not skipped:
 
 ```
 python3/python  FlagValue -c, Python    1,696
@@ -158,6 +160,6 @@ ruby            FlagValue -e, Ruby          55
 sqlite3         FirstPositional, SQL         2
 ```
 
-Mini-languages run as their own program: `awk` (1,768), `jq` (904), `sed` (real subset). Parse these to classify their content, not to find hidden commands.
+Mini-languages run as their own program: `awk` (1,768), `jq` (904), `sed` (real subset). Parse these for their content. `sed -i` and `awk` also write files, so they are edits, not only reads.
 
 Phase 2 starts with `heredoc` and `ssh`, because those two create the depth.
