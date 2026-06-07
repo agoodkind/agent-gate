@@ -43,10 +43,11 @@ var codeSearchSpecs = []config.ShellReadSpec{
 
 // ExtractCodeSearchTargets returns the effective filesystem targets of a
 // grep/rg-style command. Explicit path operands win. When a code-search tool
-// searches the working tree by default (recursive grep, bare rg/ag, or git
-// grep) and names no path, the effective target is cwd. A tool reading stdin
-// (a plain grep with no path) has no target and returns nil, so the caller
-// treats it as out of scope.
+// searches the working tree by default (recursive grep, or bare rg/ag) and
+// names no path, the effective target is cwd. A tool reading stdin (a plain
+// grep with no path) has no target and returns nil, so the caller treats it as
+// out of scope. git grep is deliberately excluded: it is an exact-text search
+// semantic search cannot replace.
 func ExtractCodeSearchTargets(command, cwd string) []ReadTarget {
 	operands := ExtractReadTargets(command, cwd, codeSearchSpecs)
 	if len(operands) > 0 {
@@ -99,9 +100,9 @@ func segmentSearchesWorkingTree(fields []string) bool {
 	if slices.Contains(grepTools, argv0) {
 		return hasRecursiveFlag(fields[1:])
 	}
-	if argv0 == "git" {
-		return len(fields) > 1 && fields[1] == "grep"
-	}
+	// git grep is intentionally not treated as a working-tree code search: it is
+	// an exact-text search over tracked files (conflict markers, literal
+	// strings) that semantic search cannot replace, so it must not be gated.
 	return false
 }
 

@@ -39,7 +39,7 @@ func TestExtractCodeSearchTargets(t *testing.T) {
 		{"context flags skip values", `grep -A 2 -B 2 "x" file.go`, []string{"/repo/file.go"}},
 		{"recursive no path falls back to cwd", `grep -rn "x"`, []string{"/repo"}},
 		{"bare rg recurses cwd", `rg "x"`, []string{"/repo"}},
-		{"git grep targets repo", `git grep "x"`, []string{"/repo"}},
+		{"git grep is not gated", `git grep "x"`, nil},
 		{"git commit message is not git grep", `git commit -m grep`, nil},
 	}
 
