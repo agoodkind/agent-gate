@@ -433,7 +433,8 @@ violation_message = "Existing content contains typographic dashes. The LLM shoul
 # [[rules.conditions]]
 # kind         = "exec"
 # command      = ["/Users/you/.config/agent-gate/validators/lm-semantic-search-indexed.sh"]
-# cache_key    = "effective_cwd"
-# cache_ttl_ms = 60000            # refresh the index verdict per codebase ~every 60s
+# cache_key    = "cmd_read_targets"  # the grep/rg target paths, so the cache keys
+#                                    # on what the search reads, not the cwd
+# cache_ttl_ms = 60000            # refresh the index verdict per target ~every 60s
 # block_on     = "nonzero"        # exit 1 = indexed -> block; exit 0 = allow
 # on_error     = "open"           # timeout/spawn-failure allows the grep
