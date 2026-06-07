@@ -101,8 +101,10 @@ The first implementation plan should target Phase 0 plus Phase 1, which delivers
 - **Phase 1 integration:** wire agent-gate's exec gate to shelldecomp behind the existing rule, run `make test` / `make lint`, deploy, and replay the recorded commands through the daemon, confirming each decision in `~/.local/state/agent-gate/sqlite/audit.db`.
 - **Phases 2 and 3:** per-language injection tests (regex-in-grep, python-in-`-c`, sql-in-heredoc, shell-in-`ssh`), and an agent-gate config-migration test once the old specs are retired.
 
+## Packaging
+
+`tree-sitter-foundation` and `shelldecomp` are each their own repo and Go module, consumed by plain `go get` imports. agent-gate imports `shelldecomp` and gets the grammars transitively through the foundation; it does not import the foundation directly. lm-semantic-search imports the foundation for its splitter.
+
 ## Open questions for the implementation plan
 
-- The exact home and module path of `tree-sitter-foundation` and `shelldecomp` (new repos vs a shared monorepo path).
-- Whether agent-gate depends on the foundation directly for grammar availability, or only transitively through shelldecomp.
-- The precise dispatch-table format and how operators (here, the author) extend it.
+- The precise dispatch-table format and how the author extends it (the calling-convention registry that routes a command's argument span to a sub-grammar; see the architecture's embedding pass).
