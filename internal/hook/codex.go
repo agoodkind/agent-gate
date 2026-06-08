@@ -19,6 +19,14 @@ const (
 	CodexUserPromptSubmit CodexEvent = "UserPromptSubmit"
 	// CodexStop fires when a Codex turn stops.
 	CodexStop CodexEvent = "Stop"
+	// CodexPreCompact fires before Codex compacts context.
+	CodexPreCompact CodexEvent = "PreCompact"
+	// CodexPostCompact fires after Codex compacts context.
+	CodexPostCompact CodexEvent = "PostCompact"
+	// CodexSubagentStart fires when a Codex subagent starts.
+	CodexSubagentStart CodexEvent = "SubagentStart"
+	// CodexSubagentStop fires when a Codex subagent stops.
+	CodexSubagentStop CodexEvent = "SubagentStop"
 )
 
 // CodexHookSpecificOutput is the discriminated output block carried in a
@@ -100,7 +108,10 @@ func CodexBlockText(eventName, text string) []byte {
 	case CodexUserPromptSubmit:
 		resp.Decision = "block"
 		resp.Reason = text
-	case CodexStop, CodexSessionStart:
+	case CodexStop, CodexSessionStart,
+		CodexPreCompact, CodexPostCompact, CodexSubagentStart, CodexSubagentStop:
+		// Observe-tier lifecycle events carry no block channel, so a block
+		// decision degrades to allow.
 		return CodexAllow()
 	default:
 		resp.Decision = "block"

@@ -75,6 +75,43 @@ type CodexStopPayload struct {
 	LastAssistantMessage string `json:"last_assistant_message"`
 }
 
+// CodexPreCompactPayload is emitted before Codex compacts context. Field shape
+// captured from a live codex-native payload: envelope, turn_id, and trigger.
+type CodexPreCompactPayload struct {
+	CodexEnvelope
+	TurnID  string `json:"turn_id"`
+	Trigger string `json:"trigger"`
+}
+
+// CodexPostCompactPayload is emitted after Codex compacts context. Field shape
+// captured from a live codex-native payload: envelope, turn_id, and trigger.
+type CodexPostCompactPayload struct {
+	CodexEnvelope
+	TurnID  string `json:"turn_id"`
+	Trigger string `json:"trigger"`
+}
+
+// CodexSubagentStartPayload is emitted when a Codex subagent starts. Field shape
+// captured from a live codex-native payload: the agent identity and turn.
+type CodexSubagentStartPayload struct {
+	CodexEnvelope
+	TurnID         string `json:"turn_id"`
+	PermissionMode string `json:"permission_mode"`
+	AgentID        string `json:"agent_id"`
+	AgentType      string `json:"agent_type"`
+}
+
+// CodexSubagentStopPayload is emitted when a Codex subagent stops. Shape mirrors
+// Claude SubagentStop (the only captured codex-labeled sample was a mislabeled
+// Claude payload), so these fields are documented-mirror, not yet verified.
+type CodexSubagentStopPayload struct {
+	CodexEnvelope
+	TurnID               string `json:"turn_id"`
+	StopHookActive       bool   `json:"stop_hook_active"`
+	AgentTranscriptPath  string `json:"agent_transcript_path"`
+	LastAssistantMessage string `json:"last_assistant_message"`
+}
+
 func codexToolFields(base rules.FieldSet, turnID string, toolName string, toolUseID string, input CodexToolInput) rules.FieldSet {
 	base.TurnID = turnID
 	base.ToolName = toolName
@@ -133,6 +170,42 @@ func (p CodexStopPayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.TurnID = p.TurnID
 	fields.StopHookActive = boolString(p.StopHookActive)
+	fields.LastAssistantMessage = p.LastAssistantMessage
+	return fields
+}
+
+// Fields renders the payload as a [rules.FieldSet].
+func (p CodexPreCompactPayload) Fields() rules.FieldSet {
+	fields := p.baseFields()
+	fields.TurnID = p.TurnID
+	fields.Trigger = p.Trigger
+	return fields
+}
+
+// Fields renders the payload as a [rules.FieldSet].
+func (p CodexPostCompactPayload) Fields() rules.FieldSet {
+	fields := p.baseFields()
+	fields.TurnID = p.TurnID
+	fields.Trigger = p.Trigger
+	return fields
+}
+
+// Fields renders the payload as a [rules.FieldSet].
+func (p CodexSubagentStartPayload) Fields() rules.FieldSet {
+	fields := p.baseFields()
+	fields.TurnID = p.TurnID
+	fields.PermissionMode = p.PermissionMode
+	fields.AgentID = p.AgentID
+	fields.AgentType = p.AgentType
+	return fields
+}
+
+// Fields renders the payload as a [rules.FieldSet].
+func (p CodexSubagentStopPayload) Fields() rules.FieldSet {
+	fields := p.baseFields()
+	fields.TurnID = p.TurnID
+	fields.StopHookActive = boolString(p.StopHookActive)
+	fields.AgentTranscriptPath = p.AgentTranscriptPath
 	fields.LastAssistantMessage = p.LastAssistantMessage
 	return fields
 }

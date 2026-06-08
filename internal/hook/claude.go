@@ -62,6 +62,12 @@ const (
 	ClaudeTeammateIdle ClaudeEvent = "TeammateIdle"
 	// ClaudeSessionEnd is emitted when a session ends.
 	ClaudeSessionEnd ClaudeEvent = "SessionEnd"
+	// ClaudePostToolBatch is emitted after a batch of tool calls completes.
+	ClaudePostToolBatch ClaudeEvent = "PostToolBatch"
+	// ClaudeUserPromptExpansion is emitted while a submitted prompt is expanded.
+	ClaudeUserPromptExpansion ClaudeEvent = "UserPromptExpansion"
+	// ClaudeMessageDisplay is emitted when a message is rendered to the user.
+	ClaudeMessageDisplay ClaudeEvent = "MessageDisplay"
 )
 
 // ClaudeAllow returns the stdout bytes for an allow response (exit 0).

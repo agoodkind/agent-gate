@@ -247,6 +247,45 @@ type ClaudeTeammateIdlePayload struct {
 	TeamName     string `json:"team_name"`
 }
 
+// ClaudeBatchToolCall is one tool invocation inside a PostToolBatch payload.
+type ClaudeBatchToolCall struct {
+	ToolName     string          `json:"tool_name"`
+	ToolUseID    string          `json:"tool_use_id"`
+	ToolInput    ClaudeToolInput `json:"tool_input"`
+	ToolResponse TextOrObject    `json:"tool_response"`
+}
+
+// ClaudePostToolBatchPayload is emitted after a batch of parallel tool calls
+// completes. Field shape captured from a live payload: the envelope plus a
+// tool_calls array, each entry mirroring a PostToolUse record.
+type ClaudePostToolBatchPayload struct {
+	ClaudeEnvelope
+	ToolCalls []ClaudeBatchToolCall `json:"tool_calls"`
+}
+
+// ClaudeUserPromptExpansionPayload is emitted while a submitted prompt is
+// expanded (a slash command or @-mention) before processing. Field shape
+// captured from a live slash-command payload.
+type ClaudeUserPromptExpansionPayload struct {
+	ClaudeEnvelope
+	ExpansionType string `json:"expansion_type"`
+	CommandName   string `json:"command_name"`
+	CommandArgs   string `json:"command_args"`
+	CommandSource string `json:"command_source"`
+	Prompt        string `json:"prompt"`
+}
+
+// ClaudeMessageDisplayPayload is emitted as each assistant message chunk is
+// rendered to the user. Field shape captured from a live payload: the envelope
+// (carrying turn_id) plus the streamed delta and its message identity.
+type ClaudeMessageDisplayPayload struct {
+	ClaudeEnvelope
+	MessageID string `json:"message_id"`
+	Index     int    `json:"index"`
+	Final     bool   `json:"final"`
+	Delta     string `json:"delta"`
+}
+
 func claudeToolFields(base rules.FieldSet, toolName string, toolUseID string, input ClaudeToolInput) rules.FieldSet {
 	base.ToolName = toolName
 	base.ToolUseID = toolUseID
@@ -473,6 +512,35 @@ func (p ClaudeTeammateIdlePayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.TeammateName = p.TeammateName
 	fields.TeamName = p.TeamName
+	return fields
+}
+
+// Fields renders the payload as a [rules.FieldSet]. A batch holds many tool
+// calls but a FieldSet is singular, so the first call is surfaced through the
+// standard tool selectors; the full set stays in the audited raw payload.
+func (p ClaudePostToolBatchPayload) Fields() rules.FieldSet {
+	if len(p.ToolCalls) == 0 {
+		return p.baseFields()
+	}
+	first := p.ToolCalls[0]
+	fields := claudeToolFields(p.baseFields(), first.ToolName, first.ToolUseID, first.ToolInput)
+	fields.ToolResponse = first.ToolResponse.SearchableText()
+	return fields
+}
+
+// Fields renders the payload as a [rules.FieldSet].
+func (p ClaudeUserPromptExpansionPayload) Fields() rules.FieldSet {
+	fields := p.baseFields()
+	fields.Prompt = p.Prompt
+	return fields
+}
+
+// Fields renders the payload as a [rules.FieldSet]. The streamed delta is the
+// assistant text being displayed, surfaced through the text selectors.
+func (p ClaudeMessageDisplayPayload) Fields() rules.FieldSet {
+	fields := p.baseFields()
+	fields.Text = p.Delta
+	fields.AssistantMessage = p.Delta
 	return fields
 }
 

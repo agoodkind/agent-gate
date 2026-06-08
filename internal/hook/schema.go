@@ -242,6 +242,13 @@ func buildClaudeSchema() map[ClaudeEvent]EventSchema {
 		),
 
 		ClaudeTeammateIdle: makeSchema(claudeEnvelope, "teammate_name", "team_name"),
+
+		// Paths captured from live payloads of these installed-schema events. A
+		// PostToolBatch surfaces its first tool call through the standard tool
+		// paths; MessageDisplay surfaces the streamed delta as assistant text.
+		ClaudePostToolBatch:       makeSchema(claudeToolUseBase, "tool_response"),
+		ClaudeUserPromptExpansion: makeSchema(claudeEnvelope, "prompt"),
+		ClaudeMessageDisplay:      makeSchema(claudeEnvelope, "text", "assistant_message"),
 	}
 }
 
@@ -278,6 +285,15 @@ func buildCodexSchema() map[CodexEvent]EventSchema {
 		CodexPostToolUse:       makeSchema(codexToolBase, "tool_response"),
 		CodexUserPromptSubmit:  makeSchema(codexEnvelope, "turn_id", "prompt"),
 		CodexStop:              makeSchema(codexEnvelope, "turn_id", "stop_hook_active", "last_assistant_message"),
+
+		// Paths from live codex-native samples (PreCompact/PostCompact/
+		// SubagentStart); SubagentStop mirrors Claude pending a verified sample.
+		CodexPreCompact:    makeSchema(codexEnvelope, "turn_id", "trigger"),
+		CodexPostCompact:   makeSchema(codexEnvelope, "turn_id", "trigger"),
+		CodexSubagentStart: makeSchema(codexEnvelope, "turn_id", "permission_mode", "agent_id", "agent_type"),
+		CodexSubagentStop: makeSchema(codexEnvelope,
+			"turn_id", "stop_hook_active", "agent_transcript_path", "last_assistant_message",
+		),
 	}
 }
 
