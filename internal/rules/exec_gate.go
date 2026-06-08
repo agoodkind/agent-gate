@@ -287,12 +287,6 @@ func (r *ExecRuntime) buildInput(
 	memo *execEventMemo,
 ) execconcern.Input {
 	cwd := fields.BaseCWD()
-	// Resolve read targets against the cd-applied working directory so a search
-	// run after `cd /other` is attributed to /other, not the session cwd.
-	effectiveCwd := fields.String(config.FieldEffectiveCWD)
-	if effectiveCwd == "" {
-		effectiveCwd = cwd
-	}
 	system := ""
 	eventName := ""
 	if memo != nil {
@@ -320,14 +314,18 @@ func (r *ExecRuntime) buildInput(
 		EffectiveCWD: canonicalizePathField(r.canon, cwd, fields.String(config.FieldEffectiveCWD)),
 		FilePath:     canonicalizePathField(r.canon, cwd, fields.FilePathValue()),
 		CacheKey:     keyView,
-		ReadTargets:  r.readTargetViews(effectiveCwd, command),
+		ReadTargets:  r.readTargetViews(cwd, command),
 		Matched:      matched,
 	}
 }
 
 // readTargetViews canonicalizes the effective filesystem targets of a
 // grep/rg-style command so the validator can check each path's index status
-// rather than the working directory.
+// rather than the working directory. The base (pre-cd) working directory is
+// passed to ExtractCodeSearchTargets, which decomposes the whole command with
+// shelldecomp and applies the cd chain itself, so a search run after `cd /other`
+// is attributed to /other rather than the session cwd without applying the cd
+// chain twice.
 func (r *ExecRuntime) readTargetViews(cwd, command string) []execconcern.PathView {
 	targets := shellread.ExtractCodeSearchTargets(command, cwd)
 	views := make([]execconcern.PathView, 0, len(targets))

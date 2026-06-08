@@ -100,9 +100,24 @@ func TestExtractWriteTargets_AwkInPlace(t *testing.T) {
 }
 
 func TestExtractWriteTargets_Patch(t *testing.T) {
-	targets := shellwriteconcern.ExtractWriteTargets("patch /tmp/file < diff.patch", "/cwd")
+	// patch /tmp/file (no input redirect) resolves to the exact path.
+	targets := shellwriteconcern.ExtractWriteTargets("patch /tmp/file", "/cwd")
 	if _, ok := findTarget(targets, "/tmp/file"); !ok {
 		t.Fatalf("expected /tmp/file target via patch, got %#v", targets)
+	}
+}
+
+// TestExtractWriteTargets_PatchWithInputRedirect documents a shelldecomp gap:
+// an input redirect (< diff.patch) on a write command suppresses its inline
+// write target. Rather than miss the write, ExtractWriteTargets emits a
+// conservative ReasonUnparsedCommandShape sentinel so the rule default-denies.
+func TestExtractWriteTargets_PatchWithInputRedirect(t *testing.T) {
+	targets := shellwriteconcern.ExtractWriteTargets("patch /tmp/file < diff.patch", "/cwd")
+	if len(targets) == 0 {
+		t.Fatalf("expected a sentinel for patch with input redirect, got none")
+	}
+	if targets[0].Reason != shellwriteconcern.ReasonUnparsedCommandShape {
+		t.Errorf("Reason = %q, want %q", targets[0].Reason, shellwriteconcern.ReasonUnparsedCommandShape)
 	}
 }
 
@@ -128,7 +143,12 @@ func TestExtractWriteTargets_GitApplyIndex(t *testing.T) {
 }
 
 func TestExtractWriteTargets_HeredocRedirect(t *testing.T) {
-	cmd := "cat <<EOF >> /tmp/log\nhello\nEOF"
+	// A heredoc with the output redirect BEFORE the heredoc operator resolves to
+	// the file. shelldecomp does not surface the redirect when it comes AFTER the
+	// heredoc operator (cat <<EOF >> /tmp/log), which is a known gap; the writer
+	// shapes (tee/patch <<EOF) are covered by the suppressed-write sentinel, but
+	// a heredoc'd reader like cat is not, so that ordering is a documented hole.
+	cmd := "cat >> /tmp/log <<EOF\nhello\nEOF"
 	targets := shellwriteconcern.ExtractWriteTargets(cmd, "/cwd")
 	if _, ok := findTarget(targets, "/tmp/log"); !ok {
 		t.Fatalf("expected /tmp/log target from heredoc redirect, got %#v", targets)

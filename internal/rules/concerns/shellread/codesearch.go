@@ -1,80 +1,106 @@
 package shellread
 
 import (
-	"path/filepath"
-	"slices"
-	"strings"
+	"os"
 
-	"goodkind.io/agent-gate/internal/config"
+	"goodkind.io/gksyntax/shelldecomp"
 )
 
-// recurseByDefaultTools scan the working tree when given no path operand.
-var recurseByDefaultTools = []string{"rg", "ripgrep", "ag"}
+// gitGrepArgv0 is the argv0 label shelldecomp assigns to a `git grep` read
+// target. It is excluded from code-search targets because git grep is an
+// exact-text search over tracked files that semantic search cannot replace.
+const gitGrepArgv0 = "git grep"
 
-// grepTools take a path operand and only recurse when asked.
-var grepTools = []string{"grep", "egrep", "fgrep", "rgrep"}
-
-// codeSearchSpecs parse the positional path operands of code-search tools. The
-// first positional is the search pattern (SkipPositionals: 1); when the pattern
-// is supplied through -e/-f instead, that flag value consumes the positional
-// budget so the first real operand is still treated as a path. Flag values that
-// are not paths (context counts, globs, include/exclude filters) are skipped.
-var codeSearchSpecs = []config.ShellReadSpec{
-	{
-		Name:                     "code-search",
-		Argv0:                    []string{"grep", "egrep", "fgrep", "rgrep", "rg", "ripgrep", "ag"},
-		PathArgStart:             1,
-		PathArgStartIfFlags:      nil,
-		PathArgStartIfFlagsValue: 0,
-		SkipPositionals:          1,
-		SkipFlagsWithValues: []string{
-			"-e", "--regexp", "-f", "--file",
-			"-m", "--max-count",
-			"-A", "--after-context", "-B", "--before-context", "-C", "--context",
-			"-g", "--glob", "--include", "--exclude", "--exclude-dir",
-		},
-		SkipFlagValuesAsPositionals: []string{"-e", "--regexp", "-f", "--file"},
-		NestedCommand:               false,
-		NestedCommandFlag:           "",
-		NestedRemote:                false,
-		RemoteSources:               false,
-	},
+// contentSearchers are the argv0 values whose shelldecomp read targets are
+// genuine content searches a semantic index could answer. Other readers
+// shelldecomp recognizes (cat, head, find, sed) are not code searches: find in
+// particular is an enumerator whose code-search contribution is computed by the
+// enumerator layer below, not by its own operands.
+var contentSearchers = map[string]bool{
+	"grep":  true,
+	"egrep": true,
+	"fgrep": true,
+	"rg":    true,
+	"ag":    true,
+	"ack":   true,
 }
 
 // ExtractCodeSearchTargets returns the effective filesystem targets of a
-// grep/rg-style command. Explicit path operands win. When a code-search tool
-// searches the working tree by default (recursive grep, or bare rg/ag) and
-// names no path, the effective target is cwd. A tool reading stdin (a plain
-// grep with no path) has no target and returns nil, so the caller treats it as
-// out of scope. git grep is deliberately excluded: it is an exact-text search
-// semantic search cannot replace.
+// grep/rg-style command (the paths it reads). It combines two layers:
+//
+//   - shelldecomp's structural read targets for content searchers (grep, rg,
+//     ag, ack): explicit path operands resolved against the cd-applied cwd, a
+//     recursive grep or bare rg/ag/ack with no operand targeting cwd, and a
+//     stdin grep (a non-first pipeline stage with no operand) contributing
+//     nothing.
+//   - the enumerator layer, which covers code search hidden behind an
+//     enumerator feeding a searcher over file contents (find DIR | xargs grep,
+//     find DIR -exec grep, git ls-files | xargs rg); shelldecomp does not model
+//     that enumerator-to-searcher dataflow, so it is handled here.
+//
+// git grep is excluded even though shelldecomp emits it, because it is an
+// exact-text search semantic search cannot replace. Targets shelldecomp could
+// not pin to a literal absolute path (an unexpanded $var operand, a command
+// substitution, or a cd into an unresolvable directory) are dropped rather than
+// fabricated, so an unresolvable shape stays out of scope.
 func ExtractCodeSearchTargets(command, cwd string) []ReadTarget {
-	operands := ExtractReadTargets(command, cwd, codeSearchSpecs)
-	if len(operands) > 0 {
-		// The command named explicit operands. Keep the ones we can resolve and
-		// drop those carrying a shell expansion we cannot evaluate; an
-		// unexpanded $var joined to cwd would falsely look like a repo path. If
-		// every operand is unresolvable the command stays out of scope rather
-		// than falling back to the working tree.
-		return resolvableTargets(operands)
+	if command == "" {
+		return nil
 	}
-	if cwd != "" && commandSearchesWorkingTree(command) {
-		return []ReadTarget{{Path: cwd, Remote: false, Spec: "code-search-cwd", Raw: command}}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		home = ""
 	}
-	// No operand and no bare working-tree search. A code search can still hide
-	// behind an enumerator that feeds a searcher (find DIR | xargs grep,
-	// find DIR -exec grep, git ls-files | xargs rg) or a bare code-file
-	// enumeration (find DIR -name '*.go'); the enumerated directory is the
-	// effective target. Drop unresolvable $var/backtick directories as above.
-	return resolvableTargets(enumeratorCodeSearchTargets(command, cwd))
+	decomposition := shelldecomp.Parse(command, cwd, home)
+
+	var out []ReadTarget
+	seen := make(map[string]struct{})
+	add := func(path string) {
+		if _, dup := seen[path]; dup {
+			return
+		}
+		seen[path] = struct{}{}
+		out = append(out, ReadTarget{Path: path, Remote: false, Spec: "code-search", Raw: command})
+	}
+
+	for _, target := range decomposition.ReadTargets() {
+		if target.Argv0 == gitGrepArgv0 {
+			continue
+		}
+		if !contentSearchers[target.Argv0] {
+			continue
+		}
+		// shelldecomp guarantees a resolvable target is a pinned absolute path
+		// (never a fabricated join of an unexpanded $var), so the old
+		// $/backtick belt-and-suspenders filter is no longer needed: an
+		// unresolvable operand or an unresolvable cwd already arrives with
+		// Resolvable=false and Path==shelldecomp.Unresolvable.
+		if !target.Resolvable || target.Path == shelldecomp.Unresolvable {
+			continue
+		}
+		add(target.Path)
+	}
+
+	// Enumerator-driven code search (find/fd/git ls-files feeding a content
+	// searcher over file contents). shelldecomp surfaces find's own operands as
+	// reads, which over- and under-count the enumerated directory, so the
+	// enumerator layer computes the real target and the find/fd/git-ls-files
+	// reads above are skipped by the contentSearchers filter.
+	for _, target := range resolvableTargets(enumeratorCodeSearchTargets(command, cwd)) {
+		add(target.Path)
+	}
+	return out
 }
 
-// resolvableTargets drops operands whose path still contains a shell expansion
-// (a $variable or `command` substitution) that agent-gate cannot evaluate.
+// resolvableTargets drops enumerator operands whose path still carries a shell
+// expansion (a $variable or `command` substitution) that agent-gate cannot
+// evaluate. The enumerator layer resolves directories with the package's own
+// resolvePath rather than shelldecomp, so this filter still guards against a
+// fabricated $var directory there.
 func resolvableTargets(targets []ReadTarget) []ReadTarget {
 	out := make([]ReadTarget, 0, len(targets))
 	for _, target := range targets {
-		if strings.ContainsAny(target.Path, "$`") {
+		if containsShellExpansion(target.Path) {
 			continue
 		}
 		out = append(out, target)
@@ -82,43 +108,11 @@ func resolvableTargets(targets []ReadTarget) []ReadTarget {
 	return out
 }
 
-// commandSearchesWorkingTree reports whether any segment runs a code-search
-// tool that scans the working tree when given no path operand.
-func commandSearchesWorkingTree(command string) bool {
-	for _, segment := range splitChain(command) {
-		fields := shellFields(strings.TrimSpace(segment))
-		if len(fields) == 0 {
-			continue
-		}
-		if segmentSearchesWorkingTree(fields) {
-			return true
-		}
-	}
-	return false
-}
-
-func segmentSearchesWorkingTree(fields []string) bool {
-	argv0 := filepath.Base(fields[0])
-	if slices.Contains(recurseByDefaultTools, argv0) {
-		return true
-	}
-	if slices.Contains(grepTools, argv0) {
-		return hasRecursiveFlag(fields[1:])
-	}
-	// git grep is intentionally not treated as a working-tree code search: it is
-	// an exact-text search over tracked files (conflict markers, literal
-	// strings) that semantic search cannot replace, so it must not be gated.
-	return false
-}
-
-// hasRecursiveFlag reports whether the grep arguments request recursion, either
-// as a long flag or inside a short-flag bundle such as -rn or -Rl.
-func hasRecursiveFlag(args []string) bool {
-	for _, arg := range args {
-		if arg == "--recursive" {
-			return true
-		}
-		if len(arg) > 1 && arg[0] == '-' && arg[1] != '-' && strings.ContainsAny(arg, "rR") {
+// containsShellExpansion reports whether a path still holds an unresolved shell
+// expansion that must not be joined into a fabricated directory.
+func containsShellExpansion(path string) bool {
+	for _, r := range path {
+		if r == '$' || r == '`' {
 			return true
 		}
 	}

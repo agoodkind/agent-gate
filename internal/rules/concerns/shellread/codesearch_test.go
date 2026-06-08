@@ -13,6 +13,36 @@ func targetPaths(targets []ReadTarget) []string {
 	return paths
 }
 
+// TestExtractCodeSearchTargetsShelldecompSanity is the post-migration sanity
+// check from the shelldecomp integration: an extensionless code grep over a repo
+// path resolves; a /tmp log grep resolves but is outside the repo (the
+// index-aware validator decides scope); git grep is excluded; a find piped to a
+// stdin grep reads filenames only and has no target; and a cd into an
+// unexpanded variable poisons the cwd so the recursive grep target is dropped
+// rather than fabricated.
+func TestExtractCodeSearchTargetsShelldecompSanity(t *testing.T) {
+	const cwd = "/repo"
+	cases := []struct {
+		name    string
+		command string
+		want    []string
+	}{
+		{"extensionless code grep over repo path", `grep -rn ServeHTTP internal`, []string{"/repo/internal"}},
+		{"tmp log grep resolves outside repo", `grep -n ERROR /tmp/x.log`, []string{"/tmp/x.log"}},
+		{"git grep excluded", `git grep ServeHTTP`, nil},
+		{"find piped to stdin grep has no target", `find Tests | grep -iE x`, nil},
+		{"cd to unresolvable var drops recursive target", `cd "$VAR" && grep -rn X .`, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := targetPaths(ExtractCodeSearchTargets(tc.command, cwd))
+			if !slices.Equal(got, tc.want) {
+				t.Fatalf("ExtractCodeSearchTargets(%q) = %v, want %v", tc.command, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestExtractCodeSearchTargets(t *testing.T) {
 	const cwd = "/repo"
 

@@ -195,8 +195,8 @@ type commandSegment struct {
 }
 
 func commandSegmentsWithCwd(fields FieldSet) []commandSegment {
-	cwd := fields.BaseCWD()
-	if cwd == "" {
+	baseCwd := fields.BaseCWD()
+	if baseCwd == "" {
 		return nil
 	}
 
@@ -207,22 +207,24 @@ func commandSegmentsWithCwd(fields FieldSet) []commandSegment {
 
 	home, err := os.UserHomeDir()
 	if err != nil {
-		home = cwd
+		home = baseCwd
 	}
 
+	// Strip heredoc bodies before splitting so a chain operator inside a
+	// heredoc body is not mistaken for a segment boundary. segmentCwds parses
+	// the stripped command so its per-segment cwd aligns with this split: the
+	// structural cd model (shelldecomp) supplies each segment's working
+	// directory instead of a cd regex.
 	cmd = stripHeredocBodies(cmd)
+	cwds := segmentCwds(cmd, baseCwd, home)
 
 	var out []commandSegment
-	for _, seg := range cmdChainRe.Split(cmd, -1) {
+	for index, seg := range cmdChainRe.Split(cmd, -1) {
 		seg = strings.TrimSpace(seg)
 		if seg == "" {
 			continue
 		}
-
-		out = append(out, commandSegment{command: seg, cwd: cwd})
-		if next, ok := cdTarget(cwd, home, seg); ok {
-			cwd = next
-		}
+		out = append(out, commandSegment{command: seg, cwd: cwds[index]})
 	}
 	return out
 }

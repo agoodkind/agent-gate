@@ -6,9 +6,7 @@ import (
 	"log/slog"
 	"math"
 	"os"
-	"path/filepath"
 	"slices"
-	"strings"
 	"sync/atomic"
 
 	"goodkind.io/agent-gate/internal/config"
@@ -19,6 +17,7 @@ import (
 	shellreadconcern "goodkind.io/agent-gate/internal/rules/concerns/shellread"
 	shellwriteconcern "goodkind.io/agent-gate/internal/rules/concerns/shellwrite"
 	"goodkind.io/agent-gate/pipeline"
+	"goodkind.io/gksyntax/shelldecomp"
 )
 
 // Violation describes one concrete match that violated a rule. The location
@@ -867,10 +866,6 @@ func extractField(fields FieldSet, selectors []config.FieldSelectorSpec) (string
 // cmdChainRe splits a shell command on common chain and sequence operators.
 var cmdChainRe = regex.MustCompile(`&&|\|\||;|\n`)
 
-// cdCommandRe matches a bare cd command and captures the target path.
-// Requires cd at the start of the segment (after trimming whitespace).
-var cdCommandRe = regex.MustCompile(`^cd\s+(.+)$`)
-
 // ReadUserHomeDir returns the current user's home directory.
 func ReadUserHomeDir() (string, error) {
 	homeDir, err := os.UserHomeDir()
@@ -881,58 +876,46 @@ func ReadUserHomeDir() (string, error) {
 	return homeDir, nil
 }
 
-// ApplyCdChain walks the segments of a shell command chain in order, applying
-// each cd operation to the running directory, and returns the final effective
-// cwd. Non-cd segments are skipped (they do not change the working directory).
+// effectiveCwdAfterChain returns the working directory in effect at the end of a
+// shell command chain starting in startCwd, computed structurally by
+// shelldecomp rather than a cd regex. A leading tilde expands against homeDir.
 //
-// Handles:
-//   - Absolute paths:          cd /some/path
-//   - Home-relative paths:     cd ~/path   or   cd ~
-//   - Relative paths:          cd ../sibling
-//   - Single/double-quoted:    cd "/path with spaces"
-//
-// Exported so that it can be tested directly.
-func ApplyCdChain(startCwd, homeDir, command string) string {
-	segments := cmdChainRe.Split(command, -1)
-	cwd := startCwd
-
-	for _, seg := range segments {
-		seg = strings.TrimSpace(seg)
-		if seg == "" {
-			continue
-		}
-
-		if next, ok := cdTarget(cwd, homeDir, seg); ok {
-			cwd = next
-		}
+// When shelldecomp cannot pin the final cwd (a cd into an unresolvable target
+// such as cd "$VAR"), the result is shelldecomp.Unresolvable: a sentinel that no
+// real directory matches, so an index-aware project or read-target check cannot
+// scope to a fabricated path. When no cd ran (or the chain left cwd at the
+// start), the result is startCwd unchanged.
+func effectiveCwdAfterChain(startCwd, homeDir, command string) string {
+	decomposition := shelldecomp.Parse(command, startCwd, homeDir)
+	cwd := decomposition.EffectiveCwdAt(uint(len(command)))
+	if cwd == "" {
+		return startCwd
 	}
-
 	return cwd
 }
 
-func cdTarget(cwd, homeDir, segment string) (string, bool) {
-	m := cdCommandRe.FindStringSubmatch(segment)
-	if m == nil {
-		return "", false
-	}
-
-	target := strings.TrimSpace(m[1])
-	// Strip surrounding matching quotes.
-	if len(target) >= 2 {
-		if (target[0] == '"' && target[len(target)-1] == '"') ||
-			(target[0] == '\'' && target[len(target)-1] == '\'') {
-			target = target[1 : len(target)-1]
+// segmentCwds returns the working directory in effect at the start of each
+// cmdChainRe segment of command, computed by shelldecomp. The returned slice is
+// aligned one-to-one with cmdChainRe.Split(command, -1), so a caller can pair a
+// raw segment string with its cwd. A segment whose cwd shelldecomp cannot pin
+// carries shelldecomp.Unresolvable.
+func segmentCwds(command, startCwd, homeDir string) []string {
+	decomposition := shelldecomp.Parse(command, startCwd, homeDir)
+	segments := cmdChainRe.Split(command, -1)
+	out := make([]string, len(segments))
+	offset := 0
+	for index, segment := range segments {
+		cwd := decomposition.EffectiveCwdAt(uint(offset))
+		if cwd == "" {
+			cwd = startCwd
 		}
+		out[index] = cwd
+		// Advance past this segment plus the one operator cmdChainRe consumed
+		// between it and the next. The exact operator width does not matter for
+		// EffectiveCwdAt, which finds the last cd span at or before the offset,
+		// so a one-byte step past the segment is enough to land inside or after
+		// the operator that follows it.
+		offset += len(segment) + 1
 	}
-
-	switch {
-	case len(target) == 1 && target[0] == '~':
-		return homeDir, true
-	case len(target) >= 2 && target[0] == '~' && target[1] == '/':
-		return filepath.Join(homeDir, target[2:]), true
-	case filepath.IsAbs(target):
-		return target, true
-	default:
-		return filepath.Join(cwd, target), true
-	}
+	return out
 }

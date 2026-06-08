@@ -1,16 +1,18 @@
 // Package shellwrite parses shell command strings and extracts the file paths
 // they will write to. The output is a list of [WriteTarget] values which a
-// rule can match against a glob list. Commands the parser cannot resolve
-// (eval, command substitution, indirect script invocation) yield a sentinel
-// target with the [ReasonUnparsedCommandShape] reason so a rule can choose
-// to default-deny those cases.
+// rule can match against a glob list. The parse is delegated to
+// goodkind.io/gksyntax/shelldecomp, which decomposes the command structurally
+// (tree-sitter) rather than by regex. Write shapes shelldecomp cannot pin to a
+// literal path (a redirect to an expansion, a dd of=$VAR, an indirect target)
+// arrive with Resolvable false and are surfaced as a sentinel target with the
+// [ReasonUnparsedCommandShape] reason so a rule can choose to default-deny.
 package shellwrite
 
 import (
-	"path/filepath"
-	"slices"
+	"os"
 	"strings"
-	"unicode"
+
+	"goodkind.io/gksyntax/shelldecomp"
 )
 
 // Tool labels classify the kind of write detected. They are exported so a
@@ -44,469 +46,244 @@ type WriteTarget struct {
 	// [ReasonUnparsedCommandShape] for sentinel targets the parser could
 	// not statically resolve.
 	Reason string
-	// Raw is the original command segment this target was extracted from.
+	// Raw is the original token this target was extracted from.
 	Raw string
 }
 
-// ExtractWriteTargets parses cmd and returns one [WriteTarget] for each
-// recognized write shape. Relative paths are joined to cwd. The parser
-// recognizes:
+// ExtractWriteTargets parses cmd with shelldecomp and returns one [WriteTarget]
+// for each recognized write shape. Relative paths are joined to cwd. shelldecomp
+// recognizes output redirections (> >> &>), tee, dd of=, sed -i, awk -i inplace,
+// patch, and git apply, resolving each against the cwd in effect at its command
+// (so a write after `cd /other` is attributed to /other).
 //
-//   - Output redirections: > path, >> path, &> path, &>> path
-//   - Heredoc into a redirection: cat <<EOF >> path ... EOF
-//   - tee path / tee -a path
-//   - sed -i path (with optional backup suffix like -i.bak)
-//   - awk -i inplace ... path
-//   - patch path / patch -p<N> path
-//   - git apply path / git apply --index path
+// A write whose destination shelldecomp cannot pin to a literal (a redirect to
+// $VAR, dd of=$VAR) arrives with Resolvable false; it is surfaced as a single
+// [ReasonUnparsedCommandShape] sentinel so the rule can default-deny rather than
+// act on a fabricated path.
 //
-// Shapes the parser cannot statically resolve (eval, $(...), `...`, indirect
-// invocation through a variable) yield a single sentinel target with
-// [ReasonUnparsedCommandShape] so the rule can choose to default-deny.
+// A command whose body is opaque to static gating (eval/exec, an interpreter
+// run with -c, or a command substitution) also yields a sentinel: its real
+// writes are hidden inside a shape the gate cannot enumerate, so the
+// conservative answer is to default-deny, matching the prior regex parser. A
+// process-substitution redirect (`>(cmd)`) is not a file write and is dropped.
 func ExtractWriteTargets(cmd, cwd string) []WriteTarget {
 	if strings.TrimSpace(cmd) == "" {
 		return nil
 	}
-
-	stripped := stripHeredocBodies(cmd)
+	home := homeDir()
+	decomposition := shelldecomp.Parse(cmd, cwd, home)
+	if decomposition.IsOpaque() {
+		return []WriteTarget{{Path: "", Tool: ToolUnparseable, Reason: ReasonUnparsedCommandShape, Raw: cmd}}
+	}
 
 	var out []WriteTarget
-	for _, segment := range splitChain(stripped) {
-		segment = strings.TrimSpace(segment)
-		if segment == "" {
+	if sentinel, ok := unparseableSentinel(decomposition); ok {
+		out = append(out, sentinel)
+	}
+	out = append(out, suppressedWriteSentinels(decomposition)...)
+	for _, target := range decomposition.WriteTargets() {
+		if isProcessSubstitution(target.Raw) {
 			continue
 		}
-		if hasUnparseableShape(segment) {
+		if !target.Resolvable || target.Path == shelldecomp.Unresolvable {
 			out = append(out, WriteTarget{
 				Path:   "",
 				Tool:   ToolUnparseable,
 				Reason: ReasonUnparsedCommandShape,
-				Raw:    segment,
+				Raw:    target.Raw,
 			})
 			continue
 		}
-		out = append(out, extractFromSegment(segment, cwd)...)
-	}
-	return out
-}
-
-// extractFromSegment returns the write targets in one chain segment. A single
-// segment can produce multiple targets (for example `tee a >> b` writes to
-// both files).
-func extractFromSegment(segment, cwd string) []WriteTarget {
-	fields := shellFields(segment)
-	if len(fields) == 0 {
-		return nil
-	}
-
-	var out []WriteTarget
-	out = append(out, redirectionTargets(fields, segment, cwd)...)
-	out = append(out, commandWriteTargets(fields, segment, cwd)...)
-	return out
-}
-
-// redirectionTargets walks the field list and emits a [WriteTarget] for every
-// > and >> redirection. The parser treats `&>` and `&>>` as equivalent
-// shapes. Process substitution (`>(cmd)`) is intentionally not classified
-// as a write target here since the destination is the substituted command,
-// not a file.
-func redirectionTargets(fields []string, raw, cwd string) []WriteTarget {
-	var out []WriteTarget
-	for index, field := range fields {
-		if !isRedirectToken(field) {
-			continue
-		}
-		if index+1 >= len(fields) {
-			continue
-		}
-		next := fields[index+1]
-		if isProcessSubstitution(next) {
-			continue
-		}
 		out = append(out, WriteTarget{
-			Path:   resolvePath(cwd, next),
-			Tool:   ToolRedirect,
+			Path:   target.Path,
+			Tool:   toolLabel(target.Argv0),
 			Reason: ReasonOK,
-			Raw:    raw,
+			Raw:    target.Raw,
 		})
 	}
 	return out
 }
 
-var redirectTokens = map[string]struct{}{
-	">":   {},
-	">>":  {},
-	"&>":  {},
-	"&>>": {},
-}
-
-func isRedirectToken(field string) bool {
-	_, present := redirectTokens[field]
-	return present
-}
-
-// isProcessSubstitution reports whether next is the head of a `>(...)` or
-// `<(...)` process-substitution form. We treat such tokens as non-file
-// destinations so the redirection is not classified as a write target.
-func isProcessSubstitution(next string) bool {
-	if strings.HasPrefix(next, "(") {
-		return true
-	}
-	if strings.HasPrefix(next, ">(") || strings.HasPrefix(next, "<(") {
-		return true
-	}
-	return false
-}
-
-// commandWriteHandlers dispatches argv0 names to per-tool extractors. Using a
-// map rather than a switch keeps the code free of the bare-string-switch
-// staticcheck-extra finding and makes it cheap to add new shapes.
-var commandWriteHandlers = map[string]func(args []string, raw, cwd string) []WriteTarget{
-	"tee":   teeTargets,
-	"sed":   sedTargets,
-	"awk":   awkTargets,
-	"patch": patchTargets,
-	"git":   gitTargets,
-}
-
-// commandWriteTargets handles tool-shaped writes such as `tee`, `sed -i`,
-// `awk -i inplace`, `patch`, and `git apply`.
-func commandWriteTargets(fields []string, raw, cwd string) []WriteTarget {
-	if len(fields) == 0 {
-		return nil
-	}
-	argv0 := filepath.Base(fields[0])
-	handler, ok := commandWriteHandlers[argv0]
-	if !ok {
-		return nil
-	}
-	return handler(fields[1:], raw, cwd)
-}
-
-// teeTargets returns every non-flag positional argument as a write target.
-// `tee` writes to all listed files (with -a for append, no semantic change
-// for the purposes of this Condition, both shapes are writes).
-func teeTargets(args []string, raw, cwd string) []WriteTarget {
-	var out []WriteTarget
-	for _, arg := range args {
-		if isFlag(arg) {
-			continue
+// unparseableSentinel reports whether any command in the decomposition runs a
+// shape whose writes the gate cannot statically enumerate, returning one
+// [ReasonUnparsedCommandShape] target so the rule can default-deny. It fires for
+// eval/exec, an interpreter invoked with -c (whose -c body is opaque to glob
+// matching), and any command carrying a command-substitution operand.
+func unparseableSentinel(decomposition *shelldecomp.Decomposition) (WriteTarget, bool) {
+	for _, command := range decomposition.Commands() {
+		if command.Argv0 == "eval" || command.Argv0 == "exec" {
+			return sentinelFor(command.Argv0), true
 		}
-		if isRedirectToken(arg) {
-			break
+		if isInterpreterWithScript(command) {
+			return sentinelFor(command.Argv0), true
 		}
-		out = append(out, WriteTarget{
-			Path:   resolvePath(cwd, arg),
-			Tool:   ToolTee,
-			Reason: ReasonOK,
-			Raw:    raw,
-		})
-	}
-	return out
-}
-
-// sedTargets returns the last positional argument as a write target when the
-// args list contains -i (in-place edit). The -i flag may carry a backup
-// suffix attached (for example -i.bak) which is still treated as in-place.
-func sedTargets(args []string, raw, cwd string) []WriteTarget {
-	if !hasSedInPlace(args) {
-		return nil
-	}
-	last := lastPositional(args)
-	if last == "" {
-		return nil
-	}
-	return []WriteTarget{{
-		Path:   resolvePath(cwd, last),
-		Tool:   ToolSed,
-		Reason: ReasonOK,
-		Raw:    raw,
-	}}
-}
-
-func hasSedInPlace(args []string) bool {
-	for _, arg := range args {
-		if arg == "-i" || strings.HasPrefix(arg, "-i") && !strings.HasPrefix(arg, "--") {
-			return true
+		if hasCommandSubstitution(command) {
+			return sentinelFor(command.Argv0), true
 		}
 	}
-	return false
+	return WriteTarget{Path: "", Tool: "", Reason: "", Raw: ""}, false
 }
 
-// awkTargets returns the last positional when the args list contains both
-// `-i` and `inplace`. Awk's inplace mode is a two-token flag plus value.
-func awkTargets(args []string, raw, cwd string) []WriteTarget {
-	if !hasAwkInPlace(args) {
-		return nil
-	}
-	last := lastPositional(args)
-	if last == "" {
-		return nil
-	}
-	return []WriteTarget{{
-		Path:   resolvePath(cwd, last),
-		Tool:   ToolAwk,
-		Reason: ReasonOK,
-		Raw:    raw,
-	}}
+// sentinelFor builds a ReasonUnparsedCommandShape target labeled with the
+// command that produced the opaque shape.
+func sentinelFor(argv0 string) WriteTarget {
+	return WriteTarget{Path: "", Tool: ToolUnparseable, Reason: ReasonUnparsedCommandShape, Raw: argv0}
 }
 
-func hasAwkInPlace(args []string) bool {
-	for index, arg := range args {
-		if arg != "-i" {
-			continue
-		}
-		if index+1 < len(args) && args[index+1] == "inplace" {
-			return true
-		}
-	}
-	return false
-}
-
-// patchTargets returns the path argument for `patch` invocations. The shape
-// `patch <path>` and `patch -p<N> <path>` are both supported.
-func patchTargets(args []string, raw, cwd string) []WriteTarget {
-	for _, arg := range args {
-		if isFlag(arg) {
-			continue
-		}
-		return []WriteTarget{{
-			Path:   resolvePath(cwd, arg),
-			Tool:   ToolPatch,
-			Reason: ReasonOK,
-			Raw:    raw,
-		}}
-	}
-	return nil
-}
-
-// gitTargets handles `git apply [flags] path`. Other git subcommands are not
-// treated as direct write targets; they are out of scope for this Condition.
-func gitTargets(args []string, raw, cwd string) []WriteTarget {
-	if len(args) == 0 || args[0] != "apply" {
-		return nil
-	}
-	for _, arg := range args[1:] {
-		if isFlag(arg) {
-			continue
-		}
-		return []WriteTarget{{
-			Path:   resolvePath(cwd, arg),
-			Tool:   ToolGitApply,
-			Reason: ReasonOK,
-			Raw:    raw,
-		}}
-	}
-	return nil
-}
-
-// lastPositional returns the last argument that does not start with a dash.
-// Empty when no such argument exists.
-func lastPositional(args []string) string {
-	for _, arg := range slices.Backward(args) {
-		if isFlag(arg) {
-			continue
-		}
-		return arg
-	}
-	return ""
-}
-
-func isFlag(arg string) bool {
-	if len(arg) == 0 {
-		return false
-	}
-	if arg == "-" || arg == "--" {
-		return false
-	}
-	return arg[0] == '-'
-}
-
-// alwaysUnparseable lists argv0 names that always count as unparseable.
-var alwaysUnparseable = map[string]struct{}{
-	"eval": {},
-	"exec": {},
-}
-
-// shellInterpreters lists argv0 names that are unparseable only when invoked
-// with a -c flag (since the inner command is a quoted string).
-var shellInterpreters = map[string]struct{}{
-	"bash": {},
-	"sh":   {},
-	"zsh":  {},
-	"ksh":  {},
-	"dash": {},
-}
-
-// hasUnparseableShape reports whether segment uses a shape this parser cannot
-// statically resolve. The conservative answer is "yes" so the rule can
-// choose to default-deny.
-func hasUnparseableShape(segment string) bool {
-	if strings.Contains(segment, "$(") {
-		return true
-	}
-	if strings.Contains(segment, "`") {
-		return true
-	}
-	fields := shellFields(segment)
-	if len(fields) == 0 {
-		return false
-	}
-	argv0 := filepath.Base(fields[0])
-	if _, present := alwaysUnparseable[argv0]; present {
-		return true
-	}
-	if _, present := shellInterpreters[argv0]; present {
-		if slices.Contains(fields[1:], "-c") {
-			return true
-		}
-	}
-	return false
-}
-
-func resolvePath(cwd, path string) string {
-	if filepath.IsAbs(path) {
-		return path
-	}
-	if len(path) > 0 && path[0] == '~' {
-		return path
-	}
-	if cwd == "" {
-		return path
-	}
-	return filepath.Join(cwd, path)
-}
-
-// splitChain splits a command into chain segments at &&, ||, ;, |, and \n.
-// This is a deliberately simplified split, intended to mirror the visibility
-// of write targets across pipelines (a `tee` at the end of a pipeline is
-// still a write target). The split keeps the chunk between the operators.
-func splitChain(command string) []string {
-	if command == "" {
-		return nil
-	}
-	var segments []string
-	var current strings.Builder
-	runes := []rune(command)
-	count := len(runes)
-	for index := 0; index < count; index++ {
-		r := runes[index]
-		// Check two-char operators first.
-		if index+1 < count {
-			next := runes[index+1]
-			if (r == '&' && next == '&') || (r == '|' && next == '|') {
-				segments = append(segments, current.String())
-				current.Reset()
-				index++
-				continue
-			}
-		}
-		if r == ';' || r == '\n' || r == '|' {
-			segments = append(segments, current.String())
-			current.Reset()
-			continue
-		}
-		current.WriteRune(r)
-	}
-	if current.Len() > 0 {
-		segments = append(segments, current.String())
-	}
-	return segments
-}
-
-// shellFields tokenizes s into fields using shell-style word splitting with
-// quote and backslash handling. Whitespace separates fields outside quotes.
+// suppressedWriteSentinels works around a shelldecomp gap: an input redirect on
+// a write command (tee FILE < in, patch FILE < diff.patch) suppresses its
+// inline write targets, and a heredoc-then-append redirect (cat <<EOF >> FILE)
+// is not surfaced either, so a real write would slip past the gate. When a
+// command shelldecomp classifies as a writer (tee, patch, dd, or sed/awk with
+// an in-place flag) produced no write target, this emits a default-deny
+// sentinel rather than missing the write. It never fabricates a path: the
+// sentinel carries an empty Path. Read-only shapes (sed without -i, cat) are
+// not writers and never trigger a sentinel.
 //
-// This duplicates internal/rules/engine.go shellFields rather than calling
-// it because this package cannot import internal/rules without creating an
-// import cycle (engine.go itself imports concern packages). The function
-// here is byte-for-byte equivalent in behavior to the engine helper for the
-// inputs this package handles.
-func shellFields(s string) []string {
-	var fields []string
-	var b strings.Builder
-	var quote rune
-	escaped := false
-
-	flush := func() {
-		if b.Len() == 0 {
-			return
-		}
-		fields = append(fields, b.String())
-		b.Reset()
+// This is a stopgap for a shelldecomp defect (an input redirect should not
+// suppress inline writes); fixing it upstream in gksyntax would let this be
+// removed.
+func suppressedWriteSentinels(decomposition *shelldecomp.Decomposition) []WriteTarget {
+	writerArgv0sWithTargets := make(map[string]struct{})
+	for _, target := range decomposition.WriteTargets() {
+		writerArgv0sWithTargets[target.Argv0] = struct{}{}
 	}
-
-	for _, r := range s {
-		if escaped {
-			b.WriteRune(r)
-			escaped = false
+	var out []WriteTarget
+	for _, command := range decomposition.Commands() {
+		if !commandIsWriter(command) {
 			continue
 		}
-		if r == '\\' && quote != '\'' {
-			escaped = true
+		if _, produced := writerArgv0sWithTargets[command.Argv0]; produced {
 			continue
 		}
-		if quote != 0 {
-			if r == quote {
-				quote = 0
-				continue
-			}
-			b.WriteRune(r)
-			continue
-		}
-		switch {
-		case r == '\'' || r == '"':
-			quote = r
-		case unicode.IsSpace(r):
-			flush()
-		default:
-			b.WriteRune(r)
-		}
-	}
-	flush()
-	return fields
-}
-
-// stripHeredocBodies removes the body of any heredoc blocks in command,
-// leaving just the leading invocation line. This is a duplicate of the
-// internal/rules/engine.go helper, repeated here for the same reason as
-// shellFields above (avoiding an import cycle).
-func stripHeredocBodies(command string) string {
-	lines := strings.Split(command, "\n")
-	var out []string
-	var pending []string
-
-	for _, line := range lines {
-		if len(pending) > 0 {
-			if strings.TrimSpace(line) == pending[0] {
-				pending = pending[1:]
-			}
-			continue
-		}
-
-		out = append(out, line)
-		pending = append(pending, heredocDelimiters(line)...)
-	}
-
-	return strings.Join(out, "\n")
-}
-
-func heredocDelimiters(line string) []string {
-	fields := shellFields(line)
-	var out []string
-	for index := 0; index < len(fields); index++ {
-		field := fields[index]
-		switch {
-		case field == "<<" || field == "<<-":
-			if index+1 < len(fields) {
-				out = append(out, fields[index+1])
-				index++
-			}
-		case strings.HasPrefix(field, "<<-") && len(field) > len("<<-"):
-			out = append(out, strings.TrimPrefix(field, "<<-"))
-		case strings.HasPrefix(field, "<<") && len(field) > len("<<"):
-			out = append(out, strings.TrimPrefix(field, "<<"))
-		}
+		out = append(out, sentinelFor(command.Argv0))
 	}
 	return out
+}
+
+// unconditionalWriters are argv0 names that always write a file, so a missing
+// write target from shelldecomp signals a suppressed write rather than a
+// read-only invocation.
+var unconditionalWriters = map[string]bool{
+	"tee":   true,
+	"patch": true,
+	"dd":    true,
+}
+
+// commandIsWriter reports whether a command unconditionally writes (tee, patch,
+// dd) or writes because it carries an in-place flag (sed -i, awk -i inplace), so
+// a missing write target from shelldecomp signals a suppressed write rather than
+// a read-only invocation.
+func commandIsWriter(command shelldecomp.Command) bool {
+	if unconditionalWriters[command.Argv0] {
+		return true
+	}
+	if command.Argv0 == "sed" {
+		return hasSedInPlaceFlag(command.Args)
+	}
+	if command.Argv0 == "awk" || command.Argv0 == "gawk" {
+		return hasAwkInPlaceFlag(command.Args)
+	}
+	return false
+}
+
+// hasSedInPlaceFlag reports whether sed's operands request in-place editing
+// through -i or a suffixed -i.bak form.
+func hasSedInPlaceFlag(args []shelldecomp.Word) bool {
+	for _, arg := range args {
+		if arg.Text == "-i" || strings.HasPrefix(arg.Text, "-i.") || strings.HasPrefix(arg.Text, "--in-place") {
+			return true
+		}
+	}
+	return false
+}
+
+// hasAwkInPlaceFlag reports whether awk's operands request the gawk in-place
+// extension through -i inplace.
+func hasAwkInPlaceFlag(args []shelldecomp.Word) bool {
+	for index := range args {
+		if args[index].Text == "-i" && index+1 < len(args) && args[index+1].Text == "inplace" {
+			return true
+		}
+	}
+	return false
+}
+
+// shellInterpreters are the argv0 names whose -c argument is a quoted program
+// the outer gate cannot statically resolve into write targets.
+var shellInterpreters = map[string]bool{
+	"bash": true, "sh": true, "zsh": true, "ksh": true, "dash": true,
+	"python": true, "python3": true, "perl": true, "ruby": true, "node": true,
+}
+
+// isInterpreterWithScript reports whether a command runs a known interpreter
+// with a -c flag, whose script body is opaque to static write-target analysis.
+func isInterpreterWithScript(command shelldecomp.Command) bool {
+	if !shellInterpreters[command.Argv0] {
+		return false
+	}
+	for _, arg := range command.Args {
+		if arg.Text == "-c" {
+			return true
+		}
+	}
+	return false
+}
+
+// hasCommandSubstitution reports whether a command carries an operand that is a
+// $(...) or `...` command substitution, which the prior parser treated as an
+// unparseable shape because a write could hide inside the substituted command.
+func hasCommandSubstitution(command shelldecomp.Command) bool {
+	for _, arg := range command.Args {
+		if arg.Resolvable {
+			continue
+		}
+		if strings.Contains(arg.Text, "$(") || strings.Contains(arg.Text, "`") {
+			return true
+		}
+	}
+	return false
+}
+
+// toolLabelByArgv0 maps a shelldecomp write argv0 to a Tool label. A writer
+// named through a redirect carries its command as argv0 (echo, cat), so an argv0
+// absent from this map is labeled a redirect.
+var toolLabelByArgv0 = map[string]string{
+	"tee":       ToolTee,
+	"sed":       ToolSed,
+	"awk":       ToolAwk,
+	"gawk":      ToolAwk,
+	"patch":     ToolPatch,
+	"git apply": ToolGitApply,
+}
+
+// toolLabel returns the Tool label for a shelldecomp write argv0, defaulting to
+// a redirect for any command not in the inline-write set.
+func toolLabel(argv0 string) string {
+	if label, ok := toolLabelByArgv0[argv0]; ok {
+		return label
+	}
+	return ToolRedirect
+}
+
+// isProcessSubstitution reports whether a raw write token is a `>(...)` or
+// `<(...)` process substitution rather than a file path. shelldecomp resolves
+// such a token as if it were a relative path, so it must be filtered here.
+func isProcessSubstitution(raw string) bool {
+	trimmed := strings.TrimSpace(raw)
+	if strings.HasPrefix(trimmed, ">(") || strings.HasPrefix(trimmed, "<(") {
+		return true
+	}
+	return strings.HasPrefix(trimmed, "(")
+}
+
+// homeDir returns the user's home directory for tilde expansion, or "" when it
+// cannot be determined. A tilde left unexpanded resolves to an unresolvable
+// target rather than a fabricated path.
+func homeDir() string {
+	dir, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return dir
 }

@@ -14,6 +14,7 @@ import (
 	"goodkind.io/agent-gate/internal/hook"
 	"goodkind.io/agent-gate/internal/regex"
 	"goodkind.io/agent-gate/internal/rules"
+	"goodkind.io/gksyntax/shelldecomp"
 )
 
 func testFields(payload map[string]any) rules.FieldSet {
@@ -1365,30 +1366,42 @@ func TestEvaluate_EffectiveCwd_StillHome(t *testing.T) {
 	}
 }
 
-// TestApplyCdChain directly tests the cd simulation logic.
+// TestApplyCdChain exercises the cd-chain simulation behind the
+// effective_cwd field. The simulation now runs on shelldecomp rather than a cd
+// regex, so it is driven through the public FieldEffectiveCWD selector instead
+// of the retired rules.ApplyCdChain helper. Home is read dynamically because
+// effective_cwd expands a leading tilde against the real user home.
 func TestApplyCdChain(t *testing.T) {
-	home := "/Users/agoodkind"
-	start := "/Users/agoodkind"
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skipf("user home dir unavailable: %v", err)
+	}
+	start := home
 
 	cases := []struct {
 		command string
 		want    string
 	}{
-		{"git commit", "/Users/agoodkind"},
+		{"git commit", start},
 		{"cd /tmp && git commit", "/tmp"},
-		{"cd ~/Sites/proj && git commit", "/Users/agoodkind/Sites/proj"},
-		{"cd ~ && git commit", "/Users/agoodkind"},
-		{"cd /tmp && cd ~/Sites && git commit", "/Users/agoodkind/Sites"},
-		{"ls && cd ~/Sites && git commit", "/Users/agoodkind/Sites"},
-		{"cd \"/Users/agoodkind/Sites/my proj\" && git commit", "/Users/agoodkind/Sites/my proj"},
-		{"cd '../sibling'", "/Users/sibling"},
+		{"cd ~/Sites/proj && git commit", filepath.Join(home, "Sites/proj")},
+		{"cd ~ && git commit", home},
+		{"cd /tmp && cd ~/Sites && git commit", filepath.Join(home, "Sites")},
+		{"ls && cd ~/Sites && git commit", filepath.Join(home, "Sites")},
+		{"cd \"" + filepath.Join(home, "Sites/my proj") + "\" && git commit", filepath.Join(home, "Sites/my proj")},
+		{"cd '../sibling'", filepath.Join(filepath.Dir(start), "sibling")},
+		// New contract: an unresolvable cd target (cd into an expansion) no
+		// longer fabricates start/$VAR; shelldecomp poisons the cwd to its
+		// Unresolvable sentinel so an index-aware check cannot pin a real dir.
+		{"cd \"$VAR\" && git commit", shelldecomp.Unresolvable},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.command, func(t *testing.T) {
-			got := rules.ApplyCdChain(start, home, tc.command)
+			fields := rules.FieldSet{CWD: start, ToolInputCommand: tc.command}
+			got := fields.String(config.FieldEffectiveCWD)
 			if got != tc.want {
-				t.Errorf("ApplyCdChain(%q) = %q, want %q", tc.command, got, tc.want)
+				t.Errorf("effective_cwd(%q) = %q, want %q", tc.command, got, tc.want)
 			}
 		})
 	}

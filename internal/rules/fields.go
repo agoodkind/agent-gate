@@ -363,7 +363,7 @@ func (fields FieldSet) effectiveCWD() string {
 	if err != nil {
 		home = cwd
 	}
-	return ApplyCdChain(cwd, home, command)
+	return effectiveCwdAfterChain(cwd, home, command)
 }
 
 // proseFileExtensions are file types whose written contents are natural language
