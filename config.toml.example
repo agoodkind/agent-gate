@@ -403,21 +403,35 @@ violation_message = "Existing content contains typographic dashes. The LLM shoul
 # block_on     = "nonzero"        # exit 0 = allow (approved); nonzero = block
 # on_error     = "open"           # timeout/spawn-failure allows and logs loudly
 
-# --- exec example: redirect code grep to lm-semantic-search when indexed -------
-# When the agent greps/rg's over code in a codebase that lm-semantic-search has
-# already indexed, block and tell it to use the lm-semantic-search MCP instead.
-# The validator (examples/validators/lm-semantic-search-indexed.sh) asks the
+# --- exec example: redirect code search to lm-semantic-search when indexed -----
+# When the agent searches code in a codebase that lm-semantic-search has already
+# indexed, block and tell it to use the lm-semantic-search MCP instead. The
+# validator (examples/validators/lm-semantic-search-indexed.sh) asks the
 # lm-semantic-search daemon for the codebase's index status.
 #
-# Caching is stale-while-revalidate: the first grep per codebase forks the
-# validator synchronously (cold = sync block), and every later grep is served
+# The exec validator keys on cmd_read_targets, the paths the shellread extractor
+# resolves a search to read. That covers a direct `grep -rn X .` / `rg X Sources`
+# and the enumerator shapes whose searcher reads stdin: `find DIR | xargs grep`,
+# `find DIR -exec grep`, and `git ls-files | xargs rg` all resolve to the
+# enumerated directory, so the file-accurate validator blocks them when that
+# directory is indexed. git grep is excluded; it is an exact-text search semantic
+# search cannot replace.
+#
+# The regex condition is a cheap prefilter so the validator only forks on
+# candidates. The grep-family alternation admits every search that names a
+# searcher (including the enumerator pipelines above, which contain one). The
+# second alternation adds a bare code-file enumeration that carries no searcher
+# token (`find DIR -name '*.go'`), which the extractor still resolves to DIR.
+#
+# Caching is stale-while-revalidate: the first search per codebase forks the
+# validator synchronously (cold = sync block), and every later search is served
 # from cache instantly while a single background refresh runs once the entry is
 # older than cache_ttl_ms. A TTL is required so a newly created or cleared index
 # is noticed within roughly that window.
 #
 # [[rules]]
 # name        = "grep-code-use-semantic-search"
-# description = "Redirect code grep/rg to lm-semantic-search when the codebase is indexed"
+# description = "Redirect code search to lm-semantic-search when the codebase is indexed"
 # claude_events = ["PreToolUse"]
 # cursor_events = ["beforeShellExecution", "preToolUse"]
 # codex_events  = ["PreToolUse"]
@@ -428,15 +442,16 @@ violation_message = "Existing content contains typographic dashes. The LLM shoul
 # [[rules.conditions]]
 # kind        = "regex"
 # field_paths = ["tool_input.command"]
-# # Fire on any grep-family invocation and let the file-accurate exec validator
-# # decide. Requiring a code extension here lets `rg -n X Sources` launder past.
-# pattern     = '\b(?:grep|egrep|fgrep|rgrep|rg|ripgrep|ag)\b'
+# # (?x): pattern whitespace is ignored; a literal space is written [ ].
+# pattern     = '''(?x)
+#     \b(?:grep|egrep|fgrep|rgrep|rg|ripgrep|ag)\b
+#   | (?: \b(?:find|fd)\b [^|;&\n]* -i?name\b [^|;&\n]* \.(?:go|ts|tsx|js|jsx|mjs|cjs|py|rb|rs|java|kt|swift|c|h|cc|cpp|hpp|cs|php|scala|m|mm|sh|lua|ex|exs|clj)\b )'''
 #
 # [[rules.conditions]]
 # kind         = "exec"
 # command      = ["/Users/you/.config/agent-gate/validators/lm-semantic-search-indexed.sh"]
-# cache_key    = "cmd_read_targets"  # the grep/rg target paths, so the cache keys
-#                                    # on what the search reads, not the cwd
+# cache_key    = "cmd_read_targets"  # the search's resolved target paths, so the
+#                                    # cache keys on what the search reads
 # cache_ttl_ms = 60000            # refresh the index verdict per target ~every 60s
 # block_on     = "nonzero"        # exit 1 = indexed -> block; exit 0 = allow
-# on_error     = "open"           # timeout/spawn-failure allows the grep
+# on_error     = "open"           # timeout/spawn-failure allows the search
