@@ -1,0 +1,306 @@
+package shellread
+
+import (
+	"path/filepath"
+	"slices"
+	"strings"
+)
+
+// enumerators list files for downstream processing. find and fd walk a
+// directory tree; git ls-files lists tracked paths from the working tree. When
+// their output feeds a content searcher, or find runs the searcher itself via
+// -exec, the effective code-search target is the enumerated directory rather
+// than any operand the searcher names, so ExtractReadTargets cannot see it.
+var (
+	findTools = []string{"find"}
+	fdTools   = []string{"fd", "fdfind"}
+)
+
+// searchTools are the content searchers a code search routes through. This
+// mirrors codeSearchSpecs.Argv0; git grep is intentionally absent for the same
+// reason it is excluded everywhere else in this package.
+var searchTools = []string{"grep", "egrep", "fgrep", "rgrep", "rg", "ripgrep", "ag"}
+
+// codeExtensions are the source-file suffixes that make a bare filename
+// enumeration count as code discovery. It mirrors the companion config rule's
+// extension list so the Go path and the interim regex agree on scope.
+var codeExtensions = []string{
+	"go", "ts", "tsx", "js", "jsx", "mjs", "cjs", "py", "rb", "rs", "java", "kt",
+	"swift", "c", "h", "cc", "cpp", "hpp", "cs", "php", "scala", "m", "mm", "sh",
+	"lua", "ex", "exs", "clj",
+}
+
+// findExecFlags introduce a command that find runs per match.
+var findExecFlags = []string{"-exec", "-execdir"}
+
+// findNameFlags introduce a filename glob that find matches against.
+var findNameFlags = []string{"-name", "-iname"}
+
+// enumeratorCodeSearchTargets returns the directories an enumerator-driven code
+// search reads when no searcher operand was resolvable. It covers three shapes
+// the operand parser misses because the searcher reads stdin or find runs the
+// searcher itself: an enumerator piped into a content searcher
+// (find DIR ... | xargs grep, git ls-files | xargs rg), find DIR ... -exec grep,
+// and a bare find DIR -name '*.<codeext>' enumeration. The enumerated directory
+// is the target; the index-aware validator decides whether it is in scope.
+func enumeratorCodeSearchTargets(command, cwd string) []ReadTarget {
+	var out []ReadTarget
+	for _, stages := range commandPipelines(command) {
+		searcherIndex := pipelineSearcherIndex(stages)
+		for stageIndex, stage := range stages {
+			fields := shellFields(strings.TrimSpace(stage))
+			if len(fields) == 0 {
+				continue
+			}
+			dirs, ok := enumeratorDirs(fields, cwd)
+			if !ok {
+				continue
+			}
+			pipedToSearcher := searcherIndex > stageIndex
+			if !pipedToSearcher && !findRunsSearcher(fields) && !findFiltersCodeExtension(fields) {
+				continue
+			}
+			for _, dir := range dirs {
+				out = append(out, ReadTarget{
+					Path:   dir,
+					Remote: false,
+					Spec:   "code-search-enum",
+					Raw:    command,
+				})
+			}
+		}
+	}
+	return out
+}
+
+// pipelineSearcherIndex returns the stage index of the first content searcher in
+// a pipeline, or -1. A searcher reached through xargs counts, since that is the
+// usual way an enumerator's output becomes a grep over file contents.
+func pipelineSearcherIndex(stages []string) int {
+	for i, stage := range stages {
+		if stageIsSearcher(shellFields(strings.TrimSpace(stage))) {
+			return i
+		}
+	}
+	return -1
+}
+
+// stageIsSearcher reports whether a pipeline stage runs a content searcher,
+// either directly or as the command xargs invokes.
+func stageIsSearcher(fields []string) bool {
+	if len(fields) == 0 {
+		return false
+	}
+	if slices.Contains(searchTools, filepath.Base(fields[0])) {
+		return true
+	}
+	if filepath.Base(fields[0]) != "xargs" {
+		return false
+	}
+	for _, field := range fields[1:] {
+		if slices.Contains(searchTools, filepath.Base(field)) {
+			return true
+		}
+	}
+	return false
+}
+
+// enumeratorDirs returns the resolved directories an enumerator stage reads and
+// whether the stage is an enumerator at all. find reports its leading path
+// operands (default cwd); fd and git ls-files default to the working tree.
+func enumeratorDirs(fields []string, cwd string) ([]string, bool) {
+	argv0 := filepath.Base(fields[0])
+	switch {
+	case slices.Contains(findTools, argv0):
+		return resolvedDirs(findPaths(fields), cwd), true
+	case slices.Contains(fdTools, argv0):
+		if cwd == "" {
+			return nil, true
+		}
+		return []string{cwd}, true
+	case argv0 == "git" && len(fields) >= 2 && fields[1] == "ls-files":
+		if cwd == "" {
+			return nil, true
+		}
+		return []string{cwd}, true
+	default:
+		return nil, false
+	}
+}
+
+// resolvedDirs resolves each path against cwd.
+func resolvedDirs(paths []string, cwd string) []string {
+	out := make([]string, 0, len(paths))
+	for _, path := range paths {
+		out = append(out, resolvePath(cwd, path))
+	}
+	return out
+}
+
+// findPaths returns find's leading path operands, which precede the first
+// expression token (a flag, or a grouping/negation operator). find defaults to
+// the current directory when no path is given.
+func findPaths(fields []string) []string {
+	var paths []string
+	for _, field := range fields[1:] {
+		if strings.HasPrefix(field, "-") || field == "(" || field == ")" || field == "!" {
+			break
+		}
+		paths = append(paths, field)
+	}
+	if len(paths) == 0 {
+		return []string{"."}
+	}
+	return paths
+}
+
+// findRunsSearcher reports whether a find stage runs a content searcher through
+// -exec or -execdir.
+func findRunsSearcher(fields []string) bool {
+	if !slices.Contains(findTools, filepath.Base(fields[0])) {
+		return false
+	}
+	for i, field := range fields {
+		if !slices.Contains(findExecFlags, field) {
+			continue
+		}
+		if i+1 < len(fields) && slices.Contains(searchTools, filepath.Base(fields[i+1])) {
+			return true
+		}
+	}
+	return false
+}
+
+// findFiltersCodeExtension reports whether a find stage filters by a source-code
+// filename, which marks a bare enumeration (no searcher) as code discovery.
+func findFiltersCodeExtension(fields []string) bool {
+	if !slices.Contains(findTools, filepath.Base(fields[0])) {
+		return false
+	}
+	for i, field := range fields {
+		if !slices.Contains(findNameFlags, field) || i+1 >= len(fields) {
+			continue
+		}
+		if isCodeExtensionGlob(fields[i+1]) {
+			return true
+		}
+	}
+	return false
+}
+
+// isCodeExtensionGlob reports whether a -name value ends in a source-code
+// extension, for example "*.swift" or "Main.go".
+func isCodeExtensionGlob(value string) bool {
+	dot := strings.LastIndex(value, ".")
+	if dot < 0 || dot == len(value)-1 {
+		return false
+	}
+	// Lowercase so a case-insensitive -iname '*.SWIFT' matches like '*.swift'.
+	return slices.Contains(codeExtensions, strings.ToLower(value[dot+1:]))
+}
+
+// commandPipelines splits a command into pipelines (on ;, newline, &&, ||) and
+// each pipeline into stages (on a single |), quote and escape aware. It keeps
+// the | boundary that splitChain collapses, so a search downstream of an
+// enumerator can be told apart from an unrelated command after a ; or &&.
+func commandPipelines(command string) [][]string {
+	if command == "" {
+		return nil
+	}
+	scanner := &pipelineScanner{
+		pipelines: nil,
+		stages:    nil,
+		current:   strings.Builder{},
+		quote:     0,
+		escaped:   false,
+	}
+	runes := []rune(command)
+	for i := 0; i < len(runes); i++ {
+		if scanner.consumeQuoted(runes[i]) {
+			continue
+		}
+		if advance := scanner.consumeOperator(runes, i); advance > 0 {
+			i += advance - 1
+			continue
+		}
+		scanner.current.WriteRune(runes[i])
+	}
+	scanner.flushPipeline()
+	return scanner.pipelines
+}
+
+// pipelineScanner holds the quote, escape, and accumulation state for
+// commandPipelines so the per-rune logic splits into small methods.
+type pipelineScanner struct {
+	pipelines [][]string
+	stages    []string
+	current   strings.Builder
+	quote     rune
+	escaped   bool
+}
+
+// consumeQuoted handles a rune that is inside a quote or escape, returning true
+// when it consumed the rune so the caller skips operator handling for it.
+func (s *pipelineScanner) consumeQuoted(r rune) bool {
+	if s.escaped {
+		s.current.WriteRune(r)
+		s.escaped = false
+		return true
+	}
+	if r == '\\' && s.quote != '\'' {
+		s.current.WriteRune(r)
+		s.escaped = true
+		return true
+	}
+	if s.quote != 0 {
+		s.current.WriteRune(r)
+		if r == s.quote {
+			s.quote = 0
+		}
+		return true
+	}
+	if r == '\'' || r == '"' {
+		s.current.WriteRune(r)
+		s.quote = r
+		return true
+	}
+	return false
+}
+
+// consumeOperator flushes at a pipeline boundary (; newline && ||) or a stage
+// boundary (a single |), returning the number of runes consumed, or 0 when the
+// rune at i is not an operator.
+func (s *pipelineScanner) consumeOperator(runes []rune, i int) int {
+	r := runes[i]
+	if i+1 < len(runes) {
+		next := runes[i+1]
+		if (r == '&' && next == '&') || (r == '|' && next == '|') {
+			s.flushPipeline()
+			return 2
+		}
+	}
+	if r == ';' || r == '\n' {
+		s.flushPipeline()
+		return 1
+	}
+	if r == '|' {
+		s.flushStage()
+		return 1
+	}
+	return 0
+}
+
+func (s *pipelineScanner) flushStage() {
+	if s.current.Len() > 0 {
+		s.stages = append(s.stages, s.current.String())
+		s.current.Reset()
+	}
+}
+
+func (s *pipelineScanner) flushPipeline() {
+	s.flushStage()
+	if len(s.stages) > 0 {
+		s.pipelines = append(s.pipelines, s.stages)
+		s.stages = nil
+	}
+}

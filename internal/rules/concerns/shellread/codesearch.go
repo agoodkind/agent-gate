@@ -61,7 +61,12 @@ func ExtractCodeSearchTargets(command, cwd string) []ReadTarget {
 	if cwd != "" && commandSearchesWorkingTree(command) {
 		return []ReadTarget{{Path: cwd, Remote: false, Spec: "code-search-cwd", Raw: command}}
 	}
-	return nil
+	// No operand and no bare working-tree search. A code search can still hide
+	// behind an enumerator that feeds a searcher (find DIR | xargs grep,
+	// find DIR -exec grep, git ls-files | xargs rg) or a bare code-file
+	// enumeration (find DIR -name '*.go'); the enumerated directory is the
+	// effective target. Drop unresolvable $var/backtick directories as above.
+	return resolvableTargets(enumeratorCodeSearchTargets(command, cwd))
 }
 
 // resolvableTargets drops operands whose path still contains a shell expansion
