@@ -10,12 +10,15 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
+
+	agconfig "goodkind.io/agent-gate/internal/config"
 )
 
 const (
@@ -136,6 +139,13 @@ func run(logger *slog.Logger) int {
 		return 2
 	}
 
+	stopDaemon, err := startIsolatedDaemon(targetBinary, logger)
+	if err != nil {
+		logger.Error("start isolated smoke daemon failed", slog.Any("err", err))
+		return 2
+	}
+	defer stopDaemon()
+
 	payloadBytes, err := buildPayload(cfg.payloadKind, string(inputBytes), logger)
 	if err != nil {
 		logger.Error("build spawn smoke payload failed", slog.Any("err", err))
@@ -155,46 +165,7 @@ func run(logger *slog.Logger) int {
 		}),
 	}
 
-	if cfg.probeEnv {
-		out.Probes = append(out.Probes, probeLimit(
-			"env_only",
-			targetBinary,
-			payloadBytes,
-			cfg.probeStep,
-			cfg.probeUpperBound,
-			func(size int) padScenario {
-				return padScenario{argvPadBytes: cfg.argvPadBytes, envPadBytes: size}
-			},
-		))
-	}
-
-	if cfg.probeArgv {
-		out.Probes = append(out.Probes, probeLimit(
-			"argv_only",
-			targetBinary,
-			payloadBytes,
-			cfg.probeStep,
-			cfg.probeUpperBound,
-			func(size int) padScenario {
-				return padScenario{argvPadBytes: size, envPadBytes: cfg.envPadBytes}
-			},
-		))
-	}
-
-	if cfg.probeCombined {
-		out.Probes = append(out.Probes, probeLimit(
-			"argv_plus_env_equal_split",
-			targetBinary,
-			payloadBytes,
-			cfg.probeStep,
-			cfg.probeUpperBound,
-			func(size int) padScenario {
-				argvPadBytes := size / 2
-				envPadBytes := size - argvPadBytes
-				return padScenario{argvPadBytes: argvPadBytes, envPadBytes: envPadBytes}
-			},
-		))
-	}
+	out.Probes = runProbes(cfg, targetBinary, payloadBytes)
 
 	logger.Info("spawn smoke run completed",
 		slog.String("target_binary", out.TargetBinary),
@@ -214,6 +185,37 @@ func run(logger *slog.Logger) int {
 	}
 
 	return 0
+}
+
+// runProbes runs the enabled padding probes and returns their reports.
+func runProbes(cfg config, targetBinary string, payloadBytes []byte) []probeReport {
+	var probes []probeReport
+	if cfg.probeEnv {
+		probes = append(probes, probeLimit(
+			"env_only", targetBinary, payloadBytes, cfg.probeStep, cfg.probeUpperBound,
+			func(size int) padScenario {
+				return padScenario{argvPadBytes: cfg.argvPadBytes, envPadBytes: size}
+			},
+		))
+	}
+	if cfg.probeArgv {
+		probes = append(probes, probeLimit(
+			"argv_only", targetBinary, payloadBytes, cfg.probeStep, cfg.probeUpperBound,
+			func(size int) padScenario {
+				return padScenario{argvPadBytes: size, envPadBytes: cfg.envPadBytes}
+			},
+		))
+	}
+	if cfg.probeCombined {
+		probes = append(probes, probeLimit(
+			"argv_plus_env_equal_split", targetBinary, payloadBytes, cfg.probeStep, cfg.probeUpperBound,
+			func(size int) padScenario {
+				argvPadBytes := size / 2
+				return padScenario{argvPadBytes: argvPadBytes, envPadBytes: size - argvPadBytes}
+			},
+		))
+	}
+	return probes
 }
 
 func parseFlags() (config, error) {
@@ -309,6 +311,93 @@ func resolveTargetBinary(target string, logger *slog.Logger) (string, error) {
 	}
 
 	return target, nil
+}
+
+// isolatedXDG maps a throwaway home to the XDG vars that route agent-gate's
+// config, audit DB, and daemon socket. Setting these keeps replayed smoke
+// payloads off the production daemon and out of the production audit DB.
+func isolatedXDG(home string) map[string]string {
+	return map[string]string{
+		"XDG_CONFIG_HOME": filepath.Join(home, "config"),
+		"XDG_STATE_HOME":  filepath.Join(home, "state"),
+		// RuntimeDir appends "agent-gate", so the socket is
+		// <home>/agent-gate/daemon.sock. Keeping home short matters because
+		// macOS caps AF_UNIX paths near 104 bytes.
+		"XDG_RUNTIME_DIR": home,
+	}
+}
+
+// startIsolatedDaemon points agent-gate at a throwaway XDG home and starts a
+// private daemon there, so smoke replays never reach the production daemon or
+// its audit database. The returned cleanup stops the daemon and removes the
+// home.
+func startIsolatedDaemon(targetBinary string, logger *slog.Logger) (func(), error) {
+	// Root under /tmp so the resulting unix socket path stays well under the
+	// ~104-byte AF_UNIX limit macOS enforces.
+	home, err := os.MkdirTemp("/tmp", "agsmk")
+	if err != nil {
+		logger.Error("create isolated smoke home failed", slog.Any("err", err))
+		return nil, fmt.Errorf("create isolated smoke home: %w", err)
+	}
+	for key, value := range isolatedXDG(home) {
+		if setErr := os.Setenv(key, value); setErr != nil {
+			_ = os.RemoveAll(home)
+			logger.Error("set isolated XDG var failed", slog.String("key", key), slog.Any("err", setErr))
+			return nil, fmt.Errorf("set %s: %w", key, setErr)
+		}
+	}
+	// Drop provider env so it cannot steer detection or audit on the isolated
+	// daemon's replays.
+	for _, key := range []string{"CODEX_CI", "CODEX_THREAD_ID"} {
+		_ = os.Unsetenv(key)
+	}
+	if mkErr := agconfig.EnsureRuntimeDir(); mkErr != nil {
+		_ = os.RemoveAll(home)
+		logger.Error("create isolated runtime dir failed", slog.Any("err", mkErr))
+		return nil, fmt.Errorf("create isolated runtime dir: %w", mkErr)
+	}
+
+	daemonCmd := exec.CommandContext(context.Background(), targetBinary, "daemon")
+	daemonCmd.Env = os.Environ()
+	if startErr := daemonCmd.Start(); startErr != nil {
+		_ = os.RemoveAll(home)
+		logger.Error("start isolated daemon failed", slog.Any("err", startErr))
+		return nil, fmt.Errorf("start isolated daemon: %w", startErr)
+	}
+
+	cleanup := func() {
+		if daemonCmd.Process != nil {
+			_ = daemonCmd.Process.Kill()
+			_, _ = daemonCmd.Process.Wait()
+		}
+		_ = os.RemoveAll(home)
+	}
+
+	socket := agconfig.DaemonSocketPath()
+	if waitErr := waitForSocket(context.Background(), socket, 5*time.Second); waitErr != nil {
+		cleanup()
+		logger.Error("isolated daemon not ready", slog.String("socket", socket), slog.Any("err", waitErr))
+		return nil, fmt.Errorf("isolated daemon not ready at %s: %w", socket, waitErr)
+	}
+	logger.Info("isolated smoke daemon ready", slog.String("socket", socket), slog.String("home", home))
+	return cleanup, nil
+}
+
+// waitForSocket polls until the unix socket accepts a connection or the timeout
+// elapses.
+func waitForSocket(ctx context.Context, path string, timeout time.Duration) error {
+	var dialer net.Dialer
+	dialer.Timeout = 200 * time.Millisecond
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		conn, err := dialer.DialContext(ctx, "unix", path)
+		if err == nil {
+			_ = conn.Close()
+			return nil
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return fmt.Errorf("timed out waiting for daemon socket %s", path)
 }
 
 func buildPayload(payloadKindValue string, largeText string, logger *slog.Logger) ([]byte, error) {
