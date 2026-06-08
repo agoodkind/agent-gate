@@ -186,65 +186,48 @@ func parseCursorPayload(eventName string, rawBytes []byte) (Event, error) {
 	}
 }
 
+// claudeDecoders maps each Claude event to its concrete payload decoder. A map
+// dispatch keeps decoding flat: a single switch over 30-plus events exceeds the
+// cyclomatic limit, and the set grows as Claude Code adds events, so a new event
+// is one entry here plus its typed payload.
+var claudeDecoders = map[ClaudeEvent]func([]byte) (Event, error){
+	ClaudeSessionStart:        decodeJSONPayload[ClaudeSessionStartPayload],
+	ClaudeSessionEnd:          decodeJSONPayload[ClaudeSessionEndPayload],
+	ClaudeSetup:               decodeJSONPayload[ClaudeSetupPayload],
+	ClaudePreToolUse:          decodeJSONPayload[ClaudePreToolUsePayload],
+	ClaudePostToolUse:         decodeJSONPayload[ClaudePostToolUsePayload],
+	ClaudePostToolUseFailure:  decodeJSONPayload[ClaudePostToolUseFailurePayload],
+	ClaudePermissionRequest:   decodeJSONPayload[ClaudePermissionRequestPayload],
+	ClaudePermissionDenied:    decodeJSONPayload[ClaudePermissionDeniedPayload],
+	ClaudeUserPromptSubmit:    decodeJSONPayload[ClaudeUserPromptSubmitPayload],
+	ClaudeStop:                decodeJSONPayload[ClaudeStopPayload],
+	ClaudeStopFailure:         decodeJSONPayload[ClaudeStopFailurePayload],
+	ClaudeSubagentStart:       decodeJSONPayload[ClaudeSubagentStartPayload],
+	ClaudeSubagentStop:        decodeJSONPayload[ClaudeSubagentStopPayload],
+	ClaudeTaskCreated:         decodeJSONPayload[ClaudeTaskCreatedPayload],
+	ClaudeTaskCompleted:       decodeJSONPayload[ClaudeTaskCompletedPayload],
+	ClaudeNotification:        decodeJSONPayload[ClaudeNotificationPayload],
+	ClaudePreCompact:          decodeJSONPayload[ClaudePreCompactPayload],
+	ClaudePostCompact:         decodeJSONPayload[ClaudePostCompactPayload],
+	ClaudeInstructionsLoaded:  decodeJSONPayload[ClaudeInstructionsLoadedPayload],
+	ClaudeConfigChange:        decodeJSONPayload[ClaudeConfigChangePayload],
+	ClaudeCwdChanged:          decodeJSONPayload[ClaudeCwdChangedPayload],
+	ClaudeFileChanged:         decodeJSONPayload[ClaudeFileChangedPayload],
+	ClaudeWorktreeCreate:      decodeJSONPayload[ClaudeWorktreeCreatePayload],
+	ClaudeWorktreeRemove:      decodeJSONPayload[ClaudeWorktreeRemovePayload],
+	ClaudeElicitation:         decodeJSONPayload[ClaudeElicitationPayload],
+	ClaudeElicitationResult:   decodeJSONPayload[ClaudeElicitationResultPayload],
+	ClaudeTeammateIdle:        decodeJSONPayload[ClaudeTeammateIdlePayload],
+	ClaudePostToolBatch:       decodeJSONPayload[ClaudePostToolBatchPayload],
+	ClaudeUserPromptExpansion: decodeJSONPayload[ClaudeUserPromptExpansionPayload],
+	ClaudeMessageDisplay:      decodeJSONPayload[ClaudeMessageDisplayPayload],
+}
+
 func parseClaudePayload(eventName string, rawBytes []byte) (Event, error) {
-	switch ClaudeEvent(eventName) {
-	case ClaudeSessionStart:
-		return decodeJSONPayload[ClaudeSessionStartPayload](rawBytes)
-	case ClaudeSessionEnd:
-		return decodeJSONPayload[ClaudeSessionEndPayload](rawBytes)
-	case ClaudeSetup:
-		return decodeJSONPayload[ClaudeSetupPayload](rawBytes)
-	case ClaudePreToolUse:
-		return decodeJSONPayload[ClaudePreToolUsePayload](rawBytes)
-	case ClaudePostToolUse:
-		return decodeJSONPayload[ClaudePostToolUsePayload](rawBytes)
-	case ClaudePostToolUseFailure:
-		return decodeJSONPayload[ClaudePostToolUseFailurePayload](rawBytes)
-	case ClaudePermissionRequest:
-		return decodeJSONPayload[ClaudePermissionRequestPayload](rawBytes)
-	case ClaudePermissionDenied:
-		return decodeJSONPayload[ClaudePermissionDeniedPayload](rawBytes)
-	case ClaudeUserPromptSubmit:
-		return decodeJSONPayload[ClaudeUserPromptSubmitPayload](rawBytes)
-	case ClaudeStop:
-		return decodeJSONPayload[ClaudeStopPayload](rawBytes)
-	case ClaudeStopFailure:
-		return decodeJSONPayload[ClaudeStopFailurePayload](rawBytes)
-	case ClaudeSubagentStart:
-		return decodeJSONPayload[ClaudeSubagentStartPayload](rawBytes)
-	case ClaudeSubagentStop:
-		return decodeJSONPayload[ClaudeSubagentStopPayload](rawBytes)
-	case ClaudeTaskCreated:
-		return decodeJSONPayload[ClaudeTaskCreatedPayload](rawBytes)
-	case ClaudeTaskCompleted:
-		return decodeJSONPayload[ClaudeTaskCompletedPayload](rawBytes)
-	case ClaudeNotification:
-		return decodeJSONPayload[ClaudeNotificationPayload](rawBytes)
-	case ClaudePreCompact:
-		return decodeJSONPayload[ClaudePreCompactPayload](rawBytes)
-	case ClaudePostCompact:
-		return decodeJSONPayload[ClaudePostCompactPayload](rawBytes)
-	case ClaudeInstructionsLoaded:
-		return decodeJSONPayload[ClaudeInstructionsLoadedPayload](rawBytes)
-	case ClaudeConfigChange:
-		return decodeJSONPayload[ClaudeConfigChangePayload](rawBytes)
-	case ClaudeCwdChanged:
-		return decodeJSONPayload[ClaudeCwdChangedPayload](rawBytes)
-	case ClaudeFileChanged:
-		return decodeJSONPayload[ClaudeFileChangedPayload](rawBytes)
-	case ClaudeWorktreeCreate:
-		return decodeJSONPayload[ClaudeWorktreeCreatePayload](rawBytes)
-	case ClaudeWorktreeRemove:
-		return decodeJSONPayload[ClaudeWorktreeRemovePayload](rawBytes)
-	case ClaudeElicitation:
-		return decodeJSONPayload[ClaudeElicitationPayload](rawBytes)
-	case ClaudeElicitationResult:
-		return decodeJSONPayload[ClaudeElicitationResultPayload](rawBytes)
-	case ClaudeTeammateIdle:
-		return decodeJSONPayload[ClaudeTeammateIdlePayload](rawBytes)
-	default:
-		return decodeJSONPayload[UnknownPayload](rawBytes)
+	if decode, ok := claudeDecoders[ClaudeEvent(eventName)]; ok {
+		return decode(rawBytes)
 	}
+	return decodeJSONPayload[UnknownPayload](rawBytes)
 }
 
 func parseCodexPayload(eventName string, rawBytes []byte) (Event, error) {
@@ -266,6 +249,18 @@ func parseCodexPayload(eventName string, rawBytes []byte) (Event, error) {
 		return payload, decodePayload(rawBytes, &payload)
 	case CodexStop:
 		var payload CodexStopPayload
+		return payload, decodePayload(rawBytes, &payload)
+	case CodexPreCompact:
+		var payload CodexPreCompactPayload
+		return payload, decodePayload(rawBytes, &payload)
+	case CodexPostCompact:
+		var payload CodexPostCompactPayload
+		return payload, decodePayload(rawBytes, &payload)
+	case CodexSubagentStart:
+		var payload CodexSubagentStartPayload
+		return payload, decodePayload(rawBytes, &payload)
+	case CodexSubagentStop:
+		var payload CodexSubagentStopPayload
 		return payload, decodePayload(rawBytes, &payload)
 	default:
 		var payload UnknownPayload
