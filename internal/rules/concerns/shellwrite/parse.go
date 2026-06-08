@@ -80,11 +80,7 @@ func ExtractWriteTargets(cmd, cwd string) []WriteTarget {
 	if sentinel, ok := unparseableSentinel(decomposition); ok {
 		out = append(out, sentinel)
 	}
-	out = append(out, suppressedWriteSentinels(decomposition)...)
 	for _, target := range decomposition.WriteTargets() {
-		if isProcessSubstitution(target.Raw) {
-			continue
-		}
 		if !target.Resolvable || target.Path == shelldecomp.Unresolvable {
 			out = append(out, WriteTarget{
 				Path:   "",
@@ -128,85 +124,6 @@ func unparseableSentinel(decomposition *shelldecomp.Decomposition) (WriteTarget,
 // command that produced the opaque shape.
 func sentinelFor(argv0 string) WriteTarget {
 	return WriteTarget{Path: "", Tool: ToolUnparseable, Reason: ReasonUnparsedCommandShape, Raw: argv0}
-}
-
-// suppressedWriteSentinels works around a shelldecomp gap: an input redirect on
-// a write command (tee FILE < in, patch FILE < diff.patch) suppresses its
-// inline write targets, and a heredoc-then-append redirect (cat <<EOF >> FILE)
-// is not surfaced either, so a real write would slip past the gate. When a
-// command shelldecomp classifies as a writer (tee, patch, dd, or sed/awk with
-// an in-place flag) produced no write target, this emits a default-deny
-// sentinel rather than missing the write. It never fabricates a path: the
-// sentinel carries an empty Path. Read-only shapes (sed without -i, cat) are
-// not writers and never trigger a sentinel.
-//
-// This is a stopgap for a shelldecomp defect (an input redirect should not
-// suppress inline writes); fixing it upstream in gksyntax would let this be
-// removed.
-func suppressedWriteSentinels(decomposition *shelldecomp.Decomposition) []WriteTarget {
-	writerArgv0sWithTargets := make(map[string]struct{})
-	for _, target := range decomposition.WriteTargets() {
-		writerArgv0sWithTargets[target.Argv0] = struct{}{}
-	}
-	var out []WriteTarget
-	for _, command := range decomposition.Commands() {
-		if !commandIsWriter(command) {
-			continue
-		}
-		if _, produced := writerArgv0sWithTargets[command.Argv0]; produced {
-			continue
-		}
-		out = append(out, sentinelFor(command.Argv0))
-	}
-	return out
-}
-
-// unconditionalWriters are argv0 names that always write a file, so a missing
-// write target from shelldecomp signals a suppressed write rather than a
-// read-only invocation.
-var unconditionalWriters = map[string]bool{
-	"tee":   true,
-	"patch": true,
-	"dd":    true,
-}
-
-// commandIsWriter reports whether a command unconditionally writes (tee, patch,
-// dd) or writes because it carries an in-place flag (sed -i, awk -i inplace), so
-// a missing write target from shelldecomp signals a suppressed write rather than
-// a read-only invocation.
-func commandIsWriter(command shelldecomp.Command) bool {
-	if unconditionalWriters[command.Argv0] {
-		return true
-	}
-	if command.Argv0 == "sed" {
-		return hasSedInPlaceFlag(command.Args)
-	}
-	if command.Argv0 == "awk" || command.Argv0 == "gawk" {
-		return hasAwkInPlaceFlag(command.Args)
-	}
-	return false
-}
-
-// hasSedInPlaceFlag reports whether sed's operands request in-place editing
-// through -i or a suffixed -i.bak form.
-func hasSedInPlaceFlag(args []shelldecomp.Word) bool {
-	for _, arg := range args {
-		if arg.Text == "-i" || strings.HasPrefix(arg.Text, "-i.") || strings.HasPrefix(arg.Text, "--in-place") {
-			return true
-		}
-	}
-	return false
-}
-
-// hasAwkInPlaceFlag reports whether awk's operands request the gawk in-place
-// extension through -i inplace.
-func hasAwkInPlaceFlag(args []shelldecomp.Word) bool {
-	for index := range args {
-		if args[index].Text == "-i" && index+1 < len(args) && args[index+1].Text == "inplace" {
-			return true
-		}
-	}
-	return false
 }
 
 // shellInterpreters are the argv0 names whose -c argument is a quoted program
@@ -264,17 +181,6 @@ func toolLabel(argv0 string) string {
 		return label
 	}
 	return ToolRedirect
-}
-
-// isProcessSubstitution reports whether a raw write token is a `>(...)` or
-// `<(...)` process substitution rather than a file path. shelldecomp resolves
-// such a token as if it were a relative path, so it must be filtered here.
-func isProcessSubstitution(raw string) bool {
-	trimmed := strings.TrimSpace(raw)
-	if strings.HasPrefix(trimmed, ">(") || strings.HasPrefix(trimmed, "<(") {
-		return true
-	}
-	return strings.HasPrefix(trimmed, "(")
 }
 
 // homeDir returns the user's home directory for tilde expansion, or "" when it
