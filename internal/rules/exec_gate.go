@@ -287,6 +287,12 @@ func (r *ExecRuntime) buildInput(
 	memo *execEventMemo,
 ) execconcern.Input {
 	cwd := fields.BaseCWD()
+	// Resolve read targets against the cd-applied working directory so a search
+	// run after `cd /other` is attributed to /other, not the session cwd.
+	effectiveCwd := fields.String(config.FieldEffectiveCWD)
+	if effectiveCwd == "" {
+		effectiveCwd = cwd
+	}
 	system := ""
 	eventName := ""
 	if memo != nil {
@@ -314,7 +320,7 @@ func (r *ExecRuntime) buildInput(
 		EffectiveCWD: canonicalizePathField(r.canon, cwd, fields.String(config.FieldEffectiveCWD)),
 		FilePath:     canonicalizePathField(r.canon, cwd, fields.FilePathValue()),
 		CacheKey:     keyView,
-		ReadTargets:  r.readTargetViews(cwd, command),
+		ReadTargets:  r.readTargetViews(effectiveCwd, command),
 		Matched:      matched,
 	}
 }

@@ -9,6 +9,10 @@ import (
 // CmdReadTargets returns the newline-joined effective filesystem targets of a
 // grep/rg-style command (the paths it reads), so an exec gate can scope its
 // decision to what a search actually reads rather than the working directory.
+// Targets resolve against the cd-applied working directory, so `cd /other &&
+// grep -rn X .` is attributed to /other rather than the session cwd; an
+// unresolvable `cd "$VAR"` yields a non-existent path the validator treats as
+// out of scope.
 func (fields FieldSet) CmdReadTargets() string {
 	if !fields.hasShellCommandContext() {
 		return ""
@@ -17,7 +21,7 @@ func (fields FieldSet) CmdReadTargets() string {
 	if command == "" {
 		return ""
 	}
-	targets := shellread.ExtractCodeSearchTargets(command, fields.BaseCWD())
+	targets := shellread.ExtractCodeSearchTargets(command, fields.effectiveCWD())
 	paths := make([]string, 0, len(targets))
 	for _, target := range targets {
 		if target.Remote || target.Path == "" {

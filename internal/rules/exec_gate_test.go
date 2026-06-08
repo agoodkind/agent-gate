@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -323,5 +324,72 @@ func TestExecStaleWhileRevalidate(t *testing.T) {
 	after := rules.EvaluateAll(ctx, "claude", "PreToolUse", testFields(payload), []config.Rule{rule}, nil)
 	if len(after) != 0 {
 		t.Fatalf("after the background refresh the cached verdict should allow, got %d violations", len(after))
+	}
+}
+
+// capturingRunner records the env passed to the validator so a test can assert
+// the read targets the gate computed.
+type capturingRunner struct {
+	mu  sync.Mutex
+	env []string
+	res execconcern.RunResult
+}
+
+func (r *capturingRunner) Run(_ context.Context, _ []string, _ time.Duration, _ []byte, env []string) (execconcern.RunResult, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.env = env
+	return r.res, nil
+}
+
+func (r *capturingRunner) readTargets() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, kv := range r.env {
+		if after, ok := strings.CutPrefix(kv, "AGENT_GATE_READ_TARGETS="); ok {
+			return after
+		}
+	}
+	return ""
+}
+
+// TestExecReadTargetsResolveAgainstEffectiveCwd guards the cd-chain fix: a search
+// run after `cd /other` must be attributed to /other, not the session cwd, so the
+// validator checks the directory the search actually reads.
+func TestExecReadTargetsResolveAgainstEffectiveCwd(t *testing.T) {
+	sessionDir := t.TempDir()
+	otherDir := t.TempDir()
+	wantTarget, err := filepath.EvalSymlinks(otherDir)
+	if err != nil {
+		t.Fatalf("EvalSymlinks: %v", err)
+	}
+
+	runner := &capturingRunner{res: execconcern.RunResult{ExitCode: 0}}
+	rule := loadExecRule(t, `
+[[rules]]
+name = "exec-rule"
+events = ["PreToolUse"]
+action = "block"
+violation_message = "static message"
+
+[[rules.conditions]]
+kind = "regex"
+field_paths = ["tool_input.command"]
+pattern = "grep"
+
+[[rules.conditions]]
+kind = "exec"
+command = ["/bin/true"]
+cache_ttl_ms = 0
+`)
+
+	evalRule(runner, rule, map[string]any{
+		"cwd":        sessionDir,
+		"tool_input": map[string]any{"command": "cd " + otherDir + " && grep -rn x ."},
+	})
+
+	got := runner.readTargets()
+	if got != wantTarget {
+		t.Fatalf("read targets = %q, want the cd dir %q (not session %q)", got, wantTarget, sessionDir)
 	}
 }
