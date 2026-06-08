@@ -163,3 +163,14 @@ sqlite3         FirstPositional, SQL         2
 Mini-languages run as their own program: `awk` (1,768), `jq` (904), `sed` (real subset). Parse these for their content. `sed -i` and `awk` also write files, so they are edits, not only reads.
 
 Phase 2 starts with `heredoc` and `ssh`, because those two create the depth.
+
+## Interim coverage shipped ahead of the library (2026-06-07)
+
+A live session laundered repo-wide code discovery past the `grep-code-use-semantic-search` gate with `find . -name '*.swift' | xargs grep -l X`. The searcher reads stdin, so `ExtractReadTargets` saw no operand and the index-aware validator failed open. This is exactly the `find ... | grep` over-stdin seam the library is meant to close, so it became the first concrete read-gate deliverable.
+
+What shipped, all still regex rather than a parser, so it inherits the leaks Phase 1 removes:
+
+- `internal/rules/concerns/shellread/codesearch_enum.go`: `enumeratorCodeSearchTargets` attributes the enumerated directory as the code-search target for `find|fd|git ls-files` piped into a searcher, `find -exec grep`, and bare `find -name '*.<codeext>'`. It splits pipelines (only `|`, not `;`/`&&`) so a searcher after a `;` is not blamed on an upstream enumerator. This feeds `cmd_read_targets`, which the existing `grep-code-use-semantic-search` rule's exec validator already keys on, so no second rule or validator was needed. Tests live in `codesearch_test.go` (`TestExtractCodeSearchTargetsEnumerator`).
+- The existing rule's regex prefilter gained one alternation, `find|fd ... -i?name '*.<codeext>'`, so a bare code-file enumeration (no searcher token) reaches the validator. The grep-family alternation already admits the enumerator-pipe and `-exec` shapes because they contain a searcher token.
+
+A separate `grep-code-discovery-use-semantic-search` rule and a cwd-aware validator were prototyped and then removed in the same session once the extractor made `cmd_read_targets` accurate, since the target-based validator then covers every shape. When `ReadTargets()` from the library replaces the helper, delete `codesearch_enum.go`, fold its cases into the library's tests, and drop the bare-enumeration alternation back out of the rule's prefilter.
