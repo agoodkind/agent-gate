@@ -8,9 +8,13 @@ import (
 
 // enumerators list files for downstream processing. find and fd walk a
 // directory tree; git ls-files lists tracked paths from the working tree. When
-// their output feeds a content searcher, or find runs the searcher itself via
-// -exec, the effective code-search target is the enumerated directory rather
-// than any operand the searcher names, so ExtractReadTargets cannot see it.
+// their output is fed to a searcher that reads file contents (find DIR | xargs
+// grep, find DIR -exec grep, git ls-files | xargs rg), the effective code-search
+// target is the enumerated directory rather than any operand the searcher names,
+// so ExtractReadTargets cannot see it. A bare enumeration (find DIR -name
+// '*.go') and an enumeration whose output is filtered by a stdin-reading grep
+// (find DIR | grep X) only read filenames, not contents, so they are filename
+// lookups and stay out of scope.
 var (
 	findTools = []string{"find"}
 	fdTools   = []string{"fd", "fdfind"}
@@ -21,32 +25,21 @@ var (
 // reason it is excluded everywhere else in this package.
 var searchTools = []string{"grep", "egrep", "fgrep", "rgrep", "rg", "ripgrep", "ag"}
 
-// codeExtensions are the source-file suffixes that make a bare filename
-// enumeration count as code discovery. It mirrors the companion config rule's
-// extension list so the Go path and the interim regex agree on scope.
-var codeExtensions = []string{
-	"go", "ts", "tsx", "js", "jsx", "mjs", "cjs", "py", "rb", "rs", "java", "kt",
-	"swift", "c", "h", "cc", "cpp", "hpp", "cs", "php", "scala", "m", "mm", "sh",
-	"lua", "ex", "exs", "clj",
-}
-
 // findExecFlags introduce a command that find runs per match.
 var findExecFlags = []string{"-exec", "-execdir"}
 
-// findNameFlags introduce a filename glob that find matches against.
-var findNameFlags = []string{"-name", "-iname"}
-
 // enumeratorCodeSearchTargets returns the directories an enumerator-driven code
-// search reads when no searcher operand was resolvable. It covers three shapes
-// the operand parser misses because the searcher reads stdin or find runs the
-// searcher itself: an enumerator piped into a content searcher
-// (find DIR ... | xargs grep, git ls-files | xargs rg), find DIR ... -exec grep,
-// and a bare find DIR -name '*.<codeext>' enumeration. The enumerated directory
-// is the target; the index-aware validator decides whether it is in scope.
+// search reads when no searcher operand was resolvable. It covers the shapes the
+// operand parser misses because the searcher's paths come from the enumerator
+// rather than its own operands: an enumerator whose output is run over file
+// contents through xargs (find DIR ... | xargs grep, git ls-files | xargs rg)
+// and find DIR ... -exec grep. The enumerated directory is the target; the
+// index-aware validator decides whether it is in scope. A bare enumeration or a
+// pipe into a stdin-reading searcher reads only filenames and is left alone.
 func enumeratorCodeSearchTargets(command, cwd string) []ReadTarget {
 	var out []ReadTarget
 	for _, stages := range commandPipelines(command) {
-		searcherIndex := pipelineSearcherIndex(stages)
+		searcherIndex := pipelineXargsSearcherIndex(stages)
 		for stageIndex, stage := range stages {
 			fields := shellFields(strings.TrimSpace(stage))
 			if len(fields) == 0 {
@@ -56,8 +49,8 @@ func enumeratorCodeSearchTargets(command, cwd string) []ReadTarget {
 			if !ok {
 				continue
 			}
-			pipedToSearcher := searcherIndex > stageIndex
-			if !pipedToSearcher && !findRunsSearcher(fields) && !findFiltersCodeExtension(fields) {
+			readsFileContents := searcherIndex > stageIndex || findRunsSearcher(fields)
+			if !readsFileContents {
 				continue
 			}
 			for _, dir := range dirs {
@@ -73,28 +66,24 @@ func enumeratorCodeSearchTargets(command, cwd string) []ReadTarget {
 	return out
 }
 
-// pipelineSearcherIndex returns the stage index of the first content searcher in
-// a pipeline, or -1. A searcher reached through xargs counts, since that is the
-// usual way an enumerator's output becomes a grep over file contents.
-func pipelineSearcherIndex(stages []string) int {
+// pipelineXargsSearcherIndex returns the stage index of the first stage that
+// runs a content searcher over the enumerated files via xargs, or -1. A bare
+// searcher stage (find ... | grep X) is excluded: it reads the filename list on
+// stdin, so it is a filename filter, not a search over file contents.
+func pipelineXargsSearcherIndex(stages []string) int {
 	for i, stage := range stages {
-		if stageIsSearcher(shellFields(strings.TrimSpace(stage))) {
+		if stageRunsSearcherOverFiles(shellFields(strings.TrimSpace(stage))) {
 			return i
 		}
 	}
 	return -1
 }
 
-// stageIsSearcher reports whether a pipeline stage runs a content searcher,
-// either directly or as the command xargs invokes.
-func stageIsSearcher(fields []string) bool {
-	if len(fields) == 0 {
-		return false
-	}
-	if slices.Contains(searchTools, filepath.Base(fields[0])) {
-		return true
-	}
-	if filepath.Base(fields[0]) != "xargs" {
+// stageRunsSearcherOverFiles reports whether a pipeline stage hands the
+// enumerated paths to a content searcher as arguments, i.e. xargs invoking a
+// searcher. That is the form that greps file contents rather than filenames.
+func stageRunsSearcherOverFiles(fields []string) bool {
+	if len(fields) == 0 || filepath.Base(fields[0]) != "xargs" {
 		return false
 	}
 	for _, field := range fields[1:] {
@@ -155,7 +144,7 @@ func findPaths(fields []string) []string {
 }
 
 // findRunsSearcher reports whether a find stage runs a content searcher through
-// -exec or -execdir.
+// -exec or -execdir, which greps the matched files' contents.
 func findRunsSearcher(fields []string) bool {
 	if !slices.Contains(findTools, filepath.Base(fields[0])) {
 		return false
@@ -169,34 +158,6 @@ func findRunsSearcher(fields []string) bool {
 		}
 	}
 	return false
-}
-
-// findFiltersCodeExtension reports whether a find stage filters by a source-code
-// filename, which marks a bare enumeration (no searcher) as code discovery.
-func findFiltersCodeExtension(fields []string) bool {
-	if !slices.Contains(findTools, filepath.Base(fields[0])) {
-		return false
-	}
-	for i, field := range fields {
-		if !slices.Contains(findNameFlags, field) || i+1 >= len(fields) {
-			continue
-		}
-		if isCodeExtensionGlob(fields[i+1]) {
-			return true
-		}
-	}
-	return false
-}
-
-// isCodeExtensionGlob reports whether a -name value ends in a source-code
-// extension, for example "*.swift" or "Main.go".
-func isCodeExtensionGlob(value string) bool {
-	dot := strings.LastIndex(value, ".")
-	if dot < 0 || dot == len(value)-1 {
-		return false
-	}
-	// Lowercase so a case-insensitive -iname '*.SWIFT' matches like '*.swift'.
-	return slices.Contains(codeExtensions, strings.ToLower(value[dot+1:]))
 }
 
 // commandPipelines splits a command into pipelines (on ;, newline, &&, ||) and
