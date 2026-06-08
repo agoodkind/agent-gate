@@ -76,6 +76,31 @@ func TestParseHookPayload_UsesToolInputWorkdir(t *testing.T) {
 	}
 }
 
+func TestCodexSubagentStop_PopulatesAgentIdentity(t *testing.T) {
+	// Field shape captured from a live codex-native SubagentStop payload.
+	rawJSON := []byte(`{"hook_event_name":"SubagentStop","session_id":"s1","turn_id":"t1","transcript_path":"/Users/x/.codex/sessions/a.jsonl","agent_transcript_path":"/Users/x/.codex/sessions/b.jsonl","cwd":"/repo","model":"gpt-5.5","permission_mode":"bypassPermissions","stop_hook_active":false,"agent_id":"019e8fe6","agent_type":"worker","last_assistant_message":"done"}`)
+	payload, err := hook.ParseHookPayload(hook.SystemCodex, rawJSON)
+	if err != nil {
+		t.Fatalf("ParseHookPayload: %v", err)
+	}
+	if _, ok := payload.Event.(hook.CodexSubagentStopPayload); !ok {
+		t.Fatalf("event type = %T, want CodexSubagentStopPayload", payload.Event)
+	}
+	fields := payload.Fields()
+	if fields.AgentType != "worker" {
+		t.Fatalf("agent_type = %q, want worker", fields.AgentType)
+	}
+	if fields.AgentID != "019e8fe6" {
+		t.Fatalf("agent_id = %q, want 019e8fe6", fields.AgentID)
+	}
+	if fields.PermissionMode != "bypassPermissions" {
+		t.Fatalf("permission_mode = %q, want bypassPermissions", fields.PermissionMode)
+	}
+	if fields.AgentTranscriptPath != "/Users/x/.codex/sessions/b.jsonl" {
+		t.Fatalf("agent_transcript_path = %q", fields.AgentTranscriptPath)
+	}
+}
+
 func TestCursorBeforeMCPExecution_ObjectToolInput(t *testing.T) {
 	rawJSON := []byte(`{"hook_event_name":"beforeMCPExecution","session_id":"s1","tool_name":"mcp__docker__logs","tool_use_id":"call_1","cwd":"/repo","tool_input":{"command":"docker logs api","query":"errors"}}`)
 	payload, err := hook.ParseHookPayload(hook.SystemCursor, rawJSON)

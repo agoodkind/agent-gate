@@ -101,12 +101,16 @@ type CodexSubagentStartPayload struct {
 	AgentType      string `json:"agent_type"`
 }
 
-// CodexSubagentStopPayload is emitted when a Codex subagent stops. Shape mirrors
-// Claude SubagentStop (the only captured codex-labeled sample was a mislabeled
-// Claude payload), so these fields are documented-mirror, not yet verified.
+// CodexSubagentStopPayload is emitted when a Codex subagent stops. Field shape
+// captured from a live codex-native payload (gpt model, .codex transcript,
+// agent_type "worker"): the subagent identity, its transcript, and its last
+// message.
 type CodexSubagentStopPayload struct {
 	CodexEnvelope
 	TurnID               string `json:"turn_id"`
+	PermissionMode       string `json:"permission_mode"`
+	AgentID              string `json:"agent_id"`
+	AgentType            string `json:"agent_type"`
 	StopHookActive       bool   `json:"stop_hook_active"`
 	AgentTranscriptPath  string `json:"agent_transcript_path"`
 	LastAssistantMessage string `json:"last_assistant_message"`
@@ -204,6 +208,9 @@ func (p CodexSubagentStartPayload) Fields() rules.FieldSet {
 func (p CodexSubagentStopPayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.TurnID = p.TurnID
+	fields.PermissionMode = p.PermissionMode
+	fields.AgentID = p.AgentID
+	fields.AgentType = p.AgentType
 	fields.StopHookActive = boolString(p.StopHookActive)
 	fields.AgentTranscriptPath = p.AgentTranscriptPath
 	fields.LastAssistantMessage = p.LastAssistantMessage

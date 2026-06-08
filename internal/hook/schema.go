@@ -292,7 +292,8 @@ func buildCodexSchema() map[CodexEvent]EventSchema {
 		CodexPostCompact:   makeSchema(codexEnvelope, "turn_id", "trigger"),
 		CodexSubagentStart: makeSchema(codexEnvelope, "turn_id", "permission_mode", "agent_id", "agent_type"),
 		CodexSubagentStop: makeSchema(codexEnvelope,
-			"turn_id", "stop_hook_active", "agent_transcript_path", "last_assistant_message",
+			"turn_id", "permission_mode", "agent_id", "agent_type",
+			"stop_hook_active", "agent_transcript_path", "last_assistant_message",
 		),
 	}
 }
