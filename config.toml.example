@@ -411,17 +411,18 @@ violation_message = "Existing content contains typographic dashes. The LLM shoul
 #
 # The exec validator keys on cmd_read_targets, the paths the shellread extractor
 # resolves a search to read. That covers a direct `grep -rn X .` / `rg X Sources`
-# and the enumerator shapes whose searcher reads stdin: `find DIR | xargs grep`,
+# and content searches that route through an enumerator: `find DIR | xargs grep`,
 # `find DIR -exec grep`, and `git ls-files | xargs rg` all resolve to the
 # enumerated directory, so the file-accurate validator blocks them when that
-# directory is indexed. git grep is excluded; it is an exact-text search semantic
-# search cannot replace.
+# directory is indexed. A bare enumeration (`find DIR -name '*.go'`) or a pipe
+# into a stdin-reading grep (`find DIR | grep X`) only reads filenames, so the
+# extractor returns no target and the search is allowed. git grep is excluded; it
+# is an exact-text search semantic search cannot replace.
 #
 # The regex condition is a cheap prefilter so the validator only forks on
 # candidates. The grep-family alternation admits every search that names a
-# searcher (including the enumerator pipelines above, which contain one). The
-# second alternation adds a bare code-file enumeration that carries no searcher
-# token (`find DIR -name '*.go'`), which the extractor still resolves to DIR.
+# searcher, including the enumerator-over-contents pipelines above (they contain
+# one) and the filename lookups (which the extractor then resolves to no target).
 #
 # Caching is stale-while-revalidate: the first search per codebase forks the
 # validator synchronously (cold = sync block), and every later search is served
@@ -442,10 +443,7 @@ violation_message = "Existing content contains typographic dashes. The LLM shoul
 # [[rules.conditions]]
 # kind        = "regex"
 # field_paths = ["tool_input.command"]
-# # (?x): pattern whitespace is ignored; a literal space is written [ ].
-# pattern     = '''(?x)
-#     \b(?:grep|egrep|fgrep|rgrep|rg|ripgrep|ag)\b
-#   | (?: \b(?:find|fd)\b [^|;&\n]* -i?name\b [^|;&\n]* \.(?:go|ts|tsx|js|jsx|mjs|cjs|py|rb|rs|java|kt|swift|c|h|cc|cpp|hpp|cs|php|scala|m|mm|sh|lua|ex|exs|clj)\b )'''
+# pattern     = '\b(?:grep|egrep|fgrep|rgrep|rg|ripgrep|ag)\b'
 #
 # [[rules.conditions]]
 # kind         = "exec"
