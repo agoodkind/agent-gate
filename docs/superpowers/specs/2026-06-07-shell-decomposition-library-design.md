@@ -1,177 +1,66 @@
-# Shell command decomposition library (shelldecomp): design
+# Shell command decomposition (gksyntax): design
 
 ## What it is
 
-A Go library that parses a shell command into a real syntax tree and labels each part. agent-gate is the first user.
+`goodkind.io/gksyntax` is one Go module that parses code into real tree-sitter syntax trees and labels the parts. It holds three packages:
 
-## Why we need it
+- `treesitter`: the tree-sitter grammar registry, the file-extension to language map, and the vendored grammars.
+- `chunk`: the cAST code chunker and its recursive-separator fallback, used for search indexing.
+- `shelldecomp`: parses a shell command into a labeled tree, tracks the working directory, classifies read and write targets, and recurses into embedded code.
 
-agent-gate reads shell commands with regex helpers today: `shellFields`, `splitChain`, `ApplyCdChain`, `stripHeredocBodies`, and `ExtractReadTargets`. Regex is not a parser. It leaks at every seam.
+Two repositories consume it: `lm-semantic-search` imports `gksyntax/chunk` for indexing, and `agent-gate` imports `gksyntax/shelldecomp` for the exec gate.
 
-This session hit three false positives from those leaks:
+## Why shelldecomp exists
 
-- `cd "$VAR" && grep -rn X .` blamed the grep on the wrong directory. agent-gate could not expand `$VAR`, so it guessed the payload cwd. The grep really ran in another repo.
-- `grep` inside a heredoc body was treated as a live command.
-- An operand with a variable (`$tea_dir/tea.go`) had to be patched by scanning for `$`.
+The exec gate needs to know what a shell command reads and writes and in which directory. Regex cannot answer that without leaking: `cd "$VAR" && grep -rn X .` blames the grep on the wrong directory, `grep` inside a heredoc body looks like a live command, and an operand like `$dir/x` needs ad-hoc `$`-scanning. shelldecomp parses instead, so the gate asks structural questions: what paths does this read, what does it write, and what directory is in effect here.
 
-The fix is to parse, not pattern-match. The library returns a tree. agent-gate asks it questions like "what paths does this read?"
+The same tree describes code an agent writes and runs, not only what it reads. A heredoc that creates a file, a `sed -i` edit, and code inside `python -c` are all the agent authoring or running code, so embedded code is first-class: shelldecomp locates it, tags its language, and parses it with the same grammars when one exists.
 
-The read gate is the first use, not the only one. The same tree must describe what an agent writes and patches, not only what it reads. A heredoc that creates a file, a `sed -i` edit, a patch envelope, and code inside `python -c` are all the agent authoring or running code. So embedded code content is first-class. The library parses it with the same grammars and classifies it, rather than treating it as a leaf to skip.
+## Invariants
 
-## Decisions
+- Anything shelldecomp cannot parse becomes an `Opaque` node; Parse never panics.
+- Any path it cannot pin to a literal is `Unresolvable`; it never fabricates a path. A consumer treats `Unresolvable` as "allow" rather than acting on a guess.
+- A program or option-value operand is never a path: awk and sed scripts, jq filters, and `stat -f` formats are skipped; a process substitution `<(...)` is unresolvable.
 
-- Standalone library. `shelldecomp` holds the shell logic. The tree-sitter setup lives in a shared module.
-- Hybrid coverage. Parse a small, curated set of languages well. Everything else becomes an `Opaque` node. Unparseable input is a normal result, not an error.
-- zsh is best-effort. There is no good zsh grammar. zsh-only syntax becomes error nodes, which `Opaque` absorbs.
-- agent-gate can break its config. The author is the only user. The migration can replace the old config outright.
+## Packaging and consumption
 
-## Reuse from lm-semantic-search
+gksyntax vendors the dart and swift grammars as its own git submodules, because neither has a usable Go-module binding against the pinned `github.com/tree-sitter/go-tree-sitter` runtime. A Go module zip does not include submodule contents, so gksyntax cannot be a plain `go get` dependency with those grammars. A local `replace` directive is also unavailable, because go-makefile's lint bans local replacements.
 
-lms already solved the hard tree-sitter setup in `internal/splitter`:
+The consumption pattern, used by both lms and agent-gate, is therefore: add gksyntax as a git submodule under `third_party/gksyntax`, and consume it through a committed `go.work` workspace rather than a module `require`. A Makefile order-only prerequisite initializes the submodule recursively and generates the swift parser from its pinned grammar definition before any compile. The generated parser stays inside the submodule working tree and is never committed; nothing generated is committed anywhere. The eighteen other grammars are normal Go-module dependencies of gksyntax.
 
-- Binding: `github.com/tree-sitter/go-tree-sitter` v0.25.0, with CGO and the build wired up.
-- Grammars ready to import: bash, python, javascript, typescript, go, rust, c, cpp, java, php, ruby, scala, kotlin, objc, json, html, css.
-- Patterns to copy: the grammar registry, the extension map, the tree walker, and the kit for vendoring a grammar (the CGO shim, the Makefile `grammars` target, and `scripts/install-tree-sitter.sh`).
+The git submodule URL is `github.com/agoodkind/gksyntax`, since the `goodkind.io/gksyntax` vanity host serves only the `go get` meta tags and not the git protocol. All Go import paths use `goodkind.io/gksyntax`.
 
-lms does not use tree-sitter's injection queries. shelldecomp adds them. Injection queries are how you recurse into embedded code.
+## How one shell command becomes a tree
 
-## Architecture
+1. Parse with the bash grammar. zsh-only syntax becomes error nodes that an `Opaque` node absorbs.
+2. Track the working directory. Walk the command list: `cd` to a literal path updates the cwd, `cd "$VAR"` sets it to `Unresolvable`, and a subshell, a `bash -c`/`ssh`/container body, and a heredoc-fed interpreter each start a fresh child scope whose cd changes do not leak out. Heredoc bodies are data, not commands. Wrappers `env` and `sudo` are stripped, and a program invoked by absolute path classifies by its basename.
+3. Find embedded code two ways: tree-sitter injection for heredoc bodies and here-strings, and a dispatch table keyed on the program name for code the grammar cannot mark.
+4. Recurse into each embedded region with its grammar, up to a configurable depth limit (default 5; the measured worst case is 4). A region whose language has no grammar is located and tagged but left `Opaque`.
+5. Classify each command and operand, and resolve each path against the tracked cwd.
 
-### Modules
+## Public API
 
-```
-tree-sitter-foundation   (the tree-sitter setup, lifted from lms)
-   |-- lm-semantic-search  (refactored to use it; no behavior change)
-   \-- shelldecomp         (parse, recurse, classify)
-          \-- agent-gate   (drops its regex helpers)
-```
-
-### How one command becomes a tree
-
-1. Parse with the bash grammar. zsh-only syntax becomes error nodes.
-2. Find embedded code two ways.
-   - Injection queries for code the grammar already marks: heredoc bodies, regex literals, here-strings.
-   - A dispatch table for code the grammar cannot mark. The bash grammar sees `python -c "code"` as a command with a string. The table knows `python -c` means the next argument is Python. It covers `bash -c`, `ssh host '...'`, `find -exec`, `xargs`, the `-c` and `-e` interpreters, and `awk`, `sed`, `jq`. Wrappers like `env` and `sudo` are stripped first.
-   - Code with no grammar becomes `Opaque`.
-   - Recursion goes all the way down. `ssh` into `bash -c` into `find -exec grep` is parsed at every level, not just detected.
-3. Track the working directory. Walk the command list. `cd` to a real path updates it. `cd "$VAR"` makes it `UNRESOLVABLE`. A subshell, `bash -c`, or `ssh` starts a fresh directory. Heredoc bodies are data, not commands.
-4. Label each command and word. Resolve each path against the tracked directory.
-
-### Node shape
-
-```
-Node {
-  Lang        // shell | python | regex | sql | opaque | ...
-  Kind        // category
-  Span        // byte range in the original string
-  Text        // raw slice
-  Resolvable  // true if all-literal
-  Value       // the resolved string when Resolvable
-  Children    // []Node
-}
-```
-
-Kinds:
-
-- Command: nav, read, write, search, vcs, network, build, pkg, interpreter, wrapper, unknown.
-- Word: flag, flag-value, read-path, write-path, pattern, embedded-code, literal, unresolvable.
-- Redirect: read, write, heredoc.
-- Each command also carries its working directory, which is a path or `UNRESOLVABLE`.
-
-### What a user calls
-
-- `ReadTargets()` returns each read path with its resolvability, value, owning command, and directory.
-- `WriteTargets()`, `Commands()`, `EmbeddedRegions()`, `EffectiveCwdAt(node)`.
+- `Parse(command, baseCwd, homeDir) *Decomposition`.
+- `ReadTargets()` and `WriteTargets()` return each path with its resolvability, value, owning command, and cwd.
+- `Commands()`, `EmbeddedRegions()`, `EffectiveCwdAt(byteOffset)`.
+- `Register(argv0, dispatcher)` lets a consumer add a dispatch entry.
 
 agent-gate's grep gate becomes one step: get `ReadTargets`, block on a resolvable indexed path, allow the rest. `cd "$VAR" && grep .` comes back unresolvable, so the gate allows it.
 
-## Why it cannot blow up
+## Dispatch table
 
-Anything the library cannot parse becomes `Opaque`. Any path it cannot pin down is unresolvable. The user treats unresolvable as allow.
+The dispatch table supplies the one thing the parser cannot derive: which named programs run code, and where. It is keyed on the program name; its value is a function over the parsed command that returns the child nodes that are code, read from the AST rather than re-scanned text.
 
-So coverage is always optional. You add a grammar or a dispatch entry only when a real command needs it. Phase 1 parses bash and nothing else.
+Command-embedders run shell and recurse fully: `heredoc` (body, language by consumer), `ssh` (trailing, new scope), `bash`/`sh`/`zsh -c` (flag value, new scope), `xargs` (trailing), `find -exec` (exec range), `docker` (new scope), `parallel` (trailing).
 
-## Build order
+Language-embedders run foreign code, parsed with their grammar when one exists and left `Opaque` otherwise: `python`/`python3 -c` (Python), `node -e`/`-p` (JS), `ruby -e` (Ruby), `perl -e` (Perl), `osascript -e` (AppleScript), `sqlite3` (SQL).
 
-- Phase 0: lift `tree-sitter-foundation` out of lms. Refactor lms to use it. No behavior change. This is the riskiest coupling, so it lands first.
-- Phase 1: build the shelldecomp core. Bash only. Track the working directory. Return `ReadTargets`. Embedded code stays `Opaque`. This already removes the false positives.
-- Phase 2: add recursion into embedded code, one dispatch entry at a time.
-- Phase 3: widen the language set. agent-gate retires its regex config.
-
-The first plan is Phase 0 plus Phase 1.
-
-## Packaging
-
-Two repos, two Go modules, imported with `go get`. agent-gate imports `shelldecomp`. lms imports the foundation. agent-gate gets the grammars through `shelldecomp`.
+Mini-languages run as their own program: `awk`, `jq`, and `sed`, with `sed -i` and `awk -i inplace` also implying writes.
 
 ## Verification
 
-- Phase 0: lms tests and lint stay green. Indexing output is unchanged.
-- Phase 1: unit tests over the real commands from this session.
-  - `cd "$VAR" && grep -rn X .` returns an unresolvable directory, so the gate allows it.
-  - `cd /indexed/repo && grep -rn X .` returns a resolved indexed path, so the gate blocks it.
-  - `grep` in a heredoc is data, not a command.
-  - `git grep`, a `/tmp` log grep, and `find ... | grep` over stdin classify as expected.
-- Phase 1 in agent-gate: wire the gate to shelldecomp, run tests and lint, deploy, replay the recorded commands, and check each decision in the audit DB.
-- Phase 2 and 3: per-language recursion tests, and a config-migration test.
-
-## Dispatch table
-
-The dispatch table supplies the one thing the parser cannot derive: which named programs run code, and where. It is keyed on the program name, because program names are strings. Its value is a function that runs on the parsed command and returns the child nodes that are code. The function reads the AST, not re-scanned text. `Lang` is an enum, so a typo fails to compile.
-
-```go
-type Embedding struct {
-    Node     *Node // the AST node holding the code; span known, quotes stripped
-    Lang     Lang  // a registered grammar id, not a free string
-    NewScope bool  // fresh cwd: subshell, remote, container
-}
-
-type Dispatcher func(cmd *Command) []Embedding
-
-var dispatch = map[string]Dispatcher{} // argv0 -> extractor
-```
-
-Common shapes get one-line helpers that build a Dispatcher: `FlagValue`, `Trailing`, `FirstPositional`, `ExecRange`, `Wrapper`. A new shape is a new function, never a framework change. A consumer adds its own with `shelldecomp.Register(argv0, dispatcher)`. That path is rare.
-
-### Seed entries, measured from the audit log
-
-84,426 distinct commands were analyzed. About 7,100 embed code. Nesting reaches four real levels (a heredoc script running `ssh` into `ssh` into `sudo` into `awk`), so recursion must be unbounded.
-
-Command-embedders hide a command, so they need full recursion:
-
-```
-heredoc       Body, language by consumer       3,774
-ssh           Trailing, Shell, NewScope        2,751
-xargs         Trailing, AsCommand                458
-find          ExecRange, AsCommand               319
-docker        AsCommand, NewScope (container)    162
-bash/sh/zsh   FlagValue -c, Shell, NewScope      210
-parallel      Trailing, AsCommand                  1
-```
-
-Language-embedders hide foreign code. That code is what the agent runs or writes, so it is parsed and classified with the same grammars, not skipped:
-
-```
-python3/python  FlagValue -c, Python    1,696
-osascript       FlagValue -e, AppleScript 195
-perl            FlagValue -e, Perl         111
-node            FlagValue -e/-p, JS         74
-ruby            FlagValue -e, Ruby          55
-sqlite3         FirstPositional, SQL         2
-```
-
-Mini-languages run as their own program: `awk` (1,768), `jq` (904), `sed` (real subset). Parse these for their content. `sed -i` and `awk` also write files, so they are edits, not only reads.
-
-Phase 2 starts with `heredoc` and `ssh`, because those two create the depth.
-
-## Interim coverage shipped ahead of the library (2026-06-07)
-
-A live session laundered repo-wide code discovery past the `grep-code-use-semantic-search` gate with `find . -name '*.swift' | xargs grep -l X`. The searcher reads stdin, so `ExtractReadTargets` saw no operand and the index-aware validator failed open. This is exactly the `find ... | grep` over-stdin seam the library is meant to close, so it became the first concrete read-gate deliverable.
-
-Scope is content search only: a search that reads file contents is in scope, a filename lookup is not. The in-scope shapes route the enumerated files into a searcher as arguments (`find DIR | xargs grep`, `find DIR -exec grep`, `git ls-files | xargs rg`). A bare enumeration (`find DIR -name '*.go'`) and a pipe into a stdin-reading grep (`find DIR | grep X`) only read filenames, which semantic search cannot serve anyway, so they stay allowed.
-
-What shipped, still regex rather than a parser, so it inherits the leaks Phase 1 removes:
-
-- `internal/rules/concerns/shellread/codesearch_enum.go`: `enumeratorCodeSearchTargets` attributes the enumerated directory as the code-search target only when the enumerator's files are run through `xargs <searcher>` or `find -exec <searcher>`. It splits pipelines (only `|`, not `;`/`&&`) so a searcher after a `;` is not blamed on an upstream enumerator. This feeds `cmd_read_targets`, which the existing `grep-code-use-semantic-search` rule's exec validator already keys on, so no second rule, validator, or regex change was needed: those pipelines carry a searcher token and already match the grep-family prefilter. Tests live in `codesearch_test.go` (`TestExtractCodeSearchTargetsEnumerator`).
-
-A separate `grep-code-discovery-use-semantic-search` rule and a cwd-aware validator were prototyped and then removed in the same session once the extractor made `cmd_read_targets` accurate, since the target-based validator then covers every in-scope shape. When `ReadTargets()` from the library replaces the helper, delete `codesearch_enum.go` and fold its cases into the library's tests.
+- gksyntax: `make check` green, golangci baseline empty.
+- shelldecomp: unit tests over the recorded command shapes (cd-chain scope, heredoc-as-data, git grep labeling, stdin grep, subshell `$1`, tilde, the full dispatch set, the depth cap, the write-redirect cases, and the program-operand fabrication guards).
+- lms: `make test` and `make lint` green, indexing unchanged.
+- agent-gate: `make check` green, then deploy and confirm gate decisions against the live daemon and the audit DB.
+- Whole-corpus replay: every distinct captured command run through shelldecomp must produce no fabricated path and no contract violation.
