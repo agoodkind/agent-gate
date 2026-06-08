@@ -1,0 +1,11 @@
+go 1.26.4
+
+// gksyntax lives as a git submodule under third_party/. It vendors the dart and
+// swift tree-sitter grammars as its own submodules, whose C sources are not part
+// of a Go module zip, so it is consumed through this workspace rather than a
+// module require. Run `git submodule update --init --recursive` and
+// `make gksyntax-grammars` before building.
+use (
+	.
+	./third_party/gksyntax
+)

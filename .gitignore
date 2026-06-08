@@ -1,6 +1,7 @@
 /agent-gate
 /dist/
 .make/
+.bin/
 notarize.env
 config.mk
 .vscode/
