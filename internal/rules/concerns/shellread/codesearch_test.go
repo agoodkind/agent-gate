@@ -5,6 +5,10 @@ import (
 	"testing"
 )
 
+// testSearchTools is the tool policy these tests exercise; production policy
+// lives in each rule's search_tools config.
+var testSearchTools = []string{"grep", "egrep", "fgrep", "rg", "ag", "ack", "git grep", "sed"}
+
 func targetPaths(targets []ReadTarget) []string {
 	paths := make([]string, 0, len(targets))
 	for _, target := range targets {
@@ -29,13 +33,13 @@ func TestExtractCodeSearchTargetsShelldecompSanity(t *testing.T) {
 	}{
 		{"extensionless code grep over repo path", `grep -rn ServeHTTP internal`, []string{"/repo/internal"}},
 		{"tmp log grep resolves outside repo", `grep -n ERROR /tmp/x.log`, []string{"/tmp/x.log"}},
-		{"git grep excluded", `git grep ServeHTTP`, nil},
+		{"git grep with pathspec", `git grep ServeHTTP internal`, []string{"/repo/internal"}},
 		{"find piped to stdin grep has no target", `find Tests | grep -iE x`, nil},
 		{"cd to unresolvable var drops recursive target", `cd "$VAR" && grep -rn X .`, nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := targetPaths(ExtractCodeSearchTargets(tc.command, cwd))
+			got := targetPaths(ExtractCodeSearchTargets(tc.command, cwd, testSearchTools))
 			if !slices.Equal(got, tc.want) {
 				t.Fatalf("ExtractCodeSearchTargets(%q) = %v, want %v", tc.command, got, tc.want)
 			}
@@ -68,13 +72,42 @@ func TestExtractCodeSearchTargets(t *testing.T) {
 		{"context flags skip values", `grep -A 2 -B 2 "x" file.go`, []string{"/repo/file.go"}},
 		{"recursive no path falls back to cwd", `grep -rn "x"`, []string{"/repo"}},
 		{"bare rg recurses cwd", `rg "x"`, []string{"/repo"}},
-		{"git grep is not gated", `git grep "x"`, nil},
+		{"bare git grep recurses cwd", `git grep "x"`, []string{"/repo"}},
 		{"git commit message is not git grep", `git commit -m grep`, nil},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := targetPaths(ExtractCodeSearchTargets(tc.command, cwd))
+			got := targetPaths(ExtractCodeSearchTargets(tc.command, cwd, testSearchTools))
+			if !slices.Equal(got, tc.want) {
+				t.Fatalf("ExtractCodeSearchTargets(%q) = %v, want %v", tc.command, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestExtractCodeSearchTargetsSed covers sed as a content reader: a sed that
+// reads a file is a code search the semantic index can answer, while a sed -i
+// edits the file in place and is not a search, so its operands are dropped.
+func TestExtractCodeSearchTargetsSed(t *testing.T) {
+	const cwd = "/repo"
+
+	cases := []struct {
+		name    string
+		command string
+		want    []string
+	}{
+		{"line range read", `sed -n '12,40p' file.go`, []string{"/repo/file.go"}},
+		{"pattern read", `sed -n '/needle/p' internal/x.go`, []string{"/repo/internal/x.go"}},
+		{"stream edit reads its operand", `sed 's/a/b/' file.go`, []string{"/repo/file.go"}},
+		{"in-place edit is not a search", `sed -i 's/a/b/' file.go`, nil},
+		{"in-place edit with suffix is not a search", `sed -i.bak 's/a/b/' file.go`, nil},
+		{"stdin sed has no target", `cat /tmp/x | sed -n '1p'`, nil},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := targetPaths(ExtractCodeSearchTargets(tc.command, cwd, testSearchTools))
 			if !slices.Equal(got, tc.want) {
 				t.Fatalf("ExtractCodeSearchTargets(%q) = %v, want %v", tc.command, got, tc.want)
 			}
@@ -112,7 +145,7 @@ func TestExtractCodeSearchTargetsEnumerator(t *testing.T) {
 		{"bare find non-code ext", `find . -name '*.json' -print`, nil},
 		{"bare find no name filter", `find Tests -type f`, nil},
 		{"git ls-files alone", `git ls-files`, nil},
-		{"git grep is not gated", `git grep x | xargs echo`, nil},
+		{"git grep feeding a pipeline recurses cwd", `git grep x | xargs echo`, []string{"/repo"}},
 
 		// Operand-bearing stages resolve through the operand parser, not here.
 		{"enumerator and grep in separate pipelines", `find Sources ; grep x other.txt`, []string{"/repo/other.txt"}},
@@ -126,7 +159,7 @@ func TestExtractCodeSearchTargetsEnumerator(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := targetPaths(ExtractCodeSearchTargets(tc.command, cwd))
+			got := targetPaths(ExtractCodeSearchTargets(tc.command, cwd, testSearchTools))
 			if !slices.Equal(got, tc.want) {
 				t.Fatalf("ExtractCodeSearchTargets(%q) = %v, want %v", tc.command, got, tc.want)
 			}

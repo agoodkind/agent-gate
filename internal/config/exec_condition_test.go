@@ -59,7 +59,8 @@ func TestExecConditionAppliesDefaults(t *testing.T) {
 }
 
 func TestExecConditionCacheKeyCmdReadTargetsCompiles(t *testing.T) {
-	body := strings.Replace(validExecRule, `command = ["/bin/true"]`, `command = ["/bin/true"]`+"\ncache_key = \"cmd_read_targets\"", 1)
+	body := strings.Replace(validExecRule, `command = ["/bin/true"]`,
+		`command = ["/bin/true"]`+"\ncache_key = \"cmd_read_targets\"\nsearch_tools = [\"grep\", \"rg\"]", 1)
 	cfg, err := writeExecConfig(t, body)
 	if err != nil {
 		t.Fatalf("LoadExisting: %v", err)
@@ -67,6 +68,30 @@ func TestExecConditionCacheKeyCmdReadTargetsCompiles(t *testing.T) {
 	cond := cfg.Rules[0].Conditions[1]
 	if cond.CacheKeySelector().Selector != config.FieldCmdReadTargets {
 		t.Fatalf("expected cache_key to compile to cmd_read_targets selector")
+	}
+	if len(cond.SearchTools) != 2 || cond.SearchTools[0] != "grep" {
+		t.Fatalf("expected search_tools preserved, got %v", cond.SearchTools)
+	}
+}
+
+// The search-tool set is rule policy with no built-in default, so a
+// cmd_read_targets cache key without search_tools is a config error rather
+// than a silently empty key.
+func TestExecConditionCmdReadTargetsCacheKeyRequiresSearchTools(t *testing.T) {
+	body := strings.Replace(validExecRule, `command = ["/bin/true"]`,
+		`command = ["/bin/true"]`+"\ncache_key = \"cmd_read_targets\"", 1)
+	_, err := writeExecConfig(t, body)
+	if err == nil || !strings.Contains(err.Error(), "requires search_tools") {
+		t.Fatalf("expected search_tools validation error, got %v", err)
+	}
+}
+
+func TestExecConditionEmptySearchToolEntryFails(t *testing.T) {
+	body := strings.Replace(validExecRule, `command = ["/bin/true"]`,
+		`command = ["/bin/true"]`+"\nsearch_tools = [\"grep\", \" \"]", 1)
+	_, err := writeExecConfig(t, body)
+	if err == nil || !strings.Contains(err.Error(), "search_tools entries must be non-empty") {
+		t.Fatalf("expected empty-entry validation error, got %v", err)
 	}
 }
 

@@ -192,7 +192,14 @@ func execConditionGateMatch(ctx context.Context, fields FieldSet, rule *config.R
 	}
 
 	cwd := fields.BaseCWD()
-	keyValue := fields.String(c.CacheKeySelector().Selector)
+	var keyValue string
+	if c.CacheKeySelector().Selector == config.FieldCmdReadTargets {
+		// cmd_read_targets is rule policy: the tool set comes from this
+		// condition's search_tools, which the generic selector path cannot see.
+		keyValue = fields.CmdReadTargets(c.SearchTools)
+	} else {
+		keyValue = fields.String(c.CacheKeySelector().Selector)
+	}
 	keyView := canonicalizePathField(runtime.canon, cwd, keyValue)
 	cacheKey := keyView.Canonical
 
@@ -380,20 +387,21 @@ func (r *ExecRuntime) buildInput(
 		EffectiveCWD: canonicalizePathField(r.canon, cwd, effectiveCwd),
 		FilePath:     canonicalizePathField(r.canon, cwd, fields.FilePathValue()),
 		CacheKey:     keyView,
-		ReadTargets:  r.readTargetViews(cwd, command),
+		ReadTargets:  r.readTargetViews(cwd, command, c.SearchTools),
 		Matched:      matched,
 	}
 }
 
 // readTargetViews canonicalizes the effective filesystem targets of a
-// grep/rg-style command so the validator can check each path's index status
-// rather than the working directory. The base (pre-cd) working directory is
-// passed to ExtractCodeSearchTargets, which decomposes the whole command with
-// shelldecomp and applies the cd chain itself, so a search run after `cd /other`
-// is attributed to /other rather than the session cwd without applying the cd
+// code-search command so the validator can check each path's index status
+// rather than the working directory, scoped to the condition's declared
+// search_tools. The base (pre-cd) working directory is passed to
+// ExtractCodeSearchTargets, which decomposes the whole command with shelldecomp
+// and applies the cd chain itself, so a search run after `cd /other` is
+// attributed to /other rather than the session cwd without applying the cd
 // chain twice.
-func (r *ExecRuntime) readTargetViews(cwd, command string) []execconcern.PathView {
-	targets := shellread.ExtractCodeSearchTargets(command, cwd)
+func (r *ExecRuntime) readTargetViews(cwd, command string, searchTools []string) []execconcern.PathView {
+	targets := shellread.ExtractCodeSearchTargets(command, cwd, searchTools)
 	views := make([]execconcern.PathView, 0, len(targets))
 	for _, target := range targets {
 		if target.Remote || target.Path == "" {

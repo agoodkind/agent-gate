@@ -6,6 +6,10 @@ import (
 	"goodkind.io/agent-gate/internal/config"
 )
 
+// readTargetsTestTools is the tool policy these tests exercise; production
+// policy lives in each rule's search_tools config.
+var readTargetsTestTools = []string{"grep", "rg"}
+
 func TestCmdReadTargetsField(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -26,10 +30,23 @@ func TestCmdReadTargetsField(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			fields := FieldSet{ToolInputCommand: tc.command, CWD: "/repo"}
-			got := fields.String(config.FieldCmdReadTargets)
+			got := fields.CmdReadTargets(readTargetsTestTools)
 			if got != tc.want {
 				t.Fatalf("cmd_read_targets for %q = %q, want %q", tc.command, got, tc.want)
 			}
 		})
+	}
+}
+
+// The tool set is rule policy with no built-in default: without search_tools
+// there are no read targets, and the generic field selector (which has no rule
+// context) yields nothing.
+func TestCmdReadTargetsRequiresDeclaredTools(t *testing.T) {
+	fields := FieldSet{ToolInputCommand: `grep -rn "x" .`, CWD: "/repo"}
+	if got := fields.CmdReadTargets(nil); got != "" {
+		t.Fatalf("CmdReadTargets(nil) = %q, want empty", got)
+	}
+	if got := fields.String(config.FieldCmdReadTargets); got != "" {
+		t.Fatalf("generic cmd_read_targets selector = %q, want empty", got)
 	}
 }

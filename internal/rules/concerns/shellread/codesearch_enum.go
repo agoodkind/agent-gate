@@ -20,26 +20,22 @@ var (
 	fdTools   = []string{"fd", "fdfind"}
 )
 
-// searchTools are the content searchers a code search routes through. This
-// mirrors codeSearchSpecs.Argv0; git grep is intentionally absent for the same
-// reason it is excluded everywhere else in this package.
-var searchTools = []string{"grep", "egrep", "fgrep", "rgrep", "rg", "ripgrep", "ag"}
-
 // findExecFlags introduce a command that find runs per match.
 var findExecFlags = []string{"-exec", "-execdir"}
 
 // enumeratorCodeSearchTargets returns the directories an enumerator-driven code
-// search reads when no searcher operand was resolvable. It covers the shapes the
-// operand parser misses because the searcher's paths come from the enumerator
-// rather than its own operands: an enumerator whose output is run over file
-// contents through xargs (find DIR ... | xargs grep, git ls-files | xargs rg)
-// and find DIR ... -exec grep. The enumerated directory is the target; the
+// search reads when no searcher operand was resolvable, scoped to tools, the
+// rule-declared content-searcher argv0 set. It covers the shapes the operand
+// parser misses because the searcher's paths come from the enumerator rather
+// than its own operands: an enumerator whose output is run over file contents
+// through xargs (find DIR ... | xargs grep, git ls-files | xargs rg) and
+// find DIR ... -exec grep. The enumerated directory is the target; the
 // index-aware validator decides whether it is in scope. A bare enumeration or a
 // pipe into a stdin-reading searcher reads only filenames and is left alone.
-func enumeratorCodeSearchTargets(command, cwd string) []ReadTarget {
+func enumeratorCodeSearchTargets(command, cwd string, tools map[string]bool) []ReadTarget {
 	var out []ReadTarget
 	for _, stages := range commandPipelines(command) {
-		searcherIndex := pipelineXargsSearcherIndex(stages)
+		searcherIndex := pipelineXargsSearcherIndex(stages, tools)
 		for stageIndex, stage := range stages {
 			fields := shellFields(strings.TrimSpace(stage))
 			if len(fields) == 0 {
@@ -49,7 +45,7 @@ func enumeratorCodeSearchTargets(command, cwd string) []ReadTarget {
 			if !ok {
 				continue
 			}
-			readsFileContents := searcherIndex > stageIndex || findRunsSearcher(fields)
+			readsFileContents := searcherIndex > stageIndex || findRunsSearcher(fields, tools)
 			if !readsFileContents {
 				continue
 			}
@@ -67,12 +63,12 @@ func enumeratorCodeSearchTargets(command, cwd string) []ReadTarget {
 }
 
 // pipelineXargsSearcherIndex returns the stage index of the first stage that
-// runs a content searcher over the enumerated files via xargs, or -1. A bare
-// searcher stage (find ... | grep X) is excluded: it reads the filename list on
-// stdin, so it is a filename filter, not a search over file contents.
-func pipelineXargsSearcherIndex(stages []string) int {
+// runs a declared content searcher over the enumerated files via xargs, or -1.
+// A bare searcher stage (find ... | grep X) is excluded: it reads the filename
+// list on stdin, so it is a filename filter, not a search over file contents.
+func pipelineXargsSearcherIndex(stages []string, tools map[string]bool) int {
 	for i, stage := range stages {
-		if stageRunsSearcherOverFiles(shellFields(strings.TrimSpace(stage))) {
+		if stageRunsSearcherOverFiles(shellFields(strings.TrimSpace(stage)), tools) {
 			return i
 		}
 	}
@@ -80,14 +76,15 @@ func pipelineXargsSearcherIndex(stages []string) int {
 }
 
 // stageRunsSearcherOverFiles reports whether a pipeline stage hands the
-// enumerated paths to a content searcher as arguments, i.e. xargs invoking a
-// searcher. That is the form that greps file contents rather than filenames.
-func stageRunsSearcherOverFiles(fields []string) bool {
+// enumerated paths to a declared content searcher as arguments, i.e. xargs
+// invoking a searcher. That is the form that greps file contents rather than
+// filenames.
+func stageRunsSearcherOverFiles(fields []string, tools map[string]bool) bool {
 	if len(fields) == 0 || filepath.Base(fields[0]) != "xargs" {
 		return false
 	}
 	for _, field := range fields[1:] {
-		if slices.Contains(searchTools, filepath.Base(field)) {
+		if tools[filepath.Base(field)] {
 			return true
 		}
 	}
@@ -143,9 +140,9 @@ func findPaths(fields []string) []string {
 	return paths
 }
 
-// findRunsSearcher reports whether a find stage runs a content searcher through
-// -exec or -execdir, which greps the matched files' contents.
-func findRunsSearcher(fields []string) bool {
+// findRunsSearcher reports whether a find stage runs a declared content
+// searcher through -exec or -execdir, which greps the matched files' contents.
+func findRunsSearcher(fields []string, tools map[string]bool) bool {
 	if !slices.Contains(findTools, filepath.Base(fields[0])) {
 		return false
 	}
@@ -153,7 +150,7 @@ func findRunsSearcher(fields []string) bool {
 		if !slices.Contains(findExecFlags, field) {
 			continue
 		}
-		if i+1 < len(fields) && slices.Contains(searchTools, filepath.Base(fields[i+1])) {
+		if i+1 < len(fields) && tools[filepath.Base(fields[i+1])] {
 			return true
 		}
 	}

@@ -468,6 +468,7 @@ pattern = "grep"
 kind = "exec"
 command = ["/bin/true"]
 cache_ttl_ms = 0
+search_tools = ["grep"]
 `)
 
 	evalRule(runner, rule, map[string]any{

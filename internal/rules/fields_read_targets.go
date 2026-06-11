@@ -7,8 +7,9 @@ import (
 )
 
 // CmdReadTargets returns the newline-joined effective filesystem targets of a
-// grep/rg-style command (the paths it reads), so an exec gate can scope its
-// decision to what a search actually reads rather than the working directory.
+// code-search command (the paths it reads), scoped to the search tools the
+// calling rule declares via search_tools. The tool list is rule policy, so
+// there is no built-in default: an empty list yields no targets.
 //
 // The base (pre-cd) working directory is passed to ExtractCodeSearchTargets,
 // which decomposes the whole command with shelldecomp and applies the cd chain
@@ -17,7 +18,10 @@ import (
 // resolvable target (shelldecomp cannot pin the cwd, so the operand is dropped
 // rather than fabricated). Passing the base cwd, not effectiveCWD(), avoids
 // applying the cd chain twice.
-func (fields FieldSet) CmdReadTargets() string {
+func (fields FieldSet) CmdReadTargets(searchTools []string) string {
+	if len(searchTools) == 0 {
+		return ""
+	}
 	if !fields.hasShellCommandContext() {
 		return ""
 	}
@@ -25,7 +29,7 @@ func (fields FieldSet) CmdReadTargets() string {
 	if command == "" {
 		return ""
 	}
-	targets := shellread.ExtractCodeSearchTargets(command, fields.BaseCWD())
+	targets := shellread.ExtractCodeSearchTargets(command, fields.BaseCWD(), searchTools)
 	paths := make([]string, 0, len(targets))
 	for _, target := range targets {
 		if target.Remote || target.Path == "" {

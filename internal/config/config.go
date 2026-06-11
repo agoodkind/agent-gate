@@ -124,12 +124,18 @@ type Condition struct {
 	// field selector whose canonicalized value keys the cross-event result
 	// cache, held for CacheTTLMs. BlockOn selects which exit codes block, and
 	// OnError selects the gate behavior when the validator errors.
-	Command    []string `toml:"command"`
-	TimeoutMs  int      `toml:"timeout_ms"`
-	CacheKey   string   `toml:"cache_key"`
-	CacheTTLMs int      `toml:"cache_ttl_ms"`
-	BlockOn    string   `toml:"block_on"`
-	OnError    string   `toml:"on_error"`
+	// SearchTools declares the argv0 values this rule treats as code-content
+	// searchers when computing read targets (for example "grep", "rg",
+	// "git grep", "sed"). The tool set is rule policy with no built-in
+	// default: read targets are empty without it, and a cmd_read_targets
+	// cache_key requires it.
+	Command     []string `toml:"command"`
+	TimeoutMs   int      `toml:"timeout_ms"`
+	CacheKey    string   `toml:"cache_key"`
+	CacheTTLMs  int      `toml:"cache_ttl_ms"`
+	BlockOn     string   `toml:"block_on"`
+	OnError     string   `toml:"on_error"`
+	SearchTools []string `toml:"search_tools"`
 
 	compiled         *regex.Regexp
 	compiledNot      *regex.Regexp
@@ -253,6 +259,7 @@ func NewCondition(fieldPaths []string, pattern, notPattern string) (Condition, e
 		CacheTTLMs:       0,
 		BlockOn:          "",
 		OnError:          "",
+		SearchTools:      nil,
 		selectors:        CompileFieldSelectorSpecs(fieldPaths),
 		compiled:         nil,
 		compiledNot:      nil,
@@ -734,6 +741,14 @@ func compileExecConfig(ruleName string, index int, c *Condition) error {
 		return fmt.Errorf("rule %q condition %d: cache_key %q is not a valid field selector", ruleName, index, c.CacheKey)
 	}
 	c.cacheKeySelector = specs[0]
+	for _, tool := range c.SearchTools {
+		if strings.TrimSpace(tool) == "" {
+			return fmt.Errorf("rule %q condition %d: search_tools entries must be non-empty", ruleName, index)
+		}
+	}
+	if c.cacheKeySelector.Selector == FieldCmdReadTargets && len(c.SearchTools) == 0 {
+		return fmt.Errorf("rule %q condition %d: cache_key %q requires search_tools to declare which commands count as code search", ruleName, index, c.CacheKey)
+	}
 	return nil
 }
 

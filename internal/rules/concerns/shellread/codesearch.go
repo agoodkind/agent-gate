@@ -6,52 +6,46 @@ import (
 	"goodkind.io/gksyntax/shelldecomp"
 )
 
-// gitGrepArgv0 is the argv0 label shelldecomp assigns to a `git grep` read
-// target. It is excluded from code-search targets because git grep is an
-// exact-text search over tracked files that semantic search cannot replace.
-const gitGrepArgv0 = "git grep"
-
-// contentSearchers are the argv0 values whose shelldecomp read targets are
-// genuine content searches a semantic index could answer. Other readers
-// shelldecomp recognizes (cat, head, find, sed) are not code searches: find in
-// particular is an enumerator whose code-search contribution is computed by the
-// enumerator layer below, not by its own operands.
-var contentSearchers = map[string]bool{
-	"grep":  true,
-	"egrep": true,
-	"fgrep": true,
-	"rg":    true,
-	"ag":    true,
-	"ack":   true,
-}
-
 // ExtractCodeSearchTargets returns the effective filesystem targets of a
-// grep/rg-style command (the paths it reads). It combines two layers:
+// code-search command (the paths it reads), scoped to searchTools, the argv0
+// values the calling rule declares as content searchers (for example grep, rg,
+// git grep, sed). The tool set is rule policy supplied by config; this package
+// carries no built-in list, and an empty set yields no targets. It combines
+// two layers:
 //
-//   - shelldecomp's structural read targets for content searchers (grep, rg,
-//     ag, ack): explicit path operands resolved against the cd-applied cwd, a
-//     recursive grep or bare rg/ag/ack with no operand targeting cwd, and a
-//     stdin grep (a non-first pipeline stage with no operand) contributing
-//     nothing.
+//   - shelldecomp's structural read targets for the declared tools: explicit
+//     path operands resolved against the cd-applied cwd, a recursive grep or
+//     bare rg/ag/ack with no operand targeting cwd, and a stdin grep (a
+//     non-first pipeline stage with no operand) contributing nothing.
 //   - the enumerator layer, which covers code search hidden behind an
-//     enumerator feeding a searcher over file contents (find DIR | xargs grep,
-//     find DIR -exec grep, git ls-files | xargs rg); shelldecomp does not model
-//     that enumerator-to-searcher dataflow, so it is handled here.
+//     enumerator feeding a declared tool over file contents (find DIR | xargs
+//     grep, find DIR -exec grep, git ls-files | xargs rg); shelldecomp does not
+//     model that enumerator-to-searcher dataflow, so it is handled here.
 //
-// git grep is excluded even though shelldecomp emits it, because it is an
-// exact-text search semantic search cannot replace. Targets shelldecomp could
-// not pin to a literal absolute path (an unexpanded $var operand, a command
-// substitution, or a cd into an unresolvable directory) are dropped rather than
-// fabricated, so an unresolvable shape stays out of scope.
-func ExtractCodeSearchTargets(command, cwd string) []ReadTarget {
-	if command == "" {
+// A path the command also writes is dropped: a sed -i edits its operand in
+// place, so the operand is an edit target, not a content search the semantic
+// index could answer. Targets shelldecomp could not pin to a literal absolute
+// path (an unexpanded $var operand, a command substitution, or a cd into an
+// unresolvable directory) are dropped rather than fabricated, so an
+// unresolvable shape stays out of scope.
+func ExtractCodeSearchTargets(command, cwd string, searchTools []string) []ReadTarget {
+	if command == "" || len(searchTools) == 0 {
 		return nil
+	}
+	tools := make(map[string]bool, len(searchTools))
+	for _, tool := range searchTools {
+		tools[tool] = true
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		home = ""
 	}
 	decomposition := shelldecomp.Parse(command, cwd, home)
+
+	written := make(map[string]struct{})
+	for _, target := range decomposition.WriteTargets() {
+		written[target.Path] = struct{}{}
+	}
 
 	var out []ReadTarget
 	seen := make(map[string]struct{})
@@ -64,10 +58,10 @@ func ExtractCodeSearchTargets(command, cwd string) []ReadTarget {
 	}
 
 	for _, target := range decomposition.ReadTargets() {
-		if target.Argv0 == gitGrepArgv0 {
+		if !tools[target.Argv0] {
 			continue
 		}
-		if !contentSearchers[target.Argv0] {
+		if _, isWrite := written[target.Path]; isWrite {
 			continue
 		}
 		// shelldecomp guarantees a resolvable target is a pinned absolute path
@@ -81,12 +75,12 @@ func ExtractCodeSearchTargets(command, cwd string) []ReadTarget {
 		add(target.Path)
 	}
 
-	// Enumerator-driven code search (find/fd/git ls-files feeding a content
-	// searcher over file contents). shelldecomp surfaces find's own operands as
+	// Enumerator-driven code search (find/fd/git ls-files feeding a declared
+	// tool over file contents). shelldecomp surfaces find's own operands as
 	// reads, which over- and under-count the enumerated directory, so the
 	// enumerator layer computes the real target and the find/fd/git-ls-files
-	// reads above are skipped by the contentSearchers filter.
-	for _, target := range resolvableTargets(enumeratorCodeSearchTargets(command, cwd)) {
+	// reads above are skipped by the declared-tools filter.
+	for _, target := range resolvableTargets(enumeratorCodeSearchTargets(command, cwd, tools)) {
 		add(target.Path)
 	}
 	return out

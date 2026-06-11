@@ -122,21 +122,25 @@ func (fields FieldSet) FirstString(selectors []config.FieldSelectorSpec) (string
 // populated at init time so [FieldSet.String] becomes a table lookup
 // rather than a giant switch.
 var fieldStringAccessors = map[config.FieldSelector]func(FieldSet) string{
-	config.FieldHookEventName:             func(f FieldSet) string { return f.HookEventName },
-	config.FieldSessionID:                 func(f FieldSet) string { return f.SessionID },
-	config.FieldConversationID:            func(f FieldSet) string { return f.ConversationID },
-	config.FieldGenerationID:              func(f FieldSet) string { return f.GenerationID },
-	config.FieldModel:                     func(f FieldSet) string { return f.Model },
-	config.FieldCursorVersion:             func(f FieldSet) string { return f.CursorVersion },
-	config.FieldUserEmail:                 func(f FieldSet) string { return f.UserEmail },
-	config.FieldTranscriptPath:            func(f FieldSet) string { return f.TranscriptPath },
-	config.FieldCWD:                       func(f FieldSet) string { return f.CWD },
-	config.FieldEffectiveCWD:              func(f FieldSet) string { return f.effectiveCWD() },
-	config.FieldCmdSegments:               func(f FieldSet) string { return f.CmdSegments() },
-	config.FieldCmdComments:               func(f FieldSet) string { return f.CmdComments() },
-	config.FieldCmdDoubleHyphenProse:      func(f FieldSet) string { return f.CmdDoubleHyphenProse() },
-	config.FieldCmdRedirections:           func(f FieldSet) string { return f.CmdRedirections() },
-	config.FieldCmdReadTargets:            func(f FieldSet) string { return f.CmdReadTargets() },
+	config.FieldHookEventName:        func(f FieldSet) string { return f.HookEventName },
+	config.FieldSessionID:            func(f FieldSet) string { return f.SessionID },
+	config.FieldConversationID:       func(f FieldSet) string { return f.ConversationID },
+	config.FieldGenerationID:         func(f FieldSet) string { return f.GenerationID },
+	config.FieldModel:                func(f FieldSet) string { return f.Model },
+	config.FieldCursorVersion:        func(f FieldSet) string { return f.CursorVersion },
+	config.FieldUserEmail:            func(f FieldSet) string { return f.UserEmail },
+	config.FieldTranscriptPath:       func(f FieldSet) string { return f.TranscriptPath },
+	config.FieldCWD:                  func(f FieldSet) string { return f.CWD },
+	config.FieldEffectiveCWD:         func(f FieldSet) string { return f.effectiveCWD() },
+	config.FieldCmdSegments:          func(f FieldSet) string { return f.CmdSegments() },
+	config.FieldCmdComments:          func(f FieldSet) string { return f.CmdComments() },
+	config.FieldCmdDoubleHyphenProse: func(f FieldSet) string { return f.CmdDoubleHyphenProse() },
+	config.FieldCmdRedirections:      func(f FieldSet) string { return f.CmdRedirections() },
+	// cmd_read_targets is rule policy: the search-tool set comes from the
+	// rule's search_tools, so the generic selector path (which has no rule
+	// context) yields nothing. The exec gate computes it with the condition's
+	// declared tools.
+	config.FieldCmdReadTargets:            func(f FieldSet) string { return f.CmdReadTargets(nil) },
 	config.FieldPermissionMode:            func(f FieldSet) string { return f.PermissionMode },
 	config.FieldAgentID:                   func(f FieldSet) string { return f.AgentID },
 	config.FieldAgentType:                 func(f FieldSet) string { return f.AgentType },
