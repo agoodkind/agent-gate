@@ -5,56 +5,56 @@ Status: approved
 
 ## Background
 
-agent-gate is a daemon that checks every shell command an AI agent tries to run. It blocks commands that break a rule.
+agent-gate is a daemon. It checks every shell command an AI agent tries to run. It blocks commands that break a rule.
 
-Some rules confirm a block by running an external script. That script is called an exec validator. The daemon passes context to the script through environment variables.
+A rule can confirm a block by running an external script. agent-gate calls this script an exec validator. The daemon passes context to the script through environment variables.
 
-The rule `grep-code-use-semantic-search` blocks grep-style searches on codebases that lm-semantic-search has indexed. Its validator script is `~/.config/agent-gate/validators/lm-semantic-search-indexed.sh`.
+One rule is `grep-code-use-semantic-search`. It blocks grep-style searches on a codebase that lm-semantic-search has indexed. The agent is told to use semantic search instead. The validator script lives at `~/.config/agent-gate/validators/lm-semantic-search-indexed.sh`.
 
-The daemon works out the working directory of a command by parsing it with shelldecomp, the shell parser in the gksyntax library. When the parser cannot resolve a `cd` target, for example `cd "$(echo /tmp)"`, it returns the sentinel string `"\x00UNRESOLVABLE"`. The sentinel starts with a NUL byte so no real path can ever equal it. It is defined in `third_party/gksyntax/shelldecomp/node.go:137`.
+The daemon needs to know what directory a command runs in. It parses the command with shelldecomp, the shell parser in the gksyntax library. Some `cd` targets cannot be resolved by parsing, for example `cd "$(echo /tmp)"`. For those, the parser returns a marker string instead of a path. The marker is `"\x00UNRESOLVABLE"` (`third_party/gksyntax/shelldecomp/node.go:137`). Its first byte is a NUL byte. No real path can contain a NUL byte, so the marker can never collide with a real path.
 
 ## Problem
 
-The daemon puts the working directory into the `AGENT_GATE_CWD` environment variable. When the value is the sentinel, the variable contains a NUL byte. Go refuses to start a process whose environment contains a NUL byte. The validator never starts. The rule sets `on_error = "open"`, so the daemon allows the command.
+The daemon copies the directory value into the `AGENT_GATE_CWD` environment variable for the validator. When the value is the marker, the variable contains a NUL byte. Go will not start a process with a NUL byte in its environment. So the validator never runs. The rule is set to allow on error (`on_error = "open"`). So the daemon allows the command.
 
-Result: any grep with an unresolvable `cd` skips the gate.
+In short: any grep behind an unresolvable `cd` skips the gate.
 
-Three related defects share the fix:
+Three more defects belong to the same fix:
 
-- Command text can carry its own NUL byte. It reaches the `AGENT_GATE_COMMAND` variable and kills the spawn the same way.
-- The daemon writes the sentinel, NUL included, into the `effective_cwd` column of the `intake_events` table in SQLite.
-- The validator gets a 1500 ms budget. It needs about 21 ms when lm-semantic-search is healthy, but it times out and fails open when lm-semantic-search is busy.
+- Command text can contain its own NUL byte. It lands in `AGENT_GATE_COMMAND` and stops the validator the same way.
+- The marker, NUL included, is written to the `effective_cwd` column of the `intake_events` table in SQLite.
+- The validator gets 1500 ms to run. It needs about 21 ms when lm-semantic-search is healthy. When lm-semantic-search is busy, the validator times out and the command is allowed.
 
-The sentinel path through the code: `effectiveCwdAfterChain` (`internal/rules/engine.go`) → `fields.effectiveCWD()` → `buildInput` (`internal/rules/exec_gate.go`) → `BuildRequest` (`internal/rules/concerns/exec/concern.go`) → environment.
+Code path of the marker: `internal/rules/engine.go` computes it, `internal/rules/exec_gate.go` packs it into the validator input, and `internal/rules/concerns/exec/concern.go` writes it into the environment.
 
 ## Evidence (measured 2026-06-10)
 
-- The log `~/.local/state/agent-gate/agent-gate.jsonl` has 56 "environment variable contains NUL" entries and 29 "exec validator timed out" entries for this rule. All fail open.
-- The `intake_events` table has 483 rows with the sentinel in `effective_cwd` (hex `00554E5245534F4C5641424C45`).
-- `cd "$(echo /tmp)" && grep -rln "func main" /Users/agoodkind/Sites/lmd` reproduced the NUL failure three times in a row.
-- The bug hides because the daemon caches validator verdicts per search target and serves expired entries. A target validated once keeps blocking from cache. A cold target with an unresolvable `cd` passes through.
+- The log `~/.local/state/agent-gate/agent-gate.jsonl` has 56 "environment variable contains NUL" entries and 29 "exec validator timed out" entries for this rule. Every one allowed the command.
+- The `intake_events` table has 483 rows with the marker in `effective_cwd`.
+- This command reproduced the failure three times in a row: `cd "$(echo /tmp)" && grep -rln "func main" /Users/agoodkind/Sites/lmd`.
+- The bug hides behind a cache. The daemon caches validator verdicts per search target and serves them even after they expire. A target that was checked once keeps blocking from cache. A new target behind an unresolvable `cd` passes through.
 
 ## Design
 
-Three parts. The sentinel itself does not change; the rule engine depends on it internally. The fix stops it from escaping the process.
+Three parts. The marker keeps its value; the rule engine uses it internally. The fix stops it at the process boundaries.
 
-**Part 1: keep NUL out of the validator environment.**
-`buildInput` maps the sentinel to the empty string. Empty already means "working directory unknown" in the validator contract. `BuildRequest` additionally strips NUL bytes from every environment value it returns. That covers every NUL source, including NUL in command text. A unit test pins the invariant.
+**Part 1: no NUL in the validator environment.**
+The validator input builder (`internal/rules/exec_gate.go`) turns the marker into an empty string. An empty `AGENT_GATE_CWD` already means "directory unknown" to validators. As a backstop, the environment builder (`internal/rules/concerns/exec/concern.go`) strips NUL bytes from every value. The backstop covers NUL in command text too. A unit test locks this in.
 
-**Part 2: keep the sentinel out of the database.**
-The intake write in `internal/daemon/server.go` maps the sentinel to the empty string before storing `effective_cwd`. Empty already means "unknown" there. Existing rows stay as they are.
+**Part 2: no marker in the database.**
+The intake writer (`internal/daemon/server.go`) turns the marker into an empty string before saving `effective_cwd`. Empty already means "unknown" in that column. Old rows are left alone.
 
-**Part 3: give the validator enough time.**
-The rule gets `timeout_ms = 4000` in `~/.config/agent-gate/config.toml`, the maximum allowed. `on_error = "open"` stays, because failing closed would block every grep whenever lm-semantic-search is down.
+**Part 3: more time for the validator.**
+The rule gets `timeout_ms = 4000` in `~/.config/agent-gate/config.toml`. That is the maximum. Allow-on-error stays, because block-on-error would stop every grep whenever lm-semantic-search is down.
 
 ## Testing
 
-- `BuildRequest` unit test: no returned environment value contains NUL, tested with a sentinel cwd and with NUL in command text.
-- `buildInput` unit test: a sentinel cwd produces an empty `EffectiveCWD`.
-- Rules test: a command with an unresolvable `cd` plus a grep on a stubbed indexed target starts the validator and blocks.
-- Intake test: a record with the sentinel stores an empty `effective_cwd`.
-- Post-deploy: rerun the reproduction on an uncached target and confirm a block with no NUL warning in the log.
+- Environment builder test: no value contains a NUL byte, with the marker as cwd and with NUL in command text.
+- Input builder test: the marker becomes an empty cwd.
+- Rules test: a grep behind an unresolvable `cd` against a stubbed indexed target runs the validator and blocks.
+- Intake test: the marker is stored as an empty `effective_cwd`.
+- After deploy: rerun the reproduction on a target with no cached verdict. Expect a block and no NUL warning in the log.
 
 ## Out of scope
 
-A second spec covers detection expansion: treating sed, awk, and perl or python one-liners as code search, using shelldecomp's recursive parsing of heredocs and interpreter `-c` scripts instead of the token regex.
+Detection expansion gets its own spec: treating sed, awk, and perl or python one-liners as code search, with shelldecomp parsing heredocs and interpreter `-c` scripts recursively, replacing the token regex.
