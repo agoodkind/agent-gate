@@ -40,12 +40,6 @@ func ExtractCodeSearchTargets(command, cwd string, searchTools []string) []ReadT
 	if err != nil {
 		home = ""
 	}
-	decomposition := shelldecomp.Parse(command, cwd, home)
-
-	written := make(map[string]struct{})
-	for _, target := range decomposition.WriteTargets() {
-		written[target.Path] = struct{}{}
-	}
 
 	var out []ReadTarget
 	seen := make(map[string]struct{})
@@ -55,6 +49,23 @@ func ExtractCodeSearchTargets(command, cwd string, searchTools []string) []ReadT
 		}
 		seen[path] = struct{}{}
 		out = append(out, ReadTarget{Path: path, Remote: false, Spec: "code-search", Raw: command})
+	}
+	extractCodeSearchInto(command, cwd, home, tools, add, maxEmbeddedSearchDepth)
+	return out
+}
+
+// extractCodeSearchInto extracts one command level into add and recurses into
+// embedded code the command would execute locally (a wrapper shell's -c script
+// and a heredoc body), bounded by depth.
+func extractCodeSearchInto(command, cwd, home string, tools map[string]bool, add func(string), depth int) {
+	if depth <= 0 || command == "" {
+		return
+	}
+	decomposition := shelldecomp.Parse(command, cwd, home)
+
+	written := make(map[string]struct{})
+	for _, target := range decomposition.WriteTargets() {
+		written[target.Path] = struct{}{}
 	}
 
 	for _, target := range decomposition.ReadTargets() {
@@ -83,7 +94,8 @@ func ExtractCodeSearchTargets(command, cwd string, searchTools []string) []ReadT
 	for _, target := range resolvableTargets(enumeratorCodeSearchTargets(command, cwd, tools)) {
 		add(target.Path)
 	}
-	return out
+
+	extractEmbeddedCodeSearchInto(decomposition, cwd, home, tools, add, depth)
 }
 
 // resolvableTargets drops enumerator operands whose path still carries a shell

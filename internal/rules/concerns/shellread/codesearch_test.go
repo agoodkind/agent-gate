@@ -86,6 +86,66 @@ func TestExtractCodeSearchTargets(t *testing.T) {
 	}
 }
 
+// TestExtractCodeSearchTargetsAwk covers awk as a content reader: an awk
+// pattern scan reads its file operand, while the gawk in-place extension edits
+// it, so the write guard drops it.
+func TestExtractCodeSearchTargetsAwk(t *testing.T) {
+	const cwd = "/repo"
+
+	cases := []struct {
+		name    string
+		command string
+		want    []string
+	}{
+		{"pattern scan", `awk '/needle/ {print}' internal/x.go`, []string{"/repo/internal/x.go"}},
+		{"xargs awk over find", `find Sources | xargs awk '/needle/'`, []string{"/repo/Sources"}},
+		{"stdin awk has no target", `cat /tmp/x | awk '{print $1}'`, nil},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := targetPaths(ExtractCodeSearchTargets(tc.command, cwd, []string{"awk", "gawk"}))
+			if !slices.Equal(got, tc.want) {
+				t.Fatalf("ExtractCodeSearchTargets(%q) = %v, want %v", tc.command, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestExtractCodeSearchTargetsEmbedded covers code search hidden inside
+// embedded code: a local wrapper shell's -c script and a heredoc body written
+// to a temp script. A remote or containerized wrapper (ssh, docker) reads
+// remote paths, so its embedded search names no local target.
+func TestExtractCodeSearchTargetsEmbedded(t *testing.T) {
+	const cwd = "/repo"
+
+	cases := []struct {
+		name    string
+		command string
+		want    []string
+	}{
+		{"bash -c grep", `bash -c "grep -rn needle /repo/internal"`, []string{"/repo/internal"}},
+		{"bash -lc rg", `bash -lc "rg -n needle /repo/internal"`, []string{"/repo/internal"}},
+		{"sh -c with cd chain", `sh -c 'cd /other && grep -rn needle .'`, []string{"/other"}},
+		{"zsh -c relative operand", `zsh -c 'grep -rn needle internal'`, []string{"/repo/internal"}},
+		{"heredoc temp script then exec", "cat > /tmp/s.sh <<'EOF'\nrg -n needle /repo/internal\nEOF\nbash /tmp/s.sh", []string{"/repo/internal"}},
+		{"mktemp var script then exec", "S=$(mktemp); cat >\"$S\" <<'EOF'\nrg -n needle /repo/internal\nEOF\nbash \"$S\"", []string{"/repo/internal"}},
+		{"prose heredoc is not a search", "cat > /tmp/notes.md <<'EOF'\nsome notes about the rg tool\nEOF\n", nil},
+		{"ssh remote grep is not local", `ssh host 'grep -rn needle /repo/internal'`, nil},
+		{"docker run grep is not local", `docker run img grep -rn needle /repo/internal`, nil},
+		{"bash script file alone", `bash /tmp/s.sh`, nil},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := targetPaths(ExtractCodeSearchTargets(tc.command, cwd, testSearchTools))
+			if !slices.Equal(got, tc.want) {
+				t.Fatalf("ExtractCodeSearchTargets(%q) = %v, want %v", tc.command, got, tc.want)
+			}
+		})
+	}
+}
+
 // TestExtractCodeSearchTargetsSed covers sed as a content reader: a sed that
 // reads a file is a code search the semantic index can answer, while a sed -i
 // edits the file in place and is not a search, so its operands are dropped.
