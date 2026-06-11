@@ -102,6 +102,27 @@ func codexStopAuditDaemonTestConfig(t testing.TB) *config.Config {
 	}
 }
 
+// An unresolvable cd makes the effective-cwd field the shelldecomp marker,
+// which begins with a NUL byte. The intake record must store the unknown
+// directory as an empty string, not leak the marker into SQLite.
+func TestBuildIntakeRecordMapsUnresolvableCwdToEmpty(t *testing.T) {
+	raw := []byte(`{
+		"hook_event_name": "PreToolUse",
+		"session_id": "test-session",
+		"cwd": "/tmp",
+		"tool_name": "Bash",
+		"tool_input": {"command": "cd \"$(echo /tmp)\" && grep -rn x ."}
+	}`)
+
+	record, err := buildIntakeRecord(raw, "claude", map[string]string{})
+	if err != nil {
+		t.Fatalf("buildIntakeRecord: %v", err)
+	}
+	if record.Operation.EffectiveCWD != "" {
+		t.Fatalf("EffectiveCWD = %q, want empty for an unresolvable cwd", record.Operation.EffectiveCWD)
+	}
+}
+
 func TestEvaluateHook_DaemonOwnsEnforcement(t *testing.T) {
 	setDaemonTestDirs(t)
 	srv, err := New(newDiscardLogger(), daemonTestConfig(t))

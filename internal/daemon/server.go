@@ -25,6 +25,7 @@ import (
 	"goodkind.io/agent-gate/internal/intake"
 	"goodkind.io/agent-gate/internal/rules"
 	"goodkind.io/agent-gate/internal/version"
+	"goodkind.io/gksyntax/shelldecomp"
 )
 
 const configReloadDebounce = 200 * time.Millisecond
@@ -437,7 +438,13 @@ func buildIntakeRecord(rawJSON []byte, providerHint string, envFingerprint map[s
 	record.NormalizedJSON = append([]byte(nil), rawJSON...)
 	record.EnvFingerprint = cloneStringMap(envFingerprint)
 	record.Operation.CWD = firstNonEmpty(fields.CWD, payload.CWD())
-	record.Operation.EffectiveCWD = fields.String(config.FieldEffectiveCWD)
+	effectiveCwd := fields.String(config.FieldEffectiveCWD)
+	if effectiveCwd == shelldecomp.Unresolvable {
+		// Store the unknown directory as empty; the marker's NUL byte must
+		// not leak into the intake database.
+		effectiveCwd = ""
+	}
+	record.Operation.EffectiveCWD = effectiveCwd
 	record.Operation.Command = fields.CommandValue()
 	record.Operation.FilePath = fields.FilePathValue()
 	return record, nil
