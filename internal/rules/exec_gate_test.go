@@ -51,6 +51,33 @@ func (r *countingRunner) Calls() int {
 	return r.calls
 }
 
+// slowRunner blocks for a fixed delay before answering, so a test can hold a
+// validator past the rule's synchronous budget without a real process.
+type slowRunner struct {
+	mu    sync.Mutex
+	calls int
+	delay time.Duration
+	res   execconcern.RunResult
+}
+
+func (r *slowRunner) Run(ctx context.Context, _ []string, _ time.Duration, _ []byte, _ []string) (execconcern.RunResult, error) {
+	r.mu.Lock()
+	r.calls++
+	r.mu.Unlock()
+	select {
+	case <-time.After(r.delay):
+		return r.res, nil
+	case <-ctx.Done():
+		return execconcern.RunResult{}, ctx.Err()
+	}
+}
+
+func (r *slowRunner) Calls() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.calls
+}
+
 func loadExecRule(t *testing.T, body string) config.Rule {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "config.toml")
@@ -327,6 +354,55 @@ func TestExecStaleWhileRevalidate(t *testing.T) {
 	}
 }
 
+// A validator that outlives the synchronous budget fails the current event
+// open, finishes in the background, and caches its verdict so the next event
+// for the same target blocks.
+func TestExecGateSlowValidatorFinishesInBackgroundAndCachesBlock(t *testing.T) {
+	runner := &slowRunner{delay: 150 * time.Millisecond, res: execconcern.RunResult{ExitCode: 1, Stdout: "indexed\n"}}
+	rule := loadExecRule(t, `
+[[rules]]
+name = "exec-rule"
+events = ["PreToolUse"]
+action = "block"
+violation_message = "static message"
+
+[[rules.conditions]]
+kind = "regex"
+field_paths = ["tool_input.command"]
+pattern = "grepcode"
+
+[[rules.conditions]]
+kind = "exec"
+command = ["/bin/true"]
+timeout_ms = 50
+cache_ttl_ms = 60000
+`)
+
+	runtime := rules.NewExecRuntime(runner, nil)
+	ctx := rules.WithExecRuntime(context.Background(), runtime)
+	payload := map[string]any{
+		"cwd":        t.TempDir(),
+		"tool_input": map[string]any{"command": "grepcode -rn x ."},
+	}
+
+	first := rules.EvaluateAll(ctx, "claude", "PreToolUse", testFields(payload), []config.Rule{rule}, nil)
+	if len(first) != 0 {
+		t.Fatalf("event whose validator exceeds the budget should fail open, got %d violations", len(first))
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		violations := rules.EvaluateAll(ctx, "claude", "PreToolUse", testFields(payload), []config.Rule{rule}, nil)
+		if len(violations) > 0 {
+			break // background verdict landed in the cache and now blocks
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("background verdict never reached the cache")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 // capturingRunner records the env passed to the validator so a test can assert
 // the read targets the gate computed.
 type capturingRunner struct {
@@ -351,6 +427,17 @@ func (r *capturingRunner) readTargets() string {
 		}
 	}
 	return ""
+}
+
+func (r *capturingRunner) envValue(key string) (string, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, kv := range r.env {
+		if after, ok := strings.CutPrefix(kv, key+"="); ok {
+			return after, true
+		}
+	}
+	return "", false
 }
 
 // TestExecReadTargetsResolveAgainstEffectiveCwd guards the cd-chain fix: a search
@@ -391,5 +478,46 @@ cache_ttl_ms = 0
 	got := runner.readTargets()
 	if got != wantTarget {
 		t.Fatalf("read targets = %q, want the cd dir %q (not session %q)", got, wantTarget, sessionDir)
+	}
+}
+
+// A grep behind an unresolvable cd must still reach the validator (the spawn
+// must not die on the marker's NUL byte) and the validator must see the
+// unknown directory as an empty AGENT_GATE_CWD per the validator contract.
+func TestExecGateUnresolvableCwdRunsValidatorWithEmptyCwd(t *testing.T) {
+	target := t.TempDir()
+	runner := &capturingRunner{res: execconcern.RunResult{ExitCode: 1, Stdout: "indexed\n"}}
+	rule := loadExecRule(t, `
+[[rules]]
+name = "exec-rule"
+events = ["PreToolUse"]
+action = "block"
+violation_message = "static message"
+
+[[rules.conditions]]
+kind = "regex"
+field_paths = ["tool_input.command"]
+pattern = "grep"
+
+[[rules.conditions]]
+kind = "exec"
+command = ["/bin/true"]
+cache_ttl_ms = 0
+`)
+
+	violations := evalRule(runner, rule, map[string]any{
+		"cwd":        t.TempDir(),
+		"tool_input": map[string]any{"command": `cd "$(echo /tmp)" && grep -rn x ` + target},
+	})
+
+	if len(violations) == 0 {
+		t.Fatalf("validator exit 1 behind an unresolvable cd should block; the spawn must not fail open")
+	}
+	cwd, found := runner.envValue("AGENT_GATE_CWD")
+	if !found {
+		t.Fatalf("validator env missing AGENT_GATE_CWD")
+	}
+	if cwd != "" {
+		t.Fatalf("AGENT_GATE_CWD = %q, want empty for an unresolvable cwd", cwd)
 	}
 }

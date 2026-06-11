@@ -13,6 +13,7 @@ import (
 	"goodkind.io/agent-gate/internal/rules/canonpath"
 	execconcern "goodkind.io/agent-gate/internal/rules/concerns/exec"
 	"goodkind.io/agent-gate/internal/rules/concerns/shellread"
+	"goodkind.io/gksyntax/shelldecomp"
 )
 
 // canonCacheTTL bounds how long a path-to-realpath mapping is memoized. Real
@@ -20,6 +21,12 @@ import (
 // events, so a short window removes redundant lstat syscalls without holding a
 // stale result long enough to matter.
 const canonCacheTTL = 5 * time.Second
+
+// backgroundValidatorTimeout bounds a validator run that outlived its event's
+// synchronous budget. The run continues detached so its verdict can land in
+// the cache and decide the next event for the same target; 30s rides out a
+// busy lm-semantic-search daemon while still reclaiming the process.
+const backgroundValidatorTimeout = 30 * time.Second
 
 // ExecRuntime holds the cross-event state for exec validator conditions: the
 // process runner, a path canonicalization cache, and the result cache keyed by
@@ -269,14 +276,66 @@ func (r *ExecRuntime) runValidator(
 		return execconcern.Verdict{Block: c.OnError == config.OnErrorClosed, Message: "", Errored: true}
 	}
 
-	timeout := time.Duration(c.TimeoutMs) * time.Millisecond
-	res, runErr := r.runner.Run(ctx, c.Command, timeout, stdin, env)
-	verdict := execconcern.Interpret(c, res, runErr)
-	if verdict.Errored {
-		r.log.WarnContext(ctx, "exec validator errored",
-			"rule", rule.Name, "on_error", c.OnError, "block", verdict.Block, "err", runErr)
+	done := make(chan execconcern.Verdict, 1)
+	bgCtx := context.WithoutCancel(ctx)
+	go func() {
+		defer func() {
+			if rec := recover(); rec != nil {
+				r.log.ErrorContext(bgCtx, "exec validator panic",
+					"rule", rule.Name, "err", fmt.Errorf("panic: %v", rec))
+				done <- execconcern.Verdict{Block: c.OnError == config.OnErrorClosed, Message: "", Errored: true}
+			}
+		}()
+		res, runErr := r.runner.Run(bgCtx, c.Command, backgroundValidatorTimeout, stdin, env)
+		verdict := execconcern.Interpret(c, res, runErr)
+		if verdict.Errored {
+			r.log.WarnContext(bgCtx, "exec validator errored",
+				"rule", rule.Name, "on_error", c.OnError, "block", verdict.Block, "err", runErr)
+		}
+		done <- verdict
+	}()
+
+	syncBudget := time.Duration(c.TimeoutMs) * time.Millisecond
+	if syncBudget <= 0 {
+		return <-done
 	}
-	return verdict
+	timer := time.NewTimer(syncBudget)
+	defer timer.Stop()
+	select {
+	case verdict := <-done:
+		return verdict
+	case <-timer.C:
+		// The event fails open now, but the run continues so its verdict can
+		// decide the next event for this target. Registration in refreshing
+		// keeps a stale-entry refresh from forking a duplicate meanwhile.
+		key := cacheEntryKey(c, keyView.Canonical)
+		r.mu.Lock()
+		_, busy := r.refreshing[key]
+		if !busy {
+			r.refreshing[key] = struct{}{}
+		}
+		r.mu.Unlock()
+		go func() {
+			defer func() {
+				if rec := recover(); rec != nil {
+					r.log.ErrorContext(bgCtx, "exec validator background cache panic",
+						"rule", rule.Name, "err", fmt.Errorf("panic: %v", rec))
+				}
+			}()
+			verdict := <-done
+			if !busy {
+				r.mu.Lock()
+				delete(r.refreshing, key)
+				r.mu.Unlock()
+			}
+			if !verdict.Errored && c.CacheTTLMs > 0 {
+				r.cacheStore(c, keyView.Canonical, verdict)
+			}
+		}()
+		r.log.WarnContext(ctx, "exec validator exceeded synchronous budget; continuing in background",
+			"rule", rule.Name, "on_error", c.OnError, "budget_ms", c.TimeoutMs)
+		return execconcern.Verdict{Block: c.OnError == config.OnErrorClosed, Message: "", Errored: true}
+	}
 }
 
 func (r *ExecRuntime) buildInput(
@@ -305,13 +364,20 @@ func (r *ExecRuntime) buildInput(
 		}
 		matched = append(matched, execconcern.FieldValue{Field: sel.Path, Value: value})
 	}
+	effectiveCwd := fields.String(config.FieldEffectiveCWD)
+	if effectiveCwd == shelldecomp.Unresolvable {
+		// The marker means "directory unknown". The validator contract
+		// expresses that as an empty cwd, and the marker's NUL byte must
+		// never reach the process environment.
+		effectiveCwd = ""
+	}
 	return execconcern.Input{
 		Event:        eventName,
 		System:       system,
 		ToolName:     fields.String(config.FieldToolName),
 		Rule:         rule.Name,
 		Command:      command,
-		EffectiveCWD: canonicalizePathField(r.canon, cwd, fields.String(config.FieldEffectiveCWD)),
+		EffectiveCWD: canonicalizePathField(r.canon, cwd, effectiveCwd),
 		FilePath:     canonicalizePathField(r.canon, cwd, fields.FilePathValue()),
 		CacheKey:     keyView,
 		ReadTargets:  r.readTargetViews(cwd, command),
