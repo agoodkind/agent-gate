@@ -87,7 +87,7 @@ func BuildRequest(in Input) (stdin []byte, env []string, err error) {
 	if err != nil {
 		return nil, nil, errors.New("marshal exec validator request: " + err.Error())
 	}
-	env = []string{
+	env = sanitizeEnv([]string{
 		"AGENT_GATE_EVENT=" + in.Event,
 		"AGENT_GATE_SYSTEM=" + in.System,
 		"AGENT_GATE_TOOL=" + in.ToolName,
@@ -97,8 +97,21 @@ func BuildRequest(in Input) (stdin []byte, env []string, err error) {
 		"AGENT_GATE_FILE_PATH=" + in.FilePath.Canonical,
 		"AGENT_GATE_CACHE_KEY=" + in.CacheKey.Canonical,
 		"AGENT_GATE_READ_TARGETS=" + readTargetsEnv(in.ReadTargets),
-	}
+	})
 	return stdin, env, nil
+}
+
+// sanitizeEnv strips NUL bytes from every env value. os/exec refuses to start
+// a process whose environment contains a NUL, which silently fails the gate
+// open under on_error=open; the shelldecomp unresolvable-cwd marker and
+// NUL-bearing command text are both real inputs here.
+func sanitizeEnv(env []string) []string {
+	for i, kv := range env {
+		if strings.Contains(kv, "\x00") {
+			env[i] = strings.ReplaceAll(kv, "\x00", "")
+		}
+	}
+	return env
 }
 
 // readTargetsEnv renders the canonical real path of each read target on its own

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -99,6 +100,53 @@ func TestBuildRequestCarriesJSONAndEnv(t *testing.T) {
 		if !slices.Contains(env, want) {
 			t.Fatalf("env missing %q in %v", want, env)
 		}
+	}
+}
+
+// The shelldecomp unresolvable-cwd marker begins with a NUL byte, and os/exec
+// refuses to start a process whose environment contains one. BuildRequest must
+// therefore never emit NUL in any env value, whatever the input carries.
+func TestBuildRequestStripsNULFromEnv(t *testing.T) {
+	in := Input{
+		Event:        "PreToolUse",
+		System:       "claude",
+		ToolName:     "Bash",
+		Rule:         "grep-code-use-semantic-search",
+		Command:      "grep -rn \x00marker .",
+		EffectiveCWD: PathView{Raw: "\x00UNRESOLVABLE", Canonical: "\x00UNRESOLVABLE", IsCanonical: false},
+		CacheKey:     PathView{Raw: "\x00UNRESOLVABLE", Canonical: "\x00UNRESOLVABLE", IsCanonical: false},
+	}
+
+	_, env, err := BuildRequest(in)
+	if err != nil {
+		t.Fatalf("BuildRequest: %v", err)
+	}
+	for _, kv := range env {
+		if strings.Contains(kv, "\x00") {
+			t.Fatalf("env entry %q contains a NUL byte", kv)
+		}
+	}
+}
+
+// End-to-end proof on the real spawn path: a sanitized env from marker-bearing
+// input must start a process without error.
+func TestOSRunnerStartsWithSanitizedMarkerEnv(t *testing.T) {
+	in := Input{
+		Command:      "grep -rn \x00marker .",
+		EffectiveCWD: PathView{Raw: "\x00UNRESOLVABLE", Canonical: "\x00UNRESOLVABLE", IsCanonical: false},
+	}
+	_, env, err := BuildRequest(in)
+	if err != nil {
+		t.Fatalf("BuildRequest: %v", err)
+	}
+
+	var runner OSRunner
+	res, err := runner.Run(context.Background(), []string{"/usr/bin/true"}, time.Second, nil, env)
+	if err != nil {
+		t.Fatalf("spawn with sanitized env failed: %v", err)
+	}
+	if res.ExitCode != 0 {
+		t.Fatalf("expected exit 0, got %d", res.ExitCode)
 	}
 }
 
