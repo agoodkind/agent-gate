@@ -55,9 +55,15 @@ As a backstop, the environment builder in `internal/rules/concerns/exec/concern.
 
 The intake writer in `internal/daemon/server.go` converts the marker to an empty string before saving `effective_cwd`. An empty value already means "unknown" in that column. Existing rows are left as they are.
 
-### Part 3: give the validator enough time
+### Part 3: finish slow validator runs in the background
 
-The rule receives `timeout_ms = 4000` in `~/.config/agent-gate/config.toml`, the maximum the configuration allows. Allow-on-error stays in place, because blocking on error would stop every grep whenever lm-semantic-search is down.
+The synchronous budget stays short. An event waits at most `timeout_ms` (the 1500 ms default) for its validator, because agent-gate's own hook client gives the whole daemon round trip only 5 seconds (`internal/daemon/client.go`).
+
+A run that exceeds the budget is no longer killed. The event itself is allowed, as today, but the validator process keeps running in the background under its own longer deadline of 30 seconds. When it finishes, its verdict is stored in the per-target cache.
+
+The next search against the same target is then decided from the cache and blocked if the target is indexed. One slow event slips through; the target does not stay open.
+
+Background completions are deduplicated per cache key, reusing the daemon's existing background-refresh tracking, so repeated timeouts on one target do not pile up processes. Allow-on-error stays in place, because blocking on error would stop every grep whenever lm-semantic-search is down.
 
 ## Testing
 
@@ -65,6 +71,7 @@ The rule receives `timeout_ms = 4000` in `~/.config/agent-gate/config.toml`, the
 - A validator input builder test asserts that the marker becomes an empty working directory.
 - A rules-package test asserts that a grep behind an unresolvable `cd`, against a stubbed indexed target, starts the validator and blocks.
 - An intake test asserts that the marker is stored as an empty `effective_cwd`.
+- A timeout test asserts that a validator exceeding the synchronous budget allows the current event, finishes in the background, stores its verdict in the cache, and blocks the next event for the same target.
 
 After deployment, rerunning the reproduction against a target with no cached verdict should produce a block and no NUL warning in the log.
 
