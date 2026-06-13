@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"goodkind.io/agent-gate/internal/rules/concerns/shellread"
+	"goodkind.io/gksyntax/shelldecomp"
 )
 
 // CmdReadTargets returns the newline-joined effective filesystem targets of a
@@ -18,7 +19,7 @@ import (
 // resolvable target (shelldecomp cannot pin the cwd, so the operand is dropped
 // rather than fabricated). Passing the base cwd, not effectiveCWD(), avoids
 // applying the cd chain twice.
-func (fields FieldSet) CmdReadTargets(searchTools []string) string {
+func (fields FieldSet) CmdReadTargets(searchTools []string, resolver shelldecomp.FileResolver) string {
 	if len(searchTools) == 0 {
 		return ""
 	}
@@ -29,7 +30,7 @@ func (fields FieldSet) CmdReadTargets(searchTools []string) string {
 	if command == "" {
 		return ""
 	}
-	targets := shellread.ExtractCodeSearchTargets(command, fields.BaseCWD(), searchTools)
+	targets := shellread.ExtractCodeSearchTargets(command, fields.BaseCWD(), searchTools, resolver)
 	paths := make([]string, 0, len(targets))
 	for _, target := range targets {
 		if target.Remote || target.Path == "" {

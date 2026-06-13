@@ -140,7 +140,7 @@ var fieldStringAccessors = map[config.FieldSelector]func(FieldSet) string{
 	// rule's search_tools, so the generic selector path (which has no rule
 	// context) yields nothing. The exec gate computes it with the condition's
 	// declared tools.
-	config.FieldCmdReadTargets:            func(f FieldSet) string { return f.CmdReadTargets(nil) },
+	config.FieldCmdReadTargets:            func(f FieldSet) string { return f.CmdReadTargets(nil, nil) },
 	config.FieldPermissionMode:            func(f FieldSet) string { return f.PermissionMode },
 	config.FieldAgentID:                   func(f FieldSet) string { return f.AgentID },
 	config.FieldAgentType:                 func(f FieldSet) string { return f.AgentType },

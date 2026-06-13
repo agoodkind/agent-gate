@@ -30,7 +30,7 @@ func TestCmdReadTargetsField(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			fields := FieldSet{ToolInputCommand: tc.command, CWD: "/repo"}
-			got := fields.CmdReadTargets(readTargetsTestTools)
+			got := fields.CmdReadTargets(readTargetsTestTools, nil)
 			if got != tc.want {
 				t.Fatalf("cmd_read_targets for %q = %q, want %q", tc.command, got, tc.want)
 			}
@@ -43,8 +43,8 @@ func TestCmdReadTargetsField(t *testing.T) {
 // context) yields nothing.
 func TestCmdReadTargetsRequiresDeclaredTools(t *testing.T) {
 	fields := FieldSet{ToolInputCommand: `grep -rn "x" .`, CWD: "/repo"}
-	if got := fields.CmdReadTargets(nil); got != "" {
-		t.Fatalf("CmdReadTargets(nil) = %q, want empty", got)
+	if got := fields.CmdReadTargets(nil, nil); got != "" {
+		t.Fatalf("CmdReadTargets(nil, nil) = %q, want empty", got)
 	}
 	if got := fields.String(config.FieldCmdReadTargets); got != "" {
 		t.Fatalf("generic cmd_read_targets selector = %q, want empty", got)

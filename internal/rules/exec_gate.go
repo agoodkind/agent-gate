@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -27,6 +28,12 @@ const canonCacheTTL = 5 * time.Second
 // the cache and decide the next event for the same target; 30s rides out a
 // busy lm-semantic-search daemon while still reclaiming the process.
 const backgroundValidatorTimeout = 30 * time.Second
+
+// maxResolvedScriptBytes caps the size of an interpreter script the disk
+// resolver reads off disk for code-search read analysis. A program file larger
+// than this is refused so a pathological input cannot pull an unbounded read
+// into the parse; real agent scripts are far smaller than 1 MiB.
+const maxResolvedScriptBytes = 1 << 20
 
 // ExecRuntime holds the cross-event state for exec validator conditions: the
 // process runner, a path canonicalization cache, and the result cache keyed by
@@ -196,7 +203,9 @@ func execConditionGateMatch(ctx context.Context, fields FieldSet, rule *config.R
 	if c.CacheKeySelector().Selector == config.FieldCmdReadTargets {
 		// cmd_read_targets is rule policy: the tool set comes from this
 		// condition's search_tools, which the generic selector path cannot see.
-		keyValue = fields.CmdReadTargets(c.SearchTools)
+		// The disk resolver lets an interpreter script be read off disk so the
+		// cache key reflects the program's real read targets.
+		keyValue = fields.CmdReadTargets(c.SearchTools, diskFileResolver())
 	} else {
 		keyValue = fields.String(c.CacheKeySelector().Selector)
 	}
@@ -401,7 +410,7 @@ func (r *ExecRuntime) buildInput(
 // attributed to /other rather than the session cwd without applying the cd
 // chain twice.
 func (r *ExecRuntime) readTargetViews(cwd, command string, searchTools []string) []execconcern.PathView {
-	targets := shellread.ExtractCodeSearchTargets(command, cwd, searchTools)
+	targets := shellread.ExtractCodeSearchTargets(command, cwd, searchTools, diskFileResolver())
 	views := make([]execconcern.PathView, 0, len(targets))
 	for _, target := range targets {
 		if target.Remote || target.Path == "" {
@@ -410,6 +419,29 @@ func (r *ExecRuntime) readTargetViews(cwd, command string, searchTools []string)
 		views = append(views, canonicalizePathField(r.canon, cwd, target.Path))
 	}
 	return views
+}
+
+// diskFileResolver returns a shelldecomp.FileResolver that reads an interpreter
+// script off disk only when the path names an existing regular file under the
+// size cap. A missing path, a directory or other non-regular file, a file over
+// the cap, or any read error yields (nil, false), so an unreadable or oversized
+// script is located but never parsed. The resolver receives an absolute path
+// that shelldecomp has already resolved against the command cwd.
+func diskFileResolver() shelldecomp.FileResolver {
+	return func(absPath string) ([]byte, bool) {
+		info, err := os.Stat(absPath)
+		if err != nil || !info.Mode().IsRegular() {
+			return nil, false
+		}
+		if info.Size() > maxResolvedScriptBytes {
+			return nil, false
+		}
+		content, err := os.ReadFile(absPath)
+		if err != nil {
+			return nil, false
+		}
+		return content, true
+	}
 }
 
 // cacheLookup reports the cached verdict and whether it is missing, fresh, or
