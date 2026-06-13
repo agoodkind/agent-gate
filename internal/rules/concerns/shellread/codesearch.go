@@ -28,7 +28,11 @@ import (
 // path (an unexpanded $var operand, a command substitution, or a cd into an
 // unresolvable directory) are dropped rather than fabricated, so an
 // unresolvable shape stays out of scope.
-func ExtractCodeSearchTargets(command, cwd string, searchTools []string) []ReadTarget {
+//
+// resolver, when non-nil, lets shelldecomp read an interpreter's script file off
+// disk so a python program's real reads are surfaced; a nil resolver leaves the
+// behavior identical to the structural-only parse.
+func ExtractCodeSearchTargets(command, cwd string, searchTools []string, resolver shelldecomp.FileResolver) []ReadTarget {
 	if command == "" || len(searchTools) == 0 {
 		return nil
 	}
@@ -50,18 +54,19 @@ func ExtractCodeSearchTargets(command, cwd string, searchTools []string) []ReadT
 		seen[path] = struct{}{}
 		out = append(out, ReadTarget{Path: path, Remote: false, Spec: "code-search", Raw: command})
 	}
-	extractCodeSearchInto(command, cwd, home, tools, add, maxEmbeddedSearchDepth)
+	extractCodeSearchInto(command, cwd, home, tools, add, maxEmbeddedSearchDepth, resolver)
 	return out
 }
 
 // extractCodeSearchInto extracts one command level into add and recurses into
 // embedded code the command would execute locally (a wrapper shell's -c script
-// and a heredoc body), bounded by depth.
-func extractCodeSearchInto(command, cwd, home string, tools map[string]bool, add func(string), depth int) {
+// and a heredoc body), bounded by depth. resolver, when non-nil, is threaded
+// into shelldecomp so an interpreter's script file is read off disk.
+func extractCodeSearchInto(command, cwd, home string, tools map[string]bool, add func(string), depth int, resolver shelldecomp.FileResolver) {
 	if depth <= 0 || command == "" {
 		return
 	}
-	decomposition := shelldecomp.Parse(command, cwd, home)
+	decomposition := parseCommand(command, cwd, home, resolver)
 
 	written := make(map[string]struct{})
 	for _, target := range decomposition.WriteTargets() {
@@ -95,7 +100,17 @@ func extractCodeSearchInto(command, cwd, home string, tools map[string]bool, add
 		add(target.Path)
 	}
 
-	extractEmbeddedCodeSearchInto(decomposition, cwd, home, tools, add, depth)
+	extractEmbeddedCodeSearchInto(decomposition, cwd, home, tools, add, depth, resolver)
+}
+
+// parseCommand decomposes a shell command, threading the off-disk resolver
+// through shelldecomp when one is supplied. A nil resolver uses the
+// structural-only Parse so the no-resolver path stays behavior-identical.
+func parseCommand(command, cwd, home string, resolver shelldecomp.FileResolver) *shelldecomp.Decomposition {
+	if resolver == nil {
+		return shelldecomp.Parse(command, cwd, home)
+	}
+	return shelldecomp.ParseWithOptions(command, cwd, shelldecomp.Options{Home: home, FileResolver: resolver})
 }
 
 // resolvableTargets drops enumerator operands whose path still carries a shell

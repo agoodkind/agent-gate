@@ -38,7 +38,7 @@ var dashCFlagRe = regexp.MustCompile(`^-[a-zA-Z]*c$`)
 // yields no declared-tool commands and therefore no targets, and a relative
 // path inside the body resolves against the outer cwd because the body's
 // execution-time cwd is unknowable statically.
-func extractEmbeddedCodeSearchInto(decomposition *shelldecomp.Decomposition, cwd, home string, tools map[string]bool, add func(string), depth int) {
+func extractEmbeddedCodeSearchInto(decomposition *shelldecomp.Decomposition, cwd, home string, tools map[string]bool, add func(string), depth int, resolver shelldecomp.FileResolver) {
 	for _, cmd := range decomposition.Commands() {
 		if !localWrapperShells[cmd.Argv0] {
 			continue
@@ -51,14 +51,43 @@ func extractEmbeddedCodeSearchInto(decomposition *shelldecomp.Decomposition, cwd
 		if innerCwd == "" || innerCwd == shelldecomp.Unresolvable {
 			innerCwd = cwd
 		}
-		extractCodeSearchInto(script, innerCwd, home, tools, add, depth-1)
+		extractCodeSearchInto(script, innerCwd, home, tools, add, depth-1, resolver)
 	}
 
 	for _, region := range decomposition.EmbeddedRegions() {
+		if region.Lang == shelldecomp.LangPython && region.Parsed != nil {
+			foldPythonRegionReads(region, tools, add)
+			continue
+		}
 		if region.Lang != shelldecomp.LangOpaque || region.Parsed != nil {
 			continue
 		}
-		extractCodeSearchInto(region.Text, cwd, home, tools, add, depth-1)
+		extractCodeSearchInto(region.Text, cwd, home, tools, add, depth-1, resolver)
+	}
+}
+
+// foldPythonRegionReads folds the read targets a python embedded region's
+// analyzer derived (Part A produces these inside region.Parsed) into add, when
+// the rule's tool set declares python. It applies the same write-guard as the
+// top level (a path the program also writes is an edit target, not a content
+// search) and drops any target shelldecomp could not pin to a literal absolute
+// path, so an unresolvable shape stays out of scope.
+func foldPythonRegionReads(region shelldecomp.EmbeddedRegion, tools map[string]bool, add func(string)) {
+	if !tools["python"] && !tools["python3"] {
+		return
+	}
+	written := make(map[string]struct{})
+	for _, target := range region.Parsed.WriteTargets() {
+		written[target.Path] = struct{}{}
+	}
+	for _, target := range region.Parsed.ReadTargets() {
+		if _, isWrite := written[target.Path]; isWrite {
+			continue
+		}
+		if !target.Resolvable || target.Path == shelldecomp.Unresolvable {
+			continue
+		}
+		add(target.Path)
 	}
 }
 

@@ -39,7 +39,7 @@ func TestExtractCodeSearchTargetsShelldecompSanity(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := targetPaths(ExtractCodeSearchTargets(tc.command, cwd, testSearchTools))
+			got := targetPaths(ExtractCodeSearchTargets(tc.command, cwd, testSearchTools, nil))
 			if !slices.Equal(got, tc.want) {
 				t.Fatalf("ExtractCodeSearchTargets(%q) = %v, want %v", tc.command, got, tc.want)
 			}
@@ -78,7 +78,7 @@ func TestExtractCodeSearchTargets(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := targetPaths(ExtractCodeSearchTargets(tc.command, cwd, testSearchTools))
+			got := targetPaths(ExtractCodeSearchTargets(tc.command, cwd, testSearchTools, nil))
 			if !slices.Equal(got, tc.want) {
 				t.Fatalf("ExtractCodeSearchTargets(%q) = %v, want %v", tc.command, got, tc.want)
 			}
@@ -104,7 +104,7 @@ func TestExtractCodeSearchTargetsAwk(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := targetPaths(ExtractCodeSearchTargets(tc.command, cwd, []string{"awk", "gawk"}))
+			got := targetPaths(ExtractCodeSearchTargets(tc.command, cwd, []string{"awk", "gawk"}, nil))
 			if !slices.Equal(got, tc.want) {
 				t.Fatalf("ExtractCodeSearchTargets(%q) = %v, want %v", tc.command, got, tc.want)
 			}
@@ -138,7 +138,7 @@ func TestExtractCodeSearchTargetsEmbedded(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := targetPaths(ExtractCodeSearchTargets(tc.command, cwd, testSearchTools))
+			got := targetPaths(ExtractCodeSearchTargets(tc.command, cwd, testSearchTools, nil))
 			if !slices.Equal(got, tc.want) {
 				t.Fatalf("ExtractCodeSearchTargets(%q) = %v, want %v", tc.command, got, tc.want)
 			}
@@ -167,7 +167,7 @@ func TestExtractCodeSearchTargetsSed(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := targetPaths(ExtractCodeSearchTargets(tc.command, cwd, testSearchTools))
+			got := targetPaths(ExtractCodeSearchTargets(tc.command, cwd, testSearchTools, nil))
 			if !slices.Equal(got, tc.want) {
 				t.Fatalf("ExtractCodeSearchTargets(%q) = %v, want %v", tc.command, got, tc.want)
 			}
@@ -219,7 +219,7 @@ func TestExtractCodeSearchTargetsEnumerator(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := targetPaths(ExtractCodeSearchTargets(tc.command, cwd, testSearchTools))
+			got := targetPaths(ExtractCodeSearchTargets(tc.command, cwd, testSearchTools, nil))
 			if !slices.Equal(got, tc.want) {
 				t.Fatalf("ExtractCodeSearchTargets(%q) = %v, want %v", tc.command, got, tc.want)
 			}
