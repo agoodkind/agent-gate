@@ -55,25 +55,37 @@ func extractEmbeddedCodeSearchInto(decomposition *shelldecomp.Decomposition, cwd
 	}
 
 	for _, region := range decomposition.EmbeddedRegions() {
-		if region.Lang == shelldecomp.LangPython && region.Parsed != nil {
-			foldPythonRegionReads(region, tools, add)
+		if region.Parsed != nil {
+			foldRegionReads(region, tools, add)
 			continue
 		}
-		if region.Lang != shelldecomp.LangOpaque || region.Parsed != nil {
+		if region.Lang != shelldecomp.LangOpaque {
 			continue
 		}
 		extractCodeSearchInto(region.Text, cwd, home, tools, add, depth-1, resolver)
 	}
 }
 
-// foldPythonRegionReads folds the read targets a python embedded region's
-// analyzer derived (Part A produces these inside region.Parsed) into add, when
-// the rule's tool set declares python. It applies the same write-guard as the
-// top level (a path the program also writes is an edit target, not a content
-// search) and drops any target shelldecomp could not pin to a literal absolute
-// path, so an unresolvable shape stays out of scope.
-func foldPythonRegionReads(region shelldecomp.EmbeddedRegion, tools map[string]bool, add func(string)) {
-	if !tools["python"] && !tools["python3"] {
+// regionFoldTools maps an analyzed embedded language to the tool names that, when
+// declared by a rule, enable folding that region's analyzer-derived reads. A
+// language whose analyzer is registered in shelldecomp (python, awk) appears
+// here; a region whose language is absent folds nothing, so adding a new
+// analyzer to shelldecomp without a matching entry leaves it inert here.
+var regionFoldTools = map[shelldecomp.Lang][]string{
+	shelldecomp.LangPython: {"python", "python3"},
+	shelldecomp.LangAwk:    {"awk", "gawk"},
+}
+
+// foldRegionReads folds the read targets an embedded region's analyzer derived
+// (shelldecomp produces these inside region.Parsed) into add, when the rule's
+// tool set declares a tool that enables this language. It applies the same
+// write-guard as the top level (a path the program also writes is an edit
+// target, not a content search) and drops any target shelldecomp could not pin
+// to a literal absolute path, so an unresolvable shape stays out of scope. A
+// region whose language has no fold entry, or whose enabling tools are not
+// declared, folds nothing.
+func foldRegionReads(region shelldecomp.EmbeddedRegion, tools map[string]bool, add func(string)) {
+	if !regionFoldEnabled(region.Lang, tools) {
 		return
 	}
 	written := make(map[string]struct{})
@@ -89,6 +101,21 @@ func foldPythonRegionReads(region shelldecomp.EmbeddedRegion, tools map[string]b
 		}
 		add(target.Path)
 	}
+}
+
+// regionFoldEnabled reports whether a region's language has a fold entry and the
+// rule's tool set declares at least one of that language's enabling tools.
+func regionFoldEnabled(lang shelldecomp.Lang, tools map[string]bool) bool {
+	toolNames, found := regionFoldTools[lang]
+	if !found {
+		return false
+	}
+	for _, name := range toolNames {
+		if tools[name] {
+			return true
+		}
+	}
+	return false
 }
 
 // dashCOperand returns the script operand of a wrapper shell invoked with -c
