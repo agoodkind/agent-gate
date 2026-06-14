@@ -80,7 +80,12 @@ TREE_SITTER_LOCAL_DIR := $(CURDIR)/.bin
 # kept in place and the perl submodule tree is not reset.
 .PHONY: gksyntax-grammars
 gksyntax-grammars:
-	@git submodule update --init --recursive $(GKS_DIR)
+	@git submodule update --init $(GKS_DIR)
+	@git -C $(GKS_DIR) submodule update --init \
+		treesitter/grammars/swift/upstream \
+		treesitter/grammars/perl/upstream \
+		treesitter/grammars/awk/upstream \
+		treesitter/grammars/dart/upstream
 	@if [ ! -f "$(SWIFT_GRAMMAR_DEF)" ]; then \
 		echo "gksyntax-grammars: $(SWIFT_GRAMMAR_DIR) is empty; run 'git submodule update --init --recursive'"; \
 		exit 1; \
