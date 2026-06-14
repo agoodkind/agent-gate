@@ -74,6 +74,7 @@ func extractEmbeddedCodeSearchInto(decomposition *shelldecomp.Decomposition, cwd
 var regionFoldTools = map[shelldecomp.Lang][]string{
 	shelldecomp.LangPython: {"python", "python3"},
 	shelldecomp.LangAwk:    {"awk", "gawk"},
+	shelldecomp.LangSed:    {"sed"},
 }
 
 // foldRegionReads folds the read targets an embedded region's analyzer derived
