@@ -75,6 +75,7 @@ var regionFoldTools = map[shelldecomp.Lang][]string{
 	shelldecomp.LangPython: {"python", "python3"},
 	shelldecomp.LangAwk:    {"awk", "gawk"},
 	shelldecomp.LangSed:    {"sed"},
+	shelldecomp.LangPerl:   {"perl"},
 }
 
 // foldRegionReads folds the read targets an embedded region's analyzer derived

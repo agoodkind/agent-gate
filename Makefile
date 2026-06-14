@@ -65,15 +65,28 @@ GKS_DIR := third_party/gksyntax
 SWIFT_GRAMMAR_DIR := $(GKS_DIR)/treesitter/grammars/swift/upstream
 SWIFT_GRAMMAR_DEF := $(SWIFT_GRAMMAR_DIR)/src/grammar.json
 SWIFT_GRAMMAR_PARSER := $(SWIFT_GRAMMAR_DIR)/src/parser.c
+PERL_GRAMMAR_DIR := $(GKS_DIR)/treesitter/grammars/perl/upstream
+PERL_GRAMMAR_DEF := $(PERL_GRAMMAR_DIR)/src/grammar.json
+PERL_GRAMMAR_PARSER := $(PERL_GRAMMAR_DIR)/src/parser.c
 TREE_SITTER_ABI ?= 14
 # tree-sitter CLI lands here when the host has none on PATH. Gitignored.
 TREE_SITTER_LOCAL_DIR := $(CURDIR)/.bin
 
+# gksyntax commits the swift and perl grammar definitions (and their external
+# scanners) but not the generated parsers, so each parser is produced from the
+# pinned submodule by the tree-sitter CLI. Swift commits its own parser.c in
+# upstream and is restored with `git checkout -- .` after generation; perl
+# commits no parser.c, so its generated parser.c and tree_sitter/ headers are
+# kept in place and the perl submodule tree is not reset.
 .PHONY: gksyntax-grammars
 gksyntax-grammars:
 	@git submodule update --init --recursive $(GKS_DIR)
 	@if [ ! -f "$(SWIFT_GRAMMAR_DEF)" ]; then \
 		echo "gksyntax-grammars: $(SWIFT_GRAMMAR_DIR) is empty; run 'git submodule update --init --recursive'"; \
+		exit 1; \
+	fi
+	@if [ ! -f "$(PERL_GRAMMAR_DEF)" ]; then \
+		echo "gksyntax-grammars: $(PERL_GRAMMAR_DIR) is empty; run 'git submodule update --init --recursive'"; \
 		exit 1; \
 	fi
 	@ts_bin="$$(command -v tree-sitter 2>/dev/null || true)"; \
@@ -87,10 +100,17 @@ gksyntax-grammars:
 		git -C "$(SWIFT_GRAMMAR_DIR)" checkout -- . >/dev/null 2>&1 || true; \
 	else \
 		echo "gksyntax-grammars: Swift parser already generated"; \
+	fi; \
+	if [ ! -f "$(PERL_GRAMMAR_PARSER)" ] || [ "$(PERL_GRAMMAR_DEF)" -nt "$(PERL_GRAMMAR_PARSER)" ]; then \
+		echo "gksyntax-grammars: generating Perl parser (abi $(TREE_SITTER_ABI))"; \
+		( cd "$(PERL_GRAMMAR_DIR)" && "$$ts_bin" generate src/grammar.json --abi $(TREE_SITTER_ABI) ); \
+	else \
+		echo "gksyntax-grammars: Perl parser already generated"; \
 	fi
 
 # Building, installing, testing, vetting, linting, and govulncheck all compile
-# the swift grammar package inside gksyntax, so they need the generated parser.
+# the swift and perl grammar packages inside gksyntax, so they need the
+# generated parsers.
 build build-check check test lint vet govulncheck install release: | gksyntax-grammars
 
 # ---------------------------------------------------------------------------
