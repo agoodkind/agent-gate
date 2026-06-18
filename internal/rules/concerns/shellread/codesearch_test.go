@@ -21,9 +21,9 @@ func targetPaths(targets []ReadTarget) []string {
 // check from the shelldecomp integration: an extensionless code grep over a repo
 // path resolves; a /tmp log grep resolves but is outside the repo (the
 // index-aware validator decides scope); git grep is excluded; a find piped to a
-// stdin grep reads filenames only and has no target; and a cd into an
-// unexpanded variable poisons the cwd so the recursive grep target is dropped
-// rather than fabricated.
+// stdin grep recursively enumerates its directory, so that directory is the
+// target; and a cd into an unexpanded variable poisons the cwd so the recursive
+// grep target is dropped rather than fabricated.
 func TestExtractCodeSearchTargetsShelldecompSanity(t *testing.T) {
 	const cwd = "/repo"
 	cases := []struct {
@@ -34,7 +34,7 @@ func TestExtractCodeSearchTargetsShelldecompSanity(t *testing.T) {
 		{"extensionless code grep over repo path", `grep -rn ServeHTTP internal`, []string{"/repo/internal"}},
 		{"tmp log grep resolves outside repo", `grep -n ERROR /tmp/x.log`, []string{"/tmp/x.log"}},
 		{"git grep with pathspec", `git grep ServeHTTP internal`, []string{"/repo/internal"}},
-		{"find piped to stdin grep has no target", `find Tests | grep -iE x`, nil},
+		{"find piped to stdin grep enumerates its dir", `find Tests | grep -iE x`, []string{"/repo/Tests"}},
 		{"cd to unresolvable var drops recursive target", `cd "$VAR" && grep -rn X .`, nil},
 	}
 	for _, tc := range cases {
@@ -197,18 +197,22 @@ func TestExtractCodeSearchTargetsEnumerator(t *testing.T) {
 		{"fd piped to xargs rg", `fd -e swift | xargs rg toolchain`, []string{"/repo"}},
 		{"multiple find paths piped to xargs grep", `find Sources Tests | xargs grep x`, []string{"/repo/Sources", "/repo/Tests"}},
 
-		// Filename lookups (read names, not contents): out of scope.
-		{"find piped to bare grep filters names", `find Tests | grep -iE "x"`, nil},
-		{"git ls-files piped to bare grep filters names", `git ls-files | grep '\.go$'`, nil},
-		{"bare find name code ext", `find . -name '*.go'`, nil},
-		{"bare find iname code ext", `find Sources -iname '*.swift' -print`, nil},
-		{"bare find non-code ext", `find . -name '*.json' -print`, nil},
-		{"bare find no name filter", `find Tests -type f`, nil},
-		{"git ls-files alone", `git ls-files`, nil},
+		// Recursive structure discovery with no content searcher: in scope. A
+		// find without a shallow -maxdepth walks a tree and git ls-files lists
+		// the whole working tree, so the enumerated directory is the target even
+		// when the output is only filtered by name.
+		{"find piped to bare grep enumerates dir", `find Tests | grep -iE "x"`, []string{"/repo/Tests"}},
+		{"git ls-files piped to bare grep enumerates cwd", `git ls-files | grep '\.go$'`, []string{"/repo"}},
+		{"bare find name code ext", `find . -name '*.go'`, []string{"/repo"}},
+		{"bare find iname code ext", `find Sources -iname '*.swift' -print`, []string{"/repo/Sources"}},
+		{"bare find non-code ext", `find . -name '*.json' -print`, []string{"/repo"}},
+		{"bare find no name filter", `find Tests -type f`, []string{"/repo/Tests"}},
+		{"git ls-files alone enumerates cwd", `git ls-files`, []string{"/repo"}},
 		{"git grep feeding a pipeline recurses cwd", `git grep x | xargs echo`, []string{"/repo"}},
 
-		// Operand-bearing stages resolve through the operand parser, not here.
-		{"enumerator and grep in separate pipelines", `find Sources ; grep x other.txt`, []string{"/repo/other.txt"}},
+		// Operand-bearing stages resolve through the operand parser; a recursive
+		// find in another pipeline then also names its enumerated directory.
+		{"enumerator and grep in separate pipelines", `find Sources ; grep x other.txt`, []string{"/repo/other.txt", "/repo/Sources"}},
 
 		// Unresolvable enumerator directory is dropped.
 		{"find var dir piped to xargs grep", `find "$dir" -name '*.go' | xargs grep x`, nil},

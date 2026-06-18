@@ -12,9 +12,9 @@ import (
 // grep, find DIR -exec grep, git ls-files | xargs rg), the effective code-search
 // target is the enumerated directory rather than any operand the searcher names,
 // so ExtractReadTargets cannot see it. A bare enumeration (find DIR -name
-// '*.go') and an enumeration whose output is filtered by a stdin-reading grep
-// (find DIR | grep X) only read filenames, not contents, so they are filename
-// lookups and stay out of scope.
+// '*.go') or one whose output is only name-filtered by a stdin grep (find DIR |
+// grep X) is handled separately by recursiveEnumerationTargets, which treats a
+// recursive structure discovery as a read of the enumerated directory.
 var (
 	findTools = []string{"find"}
 	fdTools   = []string{"fd", "fdfind"}
@@ -31,7 +31,8 @@ var findExecFlags = []string{"-exec", "-execdir"}
 // through xargs (find DIR ... | xargs grep, git ls-files | xargs rg) and
 // find DIR ... -exec grep. The enumerated directory is the target; the
 // index-aware validator decides whether it is in scope. A bare enumeration or a
-// pipe into a stdin-reading searcher reads only filenames and is left alone.
+// pipe into a stdin-reading searcher is not handled here; recursiveEnumerationTargets
+// covers those recursive structure-discovery shapes.
 func enumeratorCodeSearchTargets(command, cwd string, tools map[string]bool) []ReadTarget {
 	var out []ReadTarget
 	for _, stages := range commandPipelines(command) {
@@ -155,6 +156,137 @@ func findRunsSearcher(fields []string, tools map[string]bool) bool {
 		}
 	}
 	return false
+}
+
+// recursiveEnumerationTargets returns the directories a recursive structure
+// discovery reads when no content searcher is involved: ls -R, a find with no
+// shallow -maxdepth, git ls-files, tree, and a recursive ** glob. A shallow
+// ls DIR or find DIR -maxdepth 1 enumerates a single level and stays out of
+// scope. The enumerated directory is the target; the index-aware validator
+// decides whether it is in scope.
+func recursiveEnumerationTargets(command, cwd string) []ReadTarget {
+	var out []ReadTarget
+	for _, stages := range commandPipelines(command) {
+		for _, stage := range stages {
+			fields := shellFields(strings.TrimSpace(stage))
+			if len(fields) == 0 {
+				continue
+			}
+			for _, dir := range recursiveEnumStageDirs(fields, cwd) {
+				out = append(out, enumTarget(dir, command))
+			}
+		}
+	}
+	for _, dir := range recursiveGlobDirs(command, cwd) {
+		out = append(out, enumTarget(dir, command))
+	}
+	return out
+}
+
+// enumTarget builds a recursive-enumeration read target for a resolved directory.
+func enumTarget(dir, command string) ReadTarget {
+	return ReadTarget{Path: dir, Remote: false, Spec: "code-search-enum", Raw: command}
+}
+
+// recursiveEnumStageDirs returns the directories a single pipeline stage walks
+// recursively, or nil when the stage is not a recursive enumerator.
+func recursiveEnumStageDirs(fields []string, cwd string) []string {
+	argv0 := filepath.Base(fields[0])
+	if argv0 == "ls" {
+		if !lsIsRecursive(fields) {
+			return nil
+		}
+		return lsOperandDirs(fields, cwd)
+	}
+	if argv0 == "tree" {
+		return lsOperandDirs(fields, cwd)
+	}
+	if slices.Contains(findTools, argv0) {
+		if findIsShallow(fields) {
+			return nil
+		}
+		return resolvedDirs(findPaths(fields), cwd)
+	}
+	if argv0 == "git" && len(fields) >= 2 && fields[1] == "ls-files" {
+		if cwd == "" {
+			return nil
+		}
+		return []string{cwd}
+	}
+	return nil
+}
+
+// lsIsRecursive reports whether an ls invocation requests a recursive listing via
+// -R or --recursive, including a combined short flag like -laR.
+func lsIsRecursive(fields []string) bool {
+	for _, field := range fields[1:] {
+		if field == "--recursive" {
+			return true
+		}
+		if len(field) >= 2 && field[0] == '-' && field[1] != '-' && strings.ContainsRune(field[1:], 'R') {
+			return true
+		}
+	}
+	return false
+}
+
+// lsOperandDirs returns the resolved directory operands of an ls or tree command,
+// or cwd when none are given.
+func lsOperandDirs(fields []string, cwd string) []string {
+	var operands []string
+	for _, field := range fields[1:] {
+		if strings.HasPrefix(field, "-") {
+			continue
+		}
+		operands = append(operands, field)
+	}
+	if len(operands) == 0 {
+		if cwd == "" {
+			return nil
+		}
+		return []string{cwd}
+	}
+	return resolvedDirs(operands, cwd)
+}
+
+// findIsShallow reports whether a find invocation is limited to one level by
+// -maxdepth 0 or -maxdepth 1, which makes it a shallow enumeration.
+func findIsShallow(fields []string) bool {
+	for index, field := range fields {
+		if field != "-maxdepth" {
+			continue
+		}
+		if index+1 < len(fields) && (fields[index+1] == "0" || fields[index+1] == "1") {
+			return true
+		}
+	}
+	return false
+}
+
+// recursiveGlobDirs returns the base directory of each recursive ** glob token in
+// the command: the literal prefix before the first wildcard, taken up to its last
+// path separator and resolved against cwd. A command reading files matched by a
+// ** glob is searching that subtree's contents.
+func recursiveGlobDirs(command, cwd string) []string {
+	var out []string
+	for _, field := range shellFields(command) {
+		if !strings.Contains(field, "**") {
+			continue
+		}
+		prefix := field
+		if wildcard := strings.IndexAny(field, "*?["); wildcard >= 0 {
+			prefix = field[:wildcard]
+		}
+		dir := "."
+		if slash := strings.LastIndex(prefix, "/"); slash >= 0 {
+			dir = prefix[:slash]
+			if dir == "" {
+				dir = "/"
+			}
+		}
+		out = append(out, resolvePath(cwd, dir))
+	}
+	return out
 }
 
 // commandPipelines splits a command into pipelines (on ;, newline, &&, ||) and

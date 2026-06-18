@@ -100,6 +100,14 @@ func extractCodeSearchInto(command, cwd, home string, tools map[string]bool, add
 		add(target.Path)
 	}
 
+	// Recursive structure discovery with no content searcher (ls -R, a find
+	// without a shallow -maxdepth, git ls-files, a recursive ** glob). shelldecomp
+	// models these as filename enumeration, not a content read, so the directory
+	// they walk is computed here and left for the index-aware validator to judge.
+	for _, target := range resolvableTargets(recursiveEnumerationTargets(command, cwd)) {
+		add(target.Path)
+	}
+
 	extractEmbeddedCodeSearchInto(decomposition, cwd, home, tools, add, depth, resolver)
 }
 
