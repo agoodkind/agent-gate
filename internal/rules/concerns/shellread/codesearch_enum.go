@@ -160,10 +160,10 @@ func findRunsSearcher(fields []string, tools map[string]bool) bool {
 
 // recursiveEnumerationTargets returns the directories a recursive structure
 // discovery reads when no content searcher is involved: ls -R, a find with no
-// shallow -maxdepth, git ls-files, tree, and a recursive ** glob. A shallow
-// ls DIR or find DIR -maxdepth 1 enumerates a single level and stays out of
-// scope. The enumerated directory is the target; the index-aware validator
-// decides whether it is in scope.
+// shallow -maxdepth, git ls-files, and a recursive ** glob. A shallow ls DIR or
+// find DIR -maxdepth 1 enumerates a single level and stays out of scope. The
+// enumerated directory is the target; the index-aware validator decides whether
+// it is in scope.
 func recursiveEnumerationTargets(command, cwd string) []ReadTarget {
 	var out []ReadTarget
 	for _, stages := range commandPipelines(command) {
@@ -198,9 +198,6 @@ func recursiveEnumStageDirs(fields []string, cwd string) []string {
 		}
 		return lsOperandDirs(fields, cwd)
 	}
-	if argv0 == "tree" {
-		return lsOperandDirs(fields, cwd)
-	}
 	if slices.Contains(findTools, argv0) {
 		if findIsShallow(fields) {
 			return nil
@@ -230,8 +227,8 @@ func lsIsRecursive(fields []string) bool {
 	return false
 }
 
-// lsOperandDirs returns the resolved directory operands of an ls or tree command,
-// or cwd when none are given.
+// lsOperandDirs returns the resolved directory operands of an ls command, or cwd
+// when none are given.
 func lsOperandDirs(fields []string, cwd string) []string {
 	var operands []string
 	for _, field := range fields[1:] {
@@ -266,11 +263,14 @@ func findIsShallow(fields []string) bool {
 // recursiveGlobDirs returns the base directory of each recursive ** glob token in
 // the command: the literal prefix before the first wildcard, taken up to its last
 // path separator and resolved against cwd. A command reading files matched by a
-// ** glob is searching that subtree's contents.
+// ** glob is searching that subtree's contents. Only a path-like token (one that
+// contains a /) qualifies, so a ** that is not a path (python **kwargs or
+// exponentiation, markdown **bold**, all of which can appear quote-stripped in an
+// embedded heredoc body) is not misread as a recursive glob.
 func recursiveGlobDirs(command, cwd string) []string {
 	var out []string
 	for _, field := range shellFields(command) {
-		if !strings.Contains(field, "**") {
+		if !strings.Contains(field, "**") || !strings.Contains(field, "/") {
 			continue
 		}
 		prefix := field

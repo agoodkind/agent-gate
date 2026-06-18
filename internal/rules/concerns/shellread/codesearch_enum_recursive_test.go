@@ -32,6 +32,7 @@ func TestExtractCodeSearchTargetsRecursiveEnumeration(t *testing.T) {
 		{"git ls-files names cwd", "git ls-files", []string{"/repo"}},
 		{"recursive glob names base dir", "cat src/**/*.go", []string{"/repo/src"}},
 		{"recursive glob at root names cwd", "cat **/*.go", []string{"/repo"}},
+		{"bare ** without a slash is not a glob target", "echo 2 ** 3", nil},
 	}
 
 	for _, tc := range cases {
