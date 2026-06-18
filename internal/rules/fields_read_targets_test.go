@@ -22,7 +22,7 @@ func TestCmdReadTargetsField(t *testing.T) {
 		{"cd rebases recursive target to cd dir", `cd /elsewhere && grep -rn "x" .`, "/elsewhere"},
 		{"cd rebases bare rg target to cd dir", `cd /elsewhere && rg "x"`, "/elsewhere"},
 		{"cd to unresolvable var drops the target", `cd "$VAR" && grep -rn "x" .`, ""},
-		{"find piped to bare grep is a filename lookup", `find Tests | grep -iE "x"`, ""},
+		{"find piped to bare grep enumerates its dir", `find Tests | grep -iE "x"`, "/repo/Tests"},
 		{"find name piped to xargs grep targets cwd", `find . -name '*.swift' | xargs grep -l x`, "/repo"},
 		{"unexpanded var dropped", `grep -n "x" "$dir/a.go"`, ""},
 	}

@@ -92,6 +92,43 @@ func TestExtractCodeSearchTargetsPythonToolGate(t *testing.T) {
 	}
 }
 
+// TestExtractCodeSearchTargetsPythonTraversal covers the end-to-end fold of a
+// python program that walks a directory and reads the files it finds: the walked
+// directory becomes a code-search target, while a name-only listing folds
+// nothing. It exercises the heredoc-fed `python3 - <<PY` shape an agent uses.
+func TestExtractCodeSearchTargetsPythonTraversal(t *testing.T) {
+	const cwd = "/repo"
+
+	rglob := "python3 - <<'PY'\n" +
+		"import pathlib\n" +
+		"root = pathlib.Path(\".\")\n" +
+		"for p in sorted(root.rglob(\"*\")):\n" +
+		"    text = p.read_text()\n" +
+		"PY\n"
+	if got := targetPaths(ExtractCodeSearchTargets(rglob, cwd, pythonTestTools, nil)); !slices.Equal(got, []string{"/repo"}) {
+		t.Fatalf("rglob read fold = %v, want [/repo]", got)
+	}
+
+	walk := "python3 - <<'PY'\n" +
+		"import os\n" +
+		"for d, dirs, files in os.walk(\"/abs/repo\"):\n" +
+		"    for f in files:\n" +
+		"        open(os.path.join(d, f)).read()\n" +
+		"PY\n"
+	if got := targetPaths(ExtractCodeSearchTargets(walk, cwd, pythonTestTools, nil)); !slices.Equal(got, []string{"/abs/repo"}) {
+		t.Fatalf("os.walk read fold = %v, want [/abs/repo]", got)
+	}
+
+	namesOnly := "python3 - <<'PY'\n" +
+		"import pathlib\n" +
+		"for p in pathlib.Path(\".\").iterdir():\n" +
+		"    print(p.name)\n" +
+		"PY\n"
+	if got := targetPaths(ExtractCodeSearchTargets(namesOnly, cwd, pythonTestTools, nil)); len(got) != 0 {
+		t.Fatalf("names-only listing = %v, want none", got)
+	}
+}
+
 // TestExtractCodeSearchTargetsPythonSubprocess covers a python program that
 // shells out: the subprocess command's reads are produced inside the python
 // region and folded, so a python -c that runs grep over a repo path surfaces
