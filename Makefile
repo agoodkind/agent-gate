@@ -45,6 +45,14 @@ RELEASE_ENTITLEMENTS  := $(CODESIGN_ENTITLEMENTS)
 # Pipeline modules
 GO_MK_MODULES := go-build.mk go-release.mk go-service.mk
 
+# go.mk runs these as order-only prerequisites of every build, lint, vet, test,
+# and govulncheck target (and install/release via the modules). GO_MK_GENERATE
+# generates the tree-sitter parsers; GO_MK_WORKSPACE_USE materializes a
+# gitignored go.work that routes the gksyntax submodule into the build, so both
+# exist before any target compiles the grammar packages.
+GO_MK_GENERATE := gksyntax-grammars
+GO_MK_WORKSPACE_USE := . third_party/gksyntax
+
 include bootstrap.mk
 
 .DEFAULT_GOAL := check
@@ -53,14 +61,14 @@ include bootstrap.mk
 # gksyntax submodule grammars
 # ---------------------------------------------------------------------------
 # The exec gate's shell decomposition lives in goodkind.io/gksyntax, a git
-# submodule under third_party/ consumed through go.work (a module require is not
-# possible because gksyntax vendors the dart and swift grammars as its own
-# submodules, whose C sources are absent from a Go module zip). gksyntax commits
-# only the swift grammar definition, not the generated parser, so the parser is
-# produced from the pinned submodule by the tree-sitter CLI. The generated parser
-# stays inside the submodule working tree (gitignored there) and is never
-# committed. The order-only prerequisite initializes the submodule and generates
-# the parser before any compile, vet, lint, or govulncheck.
+# submodule under third_party/ routed through a generated, gitignored go.work
+# (GO_MK_WORKSPACE_USE above). A plain module require is not possible because
+# gksyntax vendors the dart and swift grammars as its own submodules, whose C
+# sources are absent from a Go module zip, and a go.mod replace is rejected by
+# gomoddirectives. gksyntax commits only the swift grammar definition, not the
+# generated parser, so the parser is produced from the pinned submodule by the
+# tree-sitter CLI. The generated parser stays inside the submodule working tree
+# (gitignored there) and is never committed.
 GKS_DIR := third_party/gksyntax
 SWIFT_GRAMMAR_DIR := $(GKS_DIR)/treesitter/grammars/swift/upstream
 SWIFT_GRAMMAR_DEF := $(SWIFT_GRAMMAR_DIR)/src/grammar.json
@@ -113,10 +121,9 @@ gksyntax-grammars:
 		echo "gksyntax-grammars: Perl parser already generated"; \
 	fi
 
-# Building, installing, testing, vetting, linting, and govulncheck all compile
-# the swift and perl grammar packages inside gksyntax, so they need the
-# generated parsers.
-build build-check check test lint vet govulncheck install release: | gksyntax-grammars
+# The order-only prerequisite that runs gksyntax-grammars before every compile,
+# vet, lint, test, install, and release target is wired centrally in go.mk via
+# GO_MK_GENERATE (set above), so no per-target list is maintained here.
 
 # ---------------------------------------------------------------------------
 # Project-local

@@ -5,3 +5,5 @@
 notarize.env
 config.mk
 .vscode/
+go.work
+go.work.sum
