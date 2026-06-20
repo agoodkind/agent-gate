@@ -12,3 +12,4 @@ jobs:
       id-token: write
     with:
       apt_packages: libpcre2-dev
+      submodules: recursive
