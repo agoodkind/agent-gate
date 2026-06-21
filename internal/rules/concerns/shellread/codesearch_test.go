@@ -60,9 +60,12 @@ func TestExtractCodeSearchTargets(t *testing.T) {
 		{"tmp log via pattern", `grep -nE "x" /tmp/swiftmk_check.log`, []string{"/tmp/swiftmk_check.log"}},
 		{"tmp swift extract", `rg -n "x" /tmp/main-head.swift`, []string{"/tmp/main-head.swift"}},
 		{"unexpanded var operands", `grep -n "x" "$tea_dir/tea.go" "$tea_dir/commands.go"`, nil},
+		{"command prefix env assignment does not resolve sibling expansion", "E=/repo/internal rg -n x " + `"$E"`, nil},
 		{"other repo absolute", `grep -rn "x" /other/SwiftLM/Sources/InferenceEngine.swift`, []string{"/other/SwiftLM/Sources/InferenceEngine.swift"}},
 
 		// Correct blocks: the operand resolves inside the working tree.
+		{"standalone assignment then grep", "E=/repo/internal\ngrep -rn x " + `"$E"`, []string{"/repo/internal"}},
+		{"assignment then rg", `E=/repo/internal` + "\n" + `rg x $E`, []string{"/repo/internal"}},
 		{"recursive with relative dir", `grep -rl "x" Sources --include=*.swift`, []string{"/repo/Sources"}},
 		{"explicit repo file", `grep -n "x" Sources/lmd-serve/SwiftLMD.swift`, []string{"/repo/Sources/lmd-serve/SwiftLMD.swift"}},
 		{"repo package file", `grep -nE "x" Package.swift`, []string{"/repo/Package.swift"}},
