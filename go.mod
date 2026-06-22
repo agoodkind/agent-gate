@@ -6,7 +6,7 @@ require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/hashicorp/golang-lru/v2 v2.0.7
-	github.com/mattn/go-sqlite3 v1.14.46
+	github.com/mattn/go-sqlite3 v1.14.47
 	go.opentelemetry.io/otel v1.44.0
 	go.opentelemetry.io/otel/metric v1.44.0
 	go.opentelemetry.io/otel/sdk v1.44.0
