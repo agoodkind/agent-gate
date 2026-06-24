@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"goodkind.io/agent-gate/internal/config"
+	"goodkind.io/agent-gate/internal/hotkv"
 	"goodkind.io/agent-gate/internal/rules"
 	execconcern "goodkind.io/agent-gate/internal/rules/concerns/exec"
 )
@@ -259,6 +260,27 @@ func TestExecCrossEventCacheReuse(t *testing.T) {
 	}
 }
 
+func TestExecCacheTTLOneSecondReusesHotMemory(t *testing.T) {
+	dir := t.TempDir()
+	rule := loadExecRule(t, execRuleTOML("cache_ttl_ms = 1000"))
+	runner := newCountingRunner(execconcern.RunResult{ExitCode: 1}, nil)
+	runtime := rules.NewExecRuntime(runner, nil)
+	ctx := rules.WithExecRuntime(context.Background(), runtime)
+	payload := map[string]any{
+		"effective_cwd": dir,
+		"tool_input":    map[string]any{"command": "grepcode here"},
+	}
+
+	first := rules.EvaluateAll(ctx, "claude", "PreToolUse", testFields(payload), []config.Rule{rule}, nil)
+	second := rules.EvaluateAll(ctx, "claude", "PreToolUse", testFields(payload), []config.Rule{rule}, nil)
+	if len(first) == 0 || len(second) == 0 {
+		t.Fatalf("expected both one-second TTL evaluations to block")
+	}
+	if runner.Calls() != 1 {
+		t.Fatalf("expected one-second hot cache TTL to reuse the validator result, got %d calls", runner.Calls())
+	}
+}
+
 func TestExecErrorOutcomeNotCached(t *testing.T) {
 	dir := t.TempDir()
 	rule := loadExecRule(t, execRuleTOML("on_error = \"open\"\ncache_ttl_ms = 60000"))
@@ -310,12 +332,12 @@ func TestExecCanonicalCacheKeySharedAcrossSymlinkAliases(t *testing.T) {
 	}
 }
 
-func TestExecStaleWhileRevalidate(t *testing.T) {
+func TestExecExpiredCacheRecomputesSynchronously(t *testing.T) {
 	dir := t.TempDir()
 	rule := loadExecRule(t, execRuleTOML("cache_ttl_ms = 1"))
 	runner := &countingRunner{responses: []runnerResponse{
 		{res: execconcern.RunResult{ExitCode: 1}}, // cold: block
-		{res: execconcern.RunResult{ExitCode: 0}}, // background refresh: allow
+		{res: execconcern.RunResult{ExitCode: 0}}, // expired: recompute and allow
 	}}
 	runtime := rules.NewExecRuntime(runner, nil)
 	ctx := rules.WithExecRuntime(context.Background(), runtime)
@@ -334,23 +356,166 @@ func TestExecStaleWhileRevalidate(t *testing.T) {
 
 	time.Sleep(20 * time.Millisecond) // entry is now stale
 
-	stale := rules.EvaluateAll(ctx, "claude", "PreToolUse", testFields(payload), []config.Rule{rule}, nil)
-	if len(stale) == 0 {
-		t.Fatalf("stale event should serve the cached block while revalidating")
+	expired := rules.EvaluateAll(ctx, "claude", "PreToolUse", testFields(payload), []config.Rule{rule}, nil)
+	if len(expired) != 0 {
+		t.Fatalf("expired cache should recompute synchronously and allow, got %d violations", len(expired))
+	}
+	if runner.Calls() != 2 {
+		t.Fatalf("expired event should fork once synchronously, got %d calls", runner.Calls())
+	}
+}
+
+func TestExecCacheCoalescesConcurrentMisses(t *testing.T) {
+	dir := t.TempDir()
+	rule := loadExecRule(t, execRuleTOML("cache_ttl_ms = 60000"))
+	runner := &slowRunner{
+		delay: 100 * time.Millisecond,
+		res:   execconcern.RunResult{ExitCode: 1, Stdout: "not indexed\n"},
+	}
+	runtime := rules.NewExecRuntime(runner, nil)
+	ctx := rules.WithExecRuntime(context.Background(), runtime)
+	payload := map[string]any{
+		"effective_cwd": dir,
+		"tool_input":    map[string]any{"command": "grepcode here"},
 	}
 
-	deadline := time.Now().Add(2 * time.Second)
-	for runner.Calls() < 2 {
-		if time.Now().After(deadline) {
-			t.Fatalf("background refresh never ran, calls=%d", runner.Calls())
+	const requestCount = 16
+	var waitGroup sync.WaitGroup
+	errs := make(chan error, requestCount)
+	for i := 0; i < requestCount; i++ {
+		waitGroup.Add(1)
+		go func() {
+			defer waitGroup.Done()
+			violations := rules.EvaluateAll(ctx, "claude", "PreToolUse", testFields(payload), []config.Rule{rule}, nil)
+			if len(violations) == 0 {
+				errs <- fmt.Errorf("expected blocking verdict")
+			}
+		}()
+	}
+	waitGroup.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
 		}
-		time.Sleep(5 * time.Millisecond)
 	}
-	time.Sleep(20 * time.Millisecond) // let the refresh's cacheStore settle
+	if runner.Calls() != 1 {
+		t.Fatalf("concurrent miss should fork once, got %d calls", runner.Calls())
+	}
+}
 
-	after := rules.EvaluateAll(ctx, "claude", "PreToolUse", testFields(payload), []config.Rule{rule}, nil)
-	if len(after) != 0 {
-		t.Fatalf("after the background refresh the cached verdict should allow, got %d violations", len(after))
+func TestExecStableCacheKeySurvivesEquivalentRuntimeWithSharedCache(t *testing.T) {
+	dir := t.TempDir()
+	rule := loadExecRule(t, execRuleTOML("cache_ttl_ms = 60000"))
+	runner := newCountingRunner(execconcern.RunResult{ExitCode: 1}, nil)
+	store := hotkv.New(hotkv.Options{PruneInterval: 0})
+	defer store.Close()
+
+	firstRuntime := rules.NewExecRuntimeWithCache(runner, nil, store)
+	firstCtx := rules.WithExecRuntime(context.Background(), firstRuntime)
+	payload := map[string]any{
+		"effective_cwd": dir,
+		"tool_input":    map[string]any{"command": "grepcode here"},
+	}
+	first := rules.EvaluateAll(firstCtx, "claude", "PreToolUse", testFields(payload), []config.Rule{rule}, nil)
+	if len(first) == 0 {
+		t.Fatalf("first runtime should block")
+	}
+
+	reloadedRule := loadExecRule(t, execRuleTOML("cache_ttl_ms = 60000"))
+	secondRuntime := rules.NewExecRuntimeWithCache(runner, nil, store)
+	secondCtx := rules.WithExecRuntime(context.Background(), secondRuntime)
+	second := rules.EvaluateAll(secondCtx, "claude", "PreToolUse", testFields(payload), []config.Rule{reloadedRule}, nil)
+	if len(second) == 0 {
+		t.Fatalf("second runtime should block from shared cache")
+	}
+	if runner.Calls() != 1 {
+		t.Fatalf("equivalent runtime should reuse shared hot cache, got %d calls", runner.Calls())
+	}
+}
+
+func TestExecStableCacheKeySeparatesDifferentFieldPaths(t *testing.T) {
+	dir := t.TempDir()
+	runner := newCountingRunner(execconcern.RunResult{ExitCode: 1}, nil)
+	store := hotkv.New(hotkv.Options{PruneInterval: 0})
+	defer store.Close()
+
+	rulePathOne := loadExecRule(t, `
+[[rules]]
+name = "exec-rule"
+events = ["PreToolUse"]
+action = "block"
+violation_message = "static message"
+
+[[rules.conditions]]
+kind = "regex"
+field_paths = ["tool_input.command"]
+pattern = "grepcode"
+
+[[rules.conditions]]
+kind = "exec"
+field_paths = ["tool_input.command"]
+command = ["/bin/true"]
+cache_ttl_ms = 60000
+`)
+	rulePathTwo := loadExecRule(t, `
+[[rules]]
+name = "exec-rule"
+events = ["PreToolUse"]
+action = "block"
+violation_message = "static message"
+
+[[rules.conditions]]
+kind = "regex"
+field_paths = ["tool_input.command"]
+pattern = "grepcode"
+
+[[rules.conditions]]
+kind = "exec"
+field_paths = ["command"]
+command = ["/bin/true"]
+cache_ttl_ms = 60000
+`)
+	runtime := rules.NewExecRuntimeWithCache(runner, nil, store)
+	ctx := rules.WithExecRuntime(context.Background(), runtime)
+	payload := map[string]any{
+		"effective_cwd": dir,
+		"command":       "grepcode top-level",
+		"tool_input":    map[string]any{"command": "grepcode here"},
+	}
+
+	first := rules.EvaluateAll(ctx, "claude", "PreToolUse", testFields(payload), []config.Rule{rulePathOne}, nil)
+	second := rules.EvaluateAll(ctx, "claude", "PreToolUse", testFields(payload), []config.Rule{rulePathTwo}, nil)
+	if len(first) == 0 || len(second) == 0 {
+		t.Fatalf("expected both selector variants to block")
+	}
+	if runner.Calls() != 2 {
+		t.Fatalf("different exec field_paths should not share a cache entry, got %d calls", runner.Calls())
+	}
+}
+
+func TestExecStableCacheKeySeparatesDifferentCacheTTLs(t *testing.T) {
+	dir := t.TempDir()
+	runner := newCountingRunner(execconcern.RunResult{ExitCode: 1}, nil)
+	store := hotkv.New(hotkv.Options{PruneInterval: 0})
+	defer store.Close()
+
+	ruleTTLMinute := loadExecRule(t, execRuleTOML("cache_ttl_ms = 60000"))
+	ruleTTLSecond := loadExecRule(t, execRuleTOML("cache_ttl_ms = 1000"))
+	runtime := rules.NewExecRuntimeWithCache(runner, nil, store)
+	ctx := rules.WithExecRuntime(context.Background(), runtime)
+	payload := map[string]any{
+		"effective_cwd": dir,
+		"tool_input":    map[string]any{"command": "grepcode here"},
+	}
+
+	first := rules.EvaluateAll(ctx, "claude", "PreToolUse", testFields(payload), []config.Rule{ruleTTLMinute}, nil)
+	second := rules.EvaluateAll(ctx, "claude", "PreToolUse", testFields(payload), []config.Rule{ruleTTLSecond}, nil)
+	if len(first) == 0 || len(second) == 0 {
+		t.Fatalf("expected both TTL variants to block")
+	}
+	if runner.Calls() != 2 {
+		t.Fatalf("different cache_ttl_ms values should not share a cache entry, got %d calls", runner.Calls())
 	}
 }
 
@@ -400,6 +565,47 @@ cache_ttl_ms = 60000
 			t.Fatalf("background verdict never reached the cache")
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestExecGateTimeoutKeepsSingleflightUntilBackgroundCompletes(t *testing.T) {
+	runner := &slowRunner{delay: 150 * time.Millisecond, res: execconcern.RunResult{ExitCode: 1, Stdout: "indexed\n"}}
+	rule := loadExecRule(t, `
+[[rules]]
+name = "exec-rule"
+events = ["PreToolUse"]
+action = "block"
+violation_message = "static message"
+
+[[rules.conditions]]
+kind = "regex"
+field_paths = ["tool_input.command"]
+pattern = "grepcode"
+
+[[rules.conditions]]
+kind = "exec"
+command = ["/bin/true"]
+timeout_ms = 50
+cache_ttl_ms = 60000
+`)
+
+	runtime := rules.NewExecRuntime(runner, nil)
+	ctx := rules.WithExecRuntime(context.Background(), runtime)
+	payload := map[string]any{
+		"cwd":        t.TempDir(),
+		"tool_input": map[string]any{"command": "grepcode -rn x ."},
+	}
+
+	first := rules.EvaluateAll(ctx, "claude", "PreToolUse", testFields(payload), []config.Rule{rule}, nil)
+	if len(first) != 0 {
+		t.Fatalf("timed-out first event should fail open, got %d violations", len(first))
+	}
+	second := rules.EvaluateAll(ctx, "claude", "PreToolUse", testFields(payload), []config.Rule{rule}, nil)
+	if runner.Calls() != 1 {
+		t.Fatalf("background window should still coalesce to one validator run, got %d calls", runner.Calls())
+	}
+	if len(second) == 0 {
+		t.Fatalf("concurrent follow-up event should reuse the in-flight validator result once it lands")
 	}
 }
 
