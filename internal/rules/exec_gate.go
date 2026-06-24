@@ -2,10 +2,14 @@ package rules
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -36,67 +40,70 @@ const backgroundValidatorTimeout = 30 * time.Second
 // into the parse; real agent scripts are far smaller than 1 MiB.
 const maxResolvedScriptBytes = 1 << 20
 
+const execValidatorCacheNamespace = "exec-validator"
+
 // ExecRuntime holds the cross-event state for exec validator conditions: the
-// process runner, a path canonicalization cache, and the result cache keyed by
-// canonical cache key. The cache is stale-while-revalidate: a cold key forks
-// synchronously (the first event blocks on the real verdict), and once an entry
-// exists it is served immediately on every event, with a single background
-// refresh kicked off when the entry is older than the rule's cache_ttl_ms. The
-// daemon builds one ExecRuntime per config snapshot and discards it on reload,
-// which is how the cache resets when config changes. It is safe for concurrent
-// use across events.
+// process runner, a path canonicalization cache, a daemon hot cache, and
+// singleflight state for cold cache misses. The hot cache is process-local and
+// intentionally non-durable; daemon snapshots can share it across config reloads
+// so stable rules keep their short TTL debounce window.
 type ExecRuntime struct {
 	runner execconcern.Runner
 	canon  *canonpath.Cache
+	cache  *hotkv.Store
 	log    *slog.Logger
-	now    func() time.Time
 
-	mu         sync.Mutex
-	cache      map[string]cachedVerdict
-	refreshing map[string]struct{}
+	mu       sync.Mutex
+	inflight map[string]*validatorFlight
 }
 
-type cachedVerdict struct {
-	verdict  execconcern.Verdict
-	storedAt time.Time
+type validatorFlight struct {
+	done    chan struct{}
+	verdict execconcern.Verdict
 }
 
-// cacheState reports how a cache lookup resolved against the rule's TTL.
-type cacheState int
+type cachedExecVerdict struct {
+	Block   bool   `json:"block"`
+	Message string `json:"message"`
+}
 
-const (
-	cacheMiss  cacheState = iota // no entry: the caller must fork synchronously.
-	cacheFresh                   // entry younger than the TTL: serve as-is.
-	cacheStale                   // entry past the TTL: serve, then refresh async.
-)
+type validatorRunResult struct {
+	verdict    execconcern.Verdict
+	background <-chan execconcern.Verdict
+}
 
 // NewExecRuntime returns an ExecRuntime using runner to fork validators and
 // logging errors to log. A nil runner falls back to the production OS runner and
 // a nil log falls back to the default logger.
 func NewExecRuntime(runner execconcern.Runner, log *slog.Logger) *ExecRuntime {
+	return NewExecRuntimeWithCache(runner, log, nil)
+}
+
+// NewExecRuntimeWithCache returns an ExecRuntime backed by cache. A nil cache
+// gets a private in-memory store with no periodic prune goroutine, which keeps
+// tests and standalone callers isolated.
+func NewExecRuntimeWithCache(runner execconcern.Runner, log *slog.Logger, cache *hotkv.Store) *ExecRuntime {
 	if runner == nil {
 		runner = execconcern.OSRunner{}
 	}
 	if log == nil {
 		log = slog.Default()
 	}
-	return &ExecRuntime{
-		runner:     runner,
-		canon:      canonpath.NewCache(canonCacheTTL),
-		log:        log,
-		now:        time.Now,
-		mu:         sync.Mutex{},
-		cache:      make(map[string]cachedVerdict),
-		refreshing: make(map[string]struct{}),
+	if cache == nil {
+		cache = hotkv.New(hotkv.Options{
+			MaxEntries:    hotkv.DefaultMaxEntries,
+			MaxValueBytes: hotkv.DefaultMaxValueBytes,
+			PruneInterval: 0,
+		})
 	}
-}
-
-// NewExecRuntimeWithCache returns an ExecRuntime and accepts the daemon hot
-// cache handle that later rule implementations may use. The initial hotkv
-// surface PR keeps exec validation behavior unchanged, so this constructor
-// intentionally delegates to NewExecRuntime until the debounce logic lands.
-func NewExecRuntimeWithCache(runner execconcern.Runner, log *slog.Logger, _ *hotkv.Store) *ExecRuntime {
-	return NewExecRuntime(runner, log)
+	return &ExecRuntime{
+		runner:   runner,
+		canon:    canonpath.NewCache(canonCacheTTL),
+		cache:    cache,
+		log:      log,
+		mu:       sync.Mutex{},
+		inflight: make(map[string]*validatorFlight),
+	}
 }
 
 var (
@@ -194,7 +201,7 @@ func execEventMemoFromContext(ctx context.Context) *execEventMemo {
 // whether it blocks. The result is memoized per event so the command forks at
 // most once per event, and cached across events by canonical cache key so a hot
 // working set forks rarely. Error outcomes are never cached and are logged.
-func execConditionGateMatch(ctx context.Context, fields FieldSet, rule *config.Rule, c *config.Condition) bool {
+func execConditionGateMatch(ctx context.Context, fields FieldSet, rule *config.Rule, conditionIndex int, c *config.Condition) bool {
 	memo := execEventMemoFromContext(ctx)
 	if memo != nil {
 		if v, ok := memo.lookup(c); ok {
@@ -208,81 +215,133 @@ func execConditionGateMatch(ctx context.Context, fields FieldSet, rule *config.R
 	}
 
 	cwd := fields.BaseCWD()
-	var keyValue string
-	if c.CacheKeySelector().Selector == config.FieldCmdReadTargets {
-		// cmd_read_targets is rule policy: the tool set comes from this
-		// condition's search_tools, which the generic selector path cannot see.
-		// The disk resolver lets an interpreter script be read off disk so the
-		// cache key reflects the program's real read targets.
-		keyValue = fields.CmdReadTargets(c.SearchTools, diskFileResolver())
-	} else {
-		keyValue = fields.String(c.CacheKeySelector().Selector)
-	}
-	keyView := canonicalizePathField(runtime.canon, cwd, keyValue)
-	cacheKey := keyView.Canonical
+	keyValue := execCacheKeyValue(fields, c)
+	keyView := canonicalizeCacheKeyField(runtime.canon, cwd, keyValue)
+	cacheKey := stableExecCacheEntryKey(rule, conditionIndex, c, keyView)
 
 	if c.CacheTTLMs > 0 {
-		v, state := runtime.cacheLookup(c, cacheKey)
-		switch state {
-		case cacheFresh:
+		if v, ok := runtime.cacheLookup(ctx, cacheKey); ok {
 			if memo != nil {
 				memo.record(c, rule.Name, v)
 			}
 			return v.Block
-		case cacheStale:
-			// Serve the cached verdict now and refresh in the background so no
-			// event after the cold one ever blocks on the fork.
-			runtime.triggerRefresh(ctx, fields, rule, c, keyView, cacheKey)
-			if memo != nil {
-				memo.record(c, rule.Name, v)
-			}
-			return v.Block
-		case cacheMiss:
-			// Cold key: fall through to a synchronous fork.
 		}
 	}
 
-	verdict := runtime.runValidator(ctx, fields, rule, c, keyView, memo)
+	verdict := runtime.runValidatorSingleflight(ctx, fields, rule, c, keyView, cacheKey, memo)
 
-	if !verdict.Errored && c.CacheTTLMs > 0 {
-		runtime.cacheStore(c, cacheKey, verdict)
-	}
 	if memo != nil {
 		memo.record(c, rule.Name, verdict)
 	}
 	return verdict.Block
 }
 
-// triggerRefresh forks the validator off the hot path to refresh a stale cache
-// entry, deduped so at most one refresh per key is in flight. The refresh is
-// detached from the request cancellation (the event already has its verdict)
-// and never caches an error outcome, so a transient failure keeps the last good
-// verdict instead of clearing it.
-func (r *ExecRuntime) triggerRefresh(ctx context.Context, fields FieldSet, rule *config.Rule, c *config.Condition, keyView execconcern.PathView, cacheKey string) {
-	key := cacheEntryKey(c, cacheKey)
-	r.mu.Lock()
-	if _, busy := r.refreshing[key]; busy {
-		r.mu.Unlock()
-		return
+func execCacheKeyValue(fields FieldSet, c *config.Condition) string {
+	selector := c.CacheKeySelector().Selector
+	if selector == config.FieldCmdReadTargets {
+		return fields.CmdReadTargets(c.SearchTools, diskFileResolver())
 	}
-	r.refreshing[key] = struct{}{}
+	if selector == config.FieldExecTargets {
+		return fields.ExecTargets(c.SearchTools, diskFileResolver())
+	}
+	return fields.String(selector)
+}
+
+func (r *ExecRuntime) runValidatorSingleflight(
+	ctx context.Context,
+	fields FieldSet,
+	rule *config.Rule,
+	c *config.Condition,
+	keyView execconcern.PathView,
+	cacheKey string,
+	memo *execEventMemo,
+) execconcern.Verdict {
+	if c.CacheTTLMs <= 0 {
+		return r.runValidator(ctx, fields, rule, c, keyView, memo).verdict
+	}
+
+	r.mu.Lock()
+	flight, ok := r.inflight[cacheKey]
+	if ok {
+		done := flight.done
+		r.mu.Unlock()
+		select {
+		case <-done:
+			return flight.verdict
+		case <-ctx.Done():
+			return execconcern.Verdict{
+				Block:   c.OnError == config.OnErrorClosed,
+				Message: "",
+				Errored: true,
+			}
+		}
+	}
+	flight = &validatorFlight{
+		done:    make(chan struct{}),
+		verdict: execconcern.Verdict{Block: false, Message: "", Errored: false},
+	}
+	r.inflight[cacheKey] = flight
 	r.mu.Unlock()
 
-	refreshCtx := context.WithoutCancel(ctx)
-	go func() {
-		defer func() {
-			r.mu.Lock()
-			delete(r.refreshing, key)
-			r.mu.Unlock()
-			if rec := recover(); rec != nil {
-				r.log.ErrorContext(refreshCtx, "exec validator refresh panic", "rule", rule.Name, "err", fmt.Errorf("panic: %v", rec))
+	verdict := execconcern.Verdict{Block: false, Message: "", Errored: false}
+	backgroundManaged := false
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			r.log.ErrorContext(ctx, "exec validator singleflight panic",
+				"rule", rule.Name, "err", fmt.Errorf("panic: %v", recovered))
+			verdict = execconcern.Verdict{
+				Block:   c.OnError == config.OnErrorClosed,
+				Message: "",
+				Errored: true,
 			}
-		}()
-		verdict := r.runValidator(refreshCtx, fields, rule, c, keyView, nil)
-		if !verdict.Errored {
-			r.cacheStore(c, cacheKey, verdict)
 		}
+		if backgroundManaged {
+			return
+		}
+		if !verdict.Errored && c.CacheTTLMs > 0 {
+			r.cacheStore(ctx, cacheKey, c.CacheTTLMs, verdict)
+		}
+		r.finishValidatorFlight(cacheKey, flight, verdict)
 	}()
+
+	runResult := r.runValidator(ctx, fields, rule, c, keyView, memo)
+	verdict = runResult.verdict
+	if runResult.background != nil {
+		backgroundManaged = true
+		go func() {
+			backgroundCtx := context.WithoutCancel(ctx)
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					r.log.ErrorContext(backgroundCtx, "exec validator background completion panic",
+						"rule", rule.Name, "err", fmt.Errorf("panic: %v", recovered))
+					r.finishValidatorFlight(cacheKey, flight, execconcern.Verdict{
+						Block:   c.OnError == config.OnErrorClosed,
+						Message: "",
+						Errored: true,
+					})
+				}
+			}()
+			backgroundVerdict := <-runResult.background
+			if !backgroundVerdict.Errored && c.CacheTTLMs > 0 {
+				r.cacheStore(backgroundCtx, cacheKey, c.CacheTTLMs, backgroundVerdict)
+			}
+			r.finishValidatorFlight(cacheKey, flight, backgroundVerdict)
+		}()
+	}
+
+	return verdict
+}
+
+func (r *ExecRuntime) finishValidatorFlight(cacheKey string, flight *validatorFlight, verdict execconcern.Verdict) {
+	if flight == nil {
+		return
+	}
+	flight.verdict = verdict
+	close(flight.done)
+
+	r.mu.Lock()
+	delete(r.inflight, cacheKey)
+	r.mu.Unlock()
 }
 
 func (r *ExecRuntime) runValidator(
@@ -292,13 +351,16 @@ func (r *ExecRuntime) runValidator(
 	c *config.Condition,
 	keyView execconcern.PathView,
 	memo *execEventMemo,
-) execconcern.Verdict {
+) validatorRunResult {
 	in := r.buildInput(fields, rule, c, keyView, memo)
 	stdin, env, err := execconcern.BuildRequest(in)
 	if err != nil {
 		r.log.WarnContext(ctx, "exec validator request build failed",
 			"rule", rule.Name, "on_error", c.OnError, "err", err)
-		return execconcern.Verdict{Block: c.OnError == config.OnErrorClosed, Message: "", Errored: true}
+		return validatorRunResult{
+			verdict:    execconcern.Verdict{Block: c.OnError == config.OnErrorClosed, Message: "", Errored: true},
+			background: nil,
+		}
 	}
 
 	done := make(chan execconcern.Verdict, 1)
@@ -322,44 +384,20 @@ func (r *ExecRuntime) runValidator(
 
 	syncBudget := time.Duration(c.TimeoutMs) * time.Millisecond
 	if syncBudget <= 0 {
-		return <-done
+		return validatorRunResult{verdict: <-done, background: nil}
 	}
 	timer := time.NewTimer(syncBudget)
 	defer timer.Stop()
 	select {
 	case verdict := <-done:
-		return verdict
+		return validatorRunResult{verdict: verdict, background: nil}
 	case <-timer.C:
-		// The event fails open now, but the run continues so its verdict can
-		// decide the next event for this target. Registration in refreshing
-		// keeps a stale-entry refresh from forking a duplicate meanwhile.
-		key := cacheEntryKey(c, keyView.Canonical)
-		r.mu.Lock()
-		_, busy := r.refreshing[key]
-		if !busy {
-			r.refreshing[key] = struct{}{}
-		}
-		r.mu.Unlock()
-		go func() {
-			defer func() {
-				if rec := recover(); rec != nil {
-					r.log.ErrorContext(bgCtx, "exec validator background cache panic",
-						"rule", rule.Name, "err", fmt.Errorf("panic: %v", rec))
-				}
-			}()
-			verdict := <-done
-			if !busy {
-				r.mu.Lock()
-				delete(r.refreshing, key)
-				r.mu.Unlock()
-			}
-			if !verdict.Errored && c.CacheTTLMs > 0 {
-				r.cacheStore(c, keyView.Canonical, verdict)
-			}
-		}()
 		r.log.WarnContext(ctx, "exec validator exceeded synchronous budget; continuing in background",
 			"rule", rule.Name, "on_error", c.OnError, "budget_ms", c.TimeoutMs)
-		return execconcern.Verdict{Block: c.OnError == config.OnErrorClosed, Message: "", Errored: true}
+		return validatorRunResult{
+			verdict:    execconcern.Verdict{Block: c.OnError == config.OnErrorClosed, Message: "", Errored: true},
+			background: done,
+		}
 	}
 }
 
@@ -453,32 +491,100 @@ func diskFileResolver() shelldecomp.FileResolver {
 	}
 }
 
-// cacheLookup reports the cached verdict and whether it is missing, fresh, or
-// stale relative to the condition's cache_ttl_ms.
-func (r *ExecRuntime) cacheLookup(c *config.Condition, cacheKey string) (execconcern.Verdict, cacheState) {
-	key := cacheEntryKey(c, cacheKey)
-	now := r.now()
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	entry, ok := r.cache[key]
-	if !ok {
-		return execconcern.Verdict{Block: false, Message: "", Errored: false}, cacheMiss
+func (r *ExecRuntime) cacheLookup(ctx context.Context, cacheKey string) (execconcern.Verdict, bool) {
+	if r.cache == nil {
+		return execconcern.Verdict{Block: false, Message: "", Errored: false}, false
 	}
-	if now.Sub(entry.storedAt) < time.Duration(c.CacheTTLMs)*time.Millisecond {
-		return entry.verdict, cacheFresh
+	entry, found, err := r.cache.Get(execValidatorCacheNamespace, cacheKey)
+	if err != nil {
+		r.log.WarnContext(ctx, "exec validator hot cache get failed", "err", err)
+		return execconcern.Verdict{Block: false, Message: "", Errored: false}, false
 	}
-	return entry.verdict, cacheStale
+	if !found {
+		return execconcern.Verdict{Block: false, Message: "", Errored: false}, false
+	}
+
+	var cached cachedExecVerdict
+	if err := json.Unmarshal(entry.Value, &cached); err != nil {
+		r.log.WarnContext(ctx, "exec validator hot cache decode failed", "err", err)
+		_, _ = r.cache.Delete(execValidatorCacheNamespace, cacheKey)
+		return execconcern.Verdict{Block: false, Message: "", Errored: false}, false
+	}
+	return execconcern.Verdict{
+		Block:   cached.Block,
+		Message: cached.Message,
+		Errored: false,
+	}, true
 }
 
-func (r *ExecRuntime) cacheStore(c *config.Condition, cacheKey string, verdict execconcern.Verdict) {
-	key := cacheEntryKey(c, cacheKey)
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.cache[key] = cachedVerdict{verdict: verdict, storedAt: r.now()}
+func (r *ExecRuntime) cacheStore(ctx context.Context, cacheKey string, ttlMs int, verdict execconcern.Verdict) {
+	if r.cache == nil {
+		return
+	}
+	cached := cachedExecVerdict{
+		Block:   verdict.Block,
+		Message: verdict.Message,
+	}
+	value, err := json.Marshal(cached)
+	if err != nil {
+		r.log.WarnContext(ctx, "exec validator hot cache encode failed", "err", err)
+		return
+	}
+	_, _, err = r.cache.Set(execValidatorCacheNamespace, cacheKey, value, hotkv.SetOptions{
+		Mode: hotkv.SetModeAny,
+		TTL:  time.Duration(ttlMs) * time.Millisecond,
+	})
+	if err != nil {
+		r.log.WarnContext(ctx, "exec validator hot cache set failed", "err", err)
+	}
 }
 
-func cacheEntryKey(c *config.Condition, cacheKey string) string {
-	return fmt.Sprintf("%p\x00%s", c, cacheKey)
+func stableExecCacheEntryKey(rule *config.Rule, conditionIndex int, c *config.Condition, keyView execconcern.PathView) string {
+	hash := sha256.New()
+	writeHashPart := func(value string) {
+		_, _ = hash.Write([]byte(value))
+		_, _ = hash.Write([]byte{0})
+	}
+	writeHashPart(rule.Name)
+	writeHashPart(strconv.Itoa(conditionIndex))
+	writeHashPart(c.Kind)
+	writeHashPart(strings.Join(c.Command, "\x1f"))
+	writeHashPart(c.CacheKey)
+	for _, selector := range c.Selectors() {
+		writeHashPart(selector.Path)
+	}
+	writeHashPart(c.BlockOn)
+	writeHashPart(c.OnError)
+	writeHashPart(strconv.Itoa(c.CacheTTLMs))
+	writeHashPart(strconv.Itoa(c.TimeoutMs))
+	writeHashPart(strings.Join(c.SearchTools, "\x1f"))
+	writeHashPart(keyView.Canonical)
+	return "sha256:" + hex.EncodeToString(hash.Sum(nil))
+}
+
+func canonicalizeCacheKeyField(cache *canonpath.Cache, cwd string, value string) execconcern.PathView {
+	if !strings.Contains(value, "\n") {
+		return canonicalizePathField(cache, cwd, value)
+	}
+
+	parts := strings.Split(value, "\n")
+	canonicalParts := make([]string, 0, len(parts))
+	allCanonical := true
+	for _, part := range parts {
+		if part == "" {
+			continue
+		}
+		view := canonicalizePathField(cache, cwd, part)
+		canonicalParts = append(canonicalParts, view.Canonical)
+		if !view.IsCanonical {
+			allCanonical = false
+		}
+	}
+	return execconcern.PathView{
+		Raw:         value,
+		Canonical:   strings.Join(canonicalParts, "\n"),
+		IsCanonical: allCanonical,
+	}
 }
 
 // canonicalizePathField resolves a path-like field value to its canonical real

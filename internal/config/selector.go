@@ -43,6 +43,9 @@ const (
 	// FieldCmdReadTargets selects the effective filesystem targets of a
 	// grep/rg-style command (the paths it reads), newline-joined.
 	FieldCmdReadTargets
+	// FieldExecTargets selects code-search read targets when available, then
+	// file path, then effective cwd. It is intended for exec validator cache keys.
+	FieldExecTargets
 	// FieldPermissionMode selects the active permission mode.
 	FieldPermissionMode
 	// FieldAgentID selects the agent identifier.
@@ -233,6 +236,7 @@ var fieldSelectorByPath = map[string]FieldSelector{
 	"cmd_double_hyphen_prose":      FieldCmdDoubleHyphenProse,
 	"cmd_redirections":             FieldCmdRedirections,
 	"cmd_read_targets":             FieldCmdReadTargets,
+	"exec_targets":                 FieldExecTargets,
 	"permission_mode":              FieldPermissionMode,
 	"agent_id":                     FieldAgentID,
 	"agent_type":                   FieldAgentType,

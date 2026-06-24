@@ -50,3 +50,25 @@ func TestCmdReadTargetsRequiresDeclaredTools(t *testing.T) {
 		t.Fatalf("generic cmd_read_targets selector = %q, want empty", got)
 	}
 }
+
+func TestExecTargetsFallbacks(t *testing.T) {
+	readTarget := FieldSet{ToolInputCommand: `grep -rn "x" src`, CWD: "/repo"}
+	if got := readTarget.ExecTargets(readTargetsTestTools, nil); got != "/repo/src" {
+		t.Fatalf("ExecTargets read target = %q, want /repo/src", got)
+	}
+
+	fileTarget := FieldSet{ToolInputFilePath: "/repo/file.go", CWD: "/repo"}
+	if got := fileTarget.ExecTargets(readTargetsTestTools, nil); got != "/repo/file.go" {
+		t.Fatalf("ExecTargets file target = %q, want file path", got)
+	}
+
+	cwdTarget := FieldSet{EffectiveCWD: "/repo/sub", CWD: "/repo"}
+	if got := cwdTarget.ExecTargets(readTargetsTestTools, nil); got != "/repo/sub" {
+		t.Fatalf("ExecTargets cwd target = %q, want effective cwd", got)
+	}
+
+	baseCWDTarget := FieldSet{CWD: "/repo"}
+	if got := baseCWDTarget.ExecTargets(readTargetsTestTools, nil); got != "/repo" {
+		t.Fatalf("ExecTargets base cwd target = %q, want base cwd", got)
+	}
+}

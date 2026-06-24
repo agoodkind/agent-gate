@@ -704,7 +704,7 @@ func allConditionsMatch(ctx context.Context, fields FieldSet, rule *config.Rule,
 			// Exec runs last in config order because it is the only kind that
 			// forks a process; placing it after the cheap conditions means the
 			// short-circuit above keeps it from running on non-candidates.
-			if !execConditionGateMatch(ctx, fields, rule, c) {
+			if !execConditionGateMatch(ctx, fields, rule, i, c) {
 				return false
 			}
 		default:
