@@ -18,6 +18,7 @@ const (
 	defaultHookHotQueueWait          = 25 * time.Millisecond
 	defaultHookDeferredQueueLimit    = 8192
 	defaultHookDeferredWorkers       = 1
+	defaultUpdateInterval            = 24 * time.Hour
 )
 
 // Log holds logging configuration decoded from the [log] TOML table.
@@ -454,6 +455,7 @@ type Config struct {
 	Paths       Paths           `toml:"paths"`
 	Performance Performance     `toml:"performance"`
 	Telemetry   TelemetryConfig `toml:"telemetry"`
+	Update      Update          `toml:"update"`
 	Rules       []Rule          `toml:"rules"`
 }
 
@@ -564,6 +566,9 @@ func loadPath(path string, requireExisting bool) (*Config, error) {
 		if err := compileRule(log, &cfg.Rules[i]); err != nil {
 			return nil, err
 		}
+	}
+	if err := normalizeUpdate(&cfg.Update); err != nil {
+		return nil, err
 	}
 
 	return &cfg, nil

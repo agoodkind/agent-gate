@@ -19,6 +19,9 @@
 #   --no-codex          skip Codex hook config update
 #   --no-gemini         skip Gemini hook config update
 #   --no-copilot        skip GitHub Copilot Chat hook config update
+#   --no-config         skip agent-gate config creation / merge
+#   --no-auto-update    disable auto-update in the merged config
+#   --auto-update MODE  set auto-update mode in config: check or apply
 #   --bin-dir PATH      override binary install dir (default: $XDG_BIN_HOME or
 #                       $HOME/.local/bin)
 #   --version TAG       pin to a specific release tag (default: latest)
@@ -44,8 +47,10 @@ DO_CLAUDE=1
 DO_CODEX=1
 DO_GEMINI=1
 DO_COPILOT=1
+DO_CONFIG=1
 TEMPLATES=""
 SERVICE_TEMPLATES=""
+AUTO_UPDATE_MODE="apply"
 
 # Resolve to a local templates dir when run from a checkout.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -75,6 +80,9 @@ while [[ $# -gt 0 ]]; do
     --no-codex)    DO_CODEX=0 ;;
     --no-gemini)   DO_GEMINI=0 ;;
     --no-copilot)  DO_COPILOT=0 ;;
+    --no-config)   DO_CONFIG=0 ;;
+    --no-auto-update) AUTO_UPDATE_MODE="off" ;;
+    --auto-update) shift; AUTO_UPDATE_MODE="${1:?--auto-update requires a value}" ;;
     --bin-dir)     shift; BIN_DIR="${1:?--bin-dir requires a value}" ;;
     --version)     shift; VERSION="${1:?--version requires a value}" ;;
     --repo)        shift; REPO="${1:?--repo requires a value}" ;;
@@ -207,6 +215,14 @@ install_hooks() {
   fi
 }
 
+install_config() {
+  local bin_path="$BIN_DIR/agent-gate"
+  [[ -x "$bin_path" ]] || die "missing installed binary for config merge: $bin_path"
+  "$bin_path" config ensure-defaults --auto-update "$AUTO_UPDATE_MODE" \
+    || die "config ensure-defaults failed"
+  "$bin_path" config check || die "config check failed after merge"
+}
+
 state_dir() {
   printf '%s/agent-gate' "${XDG_STATE_HOME:-$HOME/.local/state}"
 }
@@ -283,6 +299,10 @@ install_service() {
 
 if [[ "$DO_BIN" -eq 1 ]]; then
   install_bin
+fi
+
+if [[ "$DO_CONFIG" -eq 1 ]]; then
+  install_config
 fi
 
 if [[ "$DO_HOOKS" -eq 1 ]]; then

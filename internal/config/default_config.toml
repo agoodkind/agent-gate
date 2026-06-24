@@ -1,0 +1,30 @@
+[log]
+level = "info"
+
+[paths]
+conversations_dir = ""
+
+[audit]
+enabled = true
+level = "info"
+
+[audit.outputs.sqlite]
+path = ""
+
+[performance.hook]
+hot_concurrency = 0
+hot_queue_wait_ms = 0
+deferred_queue_limit = 0
+deferred_workers = 0
+
+[telemetry]
+otlp_endpoint = ""
+slow_op_threshold_ms = 0
+
+[update]
+enabled = true
+mode = "apply"
+interval = "24h"
+repo = "agoodkind/agent-gate"
+allow_prerelease = false
+trusted_minisign_public_key = "RWQs3nsE+TkjRp/kU27f55SN05WEDfE21vhTKJzZOfXAuv3zkgmaf4HW"

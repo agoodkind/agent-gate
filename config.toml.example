@@ -34,6 +34,14 @@ level = "debug"
 [audit.outputs.sqlite]
 path = ""   # default: $XDG_STATE_HOME/agent-gate/sqlite/audit.db
 
+[update]
+enabled = true
+mode = "apply"   # check | apply
+interval = "24h"
+repo = "agoodkind/agent-gate"
+allow_prerelease = false
+trusted_minisign_public_key = "RWQs3nsE+TkjRp/kU27f55SN05WEDfE21vhTKJzZOfXAuv3zkgmaf4HW"
+
 # ── Rules ────────────────────────────────────────────────────────────────────
 #
 # Each rule is evaluated in order. The first matching rule wins.

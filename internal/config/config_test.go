@@ -248,6 +248,90 @@ func TestLoadExampleConfig(t *testing.T) {
 	}
 }
 
+func TestEnsureDefaultsCreatesCanonicalConfig(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	configPath, err := config.EnsureDefaults(config.EnsureDefaultsOptions{})
+	if err != nil {
+		t.Fatalf("EnsureDefaults() error: %v", err)
+	}
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	got := string(content)
+	if !strings.Contains(got, `[update]`) {
+		t.Fatalf("config missing [update] block:\n%s", got)
+	}
+	if !strings.Contains(got, `mode = "apply"`) {
+		t.Fatalf("config missing apply mode:\n%s", got)
+	}
+	if !strings.Contains(got, config.DefaultTrustedMinisignPublicKey) {
+		t.Fatalf("config missing trusted minisign key:\n%s", got)
+	}
+}
+
+func TestEnsureDefaultsAppendsMissingUpdateTable(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	configDir := filepath.Join(dir, "agent-gate")
+	if err := os.MkdirAll(configDir, 0o700); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	path := filepath.Join(configDir, "config.toml")
+	initial := "[log]\nlevel = \"debug\"\n"
+	if err := os.WriteFile(path, []byte(initial), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	configPath, err := config.EnsureDefaults(config.EnsureDefaultsOptions{})
+	if err != nil {
+		t.Fatalf("EnsureDefaults() error: %v", err)
+	}
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	got := string(content)
+	if !strings.Contains(got, initial) {
+		t.Fatalf("config lost existing content:\n%s", got)
+	}
+	if strings.Count(got, "[update]") != 1 {
+		t.Fatalf("config expected one [update] block:\n%s", got)
+	}
+}
+
+func TestEnsureDefaultsOverridesExistingUpdateModeWhenRequested(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	configDir := filepath.Join(dir, "agent-gate")
+	if err := os.MkdirAll(configDir, 0o700); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	path := filepath.Join(configDir, "config.toml")
+	initial := "[update]\nenabled = true\nmode = \"check\"\ninterval = \"24h\"\nrepo = \"agoodkind/agent-gate\"\nallow_prerelease = false\ntrusted_minisign_public_key = \"custom\"\n"
+	if err := os.WriteFile(path, []byte(initial), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	configPath, err := config.EnsureDefaults(config.EnsureDefaultsOptions{AutoUpdateMode: "off"})
+	if err != nil {
+		t.Fatalf("EnsureDefaults() error: %v", err)
+	}
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	got := string(content)
+	if !strings.Contains(got, "enabled = false") {
+		t.Fatalf("config did not disable updater:\n%s", got)
+	}
+	if !strings.Contains(got, `mode = "apply"`) {
+		t.Fatalf("config did not rewrite mode for off override:\n%s", got)
+	}
+}
+
 func setConfigHome(t *testing.T, contents string) {
 	t.Helper()
 	dir := t.TempDir()

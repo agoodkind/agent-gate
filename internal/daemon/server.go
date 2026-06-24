@@ -55,6 +55,8 @@ type Server struct {
 	configWatcher *fsnotify.Watcher
 	configPath    string
 	closing       bool
+	updateCancel  context.CancelFunc
+	stopDaemon    func()
 
 	overloadLogMu       sync.Mutex
 	lastOverloadLogTime time.Time
@@ -66,21 +68,8 @@ func New(log *slog.Logger, cfg *config.Config) (*Server, error) {
 		log = slog.Default()
 	}
 	if cfg == nil {
-		cfg = &config.Config{
-			Log:   config.Log{Level: ""},
-			Audit: config.Audit{Enabled: nil, Level: "", Outputs: config.AuditOutput{SQLite: config.AuditSQLiteOutput{Path: ""}}},
-			Paths: config.Paths{ConversationsDir: ""},
-			Performance: config.Performance{
-				Hook: config.HookPerformance{
-					HotConcurrency:     0,
-					HotQueueWaitMS:     0,
-					DeferredQueueLimit: 0,
-					DeferredWorkers:    0,
-				},
-			},
-			Telemetry: config.TelemetryConfig{OTLPEndpoint: "", SlowOpThresholdMs: 0},
-			Rules:     nil,
-		}
+		var defaultConfig config.Config
+		cfg = &defaultConfig
 	}
 	if errs := hook.ValidateConfig(cfg); len(errs) > 0 {
 		log.Error("invalid hook config", slog.Any("err", errs[0]))
@@ -103,6 +92,8 @@ func New(log *slog.Logger, cfg *config.Config) (*Server, error) {
 		configWatcher:                 nil,
 		configPath:                    config.Path(),
 		closing:                       false,
+		updateCancel:                  nil,
+		stopDaemon:                    nil,
 		overloadLogMu:                 sync.Mutex{},
 		lastOverloadLogTime:           time.Time{},
 	}
@@ -203,6 +194,9 @@ func (s *Server) Close() {
 
 	if s.configWatcher != nil {
 		_ = s.configWatcher.Close()
+	}
+	if s.updateCancel != nil {
+		s.updateCancel()
 	}
 	snapshot.close(context.Background(), s.log)
 	s.log.InfoContext(context.Background(), "daemon closed")
@@ -323,8 +317,16 @@ func (s *Server) reloadConfig(ctx context.Context) error {
 		return nil
 	}
 	oldSnapshot := s.runtime.Swap(newSnapshot)
+	updateCancel := s.updateCancel
+	stopDaemon := s.stopDaemon
 	s.cfgMu.Unlock()
 
+	if updateCancel != nil {
+		updateCancel()
+	}
+	if stopDaemon != nil {
+		s.StartUpdateScheduler(ctx, stopDaemon)
+	}
 	oldSnapshot.close(ctx, s.log)
 	s.log.InfoContext(ctx, "config reloaded", "path", s.configPath, "rules", len(candidate.Rules), "audit_enabled", candidate.AuditEnabled())
 	return nil

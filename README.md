@@ -16,8 +16,10 @@ Claude Code, Cursor, Codex, and Gemini CLI all expose lifecycle hook systems tha
 
 Pulls the latest release tarball for your platform, installs the binary
 to `${XDG_BIN_HOME:-$HOME/.local/bin}`, installs and starts the user daemon
-service, and merges hook templates into your Claude, Codex, Gemini, and
-Copilot config files. Existing user settings in those files are preserved.
+service, writes or merges the canonical `agent-gate` config with daemon-owned
+auto-update enabled, and merges hook templates into your Claude, Codex,
+Gemini, and Copilot config files. Existing user settings in those files are
+preserved.
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/agoodkind/agent-gate/main/install.sh | bash
@@ -30,6 +32,9 @@ Flags:
 ./install.sh --hooks-only        # update hook configs, skip download
 ./install.sh --service-only      # install/start only the user daemon service
 ./install.sh --no-service        # skip launchd/systemd user service setup
+./install.sh --no-config         # skip agent-gate config creation / merge
+./install.sh --no-auto-update    # write or merge config with auto-update off
+./install.sh --auto-update check # write or merge config with check-only mode
 ./install.sh --no-claude         # opt out of Claude (additive: combine flags)
 ./install.sh --no-codex
 ./install.sh --no-gemini
@@ -126,6 +131,31 @@ $XDG_CONFIG_HOME/agent-gate/config.toml
 ```
 
 See [config.toml.example](config.toml.example) for a complete annotated example.
+
+Fresh installs write a canonical config file when none exists. Re-running
+`install.sh` preserves existing config and adds the `[update]` table when it
+is missing.
+
+### Auto-Update
+
+Direct installs use the daemon-owned updater by default.
+
+```toml
+[update]
+enabled = true
+mode = "apply"
+interval = "24h"
+repo = "agoodkind/agent-gate"
+allow_prerelease = false
+```
+
+Useful local commands:
+
+```sh
+agent-gate update check
+agent-gate update apply --dry-run
+agent-gate update status
+```
 
 ### Rules
 

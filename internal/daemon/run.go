@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -61,9 +62,15 @@ func Run(log *slog.Logger, cfg *config.Config) error {
 
 	grpcServer := grpc.NewServer()
 	daemonpb.RegisterAgentGateDServer(grpcServer, srv)
+	srv.StartUpdateScheduler(ctx, func() {
+		grpcServer.GracefulStop()
+	})
 
 	log.InfoContext(ctx, "daemon listening", "socket", socketPath)
 	if err := grpcServer.Serve(listener); err != nil {
+		if errors.Is(err, grpc.ErrServerStopped) {
+			return nil
+		}
 		log.ErrorContext(ctx, "grpc serve failed", "err", err)
 		return fmt.Errorf("grpc serve: %w", err)
 	}

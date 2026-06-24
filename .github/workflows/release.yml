@@ -13,3 +13,56 @@ jobs:
       cgo: true
       apt_packages: libpcre2-dev
       brew_packages: pcre2
+
+  sign-release-assets:
+    name: Sign Release Assets
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Require minisign signing key
+        if: ${{ secrets.MINISIGN_SECRET_KEY == '' }}
+        run: |
+          echo "MINISIGN_SECRET_KEY secret is required for signed release assets." >&2
+          exit 1
+      - uses: actions/checkout@v7
+      - name: Install minisign
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y minisign
+      - name: Resolve latest release tag
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName)"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+      - name: Download release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p dist/signatures
+          gh release download "${{ steps.release.outputs.tag }}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern 'agent-gate_*.tar.gz' \
+            --pattern 'checksums.txt' \
+            --dir dist/signatures
+      - name: Sign release assets
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+        run: |
+          umask 077
+          printf '%s' "$MINISIGN_SECRET_KEY" > dist/signatures/minisign.key
+          for asset in dist/signatures/agent-gate_*.tar.gz dist/signatures/checksums.txt; do
+            minisign -S -s dist/signatures/minisign.key -m "$asset" -x "$asset.minisig"
+          done
+          rm -f dist/signatures/minisign.key
+      - name: Upload signature assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${{ steps.release.outputs.tag }}" \
+            --repo "$GITHUB_REPOSITORY" \
+            dist/signatures/*.minisig \
+            --clobber
