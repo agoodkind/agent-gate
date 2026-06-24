@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -34,6 +36,7 @@ const (
 	commandCodexHook  commandName = "codex-hook"
 	commandDaemon     commandName = "daemon"
 	commandGeminiHook commandName = "gemini-hook"
+	commandKV         commandName = "kv"
 	commandQuery      commandName = "query"
 	commandVersion    commandName = "version"
 )
@@ -49,6 +52,37 @@ type queryCommandName string
 const (
 	queryCommandDecisions queryCommandName = "decisions"
 	queryCommandSeen      queryCommandName = "seen"
+)
+
+type kvCommandName string
+
+const (
+	kvCommandDelete    kvCommandName = "del"
+	kvCommandDeleteAlt kvCommandName = "delete"
+	kvCommandExists    kvCommandName = "exists"
+	kvCommandExpire    kvCommandName = "expire"
+	kvCommandGet       kvCommandName = "get"
+	kvCommandGetDelete kvCommandName = "getdel"
+	kvCommandList      kvCommandName = "list"
+	kvCommandPTTL      kvCommandName = "pttl"
+	kvCommandSet       kvCommandName = "set"
+	kvCommandTTL       kvCommandName = "ttl"
+)
+
+type kvBoolField string
+
+const (
+	kvBoolFieldDeleted kvBoolField = "deleted"
+	kvBoolFieldExists  kvBoolField = "exists"
+	kvBoolFieldUpdated kvBoolField = "updated"
+)
+
+type kvSetOption string
+
+const (
+	kvSetOptionNX kvSetOption = "NX"
+	kvSetOptionPX kvSetOption = "PX"
+	kvSetOptionXX kvSetOption = "XX"
 )
 
 // printVersion writes the build metadata used in log entries to stdout.
@@ -87,6 +121,8 @@ func main() {
 			os.Exit(runHook(hook.SystemCodex))
 		case commandGeminiHook:
 			os.Exit(runHook(hook.SystemGemini))
+		case commandKV:
+			os.Exit(runKV(os.Args[2:]))
 		case commandQuery:
 			os.Exit(runQuery(os.Args[2:]))
 		case commandConfig:
@@ -184,6 +220,391 @@ func runConfig(args []string) int {
 	}
 	writeUserLine(os.Stdout, "agent-gate: config ok")
 	return 0
+}
+
+type kvJSONEntry struct {
+	Namespace       string `json:"namespace"`
+	Key             string `json:"key"`
+	Value           string `json:"value,omitempty"`
+	ValueBase64     string `json:"value_base64,omitempty"`
+	Version         uint64 `json:"version"`
+	CreatedUnixNano int64  `json:"created_unix_nano"`
+	UpdatedUnixNano int64  `json:"updated_unix_nano"`
+	ExpiresUnixNano int64  `json:"expires_unix_nano"`
+	PTTLMS          int64  `json:"pttl_ms"`
+}
+
+type kvJSONResult struct {
+	Command string        `json:"command"`
+	Found   *bool         `json:"found,omitempty"`
+	Stored  *bool         `json:"stored,omitempty"`
+	Deleted *bool         `json:"deleted,omitempty"`
+	Exists  *bool         `json:"exists,omitempty"`
+	Updated *bool         `json:"updated,omitempty"`
+	TTL     *int64        `json:"ttl,omitempty"`
+	PTTL    *int64        `json:"pttl,omitempty"`
+	Entry   *kvJSONEntry  `json:"entry,omitempty"`
+	Entries []kvJSONEntry `json:"entries,omitempty"`
+}
+
+func runKV(args []string) int {
+	args, jsonOut := stripJSONFlag(args)
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "usage: agent-gate kv [--json] get|set|del|exists|ttl|pttl|expire|getdel namespace key ...")
+		return 2
+	}
+
+	ctx := context.Background()
+	client, err := connectDaemon(ctx)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-gate kv: daemon unavailable: %v\n", err)
+		return 1
+	}
+	defer func() { _ = client.Close() }()
+
+	switch kvCommandName(strings.ToLower(args[0])) {
+	case kvCommandGet:
+		return runKVGet(client, args[1:], jsonOut)
+	case kvCommandSet:
+		return runKVSet(client, args[1:], jsonOut)
+	case kvCommandDelete, kvCommandDeleteAlt:
+		return runKVDelete(client, args[1:], jsonOut)
+	case kvCommandExists:
+		return runKVExists(client, args[1:], jsonOut)
+	case kvCommandTTL:
+		return runKVTTL(client, args[1:], jsonOut, false)
+	case kvCommandPTTL:
+		return runKVTTL(client, args[1:], jsonOut, true)
+	case kvCommandExpire:
+		return runKVExpire(client, args[1:], jsonOut)
+	case kvCommandGetDelete:
+		return runKVGetDelete(client, args[1:], jsonOut)
+	case kvCommandList:
+		return runKVList(client, args[1:], jsonOut)
+	default:
+		fmt.Fprintf(os.Stderr, "agent-gate kv: unknown subcommand %q\n", args[0])
+		return 2
+	}
+}
+
+func stripJSONFlag(args []string) ([]string, bool) {
+	jsonOut := false
+	trimmed := args
+	for len(trimmed) > 0 && trimmed[0] == "--json" {
+		jsonOut = true
+		trimmed = trimmed[1:]
+	}
+	filtered := make([]string, len(trimmed))
+	copy(filtered, trimmed)
+	return filtered, jsonOut
+}
+
+func runKVGet(client *daemon.Client, args []string, jsonOut bool) int {
+	if len(args) != 2 {
+		fmt.Fprintln(os.Stderr, "usage: agent-gate kv get namespace key")
+		return 2
+	}
+	resp, err := client.KVGet(args[0], args[1])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-gate kv get: %v\n", err)
+		return 1
+	}
+	if jsonOut {
+		return writeKVJSON(kvJSONResult{
+			Command: "get",
+			Found:   boolValue(resp.GetFound()),
+			Entry:   jsonEntry(resp.GetEntry(), true),
+		})
+	}
+	if !resp.GetFound() {
+		writeUserLine(os.Stdout, "(nil)")
+		return 0
+	}
+	if _, err := os.Stdout.Write(resp.GetEntry().GetValue()); err != nil {
+		fmt.Fprintf(os.Stderr, "agent-gate kv get: write stdout: %v\n", err)
+		return 1
+	}
+	writeUserLine(os.Stdout, "")
+	return 0
+}
+
+func runKVSet(client *daemon.Client, args []string, jsonOut bool) int {
+	if len(args) < 3 {
+		fmt.Fprintln(os.Stderr, "usage: agent-gate kv set namespace key value [NX|XX] [PX milliseconds]")
+		return 2
+	}
+	mode := ""
+	ttlMs := int64(0)
+	rest := args[3:]
+	for i := 0; i < len(rest); i++ {
+		token := kvSetOption(strings.ToUpper(rest[i]))
+		switch token {
+		case kvSetOptionNX, kvSetOptionXX:
+			if mode != "" && mode != string(token) {
+				fmt.Fprintln(os.Stderr, "agent-gate kv set: NX and XX are mutually exclusive")
+				return 2
+			}
+			mode = string(token)
+		case kvSetOptionPX:
+			if i+1 >= len(rest) {
+				fmt.Fprintln(os.Stderr, "agent-gate kv set: PX requires milliseconds")
+				return 2
+			}
+			parsed, err := parseKVInt64(rest[i+1], "PX")
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "agent-gate kv set: %v\n", err)
+				return 2
+			}
+			ttlMs = parsed
+			i++
+		default:
+			fmt.Fprintf(os.Stderr, "agent-gate kv set: unknown option %q\n", rest[i])
+			return 2
+		}
+	}
+	resp, err := client.KVSet(args[0], args[1], []byte(args[2]), mode, ttlMs)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-gate kv set: %v\n", err)
+		return 1
+	}
+	if jsonOut {
+		return writeKVJSON(kvJSONResult{
+			Command: "set",
+			Stored:  boolValue(resp.GetStored()),
+			Entry:   jsonEntry(resp.GetEntry(), true),
+		})
+	}
+	if resp.GetStored() {
+		writeUserLine(os.Stdout, "OK")
+	} else {
+		writeUserLine(os.Stdout, "(nil)")
+	}
+	return 0
+}
+
+func runKVDelete(client *daemon.Client, args []string, jsonOut bool) int {
+	if len(args) != 2 {
+		fmt.Fprintln(os.Stderr, "usage: agent-gate kv del namespace key")
+		return 2
+	}
+	resp, err := client.KVDelete(args[0], args[1])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-gate kv del: %v\n", err)
+		return 1
+	}
+	return writeKVBoolInteger("del", resp.GetDeleted(), jsonOut, kvBoolFieldDeleted)
+}
+
+func runKVExists(client *daemon.Client, args []string, jsonOut bool) int {
+	if len(args) != 2 {
+		fmt.Fprintln(os.Stderr, "usage: agent-gate kv exists namespace key")
+		return 2
+	}
+	resp, err := client.KVExists(args[0], args[1])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-gate kv exists: %v\n", err)
+		return 1
+	}
+	return writeKVBoolInteger("exists", resp.GetExists(), jsonOut, kvBoolFieldExists)
+}
+
+func runKVExpire(client *daemon.Client, args []string, jsonOut bool) int {
+	if len(args) != 3 {
+		fmt.Fprintln(os.Stderr, "usage: agent-gate kv expire namespace key milliseconds")
+		return 2
+	}
+	ttlMs, err := parseKVInt64(args[2], "milliseconds")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-gate kv expire: %v\n", err)
+		return 2
+	}
+	resp, err := client.KVExpire(args[0], args[1], ttlMs)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-gate kv expire: %v\n", err)
+		return 1
+	}
+	return writeKVBoolInteger("expire", resp.GetUpdated(), jsonOut, kvBoolFieldUpdated)
+}
+
+func runKVGetDelete(client *daemon.Client, args []string, jsonOut bool) int {
+	if len(args) != 2 {
+		fmt.Fprintln(os.Stderr, "usage: agent-gate kv getdel namespace key")
+		return 2
+	}
+	resp, err := client.KVGetDelete(args[0], args[1])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-gate kv getdel: %v\n", err)
+		return 1
+	}
+	if jsonOut {
+		return writeKVJSON(kvJSONResult{
+			Command: "getdel",
+			Found:   boolValue(resp.GetFound()),
+			Entry:   jsonEntry(resp.GetEntry(), true),
+		})
+	}
+	if !resp.GetFound() {
+		writeUserLine(os.Stdout, "(nil)")
+		return 0
+	}
+	if _, err := os.Stdout.Write(resp.GetEntry().GetValue()); err != nil {
+		fmt.Fprintf(os.Stderr, "agent-gate kv getdel: write stdout: %v\n", err)
+		return 1
+	}
+	writeUserLine(os.Stdout, "")
+	return 0
+}
+
+func runKVTTL(client *daemon.Client, args []string, jsonOut bool, precise bool) int {
+	if len(args) != 2 {
+		fmt.Fprintln(os.Stderr, "usage: agent-gate kv ttl|pttl namespace key")
+		return 2
+	}
+	value := int64(-2)
+	if precise {
+		resp, err := client.KVPTTL(args[0], args[1])
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "agent-gate kv pttl: %v\n", err)
+			return 1
+		}
+		value = resp.GetPttl()
+	} else {
+		resp, err := client.KVTTL(args[0], args[1])
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "agent-gate kv ttl: %v\n", err)
+			return 1
+		}
+		value = resp.GetTtl()
+	}
+	if jsonOut {
+		result := kvJSONResult{Command: "ttl"}
+		if precise {
+			result.Command = "pttl"
+			result.PTTL = int64Value(value)
+		} else {
+			result.TTL = int64Value(value)
+		}
+		return writeKVJSON(result)
+	}
+	_, _ = fmt.Fprintf(os.Stdout, "%d\n", value)
+	return 0
+}
+
+func runKVList(client *daemon.Client, args []string, jsonOut bool) int {
+	if len(args) < 1 || len(args) > 4 {
+		fmt.Fprintln(os.Stderr, "usage: agent-gate kv list namespace [prefix] [limit] [with-values]")
+		return 2
+	}
+	prefix := ""
+	limit := 0
+	includeValues := false
+	if len(args) >= 2 {
+		prefix = args[1]
+	}
+	if len(args) >= 3 {
+		parsed, err := parseKVInt64(args[2], "limit")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "agent-gate kv list: %v\n", err)
+			return 2
+		}
+		limit = int(parsed)
+	}
+	if len(args) == 4 {
+		includeValues = args[3] == "with-values"
+		if !includeValues {
+			fmt.Fprintln(os.Stderr, "agent-gate kv list: fourth argument must be with-values")
+			return 2
+		}
+	}
+	resp, err := client.KVList(args[0], prefix, limit, includeValues)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-gate kv list: %v\n", err)
+		return 1
+	}
+	if jsonOut {
+		entries := make([]kvJSONEntry, 0, len(resp.GetEntries()))
+		for _, entry := range resp.GetEntries() {
+			entries = append(entries, *jsonEntry(entry, includeValues))
+		}
+		return writeKVJSON(kvJSONResult{Command: "list", Entries: entries})
+	}
+	for _, entry := range resp.GetEntries() {
+		if includeValues {
+			_, _ = fmt.Fprintf(os.Stdout, "%s\t%s\n", entry.GetKey(), string(entry.GetValue()))
+			continue
+		}
+		writeUserLine(os.Stdout, entry.GetKey())
+	}
+	return 0
+}
+
+func writeKVBoolInteger(command string, value bool, jsonOut bool, field kvBoolField) int {
+	if jsonOut {
+		result := kvJSONResult{Command: command}
+		switch field {
+		case kvBoolFieldDeleted:
+			result.Deleted = boolValue(value)
+		case kvBoolFieldExists:
+			result.Exists = boolValue(value)
+		case kvBoolFieldUpdated:
+			result.Updated = boolValue(value)
+		}
+		return writeKVJSON(result)
+	}
+	if value {
+		writeUserLine(os.Stdout, "1")
+	} else {
+		writeUserLine(os.Stdout, "0")
+	}
+	return 0
+}
+
+func writeKVJSON(result kvJSONResult) int {
+	encoder := json.NewEncoder(os.Stdout)
+	if err := encoder.Encode(result); err != nil {
+		fmt.Fprintf(os.Stderr, "agent-gate kv: encode JSON: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+func jsonEntry(entry *daemonpb.KVEntry, includeValue bool) *kvJSONEntry {
+	if entry == nil {
+		return nil
+	}
+	out := &kvJSONEntry{
+		Namespace:       entry.GetNamespace(),
+		Key:             entry.GetKey(),
+		Version:         entry.GetVersion(),
+		CreatedUnixNano: entry.GetCreatedUnixNano(),
+		UpdatedUnixNano: entry.GetUpdatedUnixNano(),
+		ExpiresUnixNano: entry.GetExpiresUnixNano(),
+		PTTLMS:          entry.GetPttlMs(),
+	}
+	if includeValue {
+		out.Value = string(entry.GetValue())
+		out.ValueBase64 = base64.StdEncoding.EncodeToString(entry.GetValue())
+	}
+	return out
+}
+
+func boolValue(value bool) *bool {
+	return &value
+}
+
+func int64Value(value int64) *int64 {
+	return &value
+}
+
+func parseKVInt64(value string, name string) (int64, error) {
+	parsed, err := strconv.ParseInt(value, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("%s must be an integer", name)
+	}
+	if parsed < 0 {
+		return 0, fmt.Errorf("%s must be non-negative", name)
+	}
+	return parsed, nil
 }
 
 // openLog returns a slog.Logger that writes JSON to the unified XDG state

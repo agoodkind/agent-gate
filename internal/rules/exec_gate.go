@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"goodkind.io/agent-gate/internal/config"
+	"goodkind.io/agent-gate/internal/hotkv"
 	"goodkind.io/agent-gate/internal/rules/canonpath"
 	execconcern "goodkind.io/agent-gate/internal/rules/concerns/exec"
 	"goodkind.io/agent-gate/internal/rules/concerns/shellread"
@@ -88,6 +89,14 @@ func NewExecRuntime(runner execconcern.Runner, log *slog.Logger) *ExecRuntime {
 		cache:      make(map[string]cachedVerdict),
 		refreshing: make(map[string]struct{}),
 	}
+}
+
+// NewExecRuntimeWithCache returns an ExecRuntime and accepts the daemon hot
+// cache handle that later rule implementations may use. The initial hotkv
+// surface PR keeps exec validation behavior unchanged, so this constructor
+// intentionally delegates to NewExecRuntime until the debounce logic lands.
+func NewExecRuntimeWithCache(runner execconcern.Runner, log *slog.Logger, _ *hotkv.Store) *ExecRuntime {
+	return NewExecRuntime(runner, log)
 }
 
 var (

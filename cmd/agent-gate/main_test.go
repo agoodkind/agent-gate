@@ -147,6 +147,19 @@ func TestRunQueryUnknownSubcommandFailsClearly(t *testing.T) {
 	}
 }
 
+func TestStripJSONFlagOnlyConsumesLeadingFlags(t *testing.T) {
+	args, jsonOut := stripJSONFlag([]string{"--json", "get", "namespace", "--json"})
+	if !jsonOut {
+		t.Fatal("jsonOut = false, want true")
+	}
+	if len(args) != 3 {
+		t.Fatalf("args length = %d, want 3 (%v)", len(args), args)
+	}
+	if args[0] != "get" || args[1] != "namespace" || args[2] != "--json" {
+		t.Fatalf("args = %v, want trailing --json preserved", args)
+	}
+}
+
 func TestRunQuerySeenAcceptsSharedAndIntakeFilters(t *testing.T) {
 	setupQueryEnvironment(t)
 

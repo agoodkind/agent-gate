@@ -21,6 +21,15 @@ const _ = grpc.SupportPackageIsVersion9
 const (
 	AgentGateD_EvaluateHook_FullMethodName = "/agentgate.AgentGateD/EvaluateHook"
 	AgentGateD_Status_FullMethodName       = "/agentgate.AgentGateD/Status"
+	AgentGateD_KVGet_FullMethodName        = "/agentgate.AgentGateD/KVGet"
+	AgentGateD_KVSet_FullMethodName        = "/agentgate.AgentGateD/KVSet"
+	AgentGateD_KVDelete_FullMethodName     = "/agentgate.AgentGateD/KVDelete"
+	AgentGateD_KVExists_FullMethodName     = "/agentgate.AgentGateD/KVExists"
+	AgentGateD_KVTTL_FullMethodName        = "/agentgate.AgentGateD/KVTTL"
+	AgentGateD_KVPTTL_FullMethodName       = "/agentgate.AgentGateD/KVPTTL"
+	AgentGateD_KVExpire_FullMethodName     = "/agentgate.AgentGateD/KVExpire"
+	AgentGateD_KVGetDelete_FullMethodName  = "/agentgate.AgentGateD/KVGetDelete"
+	AgentGateD_KVList_FullMethodName       = "/agentgate.AgentGateD/KVList"
 )
 
 // AgentGateDClient is the client API for AgentGateD service.
@@ -34,6 +43,15 @@ type AgentGateDClient interface {
 	EvaluateHook(ctx context.Context, in *EvaluateHookRequest, opts ...grpc.CallOption) (*EvaluateHookResponse, error)
 	// Status returns process and build metadata for the connected daemon.
 	Status(ctx context.Context, in *StatusRequest, opts ...grpc.CallOption) (*StatusResponse, error)
+	KVGet(ctx context.Context, in *KVGetRequest, opts ...grpc.CallOption) (*KVGetResponse, error)
+	KVSet(ctx context.Context, in *KVSetRequest, opts ...grpc.CallOption) (*KVSetResponse, error)
+	KVDelete(ctx context.Context, in *KVDeleteRequest, opts ...grpc.CallOption) (*KVDeleteResponse, error)
+	KVExists(ctx context.Context, in *KVExistsRequest, opts ...grpc.CallOption) (*KVExistsResponse, error)
+	KVTTL(ctx context.Context, in *KVGetRequest, opts ...grpc.CallOption) (*KVTTLResponse, error)
+	KVPTTL(ctx context.Context, in *KVGetRequest, opts ...grpc.CallOption) (*KVPTTLResponse, error)
+	KVExpire(ctx context.Context, in *KVExpireRequest, opts ...grpc.CallOption) (*KVExpireResponse, error)
+	KVGetDelete(ctx context.Context, in *KVGetDeleteRequest, opts ...grpc.CallOption) (*KVGetDeleteResponse, error)
+	KVList(ctx context.Context, in *KVListRequest, opts ...grpc.CallOption) (*KVListResponse, error)
 }
 
 type agentGateDClient struct {
@@ -64,6 +82,96 @@ func (c *agentGateDClient) Status(ctx context.Context, in *StatusRequest, opts .
 	return out, nil
 }
 
+func (c *agentGateDClient) KVGet(ctx context.Context, in *KVGetRequest, opts ...grpc.CallOption) (*KVGetResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(KVGetResponse)
+	err := c.cc.Invoke(ctx, AgentGateD_KVGet_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *agentGateDClient) KVSet(ctx context.Context, in *KVSetRequest, opts ...grpc.CallOption) (*KVSetResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(KVSetResponse)
+	err := c.cc.Invoke(ctx, AgentGateD_KVSet_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *agentGateDClient) KVDelete(ctx context.Context, in *KVDeleteRequest, opts ...grpc.CallOption) (*KVDeleteResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(KVDeleteResponse)
+	err := c.cc.Invoke(ctx, AgentGateD_KVDelete_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *agentGateDClient) KVExists(ctx context.Context, in *KVExistsRequest, opts ...grpc.CallOption) (*KVExistsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(KVExistsResponse)
+	err := c.cc.Invoke(ctx, AgentGateD_KVExists_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *agentGateDClient) KVTTL(ctx context.Context, in *KVGetRequest, opts ...grpc.CallOption) (*KVTTLResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(KVTTLResponse)
+	err := c.cc.Invoke(ctx, AgentGateD_KVTTL_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *agentGateDClient) KVPTTL(ctx context.Context, in *KVGetRequest, opts ...grpc.CallOption) (*KVPTTLResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(KVPTTLResponse)
+	err := c.cc.Invoke(ctx, AgentGateD_KVPTTL_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *agentGateDClient) KVExpire(ctx context.Context, in *KVExpireRequest, opts ...grpc.CallOption) (*KVExpireResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(KVExpireResponse)
+	err := c.cc.Invoke(ctx, AgentGateD_KVExpire_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *agentGateDClient) KVGetDelete(ctx context.Context, in *KVGetDeleteRequest, opts ...grpc.CallOption) (*KVGetDeleteResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(KVGetDeleteResponse)
+	err := c.cc.Invoke(ctx, AgentGateD_KVGetDelete_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *agentGateDClient) KVList(ctx context.Context, in *KVListRequest, opts ...grpc.CallOption) (*KVListResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(KVListResponse)
+	err := c.cc.Invoke(ctx, AgentGateD_KVList_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AgentGateDServer is the server API for AgentGateD service.
 // All implementations must embed UnimplementedAgentGateDServer
 // for forward compatibility.
@@ -75,6 +183,15 @@ type AgentGateDServer interface {
 	EvaluateHook(context.Context, *EvaluateHookRequest) (*EvaluateHookResponse, error)
 	// Status returns process and build metadata for the connected daemon.
 	Status(context.Context, *StatusRequest) (*StatusResponse, error)
+	KVGet(context.Context, *KVGetRequest) (*KVGetResponse, error)
+	KVSet(context.Context, *KVSetRequest) (*KVSetResponse, error)
+	KVDelete(context.Context, *KVDeleteRequest) (*KVDeleteResponse, error)
+	KVExists(context.Context, *KVExistsRequest) (*KVExistsResponse, error)
+	KVTTL(context.Context, *KVGetRequest) (*KVTTLResponse, error)
+	KVPTTL(context.Context, *KVGetRequest) (*KVPTTLResponse, error)
+	KVExpire(context.Context, *KVExpireRequest) (*KVExpireResponse, error)
+	KVGetDelete(context.Context, *KVGetDeleteRequest) (*KVGetDeleteResponse, error)
+	KVList(context.Context, *KVListRequest) (*KVListResponse, error)
 	mustEmbedUnimplementedAgentGateDServer()
 }
 
@@ -90,6 +207,33 @@ func (UnimplementedAgentGateDServer) EvaluateHook(context.Context, *EvaluateHook
 }
 func (UnimplementedAgentGateDServer) Status(context.Context, *StatusRequest) (*StatusResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Status not implemented")
+}
+func (UnimplementedAgentGateDServer) KVGet(context.Context, *KVGetRequest) (*KVGetResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method KVGet not implemented")
+}
+func (UnimplementedAgentGateDServer) KVSet(context.Context, *KVSetRequest) (*KVSetResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method KVSet not implemented")
+}
+func (UnimplementedAgentGateDServer) KVDelete(context.Context, *KVDeleteRequest) (*KVDeleteResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method KVDelete not implemented")
+}
+func (UnimplementedAgentGateDServer) KVExists(context.Context, *KVExistsRequest) (*KVExistsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method KVExists not implemented")
+}
+func (UnimplementedAgentGateDServer) KVTTL(context.Context, *KVGetRequest) (*KVTTLResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method KVTTL not implemented")
+}
+func (UnimplementedAgentGateDServer) KVPTTL(context.Context, *KVGetRequest) (*KVPTTLResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method KVPTTL not implemented")
+}
+func (UnimplementedAgentGateDServer) KVExpire(context.Context, *KVExpireRequest) (*KVExpireResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method KVExpire not implemented")
+}
+func (UnimplementedAgentGateDServer) KVGetDelete(context.Context, *KVGetDeleteRequest) (*KVGetDeleteResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method KVGetDelete not implemented")
+}
+func (UnimplementedAgentGateDServer) KVList(context.Context, *KVListRequest) (*KVListResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method KVList not implemented")
 }
 func (UnimplementedAgentGateDServer) mustEmbedUnimplementedAgentGateDServer() {}
 func (UnimplementedAgentGateDServer) testEmbeddedByValue()                    {}
@@ -148,6 +292,168 @@ func _AgentGateD_Status_Handler(srv interface{}, ctx context.Context, dec func(i
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AgentGateD_KVGet_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(KVGetRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentGateDServer).KVGet(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentGateD_KVGet_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentGateDServer).KVGet(ctx, req.(*KVGetRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AgentGateD_KVSet_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(KVSetRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentGateDServer).KVSet(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentGateD_KVSet_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentGateDServer).KVSet(ctx, req.(*KVSetRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AgentGateD_KVDelete_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(KVDeleteRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentGateDServer).KVDelete(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentGateD_KVDelete_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentGateDServer).KVDelete(ctx, req.(*KVDeleteRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AgentGateD_KVExists_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(KVExistsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentGateDServer).KVExists(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentGateD_KVExists_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentGateDServer).KVExists(ctx, req.(*KVExistsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AgentGateD_KVTTL_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(KVGetRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentGateDServer).KVTTL(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentGateD_KVTTL_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentGateDServer).KVTTL(ctx, req.(*KVGetRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AgentGateD_KVPTTL_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(KVGetRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentGateDServer).KVPTTL(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentGateD_KVPTTL_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentGateDServer).KVPTTL(ctx, req.(*KVGetRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AgentGateD_KVExpire_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(KVExpireRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentGateDServer).KVExpire(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentGateD_KVExpire_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentGateDServer).KVExpire(ctx, req.(*KVExpireRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AgentGateD_KVGetDelete_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(KVGetDeleteRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentGateDServer).KVGetDelete(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentGateD_KVGetDelete_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentGateDServer).KVGetDelete(ctx, req.(*KVGetDeleteRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AgentGateD_KVList_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(KVListRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentGateDServer).KVList(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentGateD_KVList_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentGateDServer).KVList(ctx, req.(*KVListRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AgentGateD_ServiceDesc is the grpc.ServiceDesc for AgentGateD service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -162,6 +468,42 @@ var AgentGateD_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Status",
 			Handler:    _AgentGateD_Status_Handler,
+		},
+		{
+			MethodName: "KVGet",
+			Handler:    _AgentGateD_KVGet_Handler,
+		},
+		{
+			MethodName: "KVSet",
+			Handler:    _AgentGateD_KVSet_Handler,
+		},
+		{
+			MethodName: "KVDelete",
+			Handler:    _AgentGateD_KVDelete_Handler,
+		},
+		{
+			MethodName: "KVExists",
+			Handler:    _AgentGateD_KVExists_Handler,
+		},
+		{
+			MethodName: "KVTTL",
+			Handler:    _AgentGateD_KVTTL_Handler,
+		},
+		{
+			MethodName: "KVPTTL",
+			Handler:    _AgentGateD_KVPTTL_Handler,
+		},
+		{
+			MethodName: "KVExpire",
+			Handler:    _AgentGateD_KVExpire_Handler,
+		},
+		{
+			MethodName: "KVGetDelete",
+			Handler:    _AgentGateD_KVGetDelete_Handler,
+		},
+		{
+			MethodName: "KVList",
+			Handler:    _AgentGateD_KVList_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

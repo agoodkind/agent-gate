@@ -93,3 +93,133 @@ func (c *Client) Status() (*daemonpb.StatusResponse, error) {
 	}
 	return resp, nil
 }
+
+// KVGet fetches one daemon hot cache entry.
+func (c *Client) KVGet(namespace string, key string) (*daemonpb.KVGetResponse, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	resp, err := c.rpc.KVGet(ctx, &daemonpb.KVGetRequest{Namespace: namespace, Key: key})
+	if err != nil {
+		slog.WarnContext(ctx, "daemon KVGet rpc failed", slog.Any("err", err))
+		return nil, fmt.Errorf("daemon KVGet rpc: %w", err)
+	}
+	return resp, nil
+}
+
+// KVSet stores one daemon hot cache entry.
+func (c *Client) KVSet(namespace string, key string, value []byte, mode string, ttlMs int64) (*daemonpb.KVSetResponse, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	resp, err := c.rpc.KVSet(ctx, &daemonpb.KVSetRequest{
+		Namespace: namespace,
+		Key:       key,
+		Value:     value,
+		Mode:      mode,
+		TtlMs:     ttlMs,
+	})
+	if err != nil {
+		slog.WarnContext(ctx, "daemon KVSet rpc failed", slog.Any("err", err))
+		return nil, fmt.Errorf("daemon KVSet rpc: %w", err)
+	}
+	return resp, nil
+}
+
+// KVDelete removes one daemon hot cache entry.
+func (c *Client) KVDelete(namespace string, key string) (*daemonpb.KVDeleteResponse, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	resp, err := c.rpc.KVDelete(ctx, &daemonpb.KVDeleteRequest{Namespace: namespace, Key: key})
+	if err != nil {
+		slog.WarnContext(ctx, "daemon KVDelete rpc failed", slog.Any("err", err))
+		return nil, fmt.Errorf("daemon KVDelete rpc: %w", err)
+	}
+	return resp, nil
+}
+
+// KVExists reports whether one daemon hot cache entry exists.
+func (c *Client) KVExists(namespace string, key string) (*daemonpb.KVExistsResponse, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	resp, err := c.rpc.KVExists(ctx, &daemonpb.KVExistsRequest{Namespace: namespace, Key: key})
+	if err != nil {
+		slog.WarnContext(ctx, "daemon KVExists rpc failed", slog.Any("err", err))
+		return nil, fmt.Errorf("daemon KVExists rpc: %w", err)
+	}
+	return resp, nil
+}
+
+// KVTTL returns the Redis-style TTL sentinel or remaining whole seconds.
+func (c *Client) KVTTL(namespace string, key string) (*daemonpb.KVTTLResponse, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	resp, err := c.rpc.KVTTL(ctx, &daemonpb.KVGetRequest{Namespace: namespace, Key: key})
+	if err != nil {
+		slog.WarnContext(ctx, "daemon KVTTL rpc failed", slog.Any("err", err))
+		return nil, fmt.Errorf("daemon KVTTL rpc: %w", err)
+	}
+	return resp, nil
+}
+
+// KVPTTL returns the Redis-style PTTL sentinel or remaining milliseconds.
+func (c *Client) KVPTTL(namespace string, key string) (*daemonpb.KVPTTLResponse, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	resp, err := c.rpc.KVPTTL(ctx, &daemonpb.KVGetRequest{Namespace: namespace, Key: key})
+	if err != nil {
+		slog.WarnContext(ctx, "daemon KVPTTL rpc failed", slog.Any("err", err))
+		return nil, fmt.Errorf("daemon KVPTTL rpc: %w", err)
+	}
+	return resp, nil
+}
+
+// KVExpire updates one daemon hot cache entry expiry.
+func (c *Client) KVExpire(namespace string, key string, ttlMs int64) (*daemonpb.KVExpireResponse, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	resp, err := c.rpc.KVExpire(ctx, &daemonpb.KVExpireRequest{Namespace: namespace, Key: key, TtlMs: ttlMs})
+	if err != nil {
+		slog.WarnContext(ctx, "daemon KVExpire rpc failed", slog.Any("err", err))
+		return nil, fmt.Errorf("daemon KVExpire rpc: %w", err)
+	}
+	return resp, nil
+}
+
+// KVGetDelete fetches and removes one daemon hot cache entry.
+func (c *Client) KVGetDelete(namespace string, key string) (*daemonpb.KVGetDeleteResponse, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	resp, err := c.rpc.KVGetDelete(ctx, &daemonpb.KVGetDeleteRequest{Namespace: namespace, Key: key})
+	if err != nil {
+		slog.WarnContext(ctx, "daemon KVGetDelete rpc failed", slog.Any("err", err))
+		return nil, fmt.Errorf("daemon KVGetDelete rpc: %w", err)
+	}
+	return resp, nil
+}
+
+// KVList lists daemon hot cache entries for one namespace and prefix.
+func (c *Client) KVList(namespace string, prefix string, limit int, includeValues bool) (*daemonpb.KVListResponse, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	resp, err := c.rpc.KVList(ctx, &daemonpb.KVListRequest{
+		Namespace:     namespace,
+		Prefix:        prefix,
+		Limit:         boundedInt32(limit),
+		IncludeValues: includeValues,
+	})
+	if err != nil {
+		slog.WarnContext(ctx, "daemon KVList rpc failed", slog.Any("err", err))
+		return nil, fmt.Errorf("daemon KVList rpc: %w", err)
+	}
+	return resp, nil
+}
+
+func boundedInt32(value int) int32 {
+	const maxInt32 = int(^uint32(0) >> 1)
+	if value < 0 {
+		return 0
+	}
+	if value > maxInt32 {
+		return int32(maxInt32)
+	}
+	return int32(value)
+}

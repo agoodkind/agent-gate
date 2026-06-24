@@ -5,8 +5,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"goodkind.io/agent-gate/internal/config"
+	"goodkind.io/agent-gate/internal/hotkv"
 )
 
 func TestLoadValidatesRuleDiagnosticGroup(t *testing.T) {
@@ -165,6 +167,43 @@ slow_op_threshold_ms = 50
 	}
 	if cfg.Telemetry.SlowOpThresholdMs != 50 {
 		t.Errorf("SlowOpThresholdMs = %d, want 50", cfg.Telemetry.SlowOpThresholdMs)
+	}
+}
+
+func TestHookCachePerformanceDefaultsAndOverrides(t *testing.T) {
+	setConfigHome(t, ``)
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.HookCacheMaxEntries() != hotkv.DefaultMaxEntries {
+		t.Fatalf("HookCacheMaxEntries = %d, want %d", cfg.HookCacheMaxEntries(), hotkv.DefaultMaxEntries)
+	}
+	if cfg.HookCacheMaxValueBytes() != hotkv.DefaultMaxValueBytes {
+		t.Fatalf("HookCacheMaxValueBytes = %d, want %d", cfg.HookCacheMaxValueBytes(), hotkv.DefaultMaxValueBytes)
+	}
+	if cfg.HookCachePruneInterval() != hotkv.DefaultPruneInterval {
+		t.Fatalf("HookCachePruneInterval = %s, want %s", cfg.HookCachePruneInterval(), hotkv.DefaultPruneInterval)
+	}
+
+	setConfigHome(t, `
+[performance.hook.cache]
+max_entries = 12
+max_value_bytes = 34
+prune_interval_ms = 56
+`)
+	cfg, err = config.Load()
+	if err != nil {
+		t.Fatalf("Load() override error: %v", err)
+	}
+	if cfg.HookCacheMaxEntries() != 12 {
+		t.Fatalf("HookCacheMaxEntries override = %d, want 12", cfg.HookCacheMaxEntries())
+	}
+	if cfg.HookCacheMaxValueBytes() != 34 {
+		t.Fatalf("HookCacheMaxValueBytes override = %d, want 34", cfg.HookCacheMaxValueBytes())
+	}
+	if cfg.HookCachePruneInterval() != 56*time.Millisecond {
+		t.Fatalf("HookCachePruneInterval override = %s, want 56ms", cfg.HookCachePruneInterval())
 	}
 }
 
