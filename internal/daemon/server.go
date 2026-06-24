@@ -3,6 +3,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
@@ -22,6 +23,7 @@ import (
 	"goodkind.io/agent-gate/internal/audit"
 	"goodkind.io/agent-gate/internal/config"
 	"goodkind.io/agent-gate/internal/hook"
+	"goodkind.io/agent-gate/internal/hotkv"
 	"goodkind.io/agent-gate/internal/intake"
 	"goodkind.io/agent-gate/internal/rules"
 	"goodkind.io/agent-gate/internal/version"
@@ -54,6 +56,7 @@ type Server struct {
 	runtime       atomic.Pointer[runtimeSnapshot]
 	configWatcher *fsnotify.Watcher
 	configPath    string
+	hotKV         *hotkv.Store
 	closing       bool
 
 	overloadLogMu       sync.Mutex
@@ -76,6 +79,11 @@ func New(log *slog.Logger, cfg *config.Config) (*Server, error) {
 					HotQueueWaitMS:     0,
 					DeferredQueueLimit: 0,
 					DeferredWorkers:    0,
+					Cache: config.HookCachePerformance{
+						MaxEntries:      0,
+						MaxValueBytes:   0,
+						PruneIntervalMS: 0,
+					},
 				},
 			},
 			Telemetry: config.TelemetryConfig{OTLPEndpoint: "", SlowOpThresholdMs: 0},
@@ -89,8 +97,10 @@ func New(log *slog.Logger, cfg *config.Config) (*Server, error) {
 
 	hook.WarnCapabilityDowngrades(context.Background(), log, cfg)
 
-	snapshot, err := newRuntimeSnapshot(context.Background(), cfg, log)
+	hotStore := hotkv.New(hotKVOptions(cfg))
+	snapshot, err := newRuntimeSnapshot(context.Background(), cfg, log, hotStore)
 	if err != nil {
+		hotStore.Close()
 		log.Error("failed to create runtime snapshot", slog.Any("err", err))
 		return nil, err
 	}
@@ -102,6 +112,7 @@ func New(log *slog.Logger, cfg *config.Config) (*Server, error) {
 		runtime:                       atomic.Pointer[runtimeSnapshot]{},
 		configWatcher:                 nil,
 		configPath:                    config.Path(),
+		hotKV:                         hotStore,
 		closing:                       false,
 		overloadLogMu:                 sync.Mutex{},
 		lastOverloadLogTime:           time.Time{},
@@ -109,12 +120,21 @@ func New(log *slog.Logger, cfg *config.Config) (*Server, error) {
 	s.runtime.Store(snapshot)
 	if err := s.startConfigWatcher(); err != nil {
 		snapshot.close(context.Background(), log)
+		hotStore.Close()
 		return nil, err
 	}
 	return s, nil
 }
 
-func newRuntimeSnapshot(ctx context.Context, cfg *config.Config, log *slog.Logger) (*runtimeSnapshot, error) {
+func hotKVOptions(cfg *config.Config) hotkv.Options {
+	return hotkv.Options{
+		MaxEntries:    cfg.HookCacheMaxEntries(),
+		MaxValueBytes: cfg.HookCacheMaxValueBytes(),
+		PruneInterval: cfg.HookCachePruneInterval(),
+	}
+}
+
+func newRuntimeSnapshot(ctx context.Context, cfg *config.Config, log *slog.Logger, hotStore *hotkv.Store) (*runtimeSnapshot, error) {
 	// The intake store is created first so the audit event logger can share its
 	// single SQLite connection pool. One pool serializes intake and audit writes
 	// to audit.db, avoiding the cross-pool SQLITE_BUSY that two pools hit during
@@ -164,7 +184,7 @@ func newRuntimeSnapshot(ctx context.Context, cfg *config.Config, log *slog.Logge
 		evaluateSlots:     make(chan struct{}, cfg.HookHotConcurrency()),
 		evaluateQueueWait: cfg.HookHotQueueWait(),
 		hotEvaluate:       defaultHotEvaluate,
-		execRuntime:       rules.NewExecRuntime(nil, log),
+		execRuntime:       rules.NewExecRuntimeWithCache(nil, log, hotStore),
 	}, nil
 }
 
@@ -205,6 +225,9 @@ func (s *Server) Close() {
 		_ = s.configWatcher.Close()
 	}
 	snapshot.close(context.Background(), s.log)
+	if s.hotKV != nil {
+		s.hotKV.Close()
+	}
 	s.log.InfoContext(context.Background(), "daemon closed")
 }
 
@@ -310,7 +333,7 @@ func (s *Server) reloadConfig(ctx context.Context) error {
 
 	hook.WarnCapabilityDowngrades(ctx, s.log, candidate)
 
-	newSnapshot, err := newRuntimeSnapshot(ctx, candidate, s.log)
+	newSnapshot, err := newRuntimeSnapshot(ctx, candidate, s.log, s.hotKV)
 	if err != nil {
 		s.log.WarnContext(ctx, "create runtime snapshot for reloaded config failed", "path", s.configPath, "err", err)
 		return fmt.Errorf("failed to create runtime snapshot for reloaded config: %w", err)
@@ -321,6 +344,9 @@ func (s *Server) reloadConfig(ctx context.Context) error {
 		s.cfgMu.Unlock()
 		newSnapshot.close(ctx, s.log)
 		return nil
+	}
+	if s.hotKV != nil {
+		s.hotKV.Configure(hotKVOptions(candidate))
 	}
 	oldSnapshot := s.runtime.Swap(newSnapshot)
 	s.cfgMu.Unlock()
@@ -618,4 +644,190 @@ func (s *Server) Status(_ context.Context, _ *daemonpb.StatusRequest) (*daemonpb
 		Dirty:          version.Dirty,
 		BuildHash:      version.BuildHash(),
 	}, nil
+}
+
+// KVGet implements the hot KV GET RPC.
+func (s *Server) KVGet(_ context.Context, req *daemonpb.KVGetRequest) (*daemonpb.KVGetResponse, error) {
+	entry, found, err := s.hotKV.Get(req.GetNamespace(), req.GetKey())
+	if err != nil {
+		return nil, kvStatusError(err)
+	}
+	if !found {
+		return &daemonpb.KVGetResponse{Found: false, Entry: nil}, nil
+	}
+	return &daemonpb.KVGetResponse{Found: true, Entry: daemonKVEntry(entry)}, nil
+}
+
+// KVSet implements the hot KV SET RPC.
+func (s *Server) KVSet(_ context.Context, req *daemonpb.KVSetRequest) (*daemonpb.KVSetResponse, error) {
+	mode, err := parseKVSetMode(req.GetMode())
+	if err != nil {
+		return nil, err
+	}
+	ttlMs := req.GetTtlMs()
+	if ttlMs < 0 {
+		return nil, status.Error(codes.InvalidArgument, "ttl_ms must be non-negative")
+	}
+	entry, stored, err := s.hotKV.Set(req.GetNamespace(), req.GetKey(), req.GetValue(), hotkv.SetOptions{
+		Mode: mode,
+		TTL:  time.Duration(ttlMs) * time.Millisecond,
+	})
+	if err != nil {
+		return nil, kvStatusError(err)
+	}
+	if !stored {
+		return &daemonpb.KVSetResponse{Stored: false, Entry: nil}, nil
+	}
+	return &daemonpb.KVSetResponse{Stored: true, Entry: daemonKVEntry(entry)}, nil
+}
+
+// KVDelete implements the hot KV DEL RPC.
+func (s *Server) KVDelete(_ context.Context, req *daemonpb.KVDeleteRequest) (*daemonpb.KVDeleteResponse, error) {
+	deleted, err := s.hotKV.Delete(req.GetNamespace(), req.GetKey())
+	if err != nil {
+		return nil, kvStatusError(err)
+	}
+	return &daemonpb.KVDeleteResponse{Deleted: deleted}, nil
+}
+
+// KVExists implements the hot KV EXISTS RPC.
+func (s *Server) KVExists(_ context.Context, req *daemonpb.KVExistsRequest) (*daemonpb.KVExistsResponse, error) {
+	exists, err := s.hotKV.Exists(req.GetNamespace(), req.GetKey())
+	if err != nil {
+		return nil, kvStatusError(err)
+	}
+	return &daemonpb.KVExistsResponse{Exists: exists}, nil
+}
+
+// KVTTL implements the hot KV TTL RPC.
+func (s *Server) KVTTL(_ context.Context, req *daemonpb.KVGetRequest) (*daemonpb.KVTTLResponse, error) {
+	ttl, err := hotKVTTL(s.hotKV, req.GetNamespace(), req.GetKey(), false)
+	if err != nil {
+		return nil, err
+	}
+	return &daemonpb.KVTTLResponse{Ttl: ttl}, nil
+}
+
+// KVPTTL implements the hot KV PTTL RPC.
+func (s *Server) KVPTTL(_ context.Context, req *daemonpb.KVGetRequest) (*daemonpb.KVPTTLResponse, error) {
+	ttl, err := hotKVTTL(s.hotKV, req.GetNamespace(), req.GetKey(), true)
+	if err != nil {
+		return nil, err
+	}
+	return &daemonpb.KVPTTLResponse{Pttl: ttl}, nil
+}
+
+// KVExpire implements the hot KV EXPIRE RPC.
+func (s *Server) KVExpire(_ context.Context, req *daemonpb.KVExpireRequest) (*daemonpb.KVExpireResponse, error) {
+	ttlMs := req.GetTtlMs()
+	if ttlMs < 0 {
+		return nil, status.Error(codes.InvalidArgument, "ttl_ms must be non-negative")
+	}
+	updated, err := s.hotKV.Expire(req.GetNamespace(), req.GetKey(), time.Duration(ttlMs)*time.Millisecond)
+	if err != nil {
+		return nil, kvStatusError(err)
+	}
+	return &daemonpb.KVExpireResponse{Updated: updated}, nil
+}
+
+// KVGetDelete implements the hot KV GETDEL RPC.
+func (s *Server) KVGetDelete(_ context.Context, req *daemonpb.KVGetDeleteRequest) (*daemonpb.KVGetDeleteResponse, error) {
+	entry, found, err := s.hotKV.GetDelete(req.GetNamespace(), req.GetKey())
+	if err != nil {
+		return nil, kvStatusError(err)
+	}
+	if !found {
+		return &daemonpb.KVGetDeleteResponse{Found: false, Entry: nil}, nil
+	}
+	return &daemonpb.KVGetDeleteResponse{Found: true, Entry: daemonKVEntry(entry)}, nil
+}
+
+// KVList implements the hot KV list RPC used by diagnostics.
+func (s *Server) KVList(_ context.Context, req *daemonpb.KVListRequest) (*daemonpb.KVListResponse, error) {
+	if req.GetLimit() < 0 {
+		return nil, status.Error(codes.InvalidArgument, "limit must be non-negative")
+	}
+	entries, err := s.hotKV.List(req.GetNamespace(), req.GetPrefix(), int(req.GetLimit()), req.GetIncludeValues())
+	if err != nil {
+		return nil, kvStatusError(err)
+	}
+	out := make([]*daemonpb.KVEntry, 0, len(entries))
+	for _, entry := range entries {
+		out = append(out, daemonKVEntry(entry))
+	}
+	return &daemonpb.KVListResponse{Entries: out}, nil
+}
+
+func parseKVSetMode(mode string) (hotkv.SetMode, error) {
+	switch strings.ToUpper(strings.TrimSpace(mode)) {
+	case "":
+		return hotkv.SetModeAny, nil
+	case string(hotkv.SetModeNX):
+		return hotkv.SetModeNX, nil
+	case string(hotkv.SetModeXX):
+		return hotkv.SetModeXX, nil
+	default:
+		return hotkv.SetModeAny, status.Errorf(codes.InvalidArgument, "unknown set mode %q", mode)
+	}
+}
+
+func kvStatusError(err error) error {
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, hotkv.ErrInvalidNamespace), errors.Is(err, hotkv.ErrInvalidKey):
+		return status.Error(codes.InvalidArgument, err.Error())
+	case errors.Is(err, hotkv.ErrValueTooLarge):
+		return status.Error(codes.ResourceExhausted, err.Error())
+	default:
+		return status.Error(codes.Internal, err.Error())
+	}
+}
+
+func hotKVTTL(store *hotkv.Store, namespace string, key string, precise bool) (int64, error) {
+	ttl, found, expiring, err := store.PTTL(namespace, key)
+	if err != nil {
+		return 0, kvStatusError(err)
+	}
+	if !found {
+		return -2, nil
+	}
+	if !expiring {
+		return -1, nil
+	}
+	if precise {
+		return ttl.Milliseconds(), nil
+	}
+	return ttl.Milliseconds() / 1000, nil
+}
+
+func daemonKVEntry(entry hotkv.Entry) *daemonpb.KVEntry {
+	pttlMs := int64(-1)
+	expiresUnixNano := int64(0)
+	if !entry.ExpiresAt.IsZero() {
+		expiresUnixNano = entry.ExpiresAt.UnixNano()
+		ttl := entry.ExpiresAt.Sub(auditNow())
+		if ttl < 0 {
+			pttlMs = 0
+		} else {
+			pttlMs = ttl.Milliseconds()
+		}
+	}
+	return &daemonpb.KVEntry{
+		Namespace:       entry.Namespace,
+		Key:             entry.Key,
+		Value:           append([]byte(nil), entry.Value...),
+		Version:         entry.Version,
+		CreatedUnixNano: unixNanoOrZero(entry.CreatedAt),
+		UpdatedUnixNano: unixNanoOrZero(entry.UpdatedAt),
+		ExpiresUnixNano: expiresUnixNano,
+		PttlMs:          pttlMs,
+	}
+}
+
+func unixNanoOrZero(value time.Time) int64 {
+	if value.IsZero() {
+		return 0
+	}
+	return value.UnixNano()
 }

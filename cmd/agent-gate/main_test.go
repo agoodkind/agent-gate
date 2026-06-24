@@ -147,6 +147,41 @@ func TestRunQueryUnknownSubcommandFailsClearly(t *testing.T) {
 	}
 }
 
+func TestStripJSONFlagOnlyConsumesLeadingFlags(t *testing.T) {
+	args, jsonOut := stripJSONFlag([]string{"--json", "get", "namespace", "--json"})
+	if !jsonOut {
+		t.Fatal("jsonOut = false, want true")
+	}
+	if len(args) != 3 {
+		t.Fatalf("args length = %d, want 3 (%v)", len(args), args)
+	}
+	if args[0] != "get" || args[1] != "namespace" || args[2] != "--json" {
+		t.Fatalf("args = %v, want trailing --json preserved", args)
+	}
+}
+
+func TestJSONEntryUsesBase64ForBinaryValue(t *testing.T) {
+	entry := jsonEntry(&daemonpb.KVEntry{
+		Namespace:       "test",
+		Key:             "binary",
+		Value:           []byte{0xff, 0x00, 0x61},
+		Version:         1,
+		CreatedUnixNano: 1,
+		UpdatedUnixNano: 2,
+		ExpiresUnixNano: 3,
+		PttlMs:          4,
+	}, true)
+	if entry == nil {
+		t.Fatal("jsonEntry returned nil")
+	}
+	if entry.Value != "" {
+		t.Fatalf("entry.Value = %q, want empty binary-safe JSON output", entry.Value)
+	}
+	if entry.ValueBase64 != "/wBh" {
+		t.Fatalf("entry.ValueBase64 = %q, want /wBh", entry.ValueBase64)
+	}
+}
+
 func TestRunQuerySeenAcceptsSharedAndIntakeFilters(t *testing.T) {
 	setupQueryEnvironment(t)
 

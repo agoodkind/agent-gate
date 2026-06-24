@@ -19,6 +19,8 @@ import (
 	"goodkind.io/agent-gate/internal/hook"
 	"goodkind.io/agent-gate/internal/intake"
 	"goodkind.io/agent-gate/internal/regex"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func boolPtr(v bool) *bool { return &v }
@@ -239,6 +241,132 @@ func TestEvaluateHook_ConcurrentBurstCompletes(t *testing.T) {
 		if err != nil {
 			t.Fatalf("concurrent EvaluateHook: %v", err)
 		}
+	}
+}
+
+func TestKVHotStoreRPCs(t *testing.T) {
+	setDaemonTestDirs(t)
+	cfg := daemonTestConfig(t)
+	cfg.Performance.Hook.Cache.MaxEntries = 16
+	cfg.Performance.Hook.Cache.MaxValueBytes = 64
+	srv, err := New(newDiscardLogger(), cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer srv.Close()
+
+	setResp, err := srv.KVSet(context.Background(), &daemonpb.KVSetRequest{
+		Namespace: "test",
+		Key:       "repo",
+		Value:     []byte("indexed"),
+		Mode:      "NX",
+		TtlMs:     1000,
+	})
+	if err != nil {
+		t.Fatalf("KVSet: %v", err)
+	}
+	if !setResp.GetStored() {
+		t.Fatal("KVSet stored = false, want true")
+	}
+
+	skipped, err := srv.KVSet(context.Background(), &daemonpb.KVSetRequest{
+		Namespace: "test",
+		Key:       "repo",
+		Value:     []byte("other"),
+		Mode:      "NX",
+	})
+	if err != nil {
+		t.Fatalf("KVSet NX existing: %v", err)
+	}
+	if skipped.GetStored() {
+		t.Fatal("KVSet NX existing stored = true, want false")
+	}
+
+	getResp, err := srv.KVGet(context.Background(), &daemonpb.KVGetRequest{Namespace: "test", Key: "repo"})
+	if err != nil {
+		t.Fatalf("KVGet: %v", err)
+	}
+	if !getResp.GetFound() || string(getResp.GetEntry().GetValue()) != "indexed" {
+		t.Fatalf("KVGet found=%v value=%q, want indexed", getResp.GetFound(), string(getResp.GetEntry().GetValue()))
+	}
+	if getResp.GetEntry().GetPttlMs() <= 0 {
+		t.Fatalf("PTTL = %d, want positive", getResp.GetEntry().GetPttlMs())
+	}
+
+	ttlResp, err := srv.KVTTL(context.Background(), &daemonpb.KVGetRequest{Namespace: "test", Key: "repo"})
+	if err != nil {
+		t.Fatalf("KVTTL: %v", err)
+	}
+	if ttlResp.GetTtl() < 0 {
+		t.Fatalf("KVTTL ttl = %d, want non-negative active TTL", ttlResp.GetTtl())
+	}
+
+	pttlResp, err := srv.KVPTTL(context.Background(), &daemonpb.KVGetRequest{Namespace: "test", Key: "repo"})
+	if err != nil {
+		t.Fatalf("KVPTTL: %v", err)
+	}
+	if pttlResp.GetPttl() <= 0 {
+		t.Fatalf("KVPTTL pttl = %d, want positive", pttlResp.GetPttl())
+	}
+
+	exists, err := srv.KVExists(context.Background(), &daemonpb.KVExistsRequest{Namespace: "test", Key: "repo"})
+	if err != nil {
+		t.Fatalf("KVExists: %v", err)
+	}
+	if !exists.GetExists() {
+		t.Fatal("KVExists = false, want true")
+	}
+
+	deleted, err := srv.KVDelete(context.Background(), &daemonpb.KVDeleteRequest{Namespace: "test", Key: "repo"})
+	if err != nil {
+		t.Fatalf("KVDelete: %v", err)
+	}
+	if !deleted.GetDeleted() {
+		t.Fatal("KVDelete = false, want true")
+	}
+
+	missingTTL, err := srv.KVTTL(context.Background(), &daemonpb.KVGetRequest{Namespace: "test", Key: "repo"})
+	if err != nil {
+		t.Fatalf("KVTTL missing: %v", err)
+	}
+	if missingTTL.GetTtl() != -2 {
+		t.Fatalf("KVTTL missing = %d, want -2", missingTTL.GetTtl())
+	}
+}
+
+func TestKVSetRejectsInvalidMode(t *testing.T) {
+	setDaemonTestDirs(t)
+	srv, err := New(newDiscardLogger(), daemonTestConfig(t))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer srv.Close()
+
+	_, err = srv.KVSet(context.Background(), &daemonpb.KVSetRequest{
+		Namespace: "test",
+		Key:       "repo",
+		Value:     []byte("indexed"),
+		Mode:      "BAD",
+	})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("KVSet invalid mode status = %v, want %v", status.Code(err), codes.InvalidArgument)
+	}
+}
+
+func TestKVListRejectsNegativeLimit(t *testing.T) {
+	setDaemonTestDirs(t)
+	srv, err := New(newDiscardLogger(), daemonTestConfig(t))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer srv.Close()
+
+	_, err = srv.KVList(context.Background(), &daemonpb.KVListRequest{
+		Namespace: "test",
+		Limit:     -1,
+	})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("KVList negative limit status = %v, want %v", status.Code(err), codes.InvalidArgument)
 	}
 }
 

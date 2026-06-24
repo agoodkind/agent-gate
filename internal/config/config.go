@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
+	"goodkind.io/agent-gate/internal/hotkv"
 	"goodkind.io/agent-gate/internal/regex"
 )
 
@@ -53,10 +54,19 @@ type Performance struct {
 
 // HookPerformance tunes the daemon-owned hook evaluation pipeline.
 type HookPerformance struct {
-	HotConcurrency     int `toml:"hot_concurrency"`
-	HotQueueWaitMS     int `toml:"hot_queue_wait_ms"`
-	DeferredQueueLimit int `toml:"deferred_queue_limit"`
-	DeferredWorkers    int `toml:"deferred_workers"`
+	HotConcurrency     int                  `toml:"hot_concurrency"`
+	HotQueueWaitMS     int                  `toml:"hot_queue_wait_ms"`
+	DeferredQueueLimit int                  `toml:"deferred_queue_limit"`
+	DeferredWorkers    int                  `toml:"deferred_workers"`
+	Cache              HookCachePerformance `toml:"cache"`
+}
+
+// HookCachePerformance tunes the daemon-owned hot memory cache used by hook
+// evaluation. Entries are process-local and are never persisted to SQLite.
+type HookCachePerformance struct {
+	MaxEntries      int `toml:"max_entries"`
+	MaxValueBytes   int `toml:"max_value_bytes"`
+	PruneIntervalMS int `toml:"prune_interval_ms"`
 }
 
 // Paths holds optional explicit path overrides from the [paths] TOML table.
@@ -529,6 +539,30 @@ func (c *Config) HookDeferredWorkers() int {
 		return c.Performance.Hook.DeferredWorkers
 	}
 	return defaultHookDeferredWorkers
+}
+
+// HookCacheMaxEntries returns the maximum daemon hot cache entry count.
+func (c *Config) HookCacheMaxEntries() int {
+	if c != nil && c.Performance.Hook.Cache.MaxEntries > 0 {
+		return c.Performance.Hook.Cache.MaxEntries
+	}
+	return hotkv.DefaultMaxEntries
+}
+
+// HookCacheMaxValueBytes returns the maximum bytes accepted per hot cache value.
+func (c *Config) HookCacheMaxValueBytes() int {
+	if c != nil && c.Performance.Hook.Cache.MaxValueBytes > 0 {
+		return c.Performance.Hook.Cache.MaxValueBytes
+	}
+	return hotkv.DefaultMaxValueBytes
+}
+
+// HookCachePruneInterval returns the daemon hot cache periodic prune interval.
+func (c *Config) HookCachePruneInterval() time.Duration {
+	if c != nil && c.Performance.Hook.Cache.PruneIntervalMS > 0 {
+		return time.Duration(c.Performance.Hook.Cache.PruneIntervalMS) * time.Millisecond
+	}
+	return hotkv.DefaultPruneInterval
 }
 
 // Load reads the config file at the XDG config path.
