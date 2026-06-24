@@ -1,0 +1,122 @@
+{
+  "sessionStart": [
+    {
+      "command": "__AGENT_GATE_BIN__",
+      "failClosed": false
+    }
+  ],
+  "sessionEnd": [
+    {
+      "command": "__AGENT_GATE_BIN__",
+      "failClosed": false
+    }
+  ],
+  "preToolUse": [
+    {
+      "command": "__AGENT_GATE_BIN__",
+      "failClosed": false
+    }
+  ],
+  "postToolUse": [
+    {
+      "command": "__AGENT_GATE_BIN__",
+      "failClosed": false
+    }
+  ],
+  "postToolUseFailure": [
+    {
+      "command": "__AGENT_GATE_BIN__",
+      "failClosed": false
+    }
+  ],
+  "beforeShellExecution": [
+    {
+      "command": "__AGENT_GATE_BIN__",
+      "failClosed": false
+    }
+  ],
+  "afterShellExecution": [
+    {
+      "command": "__AGENT_GATE_BIN__",
+      "failClosed": false
+    }
+  ],
+  "beforeMCPExecution": [
+    {
+      "command": "__AGENT_GATE_BIN__",
+      "failClosed": false
+    }
+  ],
+  "afterMCPExecution": [
+    {
+      "command": "__AGENT_GATE_BIN__",
+      "failClosed": false
+    }
+  ],
+  "beforeReadFile": [
+    {
+      "command": "__AGENT_GATE_BIN__",
+      "failClosed": false
+    }
+  ],
+  "afterFileEdit": [
+    {
+      "command": "__AGENT_GATE_BIN__",
+      "failClosed": false
+    }
+  ],
+  "beforeSubmitPrompt": [
+    {
+      "command": "__AGENT_GATE_BIN__",
+      "failClosed": false
+    }
+  ],
+  "subagentStart": [
+    {
+      "command": "__AGENT_GATE_BIN__",
+      "failClosed": false
+    }
+  ],
+  "subagentStop": [
+    {
+      "command": "__AGENT_GATE_BIN__",
+      "failClosed": false
+    }
+  ],
+  "preCompact": [
+    {
+      "command": "__AGENT_GATE_BIN__",
+      "failClosed": false
+    }
+  ],
+  "stop": [
+    {
+      "command": "__AGENT_GATE_BIN__",
+      "failClosed": false
+    }
+  ],
+  "afterAgentResponse": [
+    {
+      "command": "__AGENT_GATE_BIN__",
+      "failClosed": false
+    }
+  ],
+  "afterAgentThought": [
+    {
+      "command": "__AGENT_GATE_BIN__",
+      "failClosed": false
+    }
+  ],
+  "beforeTabFileRead": [
+    {
+      "command": "__AGENT_GATE_BIN__",
+      "failClosed": false
+    }
+  ],
+  "afterTabFileEdit": [
+    {
+      "command": "__AGENT_GATE_BIN__",
+      "failClosed": false
+    }
+  ]
+}
