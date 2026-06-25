@@ -53,7 +53,7 @@ HOOK_TEMPLATES_SET=0
 SERVICE_TEMPLATES_SET=0
 DEFAULT_HOOK_TEMPLATES=""
 DEFAULT_SERVICE_TEMPLATES=""
-AUTO_UPDATE_MODE="apply"
+AUTO_UPDATE_MODE=""
 
 SCRIPT_DIR=""
 if [[ -n "${BASH_SOURCE[0]:-}" && -f "${BASH_SOURCE[0]}" ]]; then
@@ -256,8 +256,11 @@ installer_args() {
 }
 
 install_config() {
-    "$BIN_DIR/agent-gate" config ensure-defaults --auto-update "$AUTO_UPDATE_MODE" \
-        || die "config ensure-defaults failed"
+    local args=()
+    if [[ -n "$AUTO_UPDATE_MODE" ]]; then
+        args+=(--auto-update "$AUTO_UPDATE_MODE")
+    fi
+    "$BIN_DIR/agent-gate" config ensure-defaults "${args[@]}" || die "config ensure-defaults failed"
     "$BIN_DIR/agent-gate" config check || die "config check failed after merge"
 }
 

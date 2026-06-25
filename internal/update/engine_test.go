@@ -285,7 +285,68 @@ func TestApplyCurrentIsIdempotent(t *testing.T) {
 	if state.LastResult != "current" {
 		t.Fatalf("LastResult = %q, want current", state.LastResult)
 	}
+	if state.AppliedTag != "" {
+		t.Fatalf("AppliedTag = %q, want empty without prior applied state", state.AppliedTag)
+	}
 	if state.LastError != "" {
 		t.Fatalf("LastError = %q, want empty", state.LastError)
+	}
+}
+
+func TestApplyCurrentPreservesAppliedTag(t *testing.T) {
+	originalWithLock := updateWithLock
+	originalFetchLatestRelease := updateFetchLatestRelease
+	t.Cleanup(func() {
+		updateWithLock = originalWithLock
+		updateFetchLatestRelease = originalFetchLatestRelease
+	})
+
+	runtimeAssetName := "agent-gate_" + runtime.GOOS + "_" + runtime.GOARCH + ".tar.gz"
+	statePath := filepath.Join(t.TempDir(), "update.json")
+	if err := SaveState(statePath, State{AppliedTag: "202606250437-78-1cff09c"}); err != nil {
+		t.Fatalf("SaveState() setup error: %v", err)
+	}
+
+	updateWithLock = func(_ context.Context, fn func() error) error {
+		return fn()
+	}
+	updateFetchLatestRelease = func(_ context.Context, _ Options) (release, error) {
+		return release{
+			HTMLURL: "https://example.invalid/release",
+			TagName: version.Version,
+			Assets: []releaseAsset{
+				{
+					Name:               runtimeAssetName,
+					BrowserDownloadURL: "https://example.invalid/archive",
+					Digest:             "sha256:deadbeef",
+				},
+			},
+		}, nil
+	}
+
+	options := Options{
+		Config: &config.Config{
+			Update: config.Update{
+				Enabled:         nil,
+				Mode:            config.UpdateModeApply,
+				Interval:        "24h",
+				Repo:            "agoodkind/agent-gate",
+				AllowPrerelease: true,
+			},
+		},
+		StatePath: statePath,
+	}
+
+	_, err := Apply(context.Background(), options)
+	if err != nil {
+		t.Fatalf("Apply() error: %v", err)
+	}
+
+	state, err := LoadState(statePath)
+	if err != nil {
+		t.Fatalf("LoadState() error: %v", err)
+	}
+	if state.AppliedTag != "202606250437-78-1cff09c" {
+		t.Fatalf("AppliedTag = %q", state.AppliedTag)
 	}
 }

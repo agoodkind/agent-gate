@@ -30,6 +30,7 @@ import (
 const (
 	defaultHTTPTimeout      = 2 * time.Minute
 	maxExtractedBinaryBytes = 128 * 1024 * 1024
+	maxDownloadedAssetBytes = 256 * 1024 * 1024
 )
 
 var (
@@ -118,6 +119,9 @@ func Check(ctx context.Context, options Options) (CheckResult, error) {
 	state.LastResult = "check"
 	if cfg != nil {
 		state.NextCheckAt = state.LastCheckAt.Add(cfg.UpdateInterval())
+	}
+	if previousState, loadErr := LoadState(resolvedOptions.StatePath); loadErr == nil {
+		state.AppliedTag = previousState.AppliedTag
 	}
 	if err := SaveState(resolvedOptions.StatePath, state); err != nil {
 		return result, err
@@ -328,18 +332,30 @@ func downloadFile(ctx context.Context, client *http.Client, url string, path str
 		slog.WarnContext(ctx, "update download status failed", "url", url, "status_code", resp.StatusCode, "err", err)
 		return err
 	}
+	if resp.ContentLength > maxDownloadedAssetBytes {
+		err := fmt.Errorf("download %s exceeds %d bytes", url, maxDownloadedAssetBytes)
+		slog.WarnContext(ctx, "update download size rejected", "url", url, "content_length", resp.ContentLength, "err", err)
+		return err
+	}
 	tmpPath := path + ".tmp"
 	out, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
 		slog.WarnContext(ctx, "update download temp open failed", "path", tmpPath, "err", err)
 		return fmt.Errorf("open download temp: %w", err)
 	}
-	_, copyErr := io.Copy(out, resp.Body)
+	limitedReader := io.LimitReader(resp.Body, maxDownloadedAssetBytes+1)
+	written, copyErr := io.Copy(out, limitedReader)
 	closeErr := out.Close()
 	if copyErr != nil {
 		_ = os.Remove(tmpPath)
 		slog.WarnContext(ctx, "update download copy failed", "path", path, "err", copyErr)
 		return fmt.Errorf("write download temp: %w", copyErr)
+	}
+	if written > maxDownloadedAssetBytes {
+		_ = os.Remove(tmpPath)
+		err := fmt.Errorf("download %s exceeds %d bytes", url, maxDownloadedAssetBytes)
+		slog.WarnContext(ctx, "update download size exceeded", "url", url, "written", written, "err", err)
+		return err
 	}
 	if closeErr != nil {
 		_ = os.Remove(tmpPath)
@@ -566,9 +582,11 @@ func sha256File(path string) (string, error) {
 
 func saveApplyState(options Options, result ApplyResult, status string, errorMessage string) error {
 	var state State
+	if previousState, loadErr := LoadState(options.StatePath); loadErr == nil {
+		state.AppliedTag = previousState.AppliedTag
+	}
 	state.LastCheckAt = clock.Now()
 	state.LatestTag = result.LatestTag
-	state.AppliedTag = ""
 	state.InstalledVersion = result.CurrentVersion
 	state.InstalledCommit = result.CurrentCommit
 	state.InstalledBuildHash = result.CurrentBuildHash

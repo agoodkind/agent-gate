@@ -69,12 +69,25 @@ func SaveState(path string, state State) error {
 		return fmt.Errorf("encode update state: %w", err)
 	}
 	content = append(content, '\n')
-	tmpPath := statePath + ".tmp"
-	if err := os.WriteFile(tmpPath, content, 0o600); err != nil {
+	tempFile, err := os.CreateTemp(filepath.Dir(statePath), filepath.Base(statePath)+".*.tmp")
+	if err != nil {
+		log.Warn("update state temp create failed", "path", statePath, "err", err)
+		return fmt.Errorf("create update state temp: %w", err)
+	}
+	tmpPath := tempFile.Name()
+	if _, err := tempFile.Write(content); err != nil {
+		_ = tempFile.Close()
+		_ = os.Remove(tmpPath)
 		log.Warn("update state temp write failed", "path", tmpPath, "err", err)
 		return fmt.Errorf("write update state temp: %w", err)
 	}
+	if err := tempFile.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		log.Warn("update state temp close failed", "path", tmpPath, "err", err)
+		return fmt.Errorf("close update state temp: %w", err)
+	}
 	if err := os.Rename(tmpPath, statePath); err != nil {
+		_ = os.Remove(tmpPath)
 		log.Warn("update state replace failed", "path", statePath, "err", err)
 		return fmt.Errorf("replace update state: %w", err)
 	}

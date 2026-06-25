@@ -334,11 +334,16 @@ func runUpdateApply(args []string) int {
 		writeUserLine(os.Stdout, "agent-gate: update apply dry run ok")
 		return 0
 	}
-	if err := restartManagedDaemon(); err != nil {
+	restarted, err := restartManagedDaemon()
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent-gate: update apply restart failed: %v\n", err)
 		return 1
 	}
-	writeUserLine(os.Stdout, "agent-gate: update applied and daemon restarted")
+	if restarted {
+		writeUserLine(os.Stdout, "agent-gate: update applied and daemon restarted")
+		return 0
+	}
+	writeUserLine(os.Stdout, "agent-gate: update applied; daemon not running")
 	return 0
 }
 
@@ -378,26 +383,26 @@ func runUpdateStatus(args []string) int {
 	return 0
 }
 
-func restartManagedDaemon() error {
+func restartManagedDaemon() (bool, error) {
 	ctx := context.Background()
 	client, err := connectDaemon(ctx)
 	if err != nil {
-		return nil
+		return false, nil
 	}
 	defer func() { _ = client.Close() }()
 	status, err := client.Status()
 	if err != nil {
 		slog.Warn("restart managed daemon status lookup failed", slog.Any("err", err))
-		return fmt.Errorf("read daemon status before restart: %w", err)
+		return false, fmt.Errorf("read daemon status before restart: %w", err)
 	}
 	process, err := os.FindProcess(int(status.Pid))
 	if err != nil {
 		slog.Warn("restart managed daemon process lookup failed", slog.Int64("pid", status.Pid), slog.Any("err", err))
-		return fmt.Errorf("find daemon process: %w", err)
+		return false, fmt.Errorf("find daemon process: %w", err)
 	}
 	if err := process.Signal(syscall.SIGTERM); err != nil {
 		slog.Warn("restart managed daemon signal failed", slog.Int64("pid", status.Pid), slog.Any("err", err))
-		return fmt.Errorf("signal daemon: %w", err)
+		return false, fmt.Errorf("signal daemon: %w", err)
 	}
 	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
@@ -412,11 +417,11 @@ func restartManagedDaemon() error {
 			continue
 		}
 		if restartedStatus.Pid != status.Pid {
-			return nil
+			return true, nil
 		}
 	}
 	slog.Warn("restart managed daemon timed out", slog.Int64("old_pid", status.Pid))
-	return fmt.Errorf("daemon did not restart with a new pid")
+	return false, fmt.Errorf("daemon did not restart with a new pid")
 }
 
 type kvJSONEntry struct {

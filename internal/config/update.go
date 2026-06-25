@@ -175,14 +175,15 @@ func mergeUpdateDefaults(contents string, mode string) (string, bool, error) {
 	if hasUpdate && mode == "" {
 		return contents, false, nil
 	}
-	block := updateBlockForMode(mode)
 	if !hasUpdate {
+		block := updateBlockForMode(mode)
 		separator := "\n"
 		if strings.HasSuffix(contents, "\n") {
 			separator = ""
 		}
 		return contents + separator + "\n" + block, true, nil
 	}
+	block := mergedUpdateBlock(decoded.Update, mode)
 	next, replaced := replaceTopLevelTable(contents, "update", block)
 	if !replaced {
 		err := fmt.Errorf("update table was detected but could not be replaced")
@@ -213,6 +214,37 @@ allow_prerelease = false
 
 func defaultUpdateBlock() string {
 	return updateBlockForMode(UpdateModeApply)
+}
+
+func mergedUpdateBlock(existing Update, mode string) string {
+	enabled := existing.Enabled == nil || *existing.Enabled
+	resolvedMode := existing.Mode
+	if resolvedMode == "" {
+		resolvedMode = UpdateModeApply
+	}
+	interval := existing.Interval
+	if interval == "" {
+		interval = "24h"
+	}
+	repo := existing.Repo
+	if repo == "" {
+		repo = DefaultUpdateRepo
+	}
+	allowPrerelease := existing.AllowPrerelease
+	if mode == "off" {
+		enabled = false
+		resolvedMode = UpdateModeApply
+	} else if mode != "" {
+		enabled = true
+		resolvedMode = mode
+	}
+	return fmt.Sprintf(`[update]
+enabled = %t
+mode = %q
+interval = %q
+repo = %q
+allow_prerelease = %t
+`, enabled, resolvedMode, interval, repo, allowPrerelease)
 }
 
 func replaceTopLevelTable(contents string, tableName string, replacement string) (string, bool) {

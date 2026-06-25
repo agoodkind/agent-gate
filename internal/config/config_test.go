@@ -368,6 +368,41 @@ func TestEnsureDefaultsOverridesExistingUpdateModeWhenRequested(t *testing.T) {
 	}
 }
 
+func TestEnsureDefaultsPreservesExistingUpdateSettingsWhenOverridingMode(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	configDir := filepath.Join(dir, "agent-gate")
+	if err := os.MkdirAll(configDir, 0o700); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	path := filepath.Join(configDir, "config.toml")
+	initial := "[update]\nenabled = false\nmode = \"check\"\ninterval = \"48h\"\nrepo = \"example/custom\"\nallow_prerelease = true\n"
+	if err := os.WriteFile(path, []byte(initial), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	configPath, err := config.EnsureDefaults(config.EnsureDefaultsOptions{AutoUpdateMode: "apply"})
+	if err != nil {
+		t.Fatalf("EnsureDefaults() error: %v", err)
+	}
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	got := string(content)
+	for _, want := range []string{
+		"enabled = true",
+		`mode = "apply"`,
+		`interval = "48h"`,
+		`repo = "example/custom"`,
+		"allow_prerelease = true",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("config missing %q:\n%s", want, got)
+		}
+	}
+}
+
 func TestLoadRejectsWhitespaceOnlyStdoutJSONField(t *testing.T) {
 	setConfigHome(t, `[[rules]]
 name = "exec-rule"
