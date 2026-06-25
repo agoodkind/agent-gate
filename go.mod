@@ -13,7 +13,7 @@ require (
 	go.opentelemetry.io/otel/metric v1.44.0
 	go.opentelemetry.io/otel/sdk v1.44.0
 	go.opentelemetry.io/otel/sdk/metric v1.44.0
-	golang.org/x/mod v0.36.0
+	golang.org/x/mod v0.37.0
 	goodkind.io/gklog v0.4.4
 	goodkind.io/gksyntax v0.0.0-20260618054600-30485de6d77b
 	google.golang.org/grpc v1.81.1
