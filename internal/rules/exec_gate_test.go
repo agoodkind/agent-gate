@@ -852,6 +852,138 @@ on_error = "open"
 	}
 }
 
+func TestExecForEachAllRequiresEveryMatch(t *testing.T) {
+	targetOne := filepath.Join(t.TempDir(), "repo-one")
+	targetTwo := filepath.Join(t.TempDir(), "repo-two")
+	if err := os.MkdirAll(targetOne, 0o755); err != nil {
+		t.Fatalf("MkdirAll targetOne: %v", err)
+	}
+	if err := os.MkdirAll(targetTwo, 0o755); err != nil {
+		t.Fatalf("MkdirAll targetTwo: %v", err)
+	}
+	wantOne, err := filepath.EvalSymlinks(targetOne)
+	if err != nil {
+		t.Fatalf("EvalSymlinks targetOne: %v", err)
+	}
+	wantTwo, err := filepath.EvalSymlinks(targetTwo)
+	if err != nil {
+		t.Fatalf("EvalSymlinks targetTwo: %v", err)
+	}
+
+	rule := loadExecRule(t, `
+[[rules]]
+name = "exec-rule"
+events = ["PreToolUse"]
+action = "block"
+violation_message = "static message"
+
+[[rules.conditions]]
+kind = "regex"
+field_paths = ["tool_input.command"]
+pattern = "grep"
+
+[[rules.conditions]]
+kind = "exec"
+command = ["/bin/check-target", "{{item}}"]
+for_each = "cmd_read_targets"
+match_mode = "all"
+stdout_json_field = "searchable"
+stdout_json_equals = true
+cache_key = "cmd_read_targets"
+cache_ttl_ms = 0
+search_tools = ["grep"]
+`)
+	runner := &recordingCommandRunner{
+		run: func(command []string) (execconcern.RunResult, error) {
+			if command[1] == wantOne {
+				return execconcern.RunResult{ExitCode: 0, Stdout: `{"searchable":true}`}, nil
+			}
+			if command[1] == wantTwo {
+				return execconcern.RunResult{ExitCode: 0, Stdout: `{"searchable":false}`}, nil
+			}
+			return execconcern.RunResult{ExitCode: 0, Stdout: `{"searchable":true}`}, nil
+		},
+	}
+
+	violations := evalRule(runner, rule, map[string]any{
+		"cwd":        t.TempDir(),
+		"tool_input": map[string]any{"command": "grep -rn x " + targetOne + " " + targetTwo},
+	})
+	if len(violations) != 0 {
+		t.Fatalf("match_mode=all should allow when any target mismatches, got %d violations", len(violations))
+	}
+	commands := runner.Commands()
+	if len(commands) != 2 {
+		t.Fatalf("expected two expanded commands under match_mode=all, got %d", len(commands))
+	}
+}
+
+func TestExecStableCacheKeySeparatesDifferentJSONScalarKinds(t *testing.T) {
+	dir := t.TempDir()
+	runner := newCountingRunner(execconcern.RunResult{ExitCode: 0, Stdout: `{"searchable":true}`}, nil)
+	store := hotkv.New(hotkv.Options{PruneInterval: 0})
+	defer store.Close()
+
+	ruleInt := loadExecRule(t, `
+[[rules]]
+name = "exec-rule"
+events = ["PreToolUse"]
+action = "block"
+violation_message = "static message"
+
+[[rules.conditions]]
+kind = "regex"
+field_paths = ["tool_name"]
+pattern = "^Grep$"
+
+[[rules.conditions]]
+kind = "exec"
+command = ["/bin/check-target", "{{item}}"]
+for_each = "exec_targets"
+match_mode = "any"
+stdout_json_field = "searchable"
+stdout_json_equals = 1
+cache_key = "exec_targets"
+cache_ttl_ms = 60000
+`)
+	ruleFloat := loadExecRule(t, `
+[[rules]]
+name = "exec-rule"
+events = ["PreToolUse"]
+action = "block"
+violation_message = "static message"
+
+[[rules.conditions]]
+kind = "regex"
+field_paths = ["tool_name"]
+pattern = "^Grep$"
+
+[[rules.conditions]]
+kind = "exec"
+command = ["/bin/check-target", "{{item}}"]
+for_each = "exec_targets"
+match_mode = "any"
+stdout_json_field = "searchable"
+stdout_json_equals = 1.0
+cache_key = "exec_targets"
+cache_ttl_ms = 60000
+`)
+	runtime := rules.NewExecRuntimeWithCache(runner, nil, store)
+	ctx := rules.WithExecRuntime(context.Background(), runtime)
+	payload := map[string]any{
+		"effective_cwd": dir,
+		"tool_name":     "Grep",
+		"tool_input":    map[string]any{"path": dir},
+	}
+
+	rules.EvaluateAll(ctx, "claude", "PreToolUse", testFields(payload), []config.Rule{ruleInt}, nil)
+	rules.EvaluateAll(ctx, "claude", "PreToolUse", testFields(payload), []config.Rule{ruleFloat}, nil)
+
+	if runner.Calls() != 2 {
+		t.Fatalf("different stdout_json_equals scalar kinds should not share a cache entry, got %d calls", runner.Calls())
+	}
+}
+
 // A validator that outlives the synchronous budget fails the current event
 // open, finishes in the background, and caches its verdict so the next event
 // for the same target blocks.

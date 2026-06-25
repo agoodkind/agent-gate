@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -828,6 +829,7 @@ func compileExecForEach(ruleName string, index int, c *Condition) error {
 }
 
 func compileExecStdoutJSON(ruleName string, index int, c *Condition, meta toml.MetaData) error {
+	c.StdoutJSONField = strings.TrimSpace(c.StdoutJSONField)
 	hasJSONField := c.StdoutJSONField != ""
 	hasJSONValue := c.StdoutJSONEquals != nil
 	if !hasJSONField && !hasJSONValue {
@@ -838,6 +840,13 @@ func compileExecStdoutJSON(ruleName string, index int, c *Condition, meta toml.M
 	if !hasJSONField || !hasJSONValue {
 		return fmt.Errorf("rule %q condition %d: stdout_json_field and stdout_json_equals must be set together", ruleName, index)
 	}
+	if err := validateStdoutJSONFieldPath(c.StdoutJSONField); err != nil {
+		return errors.New(
+			"rule " + strconv.Quote(ruleName) +
+				" condition " + strconv.Itoa(index) +
+				": stdout_json_field: " + err.Error(),
+		)
+	}
 	value, err := decodeTOMLScalar(meta, *c.StdoutJSONEquals)
 	if err != nil {
 		return errors.New(
@@ -847,6 +856,16 @@ func compileExecStdoutJSON(ruleName string, index int, c *Condition, meta toml.M
 		)
 	}
 	c.stdoutJSONValue = value
+	return nil
+}
+
+func validateStdoutJSONFieldPath(path string) error {
+	if path == "" {
+		return errors.New("must not be empty")
+	}
+	if slices.Contains(strings.Split(path, "."), "") {
+		return errors.New("must not contain empty path segments")
+	}
 	return nil
 }
 

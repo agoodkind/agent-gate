@@ -287,6 +287,52 @@ func TestLoadExampleConfig(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsWhitespaceOnlyStdoutJSONField(t *testing.T) {
+	setConfigHome(t, `[[rules]]
+name = "exec-rule"
+events = ["PreToolUse"]
+action = "block"
+violation_message = "blocked"
+
+[[rules.conditions]]
+kind = "exec"
+command = ["/bin/true"]
+stdout_json_field = "   "
+stdout_json_equals = true
+`)
+
+	_, err := config.Load()
+	if err == nil {
+		t.Fatal("Load() returned nil error for whitespace-only stdout_json_field")
+	}
+	if !strings.Contains(err.Error(), "stdout_json_field and stdout_json_equals must be set together") {
+		t.Fatalf("Load() error = %v", err)
+	}
+}
+
+func TestLoadRejectsStdoutJSONFieldWithEmptySegment(t *testing.T) {
+	setConfigHome(t, `[[rules]]
+name = "exec-rule"
+events = ["PreToolUse"]
+action = "block"
+violation_message = "blocked"
+
+[[rules.conditions]]
+kind = "exec"
+command = ["/bin/true"]
+stdout_json_field = "a..b"
+stdout_json_equals = true
+`)
+
+	_, err := config.Load()
+	if err == nil {
+		t.Fatal("Load() returned nil error for stdout_json_field with empty segment")
+	}
+	if !strings.Contains(err.Error(), "stdout_json_field: must not contain empty path segments") {
+		t.Fatalf("Load() error = %v", err)
+	}
+}
+
 func setConfigHome(t *testing.T, contents string) {
 	t.Helper()
 	dir := t.TempDir()
