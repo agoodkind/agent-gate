@@ -59,6 +59,9 @@ func TestResolveOptionsDefaults(t *testing.T) {
 	if options.Client == nil {
 		t.Fatal("Client = nil, want default client")
 	}
+	if options.Client.Timeout != defaultHTTPTimeout {
+		t.Fatalf("Client.Timeout = %s, want %s", options.Client.Timeout, defaultHTTPTimeout)
+	}
 	if !strings.Contains(options.CacheDir, "agent-gate") {
 		t.Fatalf("CacheDir = %q, want agent-gate path", options.CacheDir)
 	}

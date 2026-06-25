@@ -28,7 +28,7 @@ import (
 )
 
 const (
-	defaultHTTPTimeout      = 30 * time.Second
+	defaultHTTPTimeout      = 2 * time.Minute
 	maxExtractedBinaryBytes = 128 * 1024 * 1024
 )
 
