@@ -79,6 +79,47 @@ func (r *slowRunner) Calls() int {
 	return r.calls
 }
 
+type commandRunnerFunc func([]string) (execconcern.RunResult, error)
+
+type recordingCommandRunner struct {
+	mu       sync.Mutex
+	calls    int
+	commands [][]string
+	run      commandRunnerFunc
+}
+
+func (r *recordingCommandRunner) Run(_ context.Context, command []string, _ time.Duration, _ []byte, _ []string) (execconcern.RunResult, error) {
+	r.mu.Lock()
+	r.calls++
+	copied := make([]string, len(command))
+	copy(copied, command)
+	r.commands = append(r.commands, copied)
+	run := r.run
+	r.mu.Unlock()
+	if run == nil {
+		return execconcern.RunResult{}, nil
+	}
+	return run(copied)
+}
+
+func (r *recordingCommandRunner) Calls() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.calls
+}
+
+func (r *recordingCommandRunner) Commands() [][]string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([][]string, 0, len(r.commands))
+	for _, command := range r.commands {
+		copied := make([]string, len(command))
+		copy(copied, command)
+		out = append(out, copied)
+	}
+	return out
+}
+
 func loadExecRule(t *testing.T, body string) config.Rule {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "config.toml")
@@ -516,6 +557,298 @@ func TestExecStableCacheKeySeparatesDifferentCacheTTLs(t *testing.T) {
 	}
 	if runner.Calls() != 2 {
 		t.Fatalf("different cache_ttl_ms values should not share a cache entry, got %d calls", runner.Calls())
+	}
+}
+
+func TestExecForEachCmdReadTargetsExpandsItemAndBlocksOnAnyJSONMatch(t *testing.T) {
+	firstTarget := t.TempDir()
+	secondTarget := t.TempDir()
+	wantFirst, err := filepath.EvalSymlinks(firstTarget)
+	if err != nil {
+		t.Fatalf("EvalSymlinks firstTarget: %v", err)
+	}
+	wantSecond, err := filepath.EvalSymlinks(secondTarget)
+	if err != nil {
+		t.Fatalf("EvalSymlinks secondTarget: %v", err)
+	}
+
+	rule := loadExecRule(t, `
+[[rules]]
+name = "exec-rule"
+events = ["PreToolUse"]
+action = "block"
+violation_message = "static message"
+
+[[rules.conditions]]
+kind = "regex"
+field_paths = ["tool_input.command"]
+pattern = "grep"
+
+[[rules.conditions]]
+kind = "exec"
+command = ["/bin/check-target", "{{item}}"]
+for_each = "cmd_read_targets"
+match_mode = "any"
+stdout_json_field = "searchable"
+stdout_json_equals = true
+cache_key = "cmd_read_targets"
+cache_ttl_ms = 0
+search_tools = ["grep"]
+`)
+	runner := &recordingCommandRunner{
+		run: func(command []string) (execconcern.RunResult, error) {
+			if len(command) < 2 {
+				return execconcern.RunResult{ExitCode: 0, Stdout: `{"searchable":false}`}, nil
+			}
+			if command[1] == wantSecond {
+				return execconcern.RunResult{ExitCode: 0, Stdout: `{"searchable":true}`}, nil
+			}
+			return execconcern.RunResult{ExitCode: 0, Stdout: `{"searchable":false}`}, nil
+		},
+	}
+
+	violations := evalRule(runner, rule, map[string]any{
+		"cwd":        t.TempDir(),
+		"tool_input": map[string]any{"command": "grep -rn x " + firstTarget + " " + secondTarget},
+	})
+	if len(violations) == 0 {
+		t.Fatalf("expected any matching target to block")
+	}
+	commands := runner.Commands()
+	if len(commands) != 2 {
+		t.Fatalf("expected two expanded validator commands, got %d", len(commands))
+	}
+	if commands[0][1] != wantFirst {
+		t.Fatalf("first expanded item = %q, want %q", commands[0][1], wantFirst)
+	}
+	if commands[1][1] != wantSecond {
+		t.Fatalf("second expanded item = %q, want %q", commands[1][1], wantSecond)
+	}
+}
+
+func TestExecForEachExecTargetsFallsBackToFilePath(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	wantTarget, err := filepath.EvalSymlinks(target)
+	if err != nil {
+		t.Fatalf("EvalSymlinks: %v", err)
+	}
+
+	rule := loadExecRule(t, `
+[[rules]]
+name = "exec-rule"
+events = ["PreToolUse"]
+action = "block"
+violation_message = "static message"
+
+[[rules.conditions]]
+kind = "regex"
+field_paths = ["tool_name"]
+pattern = "^Grep$"
+
+[[rules.conditions]]
+kind = "exec"
+command = ["/bin/check-target", "{{item}}"]
+for_each = "exec_targets"
+match_mode = "any"
+stdout_json_field = "searchable"
+stdout_json_equals = true
+cache_key = "exec_targets"
+cache_ttl_ms = 0
+`)
+	runner := &recordingCommandRunner{
+		run: func(command []string) (execconcern.RunResult, error) {
+			return execconcern.RunResult{ExitCode: 0, Stdout: `{"searchable":false}`}, nil
+		},
+	}
+
+	evalRule(runner, rule, map[string]any{
+		"cwd":       t.TempDir(),
+		"tool_name": "Grep",
+		"tool_input": map[string]any{
+			"path": target,
+		},
+	})
+
+	commands := runner.Commands()
+	if len(commands) != 1 {
+		t.Fatalf("expected one expanded validator command, got %d", len(commands))
+	}
+	if commands[0][1] != wantTarget {
+		t.Fatalf("expanded exec_targets item = %q, want %q", commands[0][1], wantTarget)
+	}
+}
+
+func TestExecJSONMatchErrorOutcomeNotCached(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	rule := loadExecRule(t, `
+[[rules]]
+name = "exec-rule"
+events = ["PreToolUse"]
+action = "block"
+violation_message = "static message"
+
+[[rules.conditions]]
+kind = "regex"
+field_paths = ["tool_name"]
+pattern = "^Grep$"
+
+[[rules.conditions]]
+kind = "exec"
+command = ["/bin/check-target", "{{item}}"]
+for_each = "exec_targets"
+match_mode = "any"
+stdout_json_field = "searchable"
+stdout_json_equals = true
+cache_key = "exec_targets"
+cache_ttl_ms = 60000
+on_error = "open"
+`)
+	runner := newCountingRunner(execconcern.RunResult{}, nil)
+	runner.responses = []runnerResponse{
+		{res: execconcern.RunResult{ExitCode: 0, Stdout: `{"searchable":`}, err: nil},
+		{res: execconcern.RunResult{ExitCode: 0, Stdout: `{"searchable":true}`}, err: nil},
+	}
+	runtime := rules.NewExecRuntime(runner, nil)
+	ctx := rules.WithExecRuntime(context.Background(), runtime)
+	payload := map[string]any{
+		"cwd":       t.TempDir(),
+		"tool_name": "Grep",
+		"tool_input": map[string]any{
+			"path": target,
+		},
+	}
+
+	first := rules.EvaluateAll(ctx, "claude", "PreToolUse", testFields(payload), []config.Rule{rule}, nil)
+	second := rules.EvaluateAll(ctx, "claude", "PreToolUse", testFields(payload), []config.Rule{rule}, nil)
+	if len(first) != 0 {
+		t.Fatalf("invalid JSON predicate output should fail open")
+	}
+	if len(second) == 0 {
+		t.Fatalf("successful follow-up JSON match should block")
+	}
+	if runner.Calls() != 2 {
+		t.Fatalf("errored JSON predicate outcome must not be cached, got %d calls", runner.Calls())
+	}
+}
+
+func TestExecJSONMatchConcurrentMissesSingleflight(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	rule := loadExecRule(t, `
+[[rules]]
+name = "exec-rule"
+events = ["PreToolUse"]
+action = "block"
+violation_message = "static message"
+
+[[rules.conditions]]
+kind = "regex"
+field_paths = ["tool_name"]
+pattern = "^Grep$"
+
+[[rules.conditions]]
+kind = "exec"
+command = ["/bin/check-target", "{{item}}"]
+for_each = "exec_targets"
+match_mode = "any"
+stdout_json_field = "searchable"
+stdout_json_equals = true
+cache_key = "exec_targets"
+cache_ttl_ms = 60000
+`)
+	runner := &slowRunner{
+		delay: 100 * time.Millisecond,
+		res:   execconcern.RunResult{ExitCode: 0, Stdout: `{"searchable":true}`},
+	}
+	runtime := rules.NewExecRuntime(runner, nil)
+	ctx := rules.WithExecRuntime(context.Background(), runtime)
+	payload := map[string]any{
+		"cwd":       t.TempDir(),
+		"tool_name": "Grep",
+		"tool_input": map[string]any{
+			"path": target,
+		},
+	}
+
+	const requestCount = 12
+	var waitGroup sync.WaitGroup
+	errs := make(chan error, requestCount)
+	for i := 0; i < requestCount; i++ {
+		waitGroup.Add(1)
+		go func() {
+			defer waitGroup.Done()
+			violations := rules.EvaluateAll(ctx, "claude", "PreToolUse", testFields(payload), []config.Rule{rule}, nil)
+			if len(violations) == 0 {
+				errs <- fmt.Errorf("expected blocking verdict")
+			}
+		}()
+	}
+	waitGroup.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if runner.Calls() != 1 {
+		t.Fatalf("concurrent JSON predicate miss should fork once, got %d calls", runner.Calls())
+	}
+}
+
+func TestExecJSONMatchTimeoutFailsOpen(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	rule := loadExecRule(t, `
+[[rules]]
+name = "exec-rule"
+events = ["PreToolUse"]
+action = "block"
+violation_message = "static message"
+
+[[rules.conditions]]
+kind = "regex"
+field_paths = ["tool_name"]
+pattern = "^Grep$"
+
+[[rules.conditions]]
+kind = "exec"
+command = ["/bin/check-target", "{{item}}"]
+for_each = "exec_targets"
+match_mode = "any"
+stdout_json_field = "searchable"
+stdout_json_equals = true
+cache_key = "exec_targets"
+cache_ttl_ms = 60000
+timeout_ms = 50
+on_error = "open"
+`)
+	runner := &slowRunner{
+		delay: 150 * time.Millisecond,
+		res:   execconcern.RunResult{ExitCode: 0, Stdout: `{"searchable":true}`},
+	}
+	runtime := rules.NewExecRuntime(runner, nil)
+	ctx := rules.WithExecRuntime(context.Background(), runtime)
+	payload := map[string]any{
+		"cwd":       t.TempDir(),
+		"tool_name": "Grep",
+		"tool_input": map[string]any{
+			"path": target,
+		},
+	}
+
+	first := rules.EvaluateAll(ctx, "claude", "PreToolUse", testFields(payload), []config.Rule{rule}, nil)
+	if len(first) != 0 {
+		t.Fatalf("timed-out JSON predicate event should fail open")
 	}
 }
 
