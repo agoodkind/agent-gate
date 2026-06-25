@@ -158,7 +158,7 @@ func verifyBuildProvenanceAttestation(ctx context.Context, options Options, asse
 	if err != nil {
 		return fmt.Errorf("build provenance certificate identity: %w", err)
 	}
-	verifier, err := newPublicSigstoreVerifier()
+	verifier, err := newBuildProvenanceVerifier()
 	if err != nil {
 		options.Log.WarnContext(ctx, "update build provenance verifier create failed", "repo", repo, "asset", asset.Name, "err", err)
 		return err
@@ -186,13 +186,17 @@ func verifyBuildProvenanceAttestation(ctx context.Context, options Options, asse
 	return fmt.Errorf("build provenance verification failed: %w", lastErr)
 }
 
-func newPublicSigstoreVerifier() (*sigverify.Verifier, error) {
+func newBuildProvenanceVerifier() (*sigverify.Verifier, error) {
 	trustedRoot, err := sigroot.FetchTrustedRoot()
 	if err != nil {
 		slog.Warn("update sigstore trusted root fetch failed", "err", err)
 		return nil, fmt.Errorf("fetch sigstore trusted root: %w", err)
 	}
-	return newSigstoreVerifier(trustedRoot)
+	return newSigstoreVerifier(
+		trustedRoot,
+		sigverify.WithIntegratedTimestamps(1),
+		sigverify.WithTransparencyLog(1),
+	)
 }
 
 func newGitHubReleaseVerifier() (*sigverify.Verifier, error) {
@@ -204,14 +208,17 @@ func newGitHubReleaseVerifier() (*sigverify.Verifier, error) {
 		slog.Warn("update GitHub release trusted root fetch failed", "err", err)
 		return nil, fmt.Errorf("fetch GitHub release trusted root: %w", err)
 	}
-	return newSigstoreVerifier(trustedRoot)
-}
-
-func newSigstoreVerifier(trustedRoot sigroot.TrustedMaterial) (*sigverify.Verifier, error) {
-	verifier, err := sigverify.NewVerifier(
+	return newSigstoreVerifier(
 		trustedRoot,
 		sigverify.WithObserverTimestamps(1),
 	)
+}
+
+func newSigstoreVerifier(
+	trustedRoot sigroot.TrustedMaterial,
+	options ...sigverify.VerifierOption,
+) (*sigverify.Verifier, error) {
+	verifier, err := sigverify.NewVerifier(trustedRoot, options...)
 	if err != nil {
 		slog.Warn("update sigstore verifier create failed", "err", err)
 		return nil, fmt.Errorf("create sigstore verifier: %w", err)
