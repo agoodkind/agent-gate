@@ -209,6 +209,92 @@ func TestInstallHooksReplacesNestedJSONCommands(t *testing.T) {
 	}
 }
 
+func TestInstallFromScratchCreatesExpectedFiles(t *testing.T) {
+	binPath := writeExecutable(t, filepath.Join(t.TempDir(), "agent-gate"))
+	homeDir := t.TempDir()
+	runner := &recordingRunner{}
+
+	hookOptions := DefaultHooksOptions(binPath)
+	hookOptions.HomeDir = homeDir
+	if err := InstallHooks(hookOptions); err != nil {
+		t.Fatalf("InstallHooks() error: %v", err)
+	}
+
+	serviceOptions := ServiceOptions{
+		BinPath:    binPath,
+		HomeDir:    homeDir,
+		ConfigHome: filepath.Join(homeDir, ".config"),
+		StateHome:  filepath.Join(homeDir, ".local", "state"),
+		Runner:     runner,
+	}
+	if err := InstallService(serviceOptions); err != nil {
+		t.Fatalf("InstallService() error: %v", err)
+	}
+
+	testCases := []struct {
+		path           string
+		wantSubstrings []string
+	}{
+		{
+			path:           filepath.Join(homeDir, ".claude", "settings.json"),
+			wantSubstrings: []string{binPath},
+		},
+		{
+			path:           filepath.Join(homeDir, ".codex", "config.toml"),
+			wantSubstrings: []string{"hooks = true", `command = "` + binPath + ` codex-hook"`},
+		},
+		{
+			path:           filepath.Join(homeDir, ".cursor", "hooks.json"),
+			wantSubstrings: []string{binPath},
+		},
+		{
+			path:           filepath.Join(homeDir, ".gemini", "settings.json"),
+			wantSubstrings: []string{binPath + " gemini-hook"},
+		},
+		{
+			path:           filepath.Join(homeDir, ".copilot", "hooks", "agent-gate.json"),
+			wantSubstrings: []string{binPath},
+		},
+	}
+	for _, testCase := range testCases {
+		content, err := os.ReadFile(testCase.path)
+		if err != nil {
+			t.Fatalf("ReadFile(%q) error: %v", testCase.path, err)
+		}
+		for _, want := range testCase.wantSubstrings {
+			if !strings.Contains(string(content), want) {
+				t.Fatalf("%s missing %q:\n%s", testCase.path, want, content)
+			}
+		}
+		assertFileMode(t, testCase.path, privateFileMode)
+	}
+
+	switch runtime.GOOS {
+	case "darwin":
+		servicePath := filepath.Join(homeDir, "Library", "LaunchAgents", launchdLabel+".plist")
+		content, err := os.ReadFile(servicePath)
+		if err != nil {
+			t.Fatalf("ReadFile(%q) error: %v", servicePath, err)
+		}
+		if !strings.Contains(string(content), binPath) {
+			t.Fatalf("launchd plist missing bin path:\n%s", content)
+		}
+		assertFileMode(t, servicePath, privateFileMode)
+	case "linux":
+		servicePath := filepath.Join(homeDir, ".config", "systemd", "user", systemdServiceName)
+		content, err := os.ReadFile(servicePath)
+		if err != nil {
+			t.Fatalf("ReadFile(%q) error: %v", servicePath, err)
+		}
+		if !strings.Contains(string(content), binPath) {
+			t.Fatalf("systemd unit missing bin path:\n%s", content)
+		}
+		assertFileMode(t, servicePath, privateFileMode)
+	default:
+		t.Fatalf("unexpected runtime.GOOS = %s", runtime.GOOS)
+	}
+}
+
 func TestInstallServiceUsesFakeRunner(t *testing.T) {
 	binPath := writeExecutable(t, filepath.Join(t.TempDir(), "agent-gate"))
 	homeDir := t.TempDir()

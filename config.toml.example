@@ -34,6 +34,15 @@ level = "debug"
 [audit.outputs.sqlite]
 path = ""   # default: $XDG_STATE_HOME/agent-gate/sqlite/audit.db
 
+# ── Auto-update (optional) ──────────────────────────────────────────────────
+
+[update]
+enabled = true
+mode = "apply"   # check | apply
+interval = "24h"
+repo = "agoodkind/agent-gate"
+allow_prerelease = false
+
 # ── Hook performance (optional) ──────────────────────────────────────────────
 
 [performance.hook.cache]

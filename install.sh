@@ -19,6 +19,9 @@
 #   --no-cursor          skip Cursor hook config update
 #   --no-gemini          skip Gemini hook config update
 #   --no-copilot         skip GitHub Copilot Chat hook config update
+#   --no-config          skip agent-gate config creation / merge
+#   --no-auto-update     disable auto-update in the merged config
+#   --auto-update MODE   set auto-update mode in config: check or apply
 #   --bin-dir PATH       override binary install dir (default: $XDG_BIN_HOME or
 #                        $HOME/.local/bin)
 #   --version TAG        pin to a specific release tag (default: latest)
@@ -43,12 +46,14 @@ VERSION=""
 DO_BIN=1
 DO_HOOKS=1
 DO_SERVICE=1
+DO_CONFIG=1
 HOOK_INSTALL_ARGS=()
 SERVICE_INSTALL_ARGS=()
 HOOK_TEMPLATES_SET=0
 SERVICE_TEMPLATES_SET=0
 DEFAULT_HOOK_TEMPLATES=""
 DEFAULT_SERVICE_TEMPLATES=""
+AUTO_UPDATE_MODE=""
 
 SCRIPT_DIR=""
 if [[ -n "${BASH_SOURCE[0]:-}" && -f "${BASH_SOURCE[0]}" ]]; then
@@ -79,6 +84,9 @@ usage() {
         "  --no-cursor          skip Cursor hook config update" \
         "  --no-gemini          skip Gemini hook config update" \
         "  --no-copilot         skip GitHub Copilot Chat hook config update" \
+        "  --no-config          skip config creation or merge" \
+        "  --no-auto-update     disable auto-update in the merged config" \
+        "  --auto-update MODE   set auto-update mode: check or apply" \
         "  --bin-dir PATH       override binary install dir" \
         "  --version TAG        pin to a specific release tag" \
         "  --repo OWNER/NAME    override GitHub repo" \
@@ -102,14 +110,26 @@ while [[ $# -gt 0 ]]; do
         --hooks-only)
             DO_BIN=0
             DO_SERVICE=0
+            DO_CONFIG=0
             ;;
         --service-only)
             DO_BIN=0
             DO_HOOKS=0
             DO_SERVICE=1
+            DO_CONFIG=0
             ;;
         --no-service)
             DO_SERVICE=0
+            ;;
+        --no-config)
+            DO_CONFIG=0
+            ;;
+        --no-auto-update)
+            AUTO_UPDATE_MODE="off"
+            ;;
+        --auto-update)
+            shift
+            AUTO_UPDATE_MODE="${1:?--auto-update requires a value}"
             ;;
         --no-*)
             HOOK_INSTALL_ARGS+=("$1")
@@ -235,6 +255,15 @@ installer_args() {
     "$BIN_DIR/agent-gate" install "$mode" --bin-path "$BIN_DIR/agent-gate" "$@"
 }
 
+install_config() {
+    local args=()
+    if [[ -n "$AUTO_UPDATE_MODE" ]]; then
+        args+=(--auto-update "$AUTO_UPDATE_MODE")
+    fi
+    "$BIN_DIR/agent-gate" config ensure-defaults "${args[@]}" || die "config ensure-defaults failed"
+    "$BIN_DIR/agent-gate" config check || die "config check failed after merge"
+}
+
 run_hooks() {
     if [[ "$HOOK_TEMPLATES_SET" -eq 0 && -n "$DEFAULT_HOOK_TEMPLATES" ]]; then
         HOOK_INSTALL_ARGS+=(--templates "$DEFAULT_HOOK_TEMPLATES")
@@ -259,6 +288,10 @@ if [[ "$DO_BIN" -eq 1 ]]; then
     install_bin
 else
     ensure_installed_binary
+fi
+
+if [[ "$DO_CONFIG" -eq 1 ]]; then
+    install_config
 fi
 
 if [[ "$DO_HOOKS" -eq 1 ]]; then

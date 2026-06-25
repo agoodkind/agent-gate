@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"goodkind.io/agent-gate/api/daemonpb"
@@ -21,6 +22,7 @@ import (
 	"goodkind.io/agent-gate/internal/hook"
 	"goodkind.io/agent-gate/internal/intake"
 	"goodkind.io/agent-gate/internal/telemetry"
+	updater "goodkind.io/agent-gate/internal/update"
 	"goodkind.io/agent-gate/internal/version"
 	"goodkind.io/gklog"
 )
@@ -39,6 +41,7 @@ const (
 	commandInstall    commandName = "install"
 	commandKV         commandName = "kv"
 	commandQuery      commandName = "query"
+	commandUpdate     commandName = "update"
 	commandVersion    commandName = "version"
 )
 
@@ -53,6 +56,14 @@ type queryCommandName string
 const (
 	queryCommandDecisions queryCommandName = "decisions"
 	queryCommandSeen      queryCommandName = "seen"
+)
+
+type updateCommandName string
+
+const (
+	updateCommandApply  updateCommandName = "apply"
+	updateCommandCheck  updateCommandName = "check"
+	updateCommandStatus updateCommandName = "status"
 )
 
 type kvCommandName string
@@ -130,6 +141,8 @@ func main() {
 			os.Exit(runConfig(os.Args[2:]))
 		case commandInstall:
 			os.Exit(runInstall(os.Args[2:]))
+		case commandUpdate:
+			os.Exit(runUpdate(os.Args[2:]))
 		case commandVersion, "--version", "-v":
 			printVersion(os.Stdout)
 			return
@@ -213,16 +226,202 @@ func runDaemonStatus() int {
 }
 
 func runConfig(args []string) int {
-	if len(args) != 1 || args[0] != "check" {
-		fmt.Fprintln(os.Stderr, "usage: agent-gate config check")
+	if len(args) == 1 && args[0] == "check" {
+		if _, err := config.Load(); err != nil {
+			fmt.Fprintf(os.Stderr, "agent-gate: config check failed: %v\n", err)
+			return 1
+		}
+		writeUserLine(os.Stdout, "agent-gate: config ok")
+		return 0
+	}
+	if len(args) > 0 && args[0] == "ensure-defaults" {
+		return runConfigEnsureDefaults(args[1:])
+	}
+	fmt.Fprintln(os.Stderr, "usage: agent-gate config check | ensure-defaults [--auto-update check|apply|off]")
+	return 2
+}
+
+func runConfigEnsureDefaults(args []string) int {
+	fs := flag.NewFlagSet("config ensure-defaults", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	var autoUpdate string
+	fs.StringVar(&autoUpdate, "auto-update", "", "override update mode: check, apply, or off")
+	if err := fs.Parse(args); err != nil {
+		fmt.Fprintf(os.Stderr, "agent-gate config ensure-defaults: %v\n", err)
 		return 2
 	}
-	if _, err := config.Load(); err != nil {
-		fmt.Fprintf(os.Stderr, "agent-gate: config check failed: %v\n", err)
+	configPath, err := config.EnsureDefaults(config.EnsureDefaultsOptions{
+		AutoUpdateMode: autoUpdate,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-gate: config ensure-defaults failed: %v\n", err)
 		return 1
 	}
-	writeUserLine(os.Stdout, "agent-gate: config ok")
+	writeUserLine(os.Stdout, "agent-gate: defaults ensured at "+configPath)
 	return 0
+}
+
+func runUpdate(args []string) int {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "usage: agent-gate update check|apply|status")
+		return 2
+	}
+	switch updateCommandName(args[0]) {
+	case updateCommandCheck:
+		return runUpdateCheck(args[1:])
+	case updateCommandApply:
+		return runUpdateApply(args[1:])
+	case updateCommandStatus:
+		return runUpdateStatus(args[1:])
+	default:
+		fmt.Fprintf(os.Stderr, "agent-gate update: unknown subcommand %q\n", args[0])
+		return 2
+	}
+}
+
+func runUpdateCheck(args []string) int {
+	fs := flag.NewFlagSet("update check", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	if err := fs.Parse(args); err != nil {
+		fmt.Fprintf(os.Stderr, "agent-gate update check: %v\n", err)
+		return 2
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-gate: update check config load failed: %v\n", err)
+		return 1
+	}
+	result, err := updater.Check(context.Background(), updater.Options{Config: cfg})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-gate: update check failed: %v\n", err)
+		return 1
+	}
+	writeUserLine(os.Stdout, "current version: "+result.CurrentVersion)
+	writeUserLine(os.Stdout, "latest tag:      "+result.LatestTag)
+	writeUserLine(os.Stdout, "asset:           "+result.AssetName)
+	if result.UpdateAvailable {
+		writeUserLine(os.Stdout, "update available: yes")
+	} else {
+		writeUserLine(os.Stdout, "update available: no")
+	}
+	return 0
+}
+
+func runUpdateApply(args []string) int {
+	fs := flag.NewFlagSet("update apply", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	var dryRun bool
+	fs.BoolVar(&dryRun, "dry-run", false, "download and verify without installing")
+	if err := fs.Parse(args); err != nil {
+		fmt.Fprintf(os.Stderr, "agent-gate update apply: %v\n", err)
+		return 2
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-gate: update apply config load failed: %v\n", err)
+		return 1
+	}
+	result, err := updater.Apply(context.Background(), updater.Options{Config: cfg, DryRun: dryRun})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-gate: update apply failed: %v\n", err)
+		return 1
+	}
+	if !result.UpdateAvailable {
+		writeUserLine(os.Stdout, "agent-gate: already current")
+		return 0
+	}
+	if dryRun {
+		writeUserLine(os.Stdout, "agent-gate: update apply dry run ok")
+		return 0
+	}
+	restarted, err := restartManagedDaemon()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-gate: update apply restart failed: %v\n", err)
+		return 1
+	}
+	if restarted {
+		writeUserLine(os.Stdout, "agent-gate: update applied and daemon restarted")
+		return 0
+	}
+	writeUserLine(os.Stdout, "agent-gate: update applied; daemon not running")
+	return 0
+}
+
+func runUpdateStatus(args []string) int {
+	fs := flag.NewFlagSet("update status", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	if err := fs.Parse(args); err != nil {
+		fmt.Fprintf(os.Stderr, "agent-gate update status: %v\n", err)
+		return 2
+	}
+	state, err := updater.LoadState("")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-gate: update status failed: %v\n", err)
+		return 1
+	}
+	writeUserLine(os.Stdout, "current version:   "+version.Version)
+	writeUserLine(os.Stdout, "current commit:    "+version.Commit)
+	writeUserLine(os.Stdout, "current buildHash: "+version.BuildHash())
+	if !state.LastCheckAt.IsZero() {
+		writeUserLine(os.Stdout, "last check:        "+state.LastCheckAt.Format(time.RFC3339))
+	}
+	if !state.NextCheckAt.IsZero() {
+		writeUserLine(os.Stdout, "next check:        "+state.NextCheckAt.Format(time.RFC3339))
+	}
+	if state.LatestTag != "" {
+		writeUserLine(os.Stdout, "latest tag:        "+state.LatestTag)
+	}
+	if state.AppliedTag != "" {
+		writeUserLine(os.Stdout, "applied tag:       "+state.AppliedTag)
+	}
+	if state.LastResult != "" {
+		writeUserLine(os.Stdout, "last result:       "+state.LastResult)
+	}
+	if state.LastError != "" {
+		writeUserLine(os.Stdout, "last error:        "+state.LastError)
+	}
+	return 0
+}
+
+func restartManagedDaemon() (bool, error) {
+	ctx := context.Background()
+	client, err := connectDaemon(ctx)
+	if err != nil {
+		return false, nil
+	}
+	defer func() { _ = client.Close() }()
+	status, err := client.Status()
+	if err != nil {
+		slog.Warn("restart managed daemon status lookup failed", slog.Any("err", err))
+		return false, fmt.Errorf("read daemon status before restart: %w", err)
+	}
+	process, err := os.FindProcess(int(status.Pid))
+	if err != nil {
+		slog.Warn("restart managed daemon process lookup failed", slog.Int64("pid", status.Pid), slog.Any("err", err))
+		return false, fmt.Errorf("find daemon process: %w", err)
+	}
+	if err := process.Signal(syscall.SIGTERM); err != nil {
+		slog.Warn("restart managed daemon signal failed", slog.Int64("pid", status.Pid), slog.Any("err", err))
+		return false, fmt.Errorf("signal daemon: %w", err)
+	}
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		time.Sleep(500 * time.Millisecond)
+		restartedClient, connectErr := connectDaemon(ctx)
+		if connectErr != nil {
+			continue
+		}
+		restartedStatus, statusErr := restartedClient.Status()
+		_ = restartedClient.Close()
+		if statusErr != nil {
+			continue
+		}
+		if restartedStatus.Pid != status.Pid {
+			return true, nil
+		}
+	}
+	slog.Warn("restart managed daemon timed out", slog.Int64("old_pid", status.Pid))
+	return false, fmt.Errorf("daemon did not restart with a new pid")
 }
 
 type kvJSONEntry struct {

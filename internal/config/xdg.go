@@ -68,11 +68,34 @@ func DefaultStateDir() string {
 	return filepath.Join(base, appName)
 }
 
+// DefaultCacheDir returns the XDG-derived cache directory for agent-gate.
+//
+// Resolution:
+//
+//	$XDG_CACHE_HOME/agent-gate    (if $XDG_CACHE_HOME is set)
+//	~/.cache/agent-gate           (XDG spec default)
+func DefaultCacheDir() string {
+	base := os.Getenv("XDG_CACHE_HOME")
+	if base == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			home = os.Getenv("HOME")
+		}
+		base = filepath.Join(home, ".cache")
+	}
+	return filepath.Join(base, appName)
+}
+
 // DefaultConversationsDir returns the XDG-derived base directory for
 // per-conversation audit logs. Each conversation gets its own subfolder
 // under <state>/conversations/<system>/<session_id>/.
 func DefaultConversationsDir() string {
 	return filepath.Join(DefaultStateDir(), "conversations")
+}
+
+// DefaultUpdateStatePath returns the persisted auto-update state path.
+func DefaultUpdateStatePath() string {
+	return filepath.Join(DefaultStateDir(), "update.json")
 }
 
 // DefaultAuditSQLitePath returns the XDG-derived path to the audit

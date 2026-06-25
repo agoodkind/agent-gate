@@ -58,6 +58,8 @@ type Server struct {
 	configPath    string
 	hotKV         *hotkv.Store
 	closing       bool
+	updateCancel  context.CancelFunc
+	stopDaemon    func()
 
 	overloadLogMu       sync.Mutex
 	lastOverloadLogTime time.Time
@@ -85,6 +87,13 @@ func New(log *slog.Logger, cfg *config.Config) (*Server, error) {
 						PruneIntervalMS: 0,
 					},
 				},
+			},
+			Update: config.Update{
+				Enabled:         nil,
+				Mode:            "",
+				Interval:        "",
+				Repo:            "",
+				AllowPrerelease: false,
 			},
 			Telemetry: config.TelemetryConfig{OTLPEndpoint: "", SlowOpThresholdMs: 0},
 			Rules:     nil,
@@ -114,6 +123,8 @@ func New(log *slog.Logger, cfg *config.Config) (*Server, error) {
 		configPath:                    config.Path(),
 		hotKV:                         hotStore,
 		closing:                       false,
+		updateCancel:                  nil,
+		stopDaemon:                    nil,
 		overloadLogMu:                 sync.Mutex{},
 		lastOverloadLogTime:           time.Time{},
 	}
@@ -223,6 +234,9 @@ func (s *Server) Close() {
 
 	if s.configWatcher != nil {
 		_ = s.configWatcher.Close()
+	}
+	if s.updateCancel != nil {
+		s.updateCancel()
 	}
 	snapshot.close(context.Background(), s.log)
 	if s.hotKV != nil {
@@ -349,8 +363,16 @@ func (s *Server) reloadConfig(ctx context.Context) error {
 		s.hotKV.Configure(hotKVOptions(candidate))
 	}
 	oldSnapshot := s.runtime.Swap(newSnapshot)
+	updateCancel := s.updateCancel
+	stopDaemon := s.stopDaemon
 	s.cfgMu.Unlock()
 
+	if updateCancel != nil {
+		updateCancel()
+	}
+	if stopDaemon != nil {
+		s.StartUpdateScheduler(ctx, stopDaemon)
+	}
 	oldSnapshot.close(ctx, s.log)
 	s.log.InfoContext(ctx, "config reloaded", "path", s.configPath, "rules", len(candidate.Rules), "audit_enabled", candidate.AuditEnabled())
 	return nil
