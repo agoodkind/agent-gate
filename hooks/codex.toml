@@ -1,0 +1,64 @@
+[[hooks.SessionStart]]
+matcher = "startup|resume|clear"
+
+[[hooks.SessionStart.hooks]]
+type = "command"
+command = "__AGENT_GATE_BIN__ codex-hook"
+
+[[hooks.SubagentStart]]
+matcher = ".*"
+
+[[hooks.SubagentStart.hooks]]
+type = "command"
+command = "__AGENT_GATE_BIN__ codex-hook"
+
+[[hooks.PreToolUse]]
+matcher = ".*"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "__AGENT_GATE_BIN__ codex-hook"
+
+[[hooks.PermissionRequest]]
+matcher = ".*"
+
+[[hooks.PermissionRequest.hooks]]
+type = "command"
+command = "__AGENT_GATE_BIN__ codex-hook"
+
+[[hooks.PostToolUse]]
+matcher = ".*"
+
+[[hooks.PostToolUse.hooks]]
+type = "command"
+command = "__AGENT_GATE_BIN__ codex-hook"
+
+[[hooks.PreCompact]]
+
+[[hooks.PreCompact.hooks]]
+type = "command"
+command = "__AGENT_GATE_BIN__ codex-hook"
+
+[[hooks.PostCompact]]
+
+[[hooks.PostCompact.hooks]]
+type = "command"
+command = "__AGENT_GATE_BIN__ codex-hook"
+
+[[hooks.UserPromptSubmit]]
+
+[[hooks.UserPromptSubmit.hooks]]
+type = "command"
+command = "__AGENT_GATE_BIN__ codex-hook"
+
+[[hooks.SubagentStop]]
+
+[[hooks.SubagentStop.hooks]]
+type = "command"
+command = "__AGENT_GATE_BIN__ codex-hook"
+
+[[hooks.Stop]]
+
+[[hooks.Stop.hooks]]
+type = "command"
+command = "__AGENT_GATE_BIN__ codex-hook"

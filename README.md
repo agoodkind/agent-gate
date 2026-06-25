@@ -16,8 +16,9 @@ Claude Code, Cursor, Codex, and Gemini CLI all expose lifecycle hook systems tha
 
 Pulls the latest release tarball for your platform, installs the binary
 to `${XDG_BIN_HOME:-$HOME/.local/bin}`, installs and starts the user daemon
-service, and merges hook templates into your Claude, Codex, Gemini, and
-Copilot config files. Existing user settings in those files are preserved.
+service, and merges hook templates into your Claude, Codex, Cursor, Gemini,
+and Copilot config files. Existing user settings in those files are
+preserved.
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/agoodkind/agent-gate/main/install.sh | bash
@@ -32,6 +33,7 @@ Flags:
 ./install.sh --no-service        # skip launchd/systemd user service setup
 ./install.sh --no-claude         # opt out of Claude (additive: combine flags)
 ./install.sh --no-codex
+./install.sh --no-cursor
 ./install.sh --no-gemini
 ./install.sh --no-copilot
 ./install.sh --bin-dir /opt/bin  # override $XDG_BIN_HOME
@@ -95,16 +97,17 @@ the active daemon process.
 
 The one-liner above wires hooks for all supported tools automatically.
 Templates live in [`hooks/`](hooks/) and the canonical inventory is in
-[`.agent.md`](.agent.md). To re-apply after a binary move or template
+[HOOKS.md](HOOKS.md). To re-apply after a binary move or template
 change:
 
 ```sh
 make install-hooks
 ```
 
-To opt out of any tool, pass `--no-claude`, `--no-codex`, `--no-gemini`,
-or `--no-copilot` (combinable). Hook merges only touch the `.hooks` key,
-so any other settings in the target config files are preserved.
+To opt out of any tool, pass `--no-claude`, `--no-codex`, `--no-cursor`,
+`--no-gemini`, or `--no-copilot` (combinable). Hook updates preserve unrelated
+settings. Codex updates a marked TOML block and ensures `[features] hooks = true`;
+JSON-based tools update only their hook key.
 
 ## Hook event reference
 

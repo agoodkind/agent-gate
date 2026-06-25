@@ -1,9 +1,9 @@
 # agent-gate hook reference
 
 This file is the canonical inventory of every hook `agent-gate` registers
-across Claude Code, Codex, Gemini, Copilot, and Cursor. The JSON templates
-that `install.sh` merges into each tool's config live under `hooks/` and stay
-in sync with this list.
+across Claude Code, Codex, Gemini, Copilot, and Cursor. The templates that
+`install.sh` merges into each tool's config live under `hooks/` and stay in
+sync with this list.
 
 ## Provider Capability Matrix
 
@@ -135,7 +135,7 @@ Installed object shape in `$HOME/.claude/settings.json`:
 
 ## Codex hooks
 
-Source: `hooks/codex.json`. All events route to `agent-gate codex-hook`.
+Source: `hooks/codex.toml`. All events route to `agent-gate codex-hook`.
 
 Installed object shape in `$HOME/.codex/config.toml`:
 
@@ -205,6 +205,8 @@ template is written to `agent-gate.json` so it does not collide with
 other hook files in that directory.
 
 ## Cursor hooks
+
+Source: `hooks/cursor.json`. All events route to bare `agent-gate`.
 
 Cursor user hooks live in `$HOME/.cursor/hooks.json` and use a top-level
 wrapper with `version` and `hooks`.
@@ -290,6 +292,6 @@ When new hook events are added or existing matchers change:
 2. Update the matching table above.
 3. Run `make install-hooks` (or `./install.sh --hooks-only`) to apply.
 
-`install.sh` merges only the `.hooks` key in each target file, so any
-unrelated user settings (themes, permissions, etc.) are preserved across
-re-runs.
+`install.sh` preserves unrelated user settings across re-runs. JSON-based
+tools update only their hook key. Codex updates a marked TOML block in
+`$HOME/.codex/config.toml` and ensures `[features] hooks = true`.
