@@ -1,10 +1,13 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"runtime"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -139,13 +142,17 @@ type Condition struct {
 	// "git grep", "sed"). The tool set is rule policy with no built-in
 	// default: read targets are empty without it, and a cmd_read_targets
 	// cache_key requires it.
-	Command     []string `toml:"command"`
-	TimeoutMs   int      `toml:"timeout_ms"`
-	CacheKey    string   `toml:"cache_key"`
-	CacheTTLMs  int      `toml:"cache_ttl_ms"`
-	BlockOn     string   `toml:"block_on"`
-	OnError     string   `toml:"on_error"`
-	SearchTools []string `toml:"search_tools"`
+	Command          []string        `toml:"command"`
+	TimeoutMs        int             `toml:"timeout_ms"`
+	CacheKey         string          `toml:"cache_key"`
+	CacheTTLMs       int             `toml:"cache_ttl_ms"`
+	BlockOn          string          `toml:"block_on"`
+	OnError          string          `toml:"on_error"`
+	SearchTools      []string        `toml:"search_tools"`
+	ForEach          string          `toml:"for_each"`
+	MatchMode        string          `toml:"match_mode"`
+	StdoutJSONField  string          `toml:"stdout_json_field"`
+	StdoutJSONEquals *toml.Primitive `toml:"stdout_json_equals"`
 
 	compiled         *regex.Regexp
 	compiledNot      *regex.Regexp
@@ -153,11 +160,20 @@ type Condition struct {
 	selectors        []FieldSelectorSpec
 	fieldPairs       []FieldPairSpec
 	cacheKeySelector FieldSelectorSpec
+	forEachSelector  FieldSelectorSpec
+	stdoutJSONValue  TOMLScalarValue
 }
 
 // CacheKeySelector returns the compiled field selector that keys the exec
 // condition's cross-event result cache.
 func (c *Condition) CacheKeySelector() FieldSelectorSpec { return c.cacheKeySelector }
+
+// ForEachSelector returns the compiled field selector that expands the exec
+// command across many target values.
+func (c *Condition) ForEachSelector() FieldSelectorSpec { return c.forEachSelector }
+
+// StdoutJSONEqualsValue returns the decoded scalar used by stdout_json_field.
+func (c *Condition) StdoutJSONEqualsValue() TOMLScalarValue { return c.stdoutJSONValue }
 
 // ShellReadSpec describes one configurable shell command shape for the
 // shell_read_secret condition kind.
@@ -207,6 +223,7 @@ const (
 const (
 	BlockOnNonzero = "nonzero"
 	BlockOnZero    = "zero"
+	BlockOnMatch   = "match"
 )
 
 // Exec condition on_error variants decide what an error (timeout, spawn
@@ -214,6 +231,12 @@ const (
 const (
 	OnErrorOpen   = "open"
 	OnErrorClosed = "closed"
+)
+
+// Exec match_mode variants decide how many expanded exec runs must match.
+const (
+	ExecMatchAny = "any"
+	ExecMatchAll = "all"
 )
 
 // Exec condition defaults and bounds. The timeout is capped well below the 5s
@@ -242,41 +265,17 @@ func (c *Condition) Selectors() []FieldSelectorSpec { return c.selectors }
 // Intended for tests and programmatic rule construction.
 func NewCondition(fieldPaths []string, pattern, notPattern string) (Condition, error) {
 	log := slog.Default()
-	c := Condition{
-		Kind:             "regex",
-		FieldPaths:       fieldPaths,
-		Pattern:          pattern,
-		NotPattern:       notPattern,
-		DiagnosticGroup:  0,
-		Argv0:            "",
-		Subcommands:      nil,
-		StripEnv:         false,
-		StripArgs:        nil,
-		CwdFlags:         nil,
-		RootMarkers:      nil,
-		RequireAny:       nil,
-		RequireAll:       nil,
-		ForbidAny:        nil,
-		FieldPair:        "",
-		Globs:            nil,
-		PathPattern:      "",
-		MaxBytes:         0,
-		RemotePolicy:     "",
-		ReadSpecs:        nil,
-		Command:          nil,
-		TimeoutMs:        0,
-		CacheKey:         "",
-		CacheTTLMs:       0,
-		BlockOn:          "",
-		OnError:          "",
-		SearchTools:      nil,
-		selectors:        CompileFieldSelectorSpecs(fieldPaths),
-		compiled:         nil,
-		compiledNot:      nil,
-		compiledPath:     nil,
-		fieldPairs:       nil,
-		cacheKeySelector: FieldSelectorSpec{Path: "", Selector: FieldSelectorInvalid},
-	}
+	var c Condition
+	c.Kind = "regex"
+	c.FieldPaths = fieldPaths
+	c.Pattern = pattern
+	c.NotPattern = notPattern
+	c.DiagnosticGroup = 0
+	c.selectors = CompileFieldSelectorSpecs(fieldPaths)
+	c.cacheKeySelector = FieldSelectorSpec{Path: "", Selector: FieldSelectorInvalid}
+	c.forEachSelector = FieldSelectorSpec{Path: "", Selector: FieldSelectorInvalid}
+	var zeroScalar TOMLScalarValue
+	c.stdoutJSONValue = zeroScalar
 	if pattern != "" {
 		re, err := regex.Compile(pattern)
 		if err != nil {
@@ -589,13 +588,14 @@ func loadPath(path string, requireExisting bool) (*Config, error) {
 		return nil, fmt.Errorf("stat config %s: %w", path, err)
 	}
 
-	if _, err := toml.DecodeFile(path, &cfg); err != nil {
+	meta, err := toml.DecodeFile(path, &cfg)
+	if err != nil {
 		log.Error("decode config failed", "path", path, "err", err)
 		return nil, fmt.Errorf("decode config %s: %w", path, err)
 	}
 
 	for i := range cfg.Rules {
-		if err := compileRule(log, &cfg.Rules[i]); err != nil {
+		if err := compileRule(log, &cfg.Rules[i], meta); err != nil {
 			return nil, err
 		}
 	}
@@ -605,7 +605,7 @@ func loadPath(path string, requireExisting bool) (*Config, error) {
 
 // compileRule attaches compiled regexes and selectors to rule and its
 // conditions. Errors are returned with rule-context wrapping.
-func compileRule(log *slog.Logger, r *Rule) error {
+func compileRule(log *slog.Logger, r *Rule, meta toml.MetaData) error {
 	if err := normalizeRuleAction(r); err != nil {
 		return fmt.Errorf("rule %q: %w", r.Name, err)
 	}
@@ -614,7 +614,7 @@ func compileRule(log *slog.Logger, r *Rule) error {
 	}
 	if len(r.Conditions) > 0 {
 		for j := range r.Conditions {
-			if err := compileCondition(log, r.Name, j, &r.Conditions[j]); err != nil {
+			if err := compileCondition(log, r.Name, j, &r.Conditions[j], meta); err != nil {
 				return err
 			}
 		}
@@ -676,7 +676,7 @@ func normalizeRuleDiagnosticFormat(r *Rule) error {
 
 // compileCondition fills in compiled regex and selector state for one
 // condition, validates the kind, and parses any field_pair value.
-func compileCondition(log *slog.Logger, ruleName string, index int, c *Condition) error {
+func compileCondition(log *slog.Logger, ruleName string, index int, c *Condition, meta toml.MetaData) error {
 	c.selectors = CompileFieldSelectorSpecs(c.FieldPaths)
 	if c.Kind == "" {
 		c.Kind = "regex"
@@ -723,7 +723,7 @@ func compileCondition(log *slog.Logger, ruleName string, index int, c *Condition
 	if err := validateShellReadSpecConfig(ruleName, index, c); err != nil {
 		return err
 	}
-	if err := compileExecConfig(ruleName, index, c); err != nil {
+	if err := compileExecConfig(ruleName, index, c, meta); err != nil {
 		return err
 	}
 	return nil
@@ -732,7 +732,7 @@ func compileCondition(log *slog.Logger, ruleName string, index int, c *Condition
 // compileExecConfig validates the exec condition fields, applies defaults, and
 // compiles the cache-key field selector. Non-exec conditions are left
 // untouched.
-func compileExecConfig(ruleName string, index int, c *Condition) error {
+func compileExecConfig(ruleName string, index int, c *Condition, meta toml.MetaData) error {
 	if ConditionKind(c.Kind) != ConditionKindExec {
 		return nil
 	}
@@ -751,14 +751,6 @@ func compileExecConfig(ruleName string, index int, c *Condition) error {
 	if c.CacheTTLMs < 0 {
 		return fmt.Errorf("rule %q condition %d: cache_ttl_ms must be non-negative", ruleName, index)
 	}
-	if c.BlockOn == "" {
-		c.BlockOn = BlockOnNonzero
-	}
-	switch c.BlockOn {
-	case BlockOnNonzero, BlockOnZero:
-	default:
-		return fmt.Errorf("rule %q condition %d: block_on %q must be %q or %q", ruleName, index, c.BlockOn, BlockOnNonzero, BlockOnZero)
-	}
 	if c.OnError == "" {
 		c.OnError = OnErrorOpen
 	}
@@ -770,20 +762,152 @@ func compileExecConfig(ruleName string, index int, c *Condition) error {
 	if strings.TrimSpace(c.CacheKey) == "" {
 		c.CacheKey = DefaultExecCacheKey
 	}
-	specs := CompileFieldSelectorSpecs([]string{c.CacheKey})
-	if len(specs) == 0 || specs[0].Selector == FieldSelectorInvalid {
-		return fmt.Errorf("rule %q condition %d: cache_key %q is not a valid field selector", ruleName, index, c.CacheKey)
-	}
-	c.cacheKeySelector = specs[0]
 	for _, tool := range c.SearchTools {
 		if strings.TrimSpace(tool) == "" {
 			return fmt.Errorf("rule %q condition %d: search_tools entries must be non-empty", ruleName, index)
 		}
 	}
+	if err := compileExecCacheKey(ruleName, index, c); err != nil {
+		return err
+	}
+	if err := compileExecForEach(ruleName, index, c); err != nil {
+		return err
+	}
+	if err := compileExecStdoutJSON(ruleName, index, c, meta); err != nil {
+		return err
+	}
+	if err := normalizeExecBlockOn(ruleName, index, c); err != nil {
+		return err
+	}
+	return nil
+}
+
+func compileExecCacheKey(ruleName string, index int, c *Condition) error {
+	specs := CompileFieldSelectorSpecs([]string{c.CacheKey})
+	if len(specs) == 0 || specs[0].Selector == FieldSelectorInvalid {
+		return fmt.Errorf("rule %q condition %d: cache_key %q is not a valid field selector", ruleName, index, c.CacheKey)
+	}
+	c.cacheKeySelector = specs[0]
 	if c.cacheKeySelector.Selector == FieldCmdReadTargets && len(c.SearchTools) == 0 {
 		return fmt.Errorf("rule %q condition %d: cache_key %q requires search_tools to declare which commands count as code search", ruleName, index, c.CacheKey)
 	}
 	return nil
+}
+
+func compileExecForEach(ruleName string, index int, c *Condition) error {
+	commandUsesItem := strings.Contains(strings.Join(c.Command, "\x00"), "{{item}}")
+	if commandUsesItem && strings.TrimSpace(c.ForEach) == "" {
+		return fmt.Errorf("rule %q condition %d: command uses {{item}} but for_each is unset", ruleName, index)
+	}
+	if strings.TrimSpace(c.ForEach) == "" {
+		if c.MatchMode != "" {
+			return fmt.Errorf("rule %q condition %d: match_mode requires for_each", ruleName, index)
+		}
+		return nil
+	}
+
+	specs := CompileFieldSelectorSpecs([]string{c.ForEach})
+	if len(specs) == 0 || specs[0].Selector == FieldSelectorInvalid {
+		return fmt.Errorf("rule %q condition %d: for_each %q is not a valid field selector", ruleName, index, c.ForEach)
+	}
+	c.forEachSelector = specs[0]
+	if !commandUsesItem {
+		return fmt.Errorf("rule %q condition %d: for_each %q requires command to contain {{item}}", ruleName, index, c.ForEach)
+	}
+	if c.MatchMode == "" {
+		c.MatchMode = ExecMatchAny
+	}
+	switch c.MatchMode {
+	case ExecMatchAny, ExecMatchAll:
+	default:
+		return fmt.Errorf("rule %q condition %d: match_mode %q must be %q or %q", ruleName, index, c.MatchMode, ExecMatchAny, ExecMatchAll)
+	}
+	if c.forEachSelector.Selector == FieldCmdReadTargets && len(c.SearchTools) == 0 {
+		return fmt.Errorf("rule %q condition %d: for_each %q requires search_tools to declare which commands count as code search", ruleName, index, c.ForEach)
+	}
+	return nil
+}
+
+func compileExecStdoutJSON(ruleName string, index int, c *Condition, meta toml.MetaData) error {
+	c.StdoutJSONField = strings.TrimSpace(c.StdoutJSONField)
+	hasJSONField := c.StdoutJSONField != ""
+	hasJSONValue := c.StdoutJSONEquals != nil
+	if !hasJSONField && !hasJSONValue {
+		var zeroScalar TOMLScalarValue
+		c.stdoutJSONValue = zeroScalar
+		return nil
+	}
+	if !hasJSONField || !hasJSONValue {
+		return fmt.Errorf("rule %q condition %d: stdout_json_field and stdout_json_equals must be set together", ruleName, index)
+	}
+	if err := validateStdoutJSONFieldPath(c.StdoutJSONField); err != nil {
+		return errors.New(
+			"rule " + strconv.Quote(ruleName) +
+				" condition " + strconv.Itoa(index) +
+				": stdout_json_field: " + err.Error(),
+		)
+	}
+	value, err := decodeTOMLScalar(meta, *c.StdoutJSONEquals)
+	if err != nil {
+		return errors.New(
+			"rule " + strconv.Quote(ruleName) +
+				" condition " + strconv.Itoa(index) +
+				": stdout_json_equals: " + err.Error(),
+		)
+	}
+	c.stdoutJSONValue = value
+	return nil
+}
+
+func validateStdoutJSONFieldPath(path string) error {
+	if path == "" {
+		return errors.New("must not be empty")
+	}
+	if slices.Contains(strings.Split(path, "."), "") {
+		return errors.New("must not contain empty path segments")
+	}
+	return nil
+}
+
+func normalizeExecBlockOn(ruleName string, index int, c *Condition) error {
+	if c.BlockOn == "" {
+		c.BlockOn = BlockOnNonzero
+	}
+	if c.StdoutJSONField != "" && c.BlockOn == BlockOnNonzero {
+		c.BlockOn = BlockOnMatch
+	}
+	switch c.BlockOn {
+	case BlockOnNonzero, BlockOnZero, BlockOnMatch:
+	default:
+		return fmt.Errorf("rule %q condition %d: block_on %q must be %q, %q, or %q", ruleName, index, c.BlockOn, BlockOnNonzero, BlockOnZero, BlockOnMatch)
+	}
+	if c.StdoutJSONField != "" && c.BlockOn != BlockOnMatch {
+		return fmt.Errorf("rule %q condition %d: stdout_json_field requires block_on = %q", ruleName, index, BlockOnMatch)
+	}
+	if c.StdoutJSONField == "" && c.BlockOn == BlockOnMatch {
+		return fmt.Errorf("rule %q condition %d: block_on %q requires stdout_json_field and stdout_json_equals", ruleName, index, BlockOnMatch)
+	}
+	return nil
+}
+
+func decodeTOMLScalar(meta toml.MetaData, primitive toml.Primitive) (TOMLScalarValue, error) {
+	var boolValue bool
+	if err := meta.PrimitiveDecode(primitive, &boolValue); err == nil {
+		return NewBoolScalar(boolValue), nil
+	}
+	var stringValue string
+	if err := meta.PrimitiveDecode(primitive, &stringValue); err == nil {
+		return NewStringScalar(stringValue), nil
+	}
+	var intValue int64
+	if err := meta.PrimitiveDecode(primitive, &intValue); err == nil {
+		return NewIntScalar(intValue), nil
+	}
+	var floatValue float64
+	if err := meta.PrimitiveDecode(primitive, &floatValue); err == nil {
+		return NewFloatScalar(floatValue), nil
+	}
+	return TOMLScalarValue{}, fmt.Errorf("expected bool, string, integer, or float")
 }
 
 func validateShellReadSpecConfig(ruleName string, index int, c *Condition) error {

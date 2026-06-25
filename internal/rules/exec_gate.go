@@ -238,13 +238,70 @@ func execConditionGateMatch(ctx context.Context, fields FieldSet, rule *config.R
 
 func execCacheKeyValue(fields FieldSet, c *config.Condition) string {
 	selector := c.CacheKeySelector().Selector
+	return execSelectorValue(fields, selector, c.SearchTools)
+}
+
+func execSelectorValue(fields FieldSet, selector config.FieldSelector, searchTools []string) string {
 	if selector == config.FieldCmdReadTargets {
-		return fields.CmdReadTargets(c.SearchTools, diskFileResolver())
+		return fields.CmdReadTargets(searchTools, diskFileResolver())
 	}
 	if selector == config.FieldExecTargets {
-		return fields.ExecTargets(c.SearchTools, diskFileResolver())
+		return fields.ExecTargets(searchTools, diskFileResolver())
 	}
 	return fields.String(selector)
+}
+
+func (r *ExecRuntime) expandExecCommands(fields FieldSet, c *config.Condition) [][]string {
+	if c.ForEachSelector().Selector == config.FieldSelectorInvalid {
+		command := make([]string, len(c.Command))
+		copy(command, c.Command)
+		return [][]string{command}
+	}
+
+	items := r.forEachItems(fields, c)
+	if len(items) == 0 {
+		return nil
+	}
+
+	commands := make([][]string, 0, len(items))
+	for _, item := range items {
+		command := make([]string, len(c.Command))
+		for i, arg := range c.Command {
+			command[i] = strings.ReplaceAll(arg, "{{item}}", item)
+		}
+		commands = append(commands, command)
+	}
+	return commands
+}
+
+func (r *ExecRuntime) forEachItems(fields FieldSet, c *config.Condition) []string {
+	raw := execSelectorValue(fields, c.ForEachSelector().Selector, c.SearchTools)
+	if raw == "" {
+		return nil
+	}
+
+	cwd := fields.BaseCWD()
+	seen := make(map[string]struct{})
+	items := make([]string, 0, strings.Count(raw, "\n")+1)
+	for part := range strings.SplitSeq(raw, "\n") {
+		if part == "" {
+			continue
+		}
+		view := canonicalizePathField(r.canon, cwd, part)
+		value := view.Canonical
+		if value == "" {
+			value = view.Raw
+		}
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		items = append(items, value)
+	}
+	return items
 }
 
 func (r *ExecRuntime) runValidatorSingleflight(
@@ -362,6 +419,13 @@ func (r *ExecRuntime) runValidator(
 			background: nil,
 		}
 	}
+	commands := r.expandExecCommands(fields, c)
+	if len(commands) == 0 {
+		return validatorRunResult{
+			verdict:    execconcern.Verdict{Block: false, Message: "", Errored: false},
+			background: nil,
+		}
+	}
 
 	done := make(chan execconcern.Verdict, 1)
 	bgCtx := context.WithoutCancel(ctx)
@@ -373,11 +437,10 @@ func (r *ExecRuntime) runValidator(
 				done <- execconcern.Verdict{Block: c.OnError == config.OnErrorClosed, Message: "", Errored: true}
 			}
 		}()
-		res, runErr := r.runner.Run(bgCtx, c.Command, backgroundValidatorTimeout, stdin, env)
-		verdict := execconcern.Interpret(c, res, runErr)
+		verdict := r.runExpandedCommands(bgCtx, rule.Name, c, commands, stdin, env)
 		if verdict.Errored {
 			r.log.WarnContext(bgCtx, "exec validator errored",
-				"rule", rule.Name, "on_error", c.OnError, "block", verdict.Block, "err", runErr)
+				"rule", rule.Name, "on_error", c.OnError, "block", verdict.Block)
 		}
 		done <- verdict
 	}()
@@ -399,6 +462,79 @@ func (r *ExecRuntime) runValidator(
 			background: done,
 		}
 	}
+}
+
+func (r *ExecRuntime) runExpandedCommands(
+	ctx context.Context,
+	ruleName string,
+	c *config.Condition,
+	commands [][]string,
+	stdin []byte,
+	env []string,
+) execconcern.Verdict {
+	if len(commands) == 0 {
+		return execconcern.Verdict{Block: false, Message: "", Errored: false}
+	}
+
+	forEach := c.ForEachSelector().Selector != config.FieldSelectorInvalid
+	matchAll := forEach && c.MatchMode == config.ExecMatchAll
+	firstBlockMessage := ""
+	for _, command := range commands {
+		res, runErr := r.runner.Run(ctx, command, backgroundValidatorTimeout, stdin, env)
+		verdict := execconcern.Interpret(c, res, runErr)
+		if verdict.Errored {
+			r.logExpandedCommandError(ctx, ruleName, c, command, res, runErr)
+			return verdict
+		}
+		if !forEach {
+			return verdict
+		}
+		if verdict.Block && firstBlockMessage == "" {
+			firstBlockMessage = verdict.Message
+		}
+		if !matchAll && verdict.Block {
+			return verdict
+		}
+		if matchAll && !verdict.Block {
+			return execconcern.Verdict{Block: false, Message: "", Errored: false}
+		}
+	}
+	if matchAll {
+		return execconcern.Verdict{Block: true, Message: firstBlockMessage, Errored: false}
+	}
+	return execconcern.Verdict{Block: false, Message: "", Errored: false}
+}
+
+func (r *ExecRuntime) logExpandedCommandError(
+	ctx context.Context,
+	ruleName string,
+	c *config.Condition,
+	command []string,
+	res execconcern.RunResult,
+	runErr error,
+) {
+	switch {
+	case runErr != nil:
+		r.log.WarnContext(ctx, "exec validator expanded command errored",
+			"rule", ruleName, "on_error", c.OnError, "command", command, "err", runErr)
+	case c.BlockOn == config.BlockOnMatch && res.ExitCode != 0:
+		r.log.WarnContext(ctx, "exec validator expanded command exited nonzero for JSON match",
+			"rule", ruleName, "on_error", c.OnError, "command", command, "exit_code", res.ExitCode)
+	case c.BlockOn == config.BlockOnMatch:
+		r.log.WarnContext(ctx, "exec validator expanded command returned invalid JSON predicate output",
+			"rule", ruleName, "on_error", c.OnError, "command", command, "stdout_first_line", firstStdoutLine(res.Stdout))
+	default:
+		r.log.WarnContext(ctx, "exec validator expanded command produced an errored verdict",
+			"rule", ruleName, "on_error", c.OnError, "command", command, "exit_code", res.ExitCode)
+	}
+}
+
+func firstStdoutLine(stdout string) string {
+	trimmed := strings.TrimLeft(stdout, "\r\n")
+	if index := strings.IndexAny(trimmed, "\r\n"); index >= 0 {
+		return strings.TrimSpace(trimmed[:index])
+	}
+	return strings.TrimSpace(trimmed)
 }
 
 func (r *ExecRuntime) buildInput(
@@ -550,11 +686,16 @@ func stableExecCacheEntryKey(rule *config.Rule, conditionIndex int, c *config.Co
 	writeHashPart(c.Kind)
 	writeHashPart(strings.Join(c.Command, "\x1f"))
 	writeHashPart(c.CacheKey)
+	writeHashPart(c.ForEach)
+	writeHashPart(c.MatchMode)
 	for _, selector := range c.Selectors() {
 		writeHashPart(selector.Path)
 	}
 	writeHashPart(c.BlockOn)
 	writeHashPart(c.OnError)
+	writeHashPart(c.StdoutJSONField)
+	writeHashPart(string(c.StdoutJSONEqualsValue().Kind()))
+	writeHashPart(c.StdoutJSONEqualsValue().CanonicalString())
 	writeHashPart(strconv.Itoa(c.CacheTTLMs))
 	writeHashPart(strconv.Itoa(c.TimeoutMs))
 	writeHashPart(strings.Join(c.SearchTools, "\x1f"))
