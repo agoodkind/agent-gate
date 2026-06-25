@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -197,4 +199,69 @@ func TestInterpretMessageOverrideFromFirstStdoutLine(t *testing.T) {
 	if verdict.Message != "codebase X not approved" {
 		t.Fatalf("expected first stdout line as message, got %q", verdict.Message)
 	}
+}
+
+func TestInterpretBlockOnMatchUsesJSONField(t *testing.T) {
+	c := loadMatchCondition(t, config.OnErrorOpen)
+
+	matched := Interpret(c, RunResult{ExitCode: 0, Stdout: `{"searchable":true}`}, nil)
+	if !matched.Block || matched.Errored {
+		t.Fatalf("expected JSON match to block cleanly, got %+v", matched)
+	}
+
+	allowed := Interpret(c, RunResult{ExitCode: 0, Stdout: `{"searchable":false}`}, nil)
+	if allowed.Block || allowed.Errored {
+		t.Fatalf("expected JSON mismatch to allow cleanly, got %+v", allowed)
+	}
+}
+
+func TestInterpretBlockOnMatchTreatsBadJSONAsError(t *testing.T) {
+	open := loadMatchCondition(t, config.OnErrorOpen)
+	closed := loadMatchCondition(t, config.OnErrorClosed)
+
+	openVerdict := Interpret(open, RunResult{ExitCode: 0, Stdout: `{"searchable":`}, nil)
+	if openVerdict.Block || !openVerdict.Errored {
+		t.Fatalf("open policy should fail open on invalid JSON, got %+v", openVerdict)
+	}
+
+	closedVerdict := Interpret(closed, RunResult{ExitCode: 0, Stdout: `{"searchable":`}, nil)
+	if !closedVerdict.Block || !closedVerdict.Errored {
+		t.Fatalf("closed policy should block on invalid JSON, got %+v", closedVerdict)
+	}
+}
+
+func TestInterpretBlockOnMatchTreatsNonzeroExitAsError(t *testing.T) {
+	c := loadMatchCondition(t, config.OnErrorOpen)
+
+	verdict := Interpret(c, RunResult{ExitCode: 2, Stdout: `{"searchable":true}`}, nil)
+	if verdict.Block || !verdict.Errored {
+		t.Fatalf("nonzero exit under block_on=match should be treated as an error, got %+v", verdict)
+	}
+}
+
+func loadMatchCondition(t testing.TB, onError string) *config.Condition {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config.toml")
+	body := `[[rules]]
+name = "exec-rule"
+events = ["PreToolUse"]
+action = "block"
+violation_message = "static message"
+
+[[rules.conditions]]
+kind = "exec"
+command = ["/bin/true"]
+block_on = "match"
+on_error = "` + onError + `"
+stdout_json_field = "searchable"
+stdout_json_equals = true
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	cfg, err := config.LoadExisting(path)
+	if err != nil {
+		t.Fatalf("LoadExisting: %v", err)
+	}
+	return &cfg.Rules[0].Conditions[0]
 }

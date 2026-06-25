@@ -74,6 +74,19 @@ func TestExecConditionCacheKeyCmdReadTargetsCompiles(t *testing.T) {
 	}
 }
 
+func TestExecConditionCacheKeyExecTargetsCompilesWithoutSearchTools(t *testing.T) {
+	body := strings.Replace(validExecRule, `command = ["/bin/true"]`,
+		`command = ["/bin/true"]`+"\ncache_key = \"exec_targets\"", 1)
+	cfg, err := writeExecConfig(t, body)
+	if err != nil {
+		t.Fatalf("LoadExisting: %v", err)
+	}
+	cond := cfg.Rules[0].Conditions[1]
+	if cond.CacheKeySelector().Selector != config.FieldExecTargets {
+		t.Fatalf("expected cache_key to compile to exec_targets selector")
+	}
+}
+
 // The search-tool set is rule policy with no built-in default, so a
 // cmd_read_targets cache key without search_tools is a config error rather
 // than a silently empty key.

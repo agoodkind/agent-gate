@@ -292,6 +292,938 @@ func (x *StatusResponse) GetBuildHash() string {
 	return ""
 }
 
+type KVEntry struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	Namespace       string                 `protobuf:"bytes,1,opt,name=namespace,proto3" json:"namespace,omitempty"`
+	Key             string                 `protobuf:"bytes,2,opt,name=key,proto3" json:"key,omitempty"`
+	Value           []byte                 `protobuf:"bytes,3,opt,name=value,proto3" json:"value,omitempty"`
+	Version         uint64                 `protobuf:"varint,4,opt,name=version,proto3" json:"version,omitempty"`
+	CreatedUnixNano int64                  `protobuf:"varint,5,opt,name=created_unix_nano,json=createdUnixNano,proto3" json:"created_unix_nano,omitempty"`
+	UpdatedUnixNano int64                  `protobuf:"varint,6,opt,name=updated_unix_nano,json=updatedUnixNano,proto3" json:"updated_unix_nano,omitempty"`
+	ExpiresUnixNano int64                  `protobuf:"varint,7,opt,name=expires_unix_nano,json=expiresUnixNano,proto3" json:"expires_unix_nano,omitempty"`
+	PttlMs          int64                  `protobuf:"varint,8,opt,name=pttl_ms,json=pttlMs,proto3" json:"pttl_ms,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *KVEntry) Reset() {
+	*x = KVEntry{}
+	mi := &file_daemon_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *KVEntry) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*KVEntry) ProtoMessage() {}
+
+func (x *KVEntry) ProtoReflect() protoreflect.Message {
+	mi := &file_daemon_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use KVEntry.ProtoReflect.Descriptor instead.
+func (*KVEntry) Descriptor() ([]byte, []int) {
+	return file_daemon_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *KVEntry) GetNamespace() string {
+	if x != nil {
+		return x.Namespace
+	}
+	return ""
+}
+
+func (x *KVEntry) GetKey() string {
+	if x != nil {
+		return x.Key
+	}
+	return ""
+}
+
+func (x *KVEntry) GetValue() []byte {
+	if x != nil {
+		return x.Value
+	}
+	return nil
+}
+
+func (x *KVEntry) GetVersion() uint64 {
+	if x != nil {
+		return x.Version
+	}
+	return 0
+}
+
+func (x *KVEntry) GetCreatedUnixNano() int64 {
+	if x != nil {
+		return x.CreatedUnixNano
+	}
+	return 0
+}
+
+func (x *KVEntry) GetUpdatedUnixNano() int64 {
+	if x != nil {
+		return x.UpdatedUnixNano
+	}
+	return 0
+}
+
+func (x *KVEntry) GetExpiresUnixNano() int64 {
+	if x != nil {
+		return x.ExpiresUnixNano
+	}
+	return 0
+}
+
+func (x *KVEntry) GetPttlMs() int64 {
+	if x != nil {
+		return x.PttlMs
+	}
+	return 0
+}
+
+type KVGetRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Namespace     string                 `protobuf:"bytes,1,opt,name=namespace,proto3" json:"namespace,omitempty"`
+	Key           string                 `protobuf:"bytes,2,opt,name=key,proto3" json:"key,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *KVGetRequest) Reset() {
+	*x = KVGetRequest{}
+	mi := &file_daemon_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *KVGetRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*KVGetRequest) ProtoMessage() {}
+
+func (x *KVGetRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_daemon_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use KVGetRequest.ProtoReflect.Descriptor instead.
+func (*KVGetRequest) Descriptor() ([]byte, []int) {
+	return file_daemon_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *KVGetRequest) GetNamespace() string {
+	if x != nil {
+		return x.Namespace
+	}
+	return ""
+}
+
+func (x *KVGetRequest) GetKey() string {
+	if x != nil {
+		return x.Key
+	}
+	return ""
+}
+
+type KVGetResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Found         bool                   `protobuf:"varint,1,opt,name=found,proto3" json:"found,omitempty"`
+	Entry         *KVEntry               `protobuf:"bytes,2,opt,name=entry,proto3" json:"entry,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *KVGetResponse) Reset() {
+	*x = KVGetResponse{}
+	mi := &file_daemon_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *KVGetResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*KVGetResponse) ProtoMessage() {}
+
+func (x *KVGetResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_daemon_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use KVGetResponse.ProtoReflect.Descriptor instead.
+func (*KVGetResponse) Descriptor() ([]byte, []int) {
+	return file_daemon_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *KVGetResponse) GetFound() bool {
+	if x != nil {
+		return x.Found
+	}
+	return false
+}
+
+func (x *KVGetResponse) GetEntry() *KVEntry {
+	if x != nil {
+		return x.Entry
+	}
+	return nil
+}
+
+type KVSetRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Namespace     string                 `protobuf:"bytes,1,opt,name=namespace,proto3" json:"namespace,omitempty"`
+	Key           string                 `protobuf:"bytes,2,opt,name=key,proto3" json:"key,omitempty"`
+	Value         []byte                 `protobuf:"bytes,3,opt,name=value,proto3" json:"value,omitempty"`
+	Mode          string                 `protobuf:"bytes,4,opt,name=mode,proto3" json:"mode,omitempty"`
+	TtlMs         int64                  `protobuf:"varint,5,opt,name=ttl_ms,json=ttlMs,proto3" json:"ttl_ms,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *KVSetRequest) Reset() {
+	*x = KVSetRequest{}
+	mi := &file_daemon_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *KVSetRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*KVSetRequest) ProtoMessage() {}
+
+func (x *KVSetRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_daemon_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use KVSetRequest.ProtoReflect.Descriptor instead.
+func (*KVSetRequest) Descriptor() ([]byte, []int) {
+	return file_daemon_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *KVSetRequest) GetNamespace() string {
+	if x != nil {
+		return x.Namespace
+	}
+	return ""
+}
+
+func (x *KVSetRequest) GetKey() string {
+	if x != nil {
+		return x.Key
+	}
+	return ""
+}
+
+func (x *KVSetRequest) GetValue() []byte {
+	if x != nil {
+		return x.Value
+	}
+	return nil
+}
+
+func (x *KVSetRequest) GetMode() string {
+	if x != nil {
+		return x.Mode
+	}
+	return ""
+}
+
+func (x *KVSetRequest) GetTtlMs() int64 {
+	if x != nil {
+		return x.TtlMs
+	}
+	return 0
+}
+
+type KVSetResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Stored        bool                   `protobuf:"varint,1,opt,name=stored,proto3" json:"stored,omitempty"`
+	Entry         *KVEntry               `protobuf:"bytes,2,opt,name=entry,proto3" json:"entry,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *KVSetResponse) Reset() {
+	*x = KVSetResponse{}
+	mi := &file_daemon_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *KVSetResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*KVSetResponse) ProtoMessage() {}
+
+func (x *KVSetResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_daemon_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use KVSetResponse.ProtoReflect.Descriptor instead.
+func (*KVSetResponse) Descriptor() ([]byte, []int) {
+	return file_daemon_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *KVSetResponse) GetStored() bool {
+	if x != nil {
+		return x.Stored
+	}
+	return false
+}
+
+func (x *KVSetResponse) GetEntry() *KVEntry {
+	if x != nil {
+		return x.Entry
+	}
+	return nil
+}
+
+type KVDeleteRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Namespace     string                 `protobuf:"bytes,1,opt,name=namespace,proto3" json:"namespace,omitempty"`
+	Key           string                 `protobuf:"bytes,2,opt,name=key,proto3" json:"key,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *KVDeleteRequest) Reset() {
+	*x = KVDeleteRequest{}
+	mi := &file_daemon_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *KVDeleteRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*KVDeleteRequest) ProtoMessage() {}
+
+func (x *KVDeleteRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_daemon_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use KVDeleteRequest.ProtoReflect.Descriptor instead.
+func (*KVDeleteRequest) Descriptor() ([]byte, []int) {
+	return file_daemon_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *KVDeleteRequest) GetNamespace() string {
+	if x != nil {
+		return x.Namespace
+	}
+	return ""
+}
+
+func (x *KVDeleteRequest) GetKey() string {
+	if x != nil {
+		return x.Key
+	}
+	return ""
+}
+
+type KVDeleteResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Deleted       bool                   `protobuf:"varint,1,opt,name=deleted,proto3" json:"deleted,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *KVDeleteResponse) Reset() {
+	*x = KVDeleteResponse{}
+	mi := &file_daemon_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *KVDeleteResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*KVDeleteResponse) ProtoMessage() {}
+
+func (x *KVDeleteResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_daemon_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use KVDeleteResponse.ProtoReflect.Descriptor instead.
+func (*KVDeleteResponse) Descriptor() ([]byte, []int) {
+	return file_daemon_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *KVDeleteResponse) GetDeleted() bool {
+	if x != nil {
+		return x.Deleted
+	}
+	return false
+}
+
+type KVExistsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Namespace     string                 `protobuf:"bytes,1,opt,name=namespace,proto3" json:"namespace,omitempty"`
+	Key           string                 `protobuf:"bytes,2,opt,name=key,proto3" json:"key,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *KVExistsRequest) Reset() {
+	*x = KVExistsRequest{}
+	mi := &file_daemon_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *KVExistsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*KVExistsRequest) ProtoMessage() {}
+
+func (x *KVExistsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_daemon_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use KVExistsRequest.ProtoReflect.Descriptor instead.
+func (*KVExistsRequest) Descriptor() ([]byte, []int) {
+	return file_daemon_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *KVExistsRequest) GetNamespace() string {
+	if x != nil {
+		return x.Namespace
+	}
+	return ""
+}
+
+func (x *KVExistsRequest) GetKey() string {
+	if x != nil {
+		return x.Key
+	}
+	return ""
+}
+
+type KVExistsResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Exists        bool                   `protobuf:"varint,1,opt,name=exists,proto3" json:"exists,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *KVExistsResponse) Reset() {
+	*x = KVExistsResponse{}
+	mi := &file_daemon_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *KVExistsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*KVExistsResponse) ProtoMessage() {}
+
+func (x *KVExistsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_daemon_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use KVExistsResponse.ProtoReflect.Descriptor instead.
+func (*KVExistsResponse) Descriptor() ([]byte, []int) {
+	return file_daemon_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *KVExistsResponse) GetExists() bool {
+	if x != nil {
+		return x.Exists
+	}
+	return false
+}
+
+type KVTTLResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Ttl           int64                  `protobuf:"varint,1,opt,name=ttl,proto3" json:"ttl,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *KVTTLResponse) Reset() {
+	*x = KVTTLResponse{}
+	mi := &file_daemon_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *KVTTLResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*KVTTLResponse) ProtoMessage() {}
+
+func (x *KVTTLResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_daemon_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use KVTTLResponse.ProtoReflect.Descriptor instead.
+func (*KVTTLResponse) Descriptor() ([]byte, []int) {
+	return file_daemon_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *KVTTLResponse) GetTtl() int64 {
+	if x != nil {
+		return x.Ttl
+	}
+	return 0
+}
+
+type KVPTTLResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Pttl          int64                  `protobuf:"varint,1,opt,name=pttl,proto3" json:"pttl,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *KVPTTLResponse) Reset() {
+	*x = KVPTTLResponse{}
+	mi := &file_daemon_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *KVPTTLResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*KVPTTLResponse) ProtoMessage() {}
+
+func (x *KVPTTLResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_daemon_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use KVPTTLResponse.ProtoReflect.Descriptor instead.
+func (*KVPTTLResponse) Descriptor() ([]byte, []int) {
+	return file_daemon_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *KVPTTLResponse) GetPttl() int64 {
+	if x != nil {
+		return x.Pttl
+	}
+	return 0
+}
+
+type KVExpireRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Namespace     string                 `protobuf:"bytes,1,opt,name=namespace,proto3" json:"namespace,omitempty"`
+	Key           string                 `protobuf:"bytes,2,opt,name=key,proto3" json:"key,omitempty"`
+	TtlMs         int64                  `protobuf:"varint,3,opt,name=ttl_ms,json=ttlMs,proto3" json:"ttl_ms,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *KVExpireRequest) Reset() {
+	*x = KVExpireRequest{}
+	mi := &file_daemon_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *KVExpireRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*KVExpireRequest) ProtoMessage() {}
+
+func (x *KVExpireRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_daemon_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use KVExpireRequest.ProtoReflect.Descriptor instead.
+func (*KVExpireRequest) Descriptor() ([]byte, []int) {
+	return file_daemon_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *KVExpireRequest) GetNamespace() string {
+	if x != nil {
+		return x.Namespace
+	}
+	return ""
+}
+
+func (x *KVExpireRequest) GetKey() string {
+	if x != nil {
+		return x.Key
+	}
+	return ""
+}
+
+func (x *KVExpireRequest) GetTtlMs() int64 {
+	if x != nil {
+		return x.TtlMs
+	}
+	return 0
+}
+
+type KVExpireResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Updated       bool                   `protobuf:"varint,1,opt,name=updated,proto3" json:"updated,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *KVExpireResponse) Reset() {
+	*x = KVExpireResponse{}
+	mi := &file_daemon_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *KVExpireResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*KVExpireResponse) ProtoMessage() {}
+
+func (x *KVExpireResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_daemon_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use KVExpireResponse.ProtoReflect.Descriptor instead.
+func (*KVExpireResponse) Descriptor() ([]byte, []int) {
+	return file_daemon_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *KVExpireResponse) GetUpdated() bool {
+	if x != nil {
+		return x.Updated
+	}
+	return false
+}
+
+type KVGetDeleteRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Namespace     string                 `protobuf:"bytes,1,opt,name=namespace,proto3" json:"namespace,omitempty"`
+	Key           string                 `protobuf:"bytes,2,opt,name=key,proto3" json:"key,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *KVGetDeleteRequest) Reset() {
+	*x = KVGetDeleteRequest{}
+	mi := &file_daemon_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *KVGetDeleteRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*KVGetDeleteRequest) ProtoMessage() {}
+
+func (x *KVGetDeleteRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_daemon_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use KVGetDeleteRequest.ProtoReflect.Descriptor instead.
+func (*KVGetDeleteRequest) Descriptor() ([]byte, []int) {
+	return file_daemon_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *KVGetDeleteRequest) GetNamespace() string {
+	if x != nil {
+		return x.Namespace
+	}
+	return ""
+}
+
+func (x *KVGetDeleteRequest) GetKey() string {
+	if x != nil {
+		return x.Key
+	}
+	return ""
+}
+
+type KVGetDeleteResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Found         bool                   `protobuf:"varint,1,opt,name=found,proto3" json:"found,omitempty"`
+	Entry         *KVEntry               `protobuf:"bytes,2,opt,name=entry,proto3" json:"entry,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *KVGetDeleteResponse) Reset() {
+	*x = KVGetDeleteResponse{}
+	mi := &file_daemon_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *KVGetDeleteResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*KVGetDeleteResponse) ProtoMessage() {}
+
+func (x *KVGetDeleteResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_daemon_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use KVGetDeleteResponse.ProtoReflect.Descriptor instead.
+func (*KVGetDeleteResponse) Descriptor() ([]byte, []int) {
+	return file_daemon_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *KVGetDeleteResponse) GetFound() bool {
+	if x != nil {
+		return x.Found
+	}
+	return false
+}
+
+func (x *KVGetDeleteResponse) GetEntry() *KVEntry {
+	if x != nil {
+		return x.Entry
+	}
+	return nil
+}
+
+type KVListRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Namespace     string                 `protobuf:"bytes,1,opt,name=namespace,proto3" json:"namespace,omitempty"`
+	Prefix        string                 `protobuf:"bytes,2,opt,name=prefix,proto3" json:"prefix,omitempty"`
+	Limit         int32                  `protobuf:"varint,3,opt,name=limit,proto3" json:"limit,omitempty"`
+	IncludeValues bool                   `protobuf:"varint,4,opt,name=include_values,json=includeValues,proto3" json:"include_values,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *KVListRequest) Reset() {
+	*x = KVListRequest{}
+	mi := &file_daemon_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *KVListRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*KVListRequest) ProtoMessage() {}
+
+func (x *KVListRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_daemon_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use KVListRequest.ProtoReflect.Descriptor instead.
+func (*KVListRequest) Descriptor() ([]byte, []int) {
+	return file_daemon_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *KVListRequest) GetNamespace() string {
+	if x != nil {
+		return x.Namespace
+	}
+	return ""
+}
+
+func (x *KVListRequest) GetPrefix() string {
+	if x != nil {
+		return x.Prefix
+	}
+	return ""
+}
+
+func (x *KVListRequest) GetLimit() int32 {
+	if x != nil {
+		return x.Limit
+	}
+	return 0
+}
+
+func (x *KVListRequest) GetIncludeValues() bool {
+	if x != nil {
+		return x.IncludeValues
+	}
+	return false
+}
+
+type KVListResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Entries       []*KVEntry             `protobuf:"bytes,1,rep,name=entries,proto3" json:"entries,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *KVListResponse) Reset() {
+	*x = KVListResponse{}
+	mi := &file_daemon_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *KVListResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*KVListResponse) ProtoMessage() {}
+
+func (x *KVListResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_daemon_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use KVListResponse.ProtoReflect.Descriptor instead.
+func (*KVListResponse) Descriptor() ([]byte, []int) {
+	return file_daemon_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *KVListResponse) GetEntries() []*KVEntry {
+	if x != nil {
+		return x.Entries
+	}
+	return nil
+}
+
 var File_daemon_proto protoreflect.FileDescriptor
 
 const file_daemon_proto_rawDesc = "" +
@@ -322,11 +1254,77 @@ const file_daemon_proto_rawDesc = "" +
 	"\x06commit\x18\x05 \x01(\tR\x06commit\x12\x14\n" +
 	"\x05dirty\x18\x06 \x01(\tR\x05dirty\x12\x1d\n" +
 	"\n" +
-	"build_hash\x18\a \x01(\tR\tbuildHash2\x9c\x01\n" +
+	"build_hash\x18\a \x01(\tR\tbuildHash\"\x86\x02\n" +
+	"\aKVEntry\x12\x1c\n" +
+	"\tnamespace\x18\x01 \x01(\tR\tnamespace\x12\x10\n" +
+	"\x03key\x18\x02 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x03 \x01(\fR\x05value\x12\x18\n" +
+	"\aversion\x18\x04 \x01(\x04R\aversion\x12*\n" +
+	"\x11created_unix_nano\x18\x05 \x01(\x03R\x0fcreatedUnixNano\x12*\n" +
+	"\x11updated_unix_nano\x18\x06 \x01(\x03R\x0fupdatedUnixNano\x12*\n" +
+	"\x11expires_unix_nano\x18\a \x01(\x03R\x0fexpiresUnixNano\x12\x17\n" +
+	"\apttl_ms\x18\b \x01(\x03R\x06pttlMs\">\n" +
+	"\fKVGetRequest\x12\x1c\n" +
+	"\tnamespace\x18\x01 \x01(\tR\tnamespace\x12\x10\n" +
+	"\x03key\x18\x02 \x01(\tR\x03key\"O\n" +
+	"\rKVGetResponse\x12\x14\n" +
+	"\x05found\x18\x01 \x01(\bR\x05found\x12(\n" +
+	"\x05entry\x18\x02 \x01(\v2\x12.agentgate.KVEntryR\x05entry\"\x7f\n" +
+	"\fKVSetRequest\x12\x1c\n" +
+	"\tnamespace\x18\x01 \x01(\tR\tnamespace\x12\x10\n" +
+	"\x03key\x18\x02 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x03 \x01(\fR\x05value\x12\x12\n" +
+	"\x04mode\x18\x04 \x01(\tR\x04mode\x12\x15\n" +
+	"\x06ttl_ms\x18\x05 \x01(\x03R\x05ttlMs\"Q\n" +
+	"\rKVSetResponse\x12\x16\n" +
+	"\x06stored\x18\x01 \x01(\bR\x06stored\x12(\n" +
+	"\x05entry\x18\x02 \x01(\v2\x12.agentgate.KVEntryR\x05entry\"A\n" +
+	"\x0fKVDeleteRequest\x12\x1c\n" +
+	"\tnamespace\x18\x01 \x01(\tR\tnamespace\x12\x10\n" +
+	"\x03key\x18\x02 \x01(\tR\x03key\",\n" +
+	"\x10KVDeleteResponse\x12\x18\n" +
+	"\adeleted\x18\x01 \x01(\bR\adeleted\"A\n" +
+	"\x0fKVExistsRequest\x12\x1c\n" +
+	"\tnamespace\x18\x01 \x01(\tR\tnamespace\x12\x10\n" +
+	"\x03key\x18\x02 \x01(\tR\x03key\"*\n" +
+	"\x10KVExistsResponse\x12\x16\n" +
+	"\x06exists\x18\x01 \x01(\bR\x06exists\"!\n" +
+	"\rKVTTLResponse\x12\x10\n" +
+	"\x03ttl\x18\x01 \x01(\x03R\x03ttl\"$\n" +
+	"\x0eKVPTTLResponse\x12\x12\n" +
+	"\x04pttl\x18\x01 \x01(\x03R\x04pttl\"X\n" +
+	"\x0fKVExpireRequest\x12\x1c\n" +
+	"\tnamespace\x18\x01 \x01(\tR\tnamespace\x12\x10\n" +
+	"\x03key\x18\x02 \x01(\tR\x03key\x12\x15\n" +
+	"\x06ttl_ms\x18\x03 \x01(\x03R\x05ttlMs\",\n" +
+	"\x10KVExpireResponse\x12\x18\n" +
+	"\aupdated\x18\x01 \x01(\bR\aupdated\"D\n" +
+	"\x12KVGetDeleteRequest\x12\x1c\n" +
+	"\tnamespace\x18\x01 \x01(\tR\tnamespace\x12\x10\n" +
+	"\x03key\x18\x02 \x01(\tR\x03key\"U\n" +
+	"\x13KVGetDeleteResponse\x12\x14\n" +
+	"\x05found\x18\x01 \x01(\bR\x05found\x12(\n" +
+	"\x05entry\x18\x02 \x01(\v2\x12.agentgate.KVEntryR\x05entry\"\x82\x01\n" +
+	"\rKVListRequest\x12\x1c\n" +
+	"\tnamespace\x18\x01 \x01(\tR\tnamespace\x12\x16\n" +
+	"\x06prefix\x18\x02 \x01(\tR\x06prefix\x12\x14\n" +
+	"\x05limit\x18\x03 \x01(\x05R\x05limit\x12%\n" +
+	"\x0einclude_values\x18\x04 \x01(\bR\rincludeValues\">\n" +
+	"\x0eKVListResponse\x12,\n" +
+	"\aentries\x18\x01 \x03(\v2\x12.agentgate.KVEntryR\aentries2\xea\x05\n" +
 	"\n" +
 	"AgentGateD\x12O\n" +
 	"\fEvaluateHook\x12\x1e.agentgate.EvaluateHookRequest\x1a\x1f.agentgate.EvaluateHookResponse\x12=\n" +
-	"\x06Status\x12\x18.agentgate.StatusRequest\x1a\x19.agentgate.StatusResponseB%Z#goodkind.io/agent-gate/api/daemonpbb\x06proto3"
+	"\x06Status\x12\x18.agentgate.StatusRequest\x1a\x19.agentgate.StatusResponse\x12:\n" +
+	"\x05KVGet\x12\x17.agentgate.KVGetRequest\x1a\x18.agentgate.KVGetResponse\x12:\n" +
+	"\x05KVSet\x12\x17.agentgate.KVSetRequest\x1a\x18.agentgate.KVSetResponse\x12C\n" +
+	"\bKVDelete\x12\x1a.agentgate.KVDeleteRequest\x1a\x1b.agentgate.KVDeleteResponse\x12C\n" +
+	"\bKVExists\x12\x1a.agentgate.KVExistsRequest\x1a\x1b.agentgate.KVExistsResponse\x12:\n" +
+	"\x05KVTTL\x12\x17.agentgate.KVGetRequest\x1a\x18.agentgate.KVTTLResponse\x12<\n" +
+	"\x06KVPTTL\x12\x17.agentgate.KVGetRequest\x1a\x19.agentgate.KVPTTLResponse\x12C\n" +
+	"\bKVExpire\x12\x1a.agentgate.KVExpireRequest\x1a\x1b.agentgate.KVExpireResponse\x12L\n" +
+	"\vKVGetDelete\x12\x1d.agentgate.KVGetDeleteRequest\x1a\x1e.agentgate.KVGetDeleteResponse\x12=\n" +
+	"\x06KVList\x12\x18.agentgate.KVListRequest\x1a\x19.agentgate.KVListResponseB%Z#goodkind.io/agent-gate/api/daemonpbb\x06proto3"
 
 var (
 	file_daemon_proto_rawDescOnce sync.Once
@@ -340,25 +1338,64 @@ func file_daemon_proto_rawDescGZIP() []byte {
 	return file_daemon_proto_rawDescData
 }
 
-var file_daemon_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
+var file_daemon_proto_msgTypes = make([]protoimpl.MessageInfo, 22)
 var file_daemon_proto_goTypes = []any{
 	(*EvaluateHookRequest)(nil),  // 0: agentgate.EvaluateHookRequest
 	(*EvaluateHookResponse)(nil), // 1: agentgate.EvaluateHookResponse
 	(*StatusRequest)(nil),        // 2: agentgate.StatusRequest
 	(*StatusResponse)(nil),       // 3: agentgate.StatusResponse
-	nil,                          // 4: agentgate.EvaluateHookRequest.EnvFingerprintEntry
+	(*KVEntry)(nil),              // 4: agentgate.KVEntry
+	(*KVGetRequest)(nil),         // 5: agentgate.KVGetRequest
+	(*KVGetResponse)(nil),        // 6: agentgate.KVGetResponse
+	(*KVSetRequest)(nil),         // 7: agentgate.KVSetRequest
+	(*KVSetResponse)(nil),        // 8: agentgate.KVSetResponse
+	(*KVDeleteRequest)(nil),      // 9: agentgate.KVDeleteRequest
+	(*KVDeleteResponse)(nil),     // 10: agentgate.KVDeleteResponse
+	(*KVExistsRequest)(nil),      // 11: agentgate.KVExistsRequest
+	(*KVExistsResponse)(nil),     // 12: agentgate.KVExistsResponse
+	(*KVTTLResponse)(nil),        // 13: agentgate.KVTTLResponse
+	(*KVPTTLResponse)(nil),       // 14: agentgate.KVPTTLResponse
+	(*KVExpireRequest)(nil),      // 15: agentgate.KVExpireRequest
+	(*KVExpireResponse)(nil),     // 16: agentgate.KVExpireResponse
+	(*KVGetDeleteRequest)(nil),   // 17: agentgate.KVGetDeleteRequest
+	(*KVGetDeleteResponse)(nil),  // 18: agentgate.KVGetDeleteResponse
+	(*KVListRequest)(nil),        // 19: agentgate.KVListRequest
+	(*KVListResponse)(nil),       // 20: agentgate.KVListResponse
+	nil,                          // 21: agentgate.EvaluateHookRequest.EnvFingerprintEntry
 }
 var file_daemon_proto_depIdxs = []int32{
-	4, // 0: agentgate.EvaluateHookRequest.env_fingerprint:type_name -> agentgate.EvaluateHookRequest.EnvFingerprintEntry
-	0, // 1: agentgate.AgentGateD.EvaluateHook:input_type -> agentgate.EvaluateHookRequest
-	2, // 2: agentgate.AgentGateD.Status:input_type -> agentgate.StatusRequest
-	1, // 3: agentgate.AgentGateD.EvaluateHook:output_type -> agentgate.EvaluateHookResponse
-	3, // 4: agentgate.AgentGateD.Status:output_type -> agentgate.StatusResponse
-	3, // [3:5] is the sub-list for method output_type
-	1, // [1:3] is the sub-list for method input_type
-	1, // [1:1] is the sub-list for extension type_name
-	1, // [1:1] is the sub-list for extension extendee
-	0, // [0:1] is the sub-list for field type_name
+	21, // 0: agentgate.EvaluateHookRequest.env_fingerprint:type_name -> agentgate.EvaluateHookRequest.EnvFingerprintEntry
+	4,  // 1: agentgate.KVGetResponse.entry:type_name -> agentgate.KVEntry
+	4,  // 2: agentgate.KVSetResponse.entry:type_name -> agentgate.KVEntry
+	4,  // 3: agentgate.KVGetDeleteResponse.entry:type_name -> agentgate.KVEntry
+	4,  // 4: agentgate.KVListResponse.entries:type_name -> agentgate.KVEntry
+	0,  // 5: agentgate.AgentGateD.EvaluateHook:input_type -> agentgate.EvaluateHookRequest
+	2,  // 6: agentgate.AgentGateD.Status:input_type -> agentgate.StatusRequest
+	5,  // 7: agentgate.AgentGateD.KVGet:input_type -> agentgate.KVGetRequest
+	7,  // 8: agentgate.AgentGateD.KVSet:input_type -> agentgate.KVSetRequest
+	9,  // 9: agentgate.AgentGateD.KVDelete:input_type -> agentgate.KVDeleteRequest
+	11, // 10: agentgate.AgentGateD.KVExists:input_type -> agentgate.KVExistsRequest
+	5,  // 11: agentgate.AgentGateD.KVTTL:input_type -> agentgate.KVGetRequest
+	5,  // 12: agentgate.AgentGateD.KVPTTL:input_type -> agentgate.KVGetRequest
+	15, // 13: agentgate.AgentGateD.KVExpire:input_type -> agentgate.KVExpireRequest
+	17, // 14: agentgate.AgentGateD.KVGetDelete:input_type -> agentgate.KVGetDeleteRequest
+	19, // 15: agentgate.AgentGateD.KVList:input_type -> agentgate.KVListRequest
+	1,  // 16: agentgate.AgentGateD.EvaluateHook:output_type -> agentgate.EvaluateHookResponse
+	3,  // 17: agentgate.AgentGateD.Status:output_type -> agentgate.StatusResponse
+	6,  // 18: agentgate.AgentGateD.KVGet:output_type -> agentgate.KVGetResponse
+	8,  // 19: agentgate.AgentGateD.KVSet:output_type -> agentgate.KVSetResponse
+	10, // 20: agentgate.AgentGateD.KVDelete:output_type -> agentgate.KVDeleteResponse
+	12, // 21: agentgate.AgentGateD.KVExists:output_type -> agentgate.KVExistsResponse
+	13, // 22: agentgate.AgentGateD.KVTTL:output_type -> agentgate.KVTTLResponse
+	14, // 23: agentgate.AgentGateD.KVPTTL:output_type -> agentgate.KVPTTLResponse
+	16, // 24: agentgate.AgentGateD.KVExpire:output_type -> agentgate.KVExpireResponse
+	18, // 25: agentgate.AgentGateD.KVGetDelete:output_type -> agentgate.KVGetDeleteResponse
+	20, // 26: agentgate.AgentGateD.KVList:output_type -> agentgate.KVListResponse
+	16, // [16:27] is the sub-list for method output_type
+	5,  // [5:16] is the sub-list for method input_type
+	5,  // [5:5] is the sub-list for extension type_name
+	5,  // [5:5] is the sub-list for extension extendee
+	0,  // [0:5] is the sub-list for field type_name
 }
 
 func init() { file_daemon_proto_init() }
@@ -372,7 +1409,7 @@ func file_daemon_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_daemon_proto_rawDesc), len(file_daemon_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   5,
+			NumMessages:   22,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

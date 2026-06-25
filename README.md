@@ -18,7 +18,8 @@ Pulls the latest release tarball for your platform, installs the binary
 to `${XDG_BIN_HOME:-$HOME/.local/bin}`, installs and starts the user daemon
 service, writes or merges the canonical `agent-gate` config with daemon-owned
 auto-update enabled, and merges hook templates into your Claude, Codex,
-Gemini, and Copilot config files. Existing user settings in those files are
+Cursor, Gemini, and Copilot config files. Existing user settings in those
+files are
 preserved.
 
 ```sh
@@ -37,6 +38,7 @@ Flags:
 ./install.sh --auto-update check # write or merge config with check-only mode
 ./install.sh --no-claude         # opt out of Claude (additive: combine flags)
 ./install.sh --no-codex
+./install.sh --no-cursor
 ./install.sh --no-gemini
 ./install.sh --no-copilot
 ./install.sh --bin-dir /opt/bin  # override $XDG_BIN_HOME
@@ -100,16 +102,17 @@ the active daemon process.
 
 The one-liner above wires hooks for all supported tools automatically.
 Templates live in [`hooks/`](hooks/) and the canonical inventory is in
-[`.agent.md`](.agent.md). To re-apply after a binary move or template
+[HOOKS.md](HOOKS.md). To re-apply after a binary move or template
 change:
 
 ```sh
 make install-hooks
 ```
 
-To opt out of any tool, pass `--no-claude`, `--no-codex`, `--no-gemini`,
-or `--no-copilot` (combinable). Hook merges only touch the `.hooks` key,
-so any other settings in the target config files are preserved.
+To opt out of any tool, pass `--no-claude`, `--no-codex`, `--no-cursor`,
+`--no-gemini`, or `--no-copilot` (combinable). Hook updates preserve unrelated
+settings. Codex updates a marked TOML block and ensures `[features] hooks = true`;
+JSON-based tools update only their hook key.
 
 ## Hook event reference
 

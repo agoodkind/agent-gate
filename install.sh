@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
 # install.sh installs agent-gate from the latest GitHub release and wires
-# its hooks into Claude, Codex, Gemini, and GitHub Copilot Chat config
-# files.
+# its hooks into Claude, Codex, Cursor, Gemini, and GitHub Copilot Chat
+# config files.
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/agoodkind/agent-gate/main/install.sh | bash
@@ -17,6 +17,7 @@
 #   --no-service        skip user daemon service setup
 #   --no-claude         skip Claude hook config update
 #   --no-codex          skip Codex hook config update
+#   --no-cursor         skip Cursor hook config update
 #   --no-gemini         skip Gemini hook config update
 #   --no-copilot        skip GitHub Copilot Chat hook config update
 #   --no-config         skip agent-gate config creation / merge
@@ -45,6 +46,7 @@ DO_HOOKS=1
 DO_SERVICE=1
 DO_CLAUDE=1
 DO_CODEX=1
+DO_CURSOR=1
 DO_GEMINI=1
 DO_COPILOT=1
 DO_CONFIG=1
@@ -73,11 +75,12 @@ die() {
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --bin-only)    DO_HOOKS=0; DO_SERVICE=0 ;;
-    --hooks-only)  DO_BIN=0; DO_SERVICE=0 ;;
-    --service-only) DO_BIN=0; DO_HOOKS=0; DO_SERVICE=1 ;;
+    --hooks-only)  DO_BIN=0; DO_SERVICE=0; DO_CONFIG=0 ;;
+    --service-only) DO_BIN=0; DO_HOOKS=0; DO_SERVICE=1; DO_CONFIG=0 ;;
     --no-service)  DO_SERVICE=0 ;;
     --no-claude)   DO_CLAUDE=0 ;;
     --no-codex)    DO_CODEX=0 ;;
+    --no-cursor)   DO_CURSOR=0 ;;
     --no-gemini)   DO_GEMINI=0 ;;
     --no-copilot)  DO_COPILOT=0 ;;
     --no-config)   DO_CONFIG=0 ;;
@@ -152,67 +155,196 @@ install_bin() {
   printf 'install.sh: installed %s (%s)\n' "$BIN_DIR/agent-gate" "$tag"
 }
 
-# fetch_template reads a hook template into stdout. Local checkout takes
+# fetch_template_file reads a hook template into stdout. Local checkout takes
 # priority. Otherwise pulls from raw.githubusercontent.com on the same tag
 # as the binary so binary and hook templates stay in sync.
-fetch_template() {
-  local tool="$1"
-  if [[ -n "$TEMPLATES" && -f "$TEMPLATES/$tool.json" ]]; then
-    cat "$TEMPLATES/$tool.json"
-    return
-  fi
-  local ref="${VERSION:-main}"
-  local url="https://raw.githubusercontent.com/$REPO/$ref/hooks/$tool.json"
-  curl -fsSL "$url" || die "fetch template failed: $url"
+fetch_template_file() {
+    local tool="$1" ext="$2"
+    if [[ -n "$TEMPLATES" && -f "$TEMPLATES/$tool.$ext" ]]; then
+        cat "$TEMPLATES/$tool.$ext"
+        return
+    fi
+    local ref="${VERSION:-main}"
+    local url="https://raw.githubusercontent.com/$REPO/$ref/hooks/$tool.$ext"
+    curl -fsSL "$url" || die "fetch template failed: $url"
 }
 
-# update_hooks merges a hook template into a target config file. The
+fetch_template() {
+    fetch_template_file "$1" json
+}
+
+render_json_hooks() {
+    local tool="$1" cmd_path="$2"
+    local template
+    template="$(fetch_template "$tool")" || return 1
+
+    printf '%s' "$template" | jq --arg bin "$cmd_path" '
+      walk(
+        if (type=="object") and (.command? | type=="string")
+        then .command = (.command | gsub("__AGENT_GATE_BIN__"; $bin))
+        else .
+        end
+      )
+    '
+}
+
+finalize_private_target() {
+    local temp_path="$1" target_path="$2"
+    chmod 0600 "$temp_path"
+    mv "$temp_path" "$target_path"
+}
+
+write_private_file() {
+    local target_path="$1" content="$2"
+    (
+        umask 077
+        printf '%s\n' "$content" > "$target_path"
+    )
+}
+
+# update_json_hooks merges a hook template into a target config file. The
 # template uses the placeholder __AGENT_GATE_BIN__ which is substituted
 # with the actual binary path. Existing top-level keys are preserved.
-update_hooks() {
-  local tool="$1" target="$2"
-  local cmd_path="$BIN_DIR/agent-gate"
+update_json_hooks() {
+    local tool="$1" target="$2"
+    local cmd_path="$BIN_DIR/agent-gate"
 
-  local template
-  template="$(fetch_template "$tool")" || return 1
+    local rendered
+    rendered="$(render_json_hooks "$tool" "$cmd_path")" || return 1
 
-  local rendered
-  rendered="$(printf '%s' "$template" | jq --arg bin "$cmd_path" '
-    walk(
-      if (type=="object") and (.command? | type=="string")
-      then .command = (.command | gsub("__AGENT_GATE_BIN__"; $bin))
-      else .
-      end
-    )
-  ')"
+    mkdir -p "$(dirname "$target")"
 
-  mkdir -p "$(dirname "$target")"
+    local merged
+    if [[ -f "$target" ]]; then
+        merged="$(jq --argjson hooks "$rendered" '.hooks = $hooks' "$target")"
+    else
+        merged="$(jq -n --argjson hooks "$rendered" '{hooks: $hooks}')"
+    fi
 
-  local merged
-  if [[ -f "$target" ]]; then
-    merged="$(jq --argjson hooks "$rendered" '.hooks = $hooks' "$target")"
-  else
-    merged="$(jq -n --argjson hooks "$rendered" '{hooks: $hooks}')"
-  fi
+    write_private_file "$target.tmp" "$merged"
+    finalize_private_target "$target.tmp" "$target"
+    printf 'install.sh: updated %s (%s hooks)\n' "$target" "$tool"
+}
 
-  printf '%s\n' "$merged" > "$target.tmp"
-  mv "$target.tmp" "$target"
-  printf 'install.sh: updated %s (%s hooks)\n' "$target" "$tool"
+update_cursor_hooks() {
+    local target="$1"
+    local cmd_path="$BIN_DIR/agent-gate"
+
+    local rendered
+    rendered="$(render_json_hooks cursor "$cmd_path")" || return 1
+
+    mkdir -p "$(dirname "$target")"
+
+    local merged
+    if [[ -f "$target" ]]; then
+        merged="$(jq --argjson hooks "$rendered" '.version = (.version // 1) | .hooks = $hooks' "$target")"
+    else
+        merged="$(jq -n --argjson hooks "$rendered" '{version: 1, hooks: $hooks}')"
+    fi
+
+    write_private_file "$target.tmp" "$merged"
+    finalize_private_target "$target.tmp" "$target"
+    printf 'install.sh: updated %s (cursor hooks)\n' "$target"
+}
+
+render_codex_hooks() {
+    local cmd_path="$BIN_DIR/agent-gate"
+    local template
+    template="$(fetch_template_file codex toml)" || return 1
+    printf '%s' "$template" | awk -v bin="$cmd_path" '{ gsub("__AGENT_GATE_BIN__", bin); print }'
+}
+
+remove_codex_managed_block() {
+    local source="$1" target="$2"
+    awk '
+      $0 == "# BEGIN agent-gate managed hooks" { skip = 1; next }
+      $0 == "# END agent-gate managed hooks" { skip = 0; next }
+      skip != 1 { print }
+    ' "$source" > "$target"
+}
+
+ensure_codex_hooks_feature() {
+    local source="$1" target="$2"
+    awk '
+      function maybe_emit_hooks() {
+        if (in_features == 1 && saw_hooks != 1) {
+          print "hooks = true"
+        }
+      }
+      /^[[:space:]]*\[.*\][[:space:]]*(#.*)?$/ {
+        maybe_emit_hooks()
+        in_features = ($0 ~ /^[[:space:]]*\[features\][[:space:]]*(#.*)?$/)
+        if (in_features == 1) {
+          saw_features = 1
+          saw_hooks = 0
+        }
+        print
+        next
+      }
+      in_features == 1 && $0 ~ /^[[:space:]]*hooks[[:space:]]*=/ {
+        print "hooks = true"
+        saw_hooks = 1
+        next
+      }
+      { print }
+      END {
+        maybe_emit_hooks()
+        if (saw_features != 1) {
+          print ""
+          print "[features]"
+          print "hooks = true"
+        }
+      }
+    ' "$source" > "$target"
+}
+
+update_codex_hooks() {
+    local target="$1"
+    local rendered
+    rendered="$(render_codex_hooks)" || return 1
+
+    mkdir -p "$(dirname "$target")"
+    if [[ ! -f "$target" ]]; then
+        : > "$target"
+    fi
+
+    local tmp_without_block tmp_features
+    tmp_without_block="$(mktemp)"
+    tmp_features="$(mktemp)"
+    trap 'rm -f "$tmp_without_block" "$tmp_features"' RETURN
+
+    remove_codex_managed_block "$target" "$tmp_without_block"
+    ensure_codex_hooks_feature "$tmp_without_block" "$tmp_features"
+
+    rendered_block="$(
+        cat "$tmp_features"
+        printf '\n# BEGIN agent-gate managed hooks\n'
+        printf '%s\n' "$rendered"
+        printf '# END agent-gate managed hooks\n'
+    )"
+    write_private_file "$target.tmp" "$rendered_block"
+    finalize_private_target "$target.tmp" "$target"
+    rm -f "$tmp_without_block" "$tmp_features"
+    trap - RETURN
+    printf 'install.sh: updated %s (codex hooks)\n' "$target"
 }
 
 install_hooks() {
-  if [[ "$DO_CLAUDE" -eq 1 ]]; then
-    update_hooks claude "$HOME/.claude/settings.json"
-  fi
-  if [[ "$DO_CODEX" -eq 1 ]]; then
-    update_hooks codex "$HOME/.codex/hooks.json"
-  fi
-  if [[ "$DO_GEMINI" -eq 1 ]]; then
-    update_hooks gemini "$HOME/.gemini/settings.json"
-  fi
-  if [[ "$DO_COPILOT" -eq 1 ]]; then
-    update_hooks copilot "$HOME/.copilot/hooks/agent-gate.json"
-  fi
+    if [[ "$DO_CLAUDE" -eq 1 ]]; then
+        update_json_hooks claude "$HOME/.claude/settings.json"
+    fi
+    if [[ "$DO_CODEX" -eq 1 ]]; then
+        update_codex_hooks "$HOME/.codex/config.toml"
+    fi
+    if [[ "$DO_CURSOR" -eq 1 ]]; then
+        update_cursor_hooks "$HOME/.cursor/hooks.json"
+    fi
+    if [[ "$DO_GEMINI" -eq 1 ]]; then
+        update_json_hooks gemini "$HOME/.gemini/settings.json"
+    fi
+    if [[ "$DO_COPILOT" -eq 1 ]]; then
+        update_json_hooks copilot "$HOME/.copilot/hooks/agent-gate.json"
+    fi
 }
 
 install_config() {

@@ -40,3 +40,20 @@ func (fields FieldSet) CmdReadTargets(searchTools []string, resolver shelldecomp
 	}
 	return strings.Join(paths, "\n")
 }
+
+// ExecTargets returns the best target key for an exec validator cache entry:
+// resolved code-search read targets first, then the hook file path, then the
+// effective working directory. This keeps Grep-style validators target-aware
+// while preserving the old cwd fallback for payloads without a concrete file.
+func (fields FieldSet) ExecTargets(searchTools []string, resolver shelldecomp.FileResolver) string {
+	if targets := fields.CmdReadTargets(searchTools, resolver); targets != "" {
+		return targets
+	}
+	if path := fields.FilePathValue(); path != "" {
+		return path
+	}
+	if cwd := fields.effectiveCWD(); cwd != "" && cwd != shelldecomp.Unresolvable {
+		return cwd
+	}
+	return fields.BaseCWD()
+}

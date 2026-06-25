@@ -34,12 +34,23 @@ level = "debug"
 [audit.outputs.sqlite]
 path = ""   # default: $XDG_STATE_HOME/agent-gate/sqlite/audit.db
 
+# ── Auto-update (optional) ──────────────────────────────────────────────────
+
 [update]
 enabled = true
 mode = "apply"   # check | apply
 interval = "24h"
 repo = "agoodkind/agent-gate"
 allow_prerelease = false
+
+# ── Hook performance (optional) ──────────────────────────────────────────────
+
+[performance.hook.cache]
+# Daemon-owned hot cache for exec validator debounce and `agent-gate kv`.
+# Entries are memory-only and are lost on daemon restart.
+max_entries = 4096
+max_value_bytes = 1048576
+prune_interval_ms = 30000
 
 # ── Rules ────────────────────────────────────────────────────────────────────
 #
@@ -406,9 +417,18 @@ violation_message = "Existing content contains typographic dashes. The LLM shoul
 # command      = ["/Users/you/.config/agent-gate/validators/check-approved-codebase.sh"]
 # timeout_ms   = 1500             # bounded; capped below the 5s hook deadline
 # cache_key    = "effective_cwd"  # canonicalized to its real path before keying
+# cache_key    = "exec_targets"   # for Grep-style hooks: read targets, else file path, else cwd
 # cache_ttl_ms = 30000            # reuse the verdict per codebase for 30s
 # block_on     = "nonzero"        # exit 0 = allow (approved); nonzero = block
 # on_error     = "open"           # timeout/spawn-failure allows and logs loudly
+#
+# Optional generic fan-out and JSON predicate fields:
+# for_each           = "cmd_read_targets"  # or "exec_targets"; expands one run per item
+# command            = ["tool", "check", "{{item}}"]  # {{item}} is replaced in one argv slot
+# match_mode         = "any"              # "any" or "all" across the expanded runs
+# stdout_json_field  = "searchable"       # dotted path in stdout JSON
+# stdout_json_equals = true               # scalar TOML value compared against that field
+# block_on           = "match"            # required for stdout_json_* predicates
 
 # --- exec example: redirect code search to lm-semantic-search when indexed -----
 # When the agent searches code in a codebase that lm-semantic-search has already
@@ -431,11 +451,10 @@ violation_message = "Existing content contains typographic dashes. The LLM shoul
 # searcher, including the enumerator-over-contents pipelines above (they contain
 # one) and the filename lookups (which the extractor then resolves to no target).
 #
-# Caching is stale-while-revalidate: the first search per codebase forks the
-# validator synchronously (cold = sync block), and every later search is served
-# from cache instantly while a single background refresh runs once the entry is
-# older than cache_ttl_ms. A TTL is required so a newly created or cleared index
-# is noticed within roughly that window.
+# Caching is hot daemon memory with singleflight-style miss coalescing. The
+# first search per target forks the validator synchronously, parallel misses for
+# the same target share that in-flight validator, and successful outcomes are
+# reused until cache_ttl_ms expires. Error outcomes are never cached.
 #
 # [[rules]]
 # name        = "grep-code-use-semantic-search"
@@ -453,10 +472,14 @@ violation_message = "Existing content contains typographic dashes. The LLM shoul
 # pattern     = '\b(?:grep|egrep|fgrep|rgrep|rg|ripgrep|ag)\b'
 #
 # [[rules.conditions]]
-# kind         = "exec"
-# command      = ["/Users/you/.config/agent-gate/validators/lm-semantic-search-indexed.sh"]
-# cache_key    = "cmd_read_targets"  # the search's resolved target paths, so the
-#                                    # cache keys on what the search reads
-# cache_ttl_ms = 60000            # refresh the index verdict per target ~every 60s
-# block_on     = "nonzero"        # exit 1 = indexed -> block; exit 0 = allow
-# on_error     = "open"           # timeout/spawn-failure allows the search
+# kind              = "exec"
+# command           = ["lm-semantic-search", "--json", "codebase", "status", "{{item}}"]
+# for_each          = "cmd_read_targets"
+# match_mode        = "any"
+# stdout_json_field = "searchable"
+# stdout_json_equals = true
+# cache_key         = "cmd_read_targets"  # the search's resolved target paths, so the
+#                                         # cache keys on what the search reads
+# cache_ttl_ms      = 60000            # refresh the index verdict per target ~every 60s
+# block_on          = "match"
+# on_error          = "open"           # timeout/spawn-failure allows the search

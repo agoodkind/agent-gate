@@ -5,8 +5,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"goodkind.io/agent-gate/internal/config"
+	"goodkind.io/agent-gate/internal/hotkv"
 )
 
 func TestLoadValidatesRuleDiagnosticGroup(t *testing.T) {
@@ -168,6 +170,43 @@ slow_op_threshold_ms = 50
 	}
 }
 
+func TestHookCachePerformanceDefaultsAndOverrides(t *testing.T) {
+	setConfigHome(t, ``)
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.HookCacheMaxEntries() != hotkv.DefaultMaxEntries {
+		t.Fatalf("HookCacheMaxEntries = %d, want %d", cfg.HookCacheMaxEntries(), hotkv.DefaultMaxEntries)
+	}
+	if cfg.HookCacheMaxValueBytes() != hotkv.DefaultMaxValueBytes {
+		t.Fatalf("HookCacheMaxValueBytes = %d, want %d", cfg.HookCacheMaxValueBytes(), hotkv.DefaultMaxValueBytes)
+	}
+	if cfg.HookCachePruneInterval() != hotkv.DefaultPruneInterval {
+		t.Fatalf("HookCachePruneInterval = %s, want %s", cfg.HookCachePruneInterval(), hotkv.DefaultPruneInterval)
+	}
+
+	setConfigHome(t, `
+[performance.hook.cache]
+max_entries = 12
+max_value_bytes = 34
+prune_interval_ms = 56
+`)
+	cfg, err = config.Load()
+	if err != nil {
+		t.Fatalf("Load() override error: %v", err)
+	}
+	if cfg.HookCacheMaxEntries() != 12 {
+		t.Fatalf("HookCacheMaxEntries override = %d, want 12", cfg.HookCacheMaxEntries())
+	}
+	if cfg.HookCacheMaxValueBytes() != 34 {
+		t.Fatalf("HookCacheMaxValueBytes override = %d, want 34", cfg.HookCacheMaxValueBytes())
+	}
+	if cfg.HookCachePruneInterval() != 56*time.Millisecond {
+		t.Fatalf("HookCachePruneInterval override = %s, want 56ms", cfg.HookCachePruneInterval())
+	}
+}
+
 func TestLoadActionAuditSetsAuditOnly(t *testing.T) {
 	setConfigHome(t, `[[rules]]
 name = "audit-rule"
@@ -326,6 +365,52 @@ func TestEnsureDefaultsOverridesExistingUpdateModeWhenRequested(t *testing.T) {
 	}
 	if !strings.Contains(got, `mode = "apply"`) {
 		t.Fatalf("config did not rewrite mode for off override:\n%s", got)
+	}
+}
+
+func TestLoadRejectsWhitespaceOnlyStdoutJSONField(t *testing.T) {
+	setConfigHome(t, `[[rules]]
+name = "exec-rule"
+events = ["PreToolUse"]
+action = "block"
+violation_message = "blocked"
+
+[[rules.conditions]]
+kind = "exec"
+command = ["/bin/true"]
+stdout_json_field = "   "
+stdout_json_equals = true
+`)
+
+	_, err := config.Load()
+	if err == nil {
+		t.Fatal("Load() returned nil error for whitespace-only stdout_json_field")
+	}
+	if !strings.Contains(err.Error(), "stdout_json_field and stdout_json_equals must be set together") {
+		t.Fatalf("Load() error = %v", err)
+	}
+}
+
+func TestLoadRejectsStdoutJSONFieldWithEmptySegment(t *testing.T) {
+	setConfigHome(t, `[[rules]]
+name = "exec-rule"
+events = ["PreToolUse"]
+action = "block"
+violation_message = "blocked"
+
+[[rules.conditions]]
+kind = "exec"
+command = ["/bin/true"]
+stdout_json_field = "a..b"
+stdout_json_equals = true
+`)
+
+	_, err := config.Load()
+	if err == nil {
+		t.Fatal("Load() returned nil error for stdout_json_field with empty segment")
+	}
+	if !strings.Contains(err.Error(), "stdout_json_field: must not contain empty path segments") {
+		t.Fatalf("Load() error = %v", err)
 	}
 }
 

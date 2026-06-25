@@ -15,6 +15,7 @@ import (
 	"io"
 	"os"
 	osexec "os/exec"
+	"strconv"
 	"strings"
 	"time"
 
@@ -146,6 +147,24 @@ func Interpret(c *config.Condition, res RunResult, runErr error) Verdict {
 			Errored: true,
 		}
 	}
+	if c.BlockOn == config.BlockOnMatch {
+		if res.ExitCode != 0 {
+			return Verdict{
+				Block:   c.OnError == config.OnErrorClosed,
+				Message: "",
+				Errored: true,
+			}
+		}
+		matched, err := decodeStdoutJSONMatch(c, res.Stdout)
+		if err != nil {
+			return Verdict{
+				Block:   c.OnError == config.OnErrorClosed,
+				Message: "",
+				Errored: true,
+			}
+		}
+		return Verdict{Block: matched, Message: "", Errored: false}
+	}
 	block := exitBlocks(c.BlockOn, res.ExitCode)
 	message := ""
 	if block {
@@ -169,6 +188,90 @@ func firstLine(s string) string {
 		return strings.TrimSpace(trimmed[:idx])
 	}
 	return strings.TrimSpace(trimmed)
+}
+
+func decodeStdoutJSONMatch(c *config.Condition, stdout string) (bool, error) {
+	field, err := extractJSONField([]byte(stdout), c.StdoutJSONField)
+	if err != nil {
+		return false, err
+	}
+	return jsonScalarMatches(c.StdoutJSONEqualsValue(), field)
+}
+
+func extractJSONField(document []byte, path string) (json.RawMessage, error) {
+	current := json.RawMessage(document)
+	for part := range strings.SplitSeq(path, ".") {
+		var object map[string]json.RawMessage
+		if err := json.Unmarshal(current, &object); err != nil {
+			return nil, errors.New("invalid JSON stdout")
+		}
+		next, ok := object[part]
+		if !ok {
+			return nil, errors.New("missing JSON field")
+		}
+		current = next
+	}
+	return current, nil
+}
+
+func jsonScalarMatches(expected config.TOMLScalarValue, actual json.RawMessage) (bool, error) {
+	switch expected.Kind() {
+	case config.TOMLScalarUnset:
+		return false, errors.New("stdout_json_equals is unset")
+	case config.TOMLScalarBool:
+		var got bool
+		if err := json.Unmarshal(actual, &got); err != nil {
+			return false, errors.New("invalid boolean JSON field")
+		}
+		return got == expected.BoolValue(), nil
+	case config.TOMLScalarString:
+		var got string
+		if err := json.Unmarshal(actual, &got); err != nil {
+			return false, errors.New("invalid string JSON field")
+		}
+		return got == expected.StringValue(), nil
+	case config.TOMLScalarInt:
+		got, err := decodeJSONNumber(actual)
+		if err != nil {
+			return false, err
+		}
+		return jsonIntEquals(expected.IntValue(), got), nil
+	case config.TOMLScalarFloat:
+		got, err := decodeJSONNumber(actual)
+		if err != nil {
+			return false, err
+		}
+		return jsonFloatEquals(expected.FloatValue(), got), nil
+	}
+	return false, errors.New("unsupported stdout_json_equals type")
+}
+
+func decodeJSONNumber(actual json.RawMessage) (json.Number, error) {
+	decoder := json.NewDecoder(bytes.NewReader(actual))
+	decoder.UseNumber()
+	var got json.Number
+	if err := decoder.Decode(&got); err != nil {
+		return json.Number(""), errors.New("invalid numeric JSON field")
+	}
+	return got, nil
+}
+
+func jsonIntEquals(expected int64, actual json.Number) bool {
+	parsed, err := actual.Int64()
+	if err == nil {
+		return parsed == expected
+	}
+	parsedFloat, floatErr := actual.Float64()
+	return floatErr == nil && parsedFloat == float64(expected)
+}
+
+func jsonFloatEquals(expected float64, actual json.Number) bool {
+	parsed, err := actual.Float64()
+	if err == nil {
+		return parsed == expected
+	}
+	parsedInt, intErr := strconv.ParseInt(actual.String(), 10, 64)
+	return intErr == nil && float64(parsedInt) == expected
 }
 
 // OSRunner is the production Runner. It forks the command with no shell, feeds

@@ -12,6 +12,16 @@ service AgentGateD {
 
   // Status returns process and build metadata for the connected daemon.
   rpc Status(StatusRequest) returns (StatusResponse);
+
+  rpc KVGet(KVGetRequest) returns (KVGetResponse);
+  rpc KVSet(KVSetRequest) returns (KVSetResponse);
+  rpc KVDelete(KVDeleteRequest) returns (KVDeleteResponse);
+  rpc KVExists(KVExistsRequest) returns (KVExistsResponse);
+  rpc KVTTL(KVGetRequest) returns (KVTTLResponse);
+  rpc KVPTTL(KVGetRequest) returns (KVPTTLResponse);
+  rpc KVExpire(KVExpireRequest) returns (KVExpireResponse);
+  rpc KVGetDelete(KVGetDeleteRequest) returns (KVGetDeleteResponse);
+  rpc KVList(KVListRequest) returns (KVListResponse);
 }
 
 message EvaluateHookRequest {
@@ -48,4 +58,95 @@ message StatusResponse {
   string commit = 5;
   string dirty = 6;
   string build_hash = 7;
+}
+
+message KVEntry {
+  string namespace = 1;
+  string key = 2;
+  bytes value = 3;
+  uint64 version = 4;
+  int64 created_unix_nano = 5;
+  int64 updated_unix_nano = 6;
+  int64 expires_unix_nano = 7;
+  int64 pttl_ms = 8;
+}
+
+message KVGetRequest {
+  string namespace = 1;
+  string key = 2;
+}
+
+message KVGetResponse {
+  bool found = 1;
+  KVEntry entry = 2;
+}
+
+message KVSetRequest {
+  string namespace = 1;
+  string key = 2;
+  bytes value = 3;
+  string mode = 4;
+  int64 ttl_ms = 5;
+}
+
+message KVSetResponse {
+  bool stored = 1;
+  KVEntry entry = 2;
+}
+
+message KVDeleteRequest {
+  string namespace = 1;
+  string key = 2;
+}
+
+message KVDeleteResponse {
+  bool deleted = 1;
+}
+
+message KVExistsRequest {
+  string namespace = 1;
+  string key = 2;
+}
+
+message KVExistsResponse {
+  bool exists = 1;
+}
+
+message KVTTLResponse {
+  int64 ttl = 1;
+}
+
+message KVPTTLResponse {
+  int64 pttl = 1;
+}
+
+message KVExpireRequest {
+  string namespace = 1;
+  string key = 2;
+  int64 ttl_ms = 3;
+}
+
+message KVExpireResponse {
+  bool updated = 1;
+}
+
+message KVGetDeleteRequest {
+  string namespace = 1;
+  string key = 2;
+}
+
+message KVGetDeleteResponse {
+  bool found = 1;
+  KVEntry entry = 2;
+}
+
+message KVListRequest {
+  string namespace = 1;
+  string prefix = 2;
+  int32 limit = 3;
+  bool include_values = 4;
+}
+
+message KVListResponse {
+  repeated KVEntry entries = 1;
 }
