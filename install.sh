@@ -43,22 +43,21 @@ VERSION=""
 DO_BIN=1
 DO_HOOKS=1
 DO_SERVICE=1
-DO_CLAUDE=1
-DO_CODEX=1
-DO_CURSOR=1
-DO_GEMINI=1
-DO_COPILOT=1
-TEMPLATES=""
-SERVICE_TEMPLATES=""
+HOOK_INSTALL_ARGS=()
+SERVICE_INSTALL_ARGS=()
+HOOK_TEMPLATES_SET=0
+SERVICE_TEMPLATES_SET=0
+DEFAULT_HOOK_TEMPLATES=""
+DEFAULT_SERVICE_TEMPLATES=""
 
 SCRIPT_DIR=""
 if [[ -n "${BASH_SOURCE[0]:-}" && -f "${BASH_SOURCE[0]}" ]]; then
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     if [[ -d "$SCRIPT_DIR/hooks" ]]; then
-        TEMPLATES="$SCRIPT_DIR/hooks"
+        DEFAULT_HOOK_TEMPLATES="$SCRIPT_DIR/hooks"
     fi
     if [[ -d "$SCRIPT_DIR/packaging" ]]; then
-        SERVICE_TEMPLATES="$SCRIPT_DIR/packaging"
+        DEFAULT_SERVICE_TEMPLATES="$SCRIPT_DIR/packaging"
     fi
 fi
 
@@ -112,20 +111,8 @@ while [[ $# -gt 0 ]]; do
         --no-service)
             DO_SERVICE=0
             ;;
-        --no-claude)
-            DO_CLAUDE=0
-            ;;
-        --no-codex)
-            DO_CODEX=0
-            ;;
-        --no-cursor)
-            DO_CURSOR=0
-            ;;
-        --no-gemini)
-            DO_GEMINI=0
-            ;;
-        --no-copilot)
-            DO_COPILOT=0
+        --no-*)
+            HOOK_INSTALL_ARGS+=("$1")
             ;;
         --bin-dir)
             shift
@@ -141,11 +128,13 @@ while [[ $# -gt 0 ]]; do
             ;;
         --templates)
             shift
-            TEMPLATES="${1:?--templates requires a value}"
+            HOOK_INSTALL_ARGS+=(--templates "${1:?--templates requires a value}")
+            HOOK_TEMPLATES_SET=1
             ;;
         --service-templates)
             shift
-            SERVICE_TEMPLATES="${1:?--service-templates requires a value}"
+            SERVICE_INSTALL_ARGS+=(--service-templates "${1:?--service-templates requires a value}")
+            SERVICE_TEMPLATES_SET=1
             ;;
         -h | --help)
             usage
@@ -247,38 +236,17 @@ installer_args() {
 }
 
 run_hooks() {
-    local args=()
-
-    if [[ -n "$TEMPLATES" ]]; then
-        args+=(--templates "$TEMPLATES")
+    if [[ "$HOOK_TEMPLATES_SET" -eq 0 && -n "$DEFAULT_HOOK_TEMPLATES" ]]; then
+        HOOK_INSTALL_ARGS+=(--templates "$DEFAULT_HOOK_TEMPLATES")
     fi
-    if [[ "$DO_CLAUDE" -eq 0 ]]; then
-        args+=(--no-claude)
-    fi
-    if [[ "$DO_CODEX" -eq 0 ]]; then
-        args+=(--no-codex)
-    fi
-    if [[ "$DO_CURSOR" -eq 0 ]]; then
-        args+=(--no-cursor)
-    fi
-    if [[ "$DO_GEMINI" -eq 0 ]]; then
-        args+=(--no-gemini)
-    fi
-    if [[ "$DO_COPILOT" -eq 0 ]]; then
-        args+=(--no-copilot)
-    fi
-
-    installer_args hooks "${args[@]}"
+    installer_args hooks "${HOOK_INSTALL_ARGS[@]}"
 }
 
 run_service() {
-    local args=()
-
-    if [[ -n "$SERVICE_TEMPLATES" ]]; then
-        args+=(--service-templates "$SERVICE_TEMPLATES")
+    if [[ "$SERVICE_TEMPLATES_SET" -eq 0 && -n "$DEFAULT_SERVICE_TEMPLATES" ]]; then
+        SERVICE_INSTALL_ARGS+=(--service-templates "$DEFAULT_SERVICE_TEMPLATES")
     fi
-
-    installer_args service "${args[@]}"
+    installer_args service "${SERVICE_INSTALL_ARGS[@]}"
 }
 
 ensure_installed_binary() {
