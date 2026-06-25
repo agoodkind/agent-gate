@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 #
-# install.sh installs agent-gate from the latest GitHub release and wires
-# its hooks into Claude, Codex, Cursor, Gemini, and GitHub Copilot Chat
-# config files.
+# install.sh installs agent-gate from a GitHub release, then delegates hook and
+# service setup to the installed agent-gate binary.
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/agoodkind/agent-gate/main/install.sh | bash
@@ -11,22 +10,25 @@
 #   ./install.sh [flags]
 #
 # Flags:
-#   --bin-only          install the binary only, skip hook config updates
-#   --hooks-only        update hook configs only, skip binary download
-#   --service-only      install/start only the user daemon service
-#   --no-service        skip user daemon service setup
-#   --no-claude         skip Claude hook config update
-#   --no-codex          skip Codex hook config update
-#   --no-cursor         skip Cursor hook config update
-#   --no-gemini         skip Gemini hook config update
-#   --no-copilot        skip GitHub Copilot Chat hook config update
-#   --bin-dir PATH      override binary install dir (default: $XDG_BIN_HOME or
-#                       $HOME/.local/bin)
-#   --version TAG       pin to a specific release tag (default: latest)
-#   --repo OWNER/NAME   override GitHub repo (default: agoodkind/agent-gate)
-#   --templates PATH    local hooks template dir to use instead of GitHub raw
-#                       (auto-detected when run from a checkout)
-#   -h, --help          show this help
+#   --bin-only           install the binary only, skip hook config updates
+#   --hooks-only         update hook configs only, skip binary download
+#   --service-only       install/start only the user daemon service
+#   --no-service         skip user daemon service setup
+#   --no-claude          skip Claude hook config update
+#   --no-codex           skip Codex hook config update
+#   --no-cursor          skip Cursor hook config update
+#   --no-gemini          skip Gemini hook config update
+#   --no-copilot         skip GitHub Copilot Chat hook config update
+#   --bin-dir PATH       override binary install dir (default: $XDG_BIN_HOME or
+#                        $HOME/.local/bin)
+#   --version TAG        pin to a specific release tag (default: latest)
+#   --repo OWNER/NAME    override GitHub repo (default: agoodkind/agent-gate)
+#   --templates PATH     local hooks template dir to use instead of embedded
+#                        templates
+#   --service-templates PATH
+#                        local service template dir to use instead of embedded
+#                        templates
+#   -h, --help           show this help
 #
 # Exit codes:
 #   0 success
@@ -49,380 +51,254 @@ DO_COPILOT=1
 TEMPLATES=""
 SERVICE_TEMPLATES=""
 
-# Resolve to a local templates dir when run from a checkout.
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [[ -d "$SCRIPT_DIR/hooks" ]]; then
-  TEMPLATES="$SCRIPT_DIR/hooks"
-fi
-if [[ -d "$SCRIPT_DIR/services" ]]; then
-  SERVICE_TEMPLATES="$SCRIPT_DIR/services"
+SCRIPT_DIR=""
+if [[ -n "${BASH_SOURCE[0]:-}" && -f "${BASH_SOURCE[0]}" ]]; then
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    if [[ -d "$SCRIPT_DIR/hooks" ]]; then
+        TEMPLATES="$SCRIPT_DIR/hooks"
+    fi
+    if [[ -d "$SCRIPT_DIR/packaging" ]]; then
+        SERVICE_TEMPLATES="$SCRIPT_DIR/packaging"
+    fi
 fi
 
 usage() {
-  sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'
+    printf '%s\n' \
+        "install.sh installs agent-gate from a GitHub release." \
+        "" \
+        "Usage:" \
+        "  curl -fsSL https://raw.githubusercontent.com/agoodkind/agent-gate/main/install.sh | bash" \
+        "  ./install.sh [flags]" \
+        "" \
+        "Flags:" \
+        "  --bin-only           install the binary only, skip hook config updates" \
+        "  --hooks-only         update hook configs only, skip binary download" \
+        "  --service-only       install/start only the user daemon service" \
+        "  --no-service         skip launchd/systemd user service setup" \
+        "  --no-claude          skip Claude hook config update" \
+        "  --no-codex           skip Codex hook config update" \
+        "  --no-cursor          skip Cursor hook config update" \
+        "  --no-gemini          skip Gemini hook config update" \
+        "  --no-copilot         skip GitHub Copilot Chat hook config update" \
+        "  --bin-dir PATH       override binary install dir" \
+        "  --version TAG        pin to a specific release tag" \
+        "  --repo OWNER/NAME    override GitHub repo" \
+        "  --templates PATH     local hooks template dir" \
+        "  --service-templates PATH" \
+        "                       local service template dir" \
+        "  -h, --help           show this help"
 }
 
 die() {
-  printf 'install.sh: %s\n' "$*" >&2
-  exit 1
+    printf 'install.sh: %s\n' "$*" >&2
+    exit 1
 }
 
 while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --bin-only)    DO_HOOKS=0; DO_SERVICE=0 ;;
-    --hooks-only)  DO_BIN=0; DO_SERVICE=0 ;;
-    --service-only) DO_BIN=0; DO_HOOKS=0; DO_SERVICE=1 ;;
-    --no-service)  DO_SERVICE=0 ;;
-    --no-claude)   DO_CLAUDE=0 ;;
-    --no-codex)    DO_CODEX=0 ;;
-    --no-cursor)   DO_CURSOR=0 ;;
-    --no-gemini)   DO_GEMINI=0 ;;
-    --no-copilot)  DO_COPILOT=0 ;;
-    --bin-dir)     shift; BIN_DIR="${1:?--bin-dir requires a value}" ;;
-    --version)     shift; VERSION="${1:?--version requires a value}" ;;
-    --repo)        shift; REPO="${1:?--repo requires a value}" ;;
-    --templates)   shift; TEMPLATES="${1:?--templates requires a value}" ;;
-    -h|--help)     usage; exit 0 ;;
-    *) die "unknown flag: $1 (try --help)" ;;
-  esac
-  shift
+    case "$1" in
+        --bin-only)
+            DO_HOOKS=0
+            DO_SERVICE=0
+            ;;
+        --hooks-only)
+            DO_BIN=0
+            DO_SERVICE=0
+            ;;
+        --service-only)
+            DO_BIN=0
+            DO_HOOKS=0
+            DO_SERVICE=1
+            ;;
+        --no-service)
+            DO_SERVICE=0
+            ;;
+        --no-claude)
+            DO_CLAUDE=0
+            ;;
+        --no-codex)
+            DO_CODEX=0
+            ;;
+        --no-cursor)
+            DO_CURSOR=0
+            ;;
+        --no-gemini)
+            DO_GEMINI=0
+            ;;
+        --no-copilot)
+            DO_COPILOT=0
+            ;;
+        --bin-dir)
+            shift
+            BIN_DIR="${1:?--bin-dir requires a value}"
+            ;;
+        --version)
+            shift
+            VERSION="${1:?--version requires a value}"
+            ;;
+        --repo)
+            shift
+            REPO="${1:?--repo requires a value}"
+            ;;
+        --templates)
+            shift
+            TEMPLATES="${1:?--templates requires a value}"
+            ;;
+        --service-templates)
+            shift
+            SERVICE_TEMPLATES="${1:?--service-templates requires a value}"
+            ;;
+        -h | --help)
+            usage
+            exit 0
+            ;;
+        *)
+            die "unknown flag: $1 (try --help)"
+            ;;
+    esac
+    shift
 done
 
 need() {
-  command -v "$1" >/dev/null 2>&1 || die "missing dependency: $1"
+    command -v "$1" >/dev/null 2>&1 || die "missing dependency: $1"
 }
-
-need curl
-need jq
-need tar
 
 detect_platform() {
-  local os arch
-  case "$(uname -s)" in
-    Darwin) os=darwin ;;
-    Linux)  os=linux ;;
-    *) die "unsupported OS: $(uname -s)" ;;
-  esac
-  case "$(uname -m)" in
-    x86_64|amd64)   arch=amd64 ;;
-    arm64|aarch64)  arch=arm64 ;;
-    *) die "unsupported arch: $(uname -m)" ;;
-  esac
-  printf '%s_%s' "$os" "$arch"
+    local os_name
+    local arch_name
+
+    case "$(uname -s)" in
+        Darwin)
+            os_name="darwin"
+            ;;
+        Linux)
+            os_name="linux"
+            ;;
+        *)
+            die "unsupported OS: $(uname -s)"
+            ;;
+    esac
+
+    case "$(uname -m)" in
+        x86_64 | amd64)
+            arch_name="amd64"
+            ;;
+        arm64 | aarch64)
+            arch_name="arm64"
+            ;;
+        *)
+            die "unsupported arch: $(uname -m)"
+            ;;
+    esac
+
+    printf '%s_%s' "$os_name" "$arch_name"
 }
 
-resolve_version() {
-  if [[ -n "$VERSION" ]]; then
-    printf '%s' "$VERSION"
-    return
-  fi
-  curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" \
-    | jq -r '.tag_name // empty' \
-    || die "failed to query latest release from $REPO"
+release_url() {
+    local platform="$1"
+
+    if [[ -n "$VERSION" ]]; then
+        printf 'https://github.com/%s/releases/download/%s/agent-gate_%s.tar.gz' "$REPO" "$VERSION" "$platform"
+        return
+    fi
+
+    printf 'https://github.com/%s/releases/latest/download/agent-gate_%s.tar.gz' "$REPO" "$platform"
 }
 
 install_bin() {
-  local platform tag url tmpdir tarball
-  platform="$(detect_platform)"
-  tag="$(resolve_version)"
-  VERSION="$tag"
-  [[ -n "$tag" ]] || die "could not resolve release tag (use --version)"
+    local platform
+    local url
+    local tmpdir
+    local tarball
+    local extracted
 
-  url="https://github.com/$REPO/releases/download/$tag/agent-gate_${platform}.tar.gz"
-  tmpdir="$(mktemp -d)"
-  trap 'rm -rf "$tmpdir"' RETURN
+    need curl
+    need tar
+    need install
 
-  tarball="$tmpdir/agent-gate.tar.gz"
-  printf 'install.sh: downloading %s\n' "$url"
-  curl -fsSL "$url" -o "$tarball" || die "download failed: $url"
+    platform="$(detect_platform)"
+    url="$(release_url "$platform")"
+    tmpdir="$(mktemp -d)"
+    trap 'rm -rf "$tmpdir"' RETURN
 
-  tar -xzf "$tarball" -C "$tmpdir" || die "extract failed: $tarball"
+    tarball="$tmpdir/agent-gate.tar.gz"
+    printf 'install.sh: downloading %s\n' "$url"
+    curl -fsSL "$url" -o "$tarball" || die "download failed: $url"
 
-  local extracted
-  extracted="$tmpdir/agent-gate"
-  [[ -x "$extracted" ]] || die "binary not found in tarball at $extracted"
+    tar -xzf "$tarball" -C "$tmpdir" || die "extract failed: $tarball"
 
-  mkdir -p "$BIN_DIR"
-  install -m 0755 "$extracted" "$BIN_DIR/agent-gate"
-  printf 'install.sh: installed %s (%s)\n' "$BIN_DIR/agent-gate" "$tag"
-}
-
-# fetch_template_file reads a hook template into stdout. Local checkout takes
-# priority. Otherwise pulls from raw.githubusercontent.com on the same tag
-# as the binary so binary and hook templates stay in sync.
-fetch_template_file() {
-    local tool="$1" ext="$2"
-    if [[ -n "$TEMPLATES" && -f "$TEMPLATES/$tool.$ext" ]]; then
-        cat "$TEMPLATES/$tool.$ext"
-        return
-    fi
-    local ref="${VERSION:-main}"
-    local url="https://raw.githubusercontent.com/$REPO/$ref/hooks/$tool.$ext"
-    curl -fsSL "$url" || die "fetch template failed: $url"
-}
-
-fetch_template() {
-    fetch_template_file "$1" json
-}
-
-render_json_hooks() {
-    local tool="$1" cmd_path="$2"
-    local template
-    template="$(fetch_template "$tool")" || return 1
-
-    printf '%s' "$template" | jq --arg bin "$cmd_path" '
-      walk(
-        if (type=="object") and (.command? | type=="string")
-        then .command = (.command | gsub("__AGENT_GATE_BIN__"; $bin))
-        else .
-        end
-      )
-    '
-}
-
-finalize_private_target() {
-    local temp_path="$1" target_path="$2"
-    chmod 0600 "$temp_path"
-    mv "$temp_path" "$target_path"
-}
-
-write_private_file() {
-    local target_path="$1" content="$2"
-    (
-        umask 077
-        printf '%s\n' "$content" > "$target_path"
-    )
-}
-
-# update_json_hooks merges a hook template into a target config file. The
-# template uses the placeholder __AGENT_GATE_BIN__ which is substituted
-# with the actual binary path. Existing top-level keys are preserved.
-update_json_hooks() {
-    local tool="$1" target="$2"
-    local cmd_path="$BIN_DIR/agent-gate"
-
-    local rendered
-    rendered="$(render_json_hooks "$tool" "$cmd_path")" || return 1
-
-    mkdir -p "$(dirname "$target")"
-
-    local merged
-    if [[ -f "$target" ]]; then
-        merged="$(jq --argjson hooks "$rendered" '.hooks = $hooks' "$target")"
-    else
-        merged="$(jq -n --argjson hooks "$rendered" '{hooks: $hooks}')"
+    extracted="$tmpdir/agent-gate"
+    if [[ ! -x "$extracted" ]]; then
+        die "binary not found in tarball at $extracted"
     fi
 
-    write_private_file "$target.tmp" "$merged"
-    finalize_private_target "$target.tmp" "$target"
-    printf 'install.sh: updated %s (%s hooks)\n' "$target" "$tool"
-}
+    mkdir -p "$BIN_DIR"
+    install -m 0755 "$extracted" "$BIN_DIR/agent-gate" || die "install failed: $BIN_DIR/agent-gate"
+    printf 'install.sh: installed %s\n' "$BIN_DIR/agent-gate"
 
-update_cursor_hooks() {
-    local target="$1"
-    local cmd_path="$BIN_DIR/agent-gate"
-
-    local rendered
-    rendered="$(render_json_hooks cursor "$cmd_path")" || return 1
-
-    mkdir -p "$(dirname "$target")"
-
-    local merged
-    if [[ -f "$target" ]]; then
-        merged="$(jq --argjson hooks "$rendered" '.version = (.version // 1) | .hooks = $hooks' "$target")"
-    else
-        merged="$(jq -n --argjson hooks "$rendered" '{version: 1, hooks: $hooks}')"
-    fi
-
-    write_private_file "$target.tmp" "$merged"
-    finalize_private_target "$target.tmp" "$target"
-    printf 'install.sh: updated %s (cursor hooks)\n' "$target"
-}
-
-render_codex_hooks() {
-    local cmd_path="$BIN_DIR/agent-gate"
-    local template
-    template="$(fetch_template_file codex toml)" || return 1
-    printf '%s' "$template" | awk -v bin="$cmd_path" '{ gsub("__AGENT_GATE_BIN__", bin); print }'
-}
-
-remove_codex_managed_block() {
-    local source="$1" target="$2"
-    awk '
-      $0 == "# BEGIN agent-gate managed hooks" { skip = 1; next }
-      $0 == "# END agent-gate managed hooks" { skip = 0; next }
-      skip != 1 { print }
-    ' "$source" > "$target"
-}
-
-ensure_codex_hooks_feature() {
-    local source="$1" target="$2"
-    awk '
-      function maybe_emit_hooks() {
-        if (in_features == 1 && saw_hooks != 1) {
-          print "hooks = true"
-        }
-      }
-      /^[[:space:]]*\[.*\][[:space:]]*(#.*)?$/ {
-        maybe_emit_hooks()
-        in_features = ($0 ~ /^[[:space:]]*\[features\][[:space:]]*(#.*)?$/)
-        if (in_features == 1) {
-          saw_features = 1
-          saw_hooks = 0
-        }
-        print
-        next
-      }
-      in_features == 1 && $0 ~ /^[[:space:]]*hooks[[:space:]]*=/ {
-        print "hooks = true"
-        saw_hooks = 1
-        next
-      }
-      { print }
-      END {
-        maybe_emit_hooks()
-        if (saw_features != 1) {
-          print ""
-          print "[features]"
-          print "hooks = true"
-        }
-      }
-    ' "$source" > "$target"
-}
-
-update_codex_hooks() {
-    local target="$1"
-    local rendered
-    rendered="$(render_codex_hooks)" || return 1
-
-    mkdir -p "$(dirname "$target")"
-    if [[ ! -f "$target" ]]; then
-        : > "$target"
-    fi
-
-    local tmp_without_block tmp_features
-    tmp_without_block="$(mktemp)"
-    tmp_features="$(mktemp)"
-    trap 'rm -f "$tmp_without_block" "$tmp_features"' RETURN
-
-    remove_codex_managed_block "$target" "$tmp_without_block"
-    ensure_codex_hooks_feature "$tmp_without_block" "$tmp_features"
-
-    rendered_block="$(
-        cat "$tmp_features"
-        printf '\n# BEGIN agent-gate managed hooks\n'
-        printf '%s\n' "$rendered"
-        printf '# END agent-gate managed hooks\n'
-    )"
-    write_private_file "$target.tmp" "$rendered_block"
-    finalize_private_target "$target.tmp" "$target"
-    rm -f "$tmp_without_block" "$tmp_features"
+    rm -rf "$tmpdir"
     trap - RETURN
-    printf 'install.sh: updated %s (codex hooks)\n' "$target"
 }
 
-install_hooks() {
-    if [[ "$DO_CLAUDE" -eq 1 ]]; then
-        update_json_hooks claude "$HOME/.claude/settings.json"
-    fi
-    if [[ "$DO_CODEX" -eq 1 ]]; then
-        update_codex_hooks "$HOME/.codex/config.toml"
-    fi
-    if [[ "$DO_CURSOR" -eq 1 ]]; then
-        update_cursor_hooks "$HOME/.cursor/hooks.json"
-    fi
-    if [[ "$DO_GEMINI" -eq 1 ]]; then
-        update_json_hooks gemini "$HOME/.gemini/settings.json"
-    fi
-    if [[ "$DO_COPILOT" -eq 1 ]]; then
-        update_json_hooks copilot "$HOME/.copilot/hooks/agent-gate.json"
-    fi
+installer_args() {
+    local mode="$1"
+    shift
+
+    "$BIN_DIR/agent-gate" install "$mode" --bin-path "$BIN_DIR/agent-gate" "$@"
 }
 
-state_dir() {
-  printf '%s/agent-gate' "${XDG_STATE_HOME:-$HOME/.local/state}"
+run_hooks() {
+    local args=()
+
+    if [[ -n "$TEMPLATES" ]]; then
+        args+=(--templates "$TEMPLATES")
+    fi
+    if [[ "$DO_CLAUDE" -eq 0 ]]; then
+        args+=(--no-claude)
+    fi
+    if [[ "$DO_CODEX" -eq 0 ]]; then
+        args+=(--no-codex)
+    fi
+    if [[ "$DO_CURSOR" -eq 0 ]]; then
+        args+=(--no-cursor)
+    fi
+    if [[ "$DO_GEMINI" -eq 0 ]]; then
+        args+=(--no-gemini)
+    fi
+    if [[ "$DO_COPILOT" -eq 0 ]]; then
+        args+=(--no-copilot)
+    fi
+
+    installer_args hooks "${args[@]}"
 }
 
-stop_unmanaged_daemons() {
-  local pattern="^$BIN_DIR/agent-gate daemon$"
-  local pids
-  pids="$(pgrep -f "$pattern" || true)"
-  if [[ -n "$pids" ]]; then
-    printf '%s\n' "$pids" | xargs kill
-  fi
+run_service() {
+    local args=()
+
+    if [[ -n "$SERVICE_TEMPLATES" ]]; then
+        args+=(--service-templates "$SERVICE_TEMPLATES")
+    fi
+
+    installer_args service "${args[@]}"
 }
 
-fetch_service_template() {
-  local platform="$1" name="$2"
-  # Map go-service.mk platform name to packaging directory: launchd -> macos.
-  local pkg_dir
-  case "$platform" in
-    launchd) pkg_dir="macos" ;;
-    systemd) pkg_dir="systemd" ;;
-    *)       pkg_dir="$platform" ;;
-  esac
-  if [[ -n "$SERVICE_TEMPLATES" && -f "$SERVICE_TEMPLATES/$pkg_dir/$name" ]]; then
-    cat "$SERVICE_TEMPLATES/$pkg_dir/$name"
-    return
-  fi
-  local ref="${VERSION:-main}"
-  local url="https://raw.githubusercontent.com/$REPO/$ref/packaging/$pkg_dir/$name"
-  curl -fsSL "$url" || die "fetch service template failed: $url"
-}
-
-install_service() {
-  local os_name
-  os_name="$(uname -s)"
-  case "$os_name" in
-    Darwin)
-      local label target domain rendered state log_path
-      label="io.goodkind.agent-gate"
-      target="$HOME/Library/LaunchAgents/$label.plist"
-      domain="gui/$(id -u)"
-      state="$(state_dir)"
-      log_path="$state/agent-gate.log"
-      mkdir -p "$(dirname "$target")" "$state"
-      rendered="$(fetch_service_template launchd "$label.plist.in" \
-        | sed "s#@@BIN_PATH@@#$BIN_DIR/agent-gate#g; s#@@HOME@@#$HOME#g; s#@@LOG_PATH@@#$log_path#g")"
-      printf '%s\n' "$rendered" > "$target"
-      launchctl bootout "$domain" "$target" >/dev/null 2>&1 || true
-      stop_unmanaged_daemons
-      launchctl bootstrap "$domain" "$target" || die "launchctl bootstrap failed: $target"
-      launchctl enable "$domain/$label" || true
-      launchctl kickstart -k "$domain/$label" || die "launchctl kickstart failed: $label"
-      printf 'install.sh: installed launchd service %s\n' "$target"
-      ;;
-    Linux)
-      local target rendered
-      need systemctl
-      target="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/agent-gate.service"
-      mkdir -p "$(dirname "$target")"
-      rendered="$(fetch_service_template systemd agent-gate.service.in \
-        | sed "s#@@BIN_PATH@@#$BIN_DIR/agent-gate#g")"
-      printf '%s\n' "$rendered" > "$target"
-      systemctl --user daemon-reload
-      systemctl --user stop agent-gate.service >/dev/null 2>&1 || true
-      stop_unmanaged_daemons
-      systemctl --user enable --now agent-gate.service || die "systemctl --user enable --now failed"
-      systemctl --user restart agent-gate.service || die "systemctl --user restart failed"
-      printf 'install.sh: installed systemd user service %s\n' "$target"
-      ;;
-    *)
-      die "unsupported OS for service install: $os_name"
-      ;;
-  esac
+ensure_installed_binary() {
+    if [[ ! -x "$BIN_DIR/agent-gate" ]]; then
+        die "agent-gate binary not found at $BIN_DIR/agent-gate; run without --hooks-only/--service-only first"
+    fi
 }
 
 if [[ "$DO_BIN" -eq 1 ]]; then
-  install_bin
+    install_bin
+else
+    ensure_installed_binary
 fi
 
 if [[ "$DO_HOOKS" -eq 1 ]]; then
-  install_hooks
+    run_hooks
 fi
 
 if [[ "$DO_SERVICE" -eq 1 ]]; then
-  install_service
+    run_service
 fi
 
 printf 'install.sh: done\n'
