@@ -38,6 +38,7 @@ const (
 	commandCodexHook  commandName = "codex-hook"
 	commandDaemon     commandName = "daemon"
 	commandGeminiHook commandName = "gemini-hook"
+	commandInstall    commandName = "install"
 	commandKV         commandName = "kv"
 	commandQuery      commandName = "query"
 	commandUpdate     commandName = "update"
@@ -138,6 +139,8 @@ func main() {
 			os.Exit(runQuery(os.Args[2:]))
 		case commandConfig:
 			os.Exit(runConfig(os.Args[2:]))
+		case commandInstall:
+			os.Exit(runInstall(os.Args[2:]))
 		case commandUpdate:
 			os.Exit(runUpdate(os.Args[2:]))
 		case commandVersion, "--version", "-v":

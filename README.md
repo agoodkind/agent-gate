@@ -46,12 +46,16 @@ Flags:
 ```
 
 `make install`, `make install-bin`, `make install-hooks`, and
-`make install-service` are thin wrappers around the script.
+`make install-service` are thin wrappers around the script. The script
+downloads or locates the release binary first, then delegates hook and service
+setup to `agent-gate install`.
 
 ### From source
 
-Requires Go 1.21 or later. `agent-gate` uses PCRE2 via cgo, so build
-hosts must have PCRE2 and a working C toolchain available.
+Requires the Go version declared in `go.mod`. Go 1.21 and newer can select a
+newer toolchain automatically when `GOTOOLCHAIN=auto`, but older source builds
+are not supported. `agent-gate` uses PCRE2 via cgo, so build hosts must have
+PCRE2 and a working C toolchain available.
 
 Install prerequisites:
 - macOS: `brew install pcre2`
