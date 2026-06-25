@@ -267,9 +267,6 @@ func TestEnsureDefaultsCreatesCanonicalConfig(t *testing.T) {
 	if !strings.Contains(got, `mode = "apply"`) {
 		t.Fatalf("config missing apply mode:\n%s", got)
 	}
-	if !strings.Contains(got, config.DefaultTrustedMinisignPublicKey) {
-		t.Fatalf("config missing trusted minisign key:\n%s", got)
-	}
 }
 
 func TestEnsureDefaultsAppendsMissingUpdateTable(t *testing.T) {
@@ -310,7 +307,7 @@ func TestEnsureDefaultsOverridesExistingUpdateModeWhenRequested(t *testing.T) {
 		t.Fatalf("mkdir config dir: %v", err)
 	}
 	path := filepath.Join(configDir, "config.toml")
-	initial := "[update]\nenabled = true\nmode = \"check\"\ninterval = \"24h\"\nrepo = \"agoodkind/agent-gate\"\nallow_prerelease = false\ntrusted_minisign_public_key = \"custom\"\n"
+	initial := "[update]\nenabled = true\nmode = \"check\"\ninterval = \"24h\"\nrepo = \"agoodkind/agent-gate\"\nallow_prerelease = false\n"
 	if err := os.WriteFile(path, []byte(initial), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}

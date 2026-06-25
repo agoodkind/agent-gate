@@ -128,9 +128,6 @@ func Apply(ctx context.Context, options Options) (ApplyResult, error) {
 		if !check.UpdateAvailable {
 			return saveApplyState(resolvedOptions, result, "current", "")
 		}
-		if resolvedOptions.DryRun {
-			return saveApplyState(resolvedOptions, result, "dry_run", "")
-		}
 		return applyLatest(ctx, resolvedOptions, &result)
 	})
 	if err != nil {
@@ -163,7 +160,7 @@ func applyLatest(ctx context.Context, options Options, result *ApplyResult) erro
 	if err := verifyChecksum(ctx, options, latest, asset, archivePath); err != nil {
 		return err
 	}
-	if err := verifySignature(ctx, options, latest, asset, archivePath); err != nil {
+	if err := verifyGitHubAttestations(ctx, options, latest, asset, archivePath); err != nil {
 		return err
 	}
 	candidatePath, cleanup, err := extractCandidate(archivePath)
@@ -173,6 +170,9 @@ func applyLatest(ctx context.Context, options Options, result *ApplyResult) erro
 	defer cleanup()
 	if err := validateCandidate(ctx, candidatePath); err != nil {
 		return err
+	}
+	if result.DryRun {
+		return saveApplyState(options, *result, "dry_run", "")
 	}
 	if err := replaceBinary(candidatePath, options.InstallPath); err != nil {
 		return err
@@ -326,14 +326,17 @@ func downloadFile(ctx context.Context, client *http.Client, url string, path str
 	_, copyErr := io.Copy(out, resp.Body)
 	closeErr := out.Close()
 	if copyErr != nil {
+		_ = os.Remove(tmpPath)
 		slog.WarnContext(ctx, "update download copy failed", "path", path, "err", copyErr)
 		return fmt.Errorf("write download temp: %w", copyErr)
 	}
 	if closeErr != nil {
+		_ = os.Remove(tmpPath)
 		slog.WarnContext(ctx, "update download close failed", "path", path, "err", closeErr)
 		return fmt.Errorf("close download temp: %w", closeErr)
 	}
 	if err := os.Rename(tmpPath, path); err != nil {
+		_ = os.Remove(tmpPath)
 		slog.WarnContext(ctx, "update download replace failed", "path", path, "err", err)
 		return fmt.Errorf("replace download: %w", err)
 	}
@@ -392,37 +395,6 @@ func checksumFromFile(path string, name string) (string, error) {
 	err = fmt.Errorf("checksum entry not found for %s", name)
 	slog.Warn("update checksums entry missing", "path", path, "name", name, "err", err)
 	return "", err
-}
-
-func verifySignature(ctx context.Context, options Options, latest release, asset releaseAsset, archivePath string) error {
-	slog.InfoContext(ctx, "update verify signature", "asset", asset.Name, "archive", archivePath)
-	publicKey := options.Config.Update.TrustedMinisignPublicKey
-	if strings.TrimSpace(publicKey) == "" {
-		publicKey = config.DefaultTrustedMinisignPublicKey
-	}
-	signatureAsset, ok := findAsset(latest.Assets, asset.Name+".minisig")
-	if !ok {
-		err := fmt.Errorf("signature asset %s.minisig not found", asset.Name)
-		slog.WarnContext(ctx, "update signature asset missing", "asset", asset.Name, "err", err)
-		return err
-	}
-	signaturePath := archivePath + ".minisig"
-	if err := downloadFile(ctx, options.Client, signatureAsset.BrowserDownloadURL, signaturePath); err != nil {
-		slog.WarnContext(ctx, "update signature asset download failed", "asset", signatureAsset.Name, "err", err)
-		return err
-	}
-	minisign, err := exec.LookPath("minisign")
-	if err != nil {
-		slog.WarnContext(ctx, "update minisign lookup failed", "err", err)
-		return fmt.Errorf("minisign not found on PATH: %w", err)
-	}
-	cmd := exec.CommandContext(ctx, minisign, "-Vm", archivePath, "-x", signaturePath, "-P", publicKey)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		slog.WarnContext(ctx, "update minisign verification failed", "asset", asset.Name, "err", err)
-		return fmt.Errorf("minisign verification failed: %w: %s", err, strings.TrimSpace(string(output)))
-	}
-	return nil
 }
 
 func extractCandidate(archivePath string) (string, func(), error) {
@@ -506,6 +478,21 @@ func validateCandidate(ctx context.Context, candidatePath string) error {
 		err := fmt.Errorf("candidate version output did not include version")
 		slog.WarnContext(ctx, "update candidate version output invalid", "path", candidatePath, "err", err)
 		return err
+	}
+	if runtime.GOOS == "darwin" {
+		if err := verifyDarwinCodeSignature(ctx, candidatePath); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func verifyDarwinCodeSignature(ctx context.Context, candidatePath string) error {
+	cmd := exec.CommandContext(ctx, "codesign", "--verify", "--strict", "--verbose=2", candidatePath)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		slog.WarnContext(ctx, "update candidate codesign verify failed", "path", candidatePath, "err", err)
+		return fmt.Errorf("candidate codesign verify failed: %w: %s", err, strings.TrimSpace(string(output)))
 	}
 	return nil
 }

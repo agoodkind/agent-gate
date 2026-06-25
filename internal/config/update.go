@@ -19,8 +19,6 @@ const (
 	UpdateModeCheck = "check"
 	// DefaultUpdateRepo is the direct-install release repository.
 	DefaultUpdateRepo = "agoodkind/agent-gate"
-	// DefaultTrustedMinisignPublicKey verifies release assets for direct installs.
-	DefaultTrustedMinisignPublicKey = "RWQs3nsE+TkjRp/kU27f55SN05WEDfE21vhTKJzZOfXAuv3zkgmaf4HW"
 )
 
 //go:embed default_config.toml
@@ -28,12 +26,11 @@ var defaultConfigTOML string
 
 // Update holds daemon-owned auto-update settings.
 type Update struct {
-	Enabled                  *bool  `toml:"enabled"`
-	Mode                     string `toml:"mode"`
-	Interval                 string `toml:"interval"`
-	Repo                     string `toml:"repo"`
-	AllowPrerelease          bool   `toml:"allow_prerelease"`
-	TrustedMinisignPublicKey string `toml:"trusted_minisign_public_key"`
+	Enabled         *bool  `toml:"enabled"`
+	Mode            string `toml:"mode"`
+	Interval        string `toml:"interval"`
+	Repo            string `toml:"repo"`
+	AllowPrerelease bool   `toml:"allow_prerelease"`
 }
 
 // EnsureDefaultsOptions controls install-time config creation and merging.
@@ -211,8 +208,7 @@ mode = %q
 interval = "24h"
 repo = "agoodkind/agent-gate"
 allow_prerelease = false
-trusted_minisign_public_key = %q
-`, enabled, resolvedMode, DefaultTrustedMinisignPublicKey)
+`, enabled, resolvedMode)
 }
 
 func defaultUpdateBlock() string {
