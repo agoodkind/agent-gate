@@ -32,6 +32,17 @@ const (
 	maxExtractedBinaryBytes = 128 * 1024 * 1024
 )
 
+var (
+	updateWithLock                 = WithLock
+	updateFetchLatestRelease       = fetchLatestRelease
+	updateDownloadFile             = downloadFile
+	updateVerifyChecksum           = verifyChecksum
+	updateVerifyGitHubAttestations = verifyGitHubAttestations
+	updateExtractCandidate         = extractCandidate
+	updateValidateCandidate        = validateCandidate
+	updateReplaceBinary            = replaceBinary
+)
+
 // Options configures one update check or apply operation.
 type Options struct {
 	Config      *config.Config
@@ -79,7 +90,7 @@ type releaseAsset struct {
 func Check(ctx context.Context, options Options) (CheckResult, error) {
 	resolvedOptions := resolveOptions(options)
 	cfg := resolvedOptions.Config
-	latest, err := fetchLatestRelease(ctx, resolvedOptions)
+	latest, err := updateFetchLatestRelease(ctx, resolvedOptions)
 	if err != nil {
 		recordCheckError(resolvedOptions, err)
 		return CheckResult{}, err
@@ -118,7 +129,7 @@ func Check(ctx context.Context, options Options) (CheckResult, error) {
 func Apply(ctx context.Context, options Options) (ApplyResult, error) {
 	resolvedOptions := resolveOptions(options)
 	var result ApplyResult
-	err := WithLock(ctx, func() error {
+	err := updateWithLock(ctx, func() error {
 		check, checkErr := Check(ctx, resolvedOptions)
 		if checkErr != nil {
 			return checkErr
@@ -138,7 +149,7 @@ func Apply(ctx context.Context, options Options) (ApplyResult, error) {
 }
 
 func applyLatest(ctx context.Context, options Options, result *ApplyResult) error {
-	latest, err := fetchLatestRelease(ctx, options)
+	latest, err := updateFetchLatestRelease(ctx, options)
 	if err != nil {
 		options.Log.WarnContext(ctx, "update apply latest release lookup failed", "err", err)
 		return err
@@ -154,27 +165,27 @@ func applyLatest(ctx context.Context, options Options, result *ApplyResult) erro
 		return fmt.Errorf("create update cache dir: %w", err)
 	}
 	archivePath := filepath.Join(cacheDir, asset.Name)
-	if err := downloadFile(ctx, options.Client, asset.BrowserDownloadURL, archivePath); err != nil {
+	if err := updateDownloadFile(ctx, options.Client, asset.BrowserDownloadURL, archivePath); err != nil {
 		return err
 	}
-	if err := verifyChecksum(ctx, options, latest, asset, archivePath); err != nil {
+	if err := updateVerifyChecksum(ctx, options, latest, asset, archivePath); err != nil {
 		return err
 	}
-	if err := verifyGitHubAttestations(ctx, options, latest, asset, archivePath); err != nil {
+	if err := updateVerifyGitHubAttestations(ctx, options, latest, asset, archivePath); err != nil {
 		return err
 	}
-	candidatePath, cleanup, err := extractCandidate(archivePath)
+	candidatePath, cleanup, err := updateExtractCandidate(archivePath)
 	if err != nil {
 		return err
 	}
 	defer cleanup()
-	if err := validateCandidate(ctx, candidatePath); err != nil {
+	if err := updateValidateCandidate(ctx, candidatePath); err != nil {
 		return err
 	}
 	if result.DryRun {
 		return saveApplyState(options, *result, "dry_run", "")
 	}
-	if err := replaceBinary(candidatePath, options.InstallPath); err != nil {
+	if err := updateReplaceBinary(candidatePath, options.InstallPath); err != nil {
 		return err
 	}
 	result.Applied = true
