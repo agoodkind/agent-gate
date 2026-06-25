@@ -51,6 +51,16 @@ GO_MK_MODULES := go-build.mk go-release.mk go-service.mk
 # gitignored go.work that routes the gksyntax submodule into the build, so both
 # exist before any target compiles the grammar packages.
 GO_MK_GENERATE := gksyntax-grammars
+GO_MK_GENERATE_INPUTS := third_party/gksyntax
+GO_MK_GENERATE_OUTPUTS := \
+	third_party/gksyntax/treesitter/grammars/swift/upstream/src/parser.c \
+	third_party/gksyntax/treesitter/grammars/swift/upstream/src/tree_sitter/parser.h \
+	third_party/gksyntax/treesitter/grammars/swift/upstream/src/tree_sitter/array.h \
+	third_party/gksyntax/treesitter/grammars/swift/upstream/src/tree_sitter/alloc.h \
+	third_party/gksyntax/treesitter/grammars/perl/upstream/src/parser.c \
+	third_party/gksyntax/treesitter/grammars/perl/upstream/src/node-types.json \
+	third_party/gksyntax/treesitter/grammars/perl/upstream/src/tree_sitter/parser.h \
+	third_party/gksyntax/treesitter/grammars/perl/upstream/src/tree_sitter/array.h
 GO_MK_WORKSPACE_USE := . third_party/gksyntax
 
 include bootstrap.mk
