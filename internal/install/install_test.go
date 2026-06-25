@@ -214,10 +214,12 @@ func TestInstallServiceUsesFakeRunner(t *testing.T) {
 	homeDir := t.TempDir()
 	runner := &recordingRunner{}
 	options := ServiceOptions{
-		BinPath: binPath,
-		HomeDir: homeDir,
-		Stdout:  nil,
-		Runner:  runner,
+		BinPath:    binPath,
+		HomeDir:    homeDir,
+		ConfigHome: filepath.Join(homeDir, ".config"),
+		StateHome:  filepath.Join(homeDir, ".local", "state"),
+		Stdout:     nil,
+		Runner:     runner,
 	}
 	if err := InstallService(options); err != nil {
 		t.Fatalf("InstallService: %v", err)
@@ -237,8 +239,9 @@ func TestInstallServiceUsesFakeRunner(t *testing.T) {
 			"launchctl bootout gui/",
 			"launchctl print gui/",
 			"pgrep -f ^",
-			"launchctl bootstrap gui/",
 			"launchctl enable gui/",
+			"launchctl bootstrap gui/",
+			"launchctl kickstart -k gui/",
 		})
 	case "linux":
 		targetPath := filepath.Join(homeDir, ".config", "systemd", "user", systemdServiceName)

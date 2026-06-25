@@ -229,13 +229,16 @@ func installLaunchdService(options ServiceOptions, homeDir string, writer io.Wri
 	}
 	domain := "gui/" + strconv.Itoa(os.Getuid())
 	serviceTarget := domain + "/" + launchdLabel
-	_ = runner.Run("launchctl", "bootout", serviceTarget)
+	_, _ = runner.Output("launchctl", "bootout", serviceTarget)
 	waitForLaunchdExit(runner, serviceTarget)
 	stopUnmanagedDaemons(runner, options.BinPath)
+	_, _ = runner.Output("launchctl", "enable", serviceTarget)
 	if err := runner.Run("launchctl", "bootstrap", domain, targetPath); err != nil {
 		return logInstallError("launchctl bootstrap failed", fmt.Errorf("launchctl bootstrap failed: %s: %w", targetPath, err), slog.String("path", targetPath))
 	}
-	_ = runner.Run("launchctl", "enable", serviceTarget)
+	if err := runner.Run("launchctl", "kickstart", "-k", serviceTarget); err != nil {
+		return logInstallError("launchctl kickstart failed", fmt.Errorf("launchctl kickstart failed: %s: %w", serviceTarget, err), slog.String("service_target", serviceTarget))
+	}
 	_, _ = fmt.Fprintf(writer, "agent-gate install: installed launchd service %s\n", targetPath)
 	return nil
 }
@@ -501,8 +504,12 @@ func isFeaturesHeader(line string) bool {
 }
 
 func isHooksAssignment(line string) bool {
-	trimmedLine := strings.TrimSpace(line)
-	return strings.HasPrefix(trimmedLine, "hooks") && strings.Contains(trimmedLine, "=")
+	trimmedLine := strings.TrimSpace(stripTOMLComment(line))
+	keyName, _, found := strings.Cut(trimmedLine, "=")
+	if !found {
+		return false
+	}
+	return strings.TrimSpace(keyName) == "hooks"
 }
 
 func stripTOMLComment(line string) string {
@@ -651,7 +658,7 @@ func resolvedHomeDir(override string) (string, error) {
 
 func waitForLaunchdExit(runner CommandRunner, serviceTarget string) {
 	for range serviceWaitAttempts {
-		if err := runner.Run("launchctl", "print", serviceTarget); err != nil {
+		if _, err := runner.Output("launchctl", "print", serviceTarget); err != nil {
 			return
 		}
 		timer := time.NewTimer(serviceWaitSleep)

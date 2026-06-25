@@ -54,6 +54,10 @@ func runInstallHooks(args []string) int {
 		fmt.Fprintf(os.Stderr, "agent-gate install hooks: unexpected argument %q\n", flags.Arg(0))
 		return 2
 	}
+	if values.binPath == "" {
+		fmt.Fprintln(os.Stderr, "usage: agent-gate install hooks --bin-path PATH")
+		return 2
+	}
 	options := hookOptions(values)
 	if err := agentinstall.InstallHooks(options); err != nil {
 		fmt.Fprintf(os.Stderr, "agent-gate install hooks: %v\n", err)
@@ -71,6 +75,10 @@ func runInstallService(args []string) int {
 	}
 	if flags.NArg() != 0 {
 		fmt.Fprintf(os.Stderr, "agent-gate install service: unexpected argument %q\n", flags.Arg(0))
+		return 2
+	}
+	if values.binPath == "" {
+		fmt.Fprintln(os.Stderr, "usage: agent-gate install service --bin-path PATH")
 		return 2
 	}
 	options := serviceOptions(values)
@@ -91,6 +99,10 @@ func runInstallAll(args []string) int {
 	}
 	if flags.NArg() != 0 {
 		fmt.Fprintf(os.Stderr, "agent-gate install all: unexpected argument %q\n", flags.Arg(0))
+		return 2
+	}
+	if values.binPath == "" {
+		fmt.Fprintln(os.Stderr, "usage: agent-gate install all --bin-path PATH")
 		return 2
 	}
 	if err := agentinstall.InstallHooks(hookOptions(values)); err != nil {
