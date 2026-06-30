@@ -14,5 +14,4 @@ jobs:
     with:
       cgo: true
       apt_packages: libpcre2-dev
-      brew_packages: pcre2
       require_darwin_codesign: true
