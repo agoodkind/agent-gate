@@ -38,8 +38,8 @@ BUNDLE_ID             ?= io.goodkind.agent-gate
 CODESIGN_ENTITLEMENTS := packaging/macos/agent-gate.entitlements
 
 # go-mk's release command signs darwin binaries with quill and reads the
-# hardened-runtime entitlements (which let the Homebrew PCRE2 dylib load) from
-# RELEASE_ENTITLEMENTS.
+# hardened-runtime entitlements from RELEASE_ENTITLEMENTS. pcre2 now links
+# statically on darwin, so no third-party dylib has to load at runtime.
 RELEASE_ENTITLEMENTS  := $(CODESIGN_ENTITLEMENTS)
 
 # Pipeline modules
@@ -63,9 +63,22 @@ GO_MK_GENERATE_OUTPUTS := \
 	third_party/gksyntax/treesitter/grammars/perl/upstream/src/tree_sitter/array.h
 GO_MK_WORKSPACE_USE := . third_party/gksyntax
 
+# pcre2 is linked through cgo (#cgo pkg-config: libpcre2-8). On a linux target the
+# build uses the system libpcre2-8 from apt (apt_packages: libpcre2-dev). On the
+# darwin cross target go-makefile provisions a static pcre2 through this hook, so
+# the release binary is self-contained. Set before include bootstrap.mk.
+GO_MK_CGO_DEPS := pcre2
+
 include bootstrap.mk
 
 .DEFAULT_GOAL := check
+
+# go-makefile's release command runs this per build target with CC/CXX,
+# GO_MK_TARGET_GOOS/GOARCH, and GO_MK_CGO_PREFIX set; the script builds a static
+# darwin pcre2 into the prefix and is a no-op on linux.
+.PHONY: go-mk-cgo-dep-pcre2
+go-mk-cgo-dep-pcre2:
+	@bash scripts/setup-cgo-pcre2.sh
 
 # ---------------------------------------------------------------------------
 # gksyntax submodule grammars
