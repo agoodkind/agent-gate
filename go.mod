@@ -16,7 +16,7 @@ require (
 	golang.org/x/mod v0.37.0
 	goodkind.io/gklog v0.4.4
 	goodkind.io/gksyntax v0.0.0-20260618054600-30485de6d77b
-	google.golang.org/grpc v1.81.1
+	google.golang.org/grpc v1.82.0
 	google.golang.org/protobuf v1.36.11
 )
 
