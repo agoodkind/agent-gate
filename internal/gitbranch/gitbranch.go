@@ -46,7 +46,10 @@ func OnDefaultBranch(path string) (match bool, resolved bool) {
 	}
 	defaultBranch := resolveDefaultBranch(repo)
 	if defaultBranch == "" {
-		return false, true
+		// The default branch could not be determined, so the branch state is
+		// unresolved. Report resolved=false to preserve the fail-open contract
+		// rather than claiming a resolved non-match.
+		return false, false
 	}
 	return head.Name().Short() == defaultBranch, true
 }
