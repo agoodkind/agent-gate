@@ -45,6 +45,7 @@ var virtualFields = []string{
 	"cmd_comments",
 	"cmd_double_hyphen_prose",
 	"cmd_redirections",
+	"cmd_write_targets",
 }
 
 type schemaSystem string
@@ -406,7 +407,7 @@ func isKnownConditionKind(kind string) bool {
 	switch config.ConditionKind(kind) {
 	case "", config.ConditionKindRegex, config.ConditionKindCommand, config.ConditionKindProject,
 		config.ConditionKindDiff, config.ConditionKindShellRead, config.ConditionKindShellWrite,
-		config.ConditionKindExec:
+		config.ConditionKindExec, config.ConditionKindGitDefaultBranch:
 		return true
 	default:
 		return false
