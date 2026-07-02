@@ -60,7 +60,13 @@ func OnDefaultBranch(path string) (match bool, resolved bool) {
 func resolveDefaultBranch(repo *git.Repository) string {
 	if ref, err := repo.Reference(originHeadRef, false); err == nil {
 		if ref.Type() == plumbing.SymbolicReference {
-			return strings.TrimPrefix(ref.Target().String(), "refs/remotes/origin/")
+			// Only accept the expected refs/remotes/origin/<branch> shape. An
+			// origin/HEAD that targets some other refname is not a usable default
+			// name, so fall through to the conventional-default fallback rather
+			// than returning a bogus prefixed string that never matches HEAD.
+			if name, ok := strings.CutPrefix(ref.Target().String(), "refs/remotes/origin/"); ok && name != "" {
+				return name
+			}
 		}
 	}
 	for _, name := range defaultBranchNames {
