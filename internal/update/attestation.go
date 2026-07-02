@@ -27,7 +27,7 @@ const (
 	githubReleaseAttestationPredicateType = "https://in-toto.io/attestation/release/v0.2"
 	githubReleaseAttestationSAN           = "https://dotcom.releases.github.com"
 	githubReleaseTUFRepositoryURL         = "https://tuf-repo.github.com"
-	goMakefileReleaseWorkflowURI          = "https://github.com/agoodkind/go-makefile/.github/workflows/_release.yml@refs/heads/main"
+	goMakefileReleaseBuildWorkflowURI     = "https://github.com/agoodkind/go-makefile/.github/workflows/_release_build.yml@refs/heads/main"
 )
 
 //go:embed embed/tuf-repo.github.com/4.root.json
@@ -142,7 +142,7 @@ func verifyBuildProvenanceAttestation(ctx context.Context, options Options, asse
 		return fmt.Errorf("fetch build provenance attestation: %w", err)
 	}
 	sourceRepositoryURI := githubRepositoryURI(repo)
-	sanMatcher, err := sigverify.NewSANMatcher(goMakefileReleaseWorkflowURI, "")
+	sanMatcher, err := sigverify.NewSANMatcher(goMakefileReleaseBuildWorkflowURI, "")
 	if err != nil {
 		return fmt.Errorf("build provenance SAN matcher: %w", err)
 	}
@@ -151,7 +151,7 @@ func verifyBuildProvenanceAttestation(ctx context.Context, options Options, asse
 		return fmt.Errorf("build provenance issuer matcher: %w", err)
 	}
 	identity, err := sigverify.NewCertificateIdentity(sanMatcher, issuerMatcher, fulciocert.Extensions{
-		BuildSignerURI:      goMakefileReleaseWorkflowURI,
+		BuildSignerURI:      goMakefileReleaseBuildWorkflowURI,
 		RunnerEnvironment:   githubHostedRunnerEnvironment,
 		SourceRepositoryURI: sourceRepositoryURI,
 	})
@@ -376,14 +376,14 @@ func validateBuildProvenance(result *sigverify.VerificationResult, repo string, 
 }
 
 func validateBuildProvenanceCertificate(summary *fulciocert.Summary, repo string) error {
-	if summary.SubjectAlternativeName != goMakefileReleaseWorkflowURI {
-		return fmt.Errorf("build provenance SAN %q did not match %q", summary.SubjectAlternativeName, goMakefileReleaseWorkflowURI)
+	if summary.SubjectAlternativeName != goMakefileReleaseBuildWorkflowURI {
+		return fmt.Errorf("build provenance SAN %q did not match %q", summary.SubjectAlternativeName, goMakefileReleaseBuildWorkflowURI)
 	}
 	if summary.Issuer != githubActionsOIDCIssuer {
 		return fmt.Errorf("build provenance issuer %q did not match %q", summary.Issuer, githubActionsOIDCIssuer)
 	}
-	if summary.BuildSignerURI != goMakefileReleaseWorkflowURI {
-		return fmt.Errorf("build signer URI %q did not match %q", summary.BuildSignerURI, goMakefileReleaseWorkflowURI)
+	if summary.BuildSignerURI != goMakefileReleaseBuildWorkflowURI {
+		return fmt.Errorf("build signer URI %q did not match %q", summary.BuildSignerURI, goMakefileReleaseBuildWorkflowURI)
 	}
 	if summary.RunnerEnvironment != githubHostedRunnerEnvironment {
 		return fmt.Errorf("runner environment %q did not match %q", summary.RunnerEnvironment, githubHostedRunnerEnvironment)
