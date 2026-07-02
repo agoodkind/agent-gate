@@ -12,5 +12,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
+      attestations: write
+    secrets: inherit
     with:
       apt_packages: libpcre2-dev
