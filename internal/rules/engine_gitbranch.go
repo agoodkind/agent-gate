@@ -1,6 +1,7 @@
 package rules
 
 import (
+	"path/filepath"
 	"strings"
 
 	"goodkind.io/agent-gate/internal/config"
@@ -44,11 +45,16 @@ func gitBranchTargets(fields FieldSet, c *config.Condition, ctx conditionContext
 	return dedupeNonEmpty(targets)
 }
 
+// dedupeNonEmpty returns the distinct usable target paths. It drops empties, the
+// shelldecomp unresolvable sentinel (which carries a NUL byte), and any
+// non-absolute value, so an unpinnable cwd or write target can never collapse to
+// "." inside gitbranch.OnDefaultBranch and accidentally evaluate the daemon's
+// own directory. This preserves the fail-open contract for unresolvable targets.
 func dedupeNonEmpty(values []string) []string {
 	seen := make(map[string]struct{}, len(values))
 	out := make([]string, 0, len(values))
 	for _, value := range values {
-		if value == "" {
+		if value == "" || strings.ContainsRune(value, 0) || !filepath.IsAbs(value) {
 			continue
 		}
 		if _, ok := seen[value]; ok {

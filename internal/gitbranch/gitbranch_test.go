@@ -20,8 +20,8 @@ func runGit(t *testing.T, dir string, args ...string) {
 	cmd := exec.Command("git", full...)
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(),
-		"GIT_CONFIG_GLOBAL=/dev/null",
-		"GIT_CONFIG_SYSTEM=/dev/null",
+		"GIT_CONFIG_GLOBAL="+os.DevNull,
+		"GIT_CONFIG_SYSTEM="+os.DevNull,
 		"GIT_TERMINAL_PROMPT=0",
 	)
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -31,6 +31,9 @@ func runGit(t *testing.T, dir string, args ...string) {
 
 func initRepo(t *testing.T, dir string) {
 	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git binary not available")
+	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -78,6 +81,9 @@ func TestLinkedWorktreeOnFeatureBranch(t *testing.T) {
 	repo := filepath.Join(base, "repo")
 	initRepo(t, repo)
 	wt := filepath.Join(repo, ".claude", "worktrees", "task")
+	if err := os.MkdirAll(filepath.Dir(wt), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	runGit(t, repo, "worktree", "add", "-q", "-b", "task", wt)
 	match, resolved := OnDefaultBranch(filepath.Join(wt, "f.txt"))
 	assert(t, "worktree on feature", match, resolved, false, true)
@@ -109,10 +115,14 @@ func TestCloneReadsOriginHead(t *testing.T) {
 	base := t.TempDir()
 	repo := filepath.Join(base, "repo")
 	initRepo(t, repo)
+	// Rename the source default branch to a non-conventional name so the clone's
+	// default can only be resolved through origin/HEAD; the main/master/trunk
+	// fallback cannot find it, which is what makes this test exercise origin/HEAD.
+	runGit(t, repo, "branch", "-m", "release")
 	clone := filepath.Join(base, "clone")
 	runGit(t, base, "clone", "-q", repo, clone)
 	match, resolved := OnDefaultBranch(clone)
-	assert(t, "clone on default via origin/HEAD", match, resolved, true, true)
+	assert(t, "clone on non-conventional default via origin/HEAD", match, resolved, true, true)
 }
 
 func TestDetachedHead(t *testing.T) {

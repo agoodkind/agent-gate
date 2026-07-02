@@ -7,8 +7,8 @@ import (
 )
 
 // CmdWriteTargets returns the newline-joined effective filesystem targets that
-// the active shell command writes (output redirects, tee, sed -i, awk -i,
-// patch, git apply), resolved against the cwd in effect at each write. It is the
+// the active shell command writes (output redirects, tee, dd of=, sed -i,
+// awk -i, patch, git apply), resolved against the cwd in effect at each write. It is the
 // write-side mirror of [FieldSet.CmdReadTargets] and delegates to
 // shellwrite.ExtractWriteTargets (structural shelldecomp parse, no regex).
 // Sentinel targets for unparseable write shapes carry no path and are dropped;

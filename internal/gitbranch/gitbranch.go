@@ -1,9 +1,8 @@
 // Package gitbranch reports whether the git repository containing a path
 // currently has HEAD on its default branch. It uses the pure-Go
-// github.com/git-pkgs/go-git implementation (wired through a go.mod replace of
-// github.com/go-git/go-git/v5) rather than shelling out to the git binary or
-// parsing .git files by hand, so worktrees, packed-refs, and origin/HEAD are all
-// handled by the library.
+// github.com/go-git/go-git/v5 implementation rather than shelling out to the git
+// binary or parsing .git files by hand, so worktrees, packed-refs, and
+// origin/HEAD are all handled by the library.
 package gitbranch
 
 import (
