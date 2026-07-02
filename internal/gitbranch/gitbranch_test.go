@@ -68,6 +68,24 @@ func TestFilePathResolvesRepo(t *testing.T) {
 	assert(t, "nested new file on main", match, resolved, true, true)
 }
 
+func TestExistingNestedFileResolvesRepo(t *testing.T) {
+	repo := filepath.Join(t.TempDir(), "repo")
+	initRepo(t, repo)
+	// An existing file in a nested subdirectory must resolve the enclosing repo:
+	// go-git PlainOpenWithOptions(DetectDotGit) walks up from the file's parent
+	// directory to find the .git entry.
+	sub := filepath.Join(repo, "sub", "dir")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	nested := filepath.Join(sub, "nested.go")
+	if err := os.WriteFile(nested, []byte("package x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	match, resolved := OnDefaultBranch(nested)
+	assert(t, "existing nested file on main", match, resolved, true, true)
+}
+
 func TestFeatureBranchNotDefault(t *testing.T) {
 	repo := filepath.Join(t.TempDir(), "repo")
 	initRepo(t, repo)
