@@ -14,7 +14,7 @@ Claude Code, Cursor, Codex, and Gemini CLI all expose lifecycle hook systems tha
 
 ### One-liner (recommended)
 
-Pulls the latest release tarball for your platform, installs the binary
+Pulls the latest rolling release tarball for your platform, installs the binary
 to `${XDG_BIN_HOME:-$HOME/.local/bin}`, installs and starts the user daemon
 service, writes or merges the canonical `agent-gate` config with daemon-owned
 auto-update enabled, and merges hook templates into your Claude, Codex,
@@ -43,10 +43,13 @@ Flags:
 ./install.sh --no-copilot
 ./install.sh --bin-dir /opt/bin  # override $XDG_BIN_HOME
 ./install.sh --version v1.2.3    # pin to a specific release tag
+./install.sh --channel stable    # use GitHub's latest stable release
+./install.sh --repo owner/name   # override the GitHub release repo
+./install.sh --require-attestation
 ```
 
-`make install`, `make install-bin`, `make install-hooks`, and
-`make install-service` are thin wrappers around the script. The script
+`make install-release`, `make install-release-bin`, `make install-release-hooks`,
+and `make install-release-service` are thin wrappers around the script. The script
 downloads or locates the release binary first, then delegates hook and service
 setup to `agent-gate install`.
 
@@ -153,7 +156,7 @@ enabled = true
 mode = "apply"
 interval = "24h"
 repo = "agoodkind/agent-gate"
-allow_prerelease = false
+allow_prerelease = true
 ```
 
 Useful local commands:
