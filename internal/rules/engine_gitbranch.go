@@ -29,28 +29,43 @@ func gitDefaultBranchConditionMatch(fields FieldSet, c *config.Condition, ctx co
 
 // gitBranchTargets returns the deduplicated set of filesystem targets to test:
 // the resolved command cwds when present, else every non-empty line of every
-// configured selector value.
+// configured selector value. A relative selector value (a provider may pass a
+// relative tool_input.file_path straight through) is resolved against the event
+// cwd first, so a relative target is enforced rather than silently skipped.
 func gitBranchTargets(fields FieldSet, c *config.Condition, ctx conditionContext) []string {
 	if len(ctx.commandCwds) > 0 {
-		return dedupeNonEmpty(ctx.commandCwds)
+		return dedupeUsable(ctx.commandCwds)
 	}
+	base := fields.BaseCWD()
 	var targets []string
 	for _, spec := range c.Selectors() {
 		value := fields.String(spec.Selector)
 		if value == "" {
 			continue
 		}
-		targets = append(targets, strings.Split(value, "\n")...)
+		for line := range strings.SplitSeq(value, "\n") {
+			if line == "" || strings.ContainsRune(line, 0) {
+				continue
+			}
+			if !filepath.IsAbs(line) {
+				if base == "" {
+					continue
+				}
+				line = filepath.Join(base, line)
+			}
+			targets = append(targets, line)
+		}
 	}
-	return dedupeNonEmpty(targets)
+	return dedupeUsable(targets)
 }
 
-// dedupeNonEmpty returns the distinct usable target paths. It drops empties, the
+// dedupeUsable returns the distinct usable target paths. It drops empties, the
 // shelldecomp unresolvable sentinel (which carries a NUL byte), and any
-// non-absolute value, so an unpinnable cwd or write target can never collapse to
-// "." inside gitbranch.OnDefaultBranch and accidentally evaluate the daemon's
-// own directory. This preserves the fail-open contract for unresolvable targets.
-func dedupeNonEmpty(values []string) []string {
+// remaining non-absolute value, so an unpinnable cwd or write target can never
+// collapse to "." inside gitbranch.OnDefaultBranch and accidentally evaluate the
+// daemon's own directory. This preserves the fail-open contract for unresolvable
+// targets while gitBranchTargets has already resolved relative selector paths.
+func dedupeUsable(values []string) []string {
 	seen := make(map[string]struct{}, len(values))
 	out := make([]string, 0, len(values))
 	for _, value := range values {

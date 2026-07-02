@@ -77,18 +77,24 @@ field_paths = ["tool_input.file_path"]
 	onFeature := makeGitRepo(t, false)
 
 	cases := []struct {
-		name    string
-		repo    string
-		blocked bool
+		name     string
+		repo     string
+		relative bool
+		blocked  bool
 	}{
 		{name: "edit file in repo on default branch", repo: onMain, blocked: true},
 		{name: "edit file in repo on feature branch", repo: onFeature, blocked: false},
+		{name: "relative file_path resolved against cwd on default", repo: onMain, relative: true, blocked: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			filePath := filepath.Join(tc.repo, "f.txt")
+			if tc.relative {
+				filePath = "f.txt"
+			}
 			fields := rules.FieldSet{
 				ToolName:          "Edit",
-				ToolInputFilePath: filepath.Join(tc.repo, "f.txt"),
+				ToolInputFilePath: filePath,
 				CWD:               tc.repo,
 			}
 			got := rules.EvaluateAll(context.Background(), "claude", "PreToolUse", fields, cfg.Rules, nil)
