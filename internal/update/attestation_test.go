@@ -114,10 +114,10 @@ func TestValidateReleaseAttestationRejectsMismatches(t *testing.T) {
 
 func TestValidateBuildProvenanceCertificate(t *testing.T) {
 	summary := &fulciocert.Summary{
-		SubjectAlternativeName: goMakefileReleaseWorkflowURI,
+		SubjectAlternativeName: goMakefileReleaseBuildWorkflowURI,
 		Extensions: fulciocert.Extensions{
 			Issuer:              githubActionsOIDCIssuer,
-			BuildSignerURI:      goMakefileReleaseWorkflowURI,
+			BuildSignerURI:      goMakefileReleaseBuildWorkflowURI,
 			RunnerEnvironment:   githubHostedRunnerEnvironment,
 			SourceRepositoryURI: githubRepositoryURI("agoodkind/agent-gate"),
 		},
@@ -140,7 +140,7 @@ func TestValidateBuildProvenanceCertificateRejectsMismatches(t *testing.T) {
 				SubjectAlternativeName: "https://github.com/agoodkind/go-makefile/.github/workflows/not-real.yml@refs/heads/main",
 				Extensions: fulciocert.Extensions{
 					Issuer:              githubActionsOIDCIssuer,
-					BuildSignerURI:      goMakefileReleaseWorkflowURI,
+					BuildSignerURI:      goMakefileReleaseBuildWorkflowURI,
 					RunnerEnvironment:   githubHostedRunnerEnvironment,
 					SourceRepositoryURI: githubRepositoryURI("agoodkind/agent-gate"),
 				},
@@ -151,10 +151,10 @@ func TestValidateBuildProvenanceCertificateRejectsMismatches(t *testing.T) {
 		{
 			name: "wrong repo",
 			summary: &fulciocert.Summary{
-				SubjectAlternativeName: goMakefileReleaseWorkflowURI,
+				SubjectAlternativeName: goMakefileReleaseBuildWorkflowURI,
 				Extensions: fulciocert.Extensions{
 					Issuer:              githubActionsOIDCIssuer,
-					BuildSignerURI:      goMakefileReleaseWorkflowURI,
+					BuildSignerURI:      goMakefileReleaseBuildWorkflowURI,
 					RunnerEnvironment:   githubHostedRunnerEnvironment,
 					SourceRepositoryURI: githubRepositoryURI("agoodkind/go-makefile"),
 				},
@@ -165,10 +165,10 @@ func TestValidateBuildProvenanceCertificateRejectsMismatches(t *testing.T) {
 		{
 			name: "wrong issuer",
 			summary: &fulciocert.Summary{
-				SubjectAlternativeName: goMakefileReleaseWorkflowURI,
+				SubjectAlternativeName: goMakefileReleaseBuildWorkflowURI,
 				Extensions: fulciocert.Extensions{
 					Issuer:              "https://issuer.example.invalid",
-					BuildSignerURI:      goMakefileReleaseWorkflowURI,
+					BuildSignerURI:      goMakefileReleaseBuildWorkflowURI,
 					RunnerEnvironment:   githubHostedRunnerEnvironment,
 					SourceRepositoryURI: githubRepositoryURI("agoodkind/agent-gate"),
 				},
