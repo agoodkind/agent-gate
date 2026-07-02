@@ -61,11 +61,14 @@ type WriteTarget struct {
 // [ReasonUnparsedCommandShape] sentinel so the rule can default-deny rather than
 // act on a fabricated path.
 //
-// A command whose body is opaque to static gating (eval/exec, an interpreter
-// run with -c, or a command substitution) also yields a sentinel: its real
-// writes are hidden inside a shape the gate cannot enumerate, so the
-// conservative answer is to default-deny, matching the prior regex parser. A
-// process-substitution redirect (`>(cmd)`) is not a file write and is dropped.
+// A command whose body is opaque to the top-level scan (eval/exec, an
+// interpreter run with -c, or a command substitution) yields a sentinel so a
+// glob rule can default-deny. shelldecomp still parses those embedded bodies, so
+// this function also recurses into them and returns any resolved embedded write
+// target (for example the f in `bash -c 'echo x > f'`, cd-aware); the sentinel is
+// emitted alongside so both the default-deny and the concrete-target consumers
+// are served. A process-substitution redirect (`>(cmd)`) is not a file write and
+// is dropped.
 func ExtractWriteTargets(cmd, cwd string) []WriteTarget {
 	if strings.TrimSpace(cmd) == "" {
 		return nil
