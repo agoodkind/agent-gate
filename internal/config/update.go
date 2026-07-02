@@ -30,7 +30,7 @@ type Update struct {
 	Mode            string `toml:"mode"`
 	Interval        string `toml:"interval"`
 	Repo            string `toml:"repo"`
-	AllowPrerelease bool   `toml:"allow_prerelease"`
+	AllowPrerelease *bool  `toml:"allow_prerelease"`
 }
 
 // EnsureDefaultsOptions controls install-time config creation and merging.
@@ -71,6 +71,14 @@ func (c *Config) UpdateInterval() time.Duration {
 		}
 	}
 	return defaultUpdateInterval
+}
+
+// UpdateAllowPrerelease reports whether update checks should include rolling releases.
+func (c *Config) UpdateAllowPrerelease() bool {
+	if c != nil && c.Update.AllowPrerelease != nil {
+		return *c.Update.AllowPrerelease
+	}
+	return true
 }
 
 func normalizeUpdate(update *Update) error {
@@ -208,7 +216,7 @@ enabled = %s
 mode = %q
 interval = "24h"
 repo = "agoodkind/agent-gate"
-allow_prerelease = false
+allow_prerelease = true
 `, enabled, resolvedMode)
 }
 
@@ -230,7 +238,10 @@ func mergedUpdateBlock(existing Update, mode string) string {
 	if repo == "" {
 		repo = DefaultUpdateRepo
 	}
-	allowPrerelease := existing.AllowPrerelease
+	allowPrerelease := true
+	if existing.AllowPrerelease != nil {
+		allowPrerelease = *existing.AllowPrerelease
+	}
 	if mode == "off" {
 		enabled = false
 		resolvedMode = UpdateModeApply

@@ -15,3 +15,4 @@ jobs:
       cgo: true
       apt_packages: libpcre2-dev
       require_darwin_codesign: true
+      binary: agent-gate

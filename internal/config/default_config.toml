@@ -26,4 +26,4 @@ enabled = true
 mode = "apply"
 interval = "24h"
 repo = "agoodkind/agent-gate"
-allow_prerelease = false
+allow_prerelease = true

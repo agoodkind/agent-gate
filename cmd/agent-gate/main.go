@@ -22,9 +22,10 @@ import (
 	"goodkind.io/agent-gate/internal/hook"
 	"goodkind.io/agent-gate/internal/intake"
 	"goodkind.io/agent-gate/internal/telemetry"
-	updater "goodkind.io/agent-gate/internal/update"
+	"goodkind.io/agent-gate/internal/updateopts"
 	"goodkind.io/agent-gate/internal/version"
 	"goodkind.io/gklog"
+	"goodkind.io/go-makefile/selfupdate"
 )
 
 func writeUserLine(writer io.Writer, line string) {
@@ -291,7 +292,7 @@ func runUpdateCheck(args []string) int {
 		fmt.Fprintf(os.Stderr, "agent-gate: update check config load failed: %v\n", err)
 		return 1
 	}
-	result, err := updater.Check(context.Background(), updater.Options{Config: cfg})
+	result, err := selfupdate.Check(context.Background(), updateopts.Options(cfg, updateopts.Overrides{}))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent-gate: update check failed: %v\n", err)
 		return 1
@@ -321,7 +322,7 @@ func runUpdateApply(args []string) int {
 		fmt.Fprintf(os.Stderr, "agent-gate: update apply config load failed: %v\n", err)
 		return 1
 	}
-	result, err := updater.Apply(context.Background(), updater.Options{Config: cfg, DryRun: dryRun})
+	result, err := selfupdate.Apply(context.Background(), updateopts.Options(cfg, updateopts.Overrides{DryRun: dryRun}))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent-gate: update apply failed: %v\n", err)
 		return 1
@@ -354,7 +355,7 @@ func runUpdateStatus(args []string) int {
 		fmt.Fprintf(os.Stderr, "agent-gate update status: %v\n", err)
 		return 2
 	}
-	state, err := updater.LoadState("")
+	state, err := selfupdate.LoadState(config.DefaultUpdateStatePath())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent-gate: update status failed: %v\n", err)
 		return 1
