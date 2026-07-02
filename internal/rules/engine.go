@@ -224,7 +224,8 @@ func isMatchingConditionKind(c *config.Condition) bool {
 	switch conditionKind(c) {
 	case config.ConditionKindRegex, config.ConditionKindDiff, config.ConditionKindShellRead, config.ConditionKindShellWrite:
 		return true
-	case config.ConditionKindCommand, config.ConditionKindProject, config.ConditionKindExec:
+	case config.ConditionKindCommand, config.ConditionKindProject, config.ConditionKindExec,
+		config.ConditionKindGitDefaultBranch:
 		// Gate-only kinds. They must pass for the rule to fire but they do
 		// not by themselves emit per-match diagnostics, so they are evaluated
 		// as part of the gate inside [allConditionsMatch] and surfaced via
@@ -408,7 +409,8 @@ func (r *ruleRegexCondition) Execute(ctx context.Context, _ pipeline.Input) (pip
 			isConditionBased: true,
 			gateMatched:      true,
 		}, nil
-	case config.ConditionKindCommand, config.ConditionKindProject, config.ConditionKindExec:
+	case config.ConditionKindCommand, config.ConditionKindProject, config.ConditionKindExec,
+		config.ConditionKindGitDefaultBranch:
 		// Gate-only kinds are handled by [allConditionsMatch] above and
 		// produce no per-condition Condition. Reaching this arm means
 		// [buildRuleRegexConditions] mis-routed a condition; emit nothing
@@ -698,6 +700,10 @@ func allConditionsMatch(ctx context.Context, fields FieldSet, rule *config.Rule,
 			}
 		case config.ConditionKindShellRead:
 			if !shellReadConditionGateMatch(fields, c) {
+				return false
+			}
+		case config.ConditionKindGitDefaultBranch:
+			if !gitDefaultBranchConditionMatch(fields, c, condCtx) {
 				return false
 			}
 		case config.ConditionKindExec:

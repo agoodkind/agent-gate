@@ -211,13 +211,14 @@ type ConditionKind string
 
 // ConditionKind variants.
 const (
-	ConditionKindCommand    ConditionKind = "command"
-	ConditionKindDiff       ConditionKind = "diff"
-	ConditionKindExec       ConditionKind = "exec"
-	ConditionKindProject    ConditionKind = "project"
-	ConditionKindRegex      ConditionKind = "regex"
-	ConditionKindShellRead  ConditionKind = "shell_read_secret"
-	ConditionKindShellWrite ConditionKind = "shell_write"
+	ConditionKindCommand          ConditionKind = "command"
+	ConditionKindDiff             ConditionKind = "diff"
+	ConditionKindExec             ConditionKind = "exec"
+	ConditionKindProject          ConditionKind = "project"
+	ConditionKindRegex            ConditionKind = "regex"
+	ConditionKindShellRead        ConditionKind = "shell_read_secret"
+	ConditionKindShellWrite       ConditionKind = "shell_write"
+	ConditionKindGitDefaultBranch ConditionKind = "git_default_branch"
 )
 
 // Exec condition block_on variants decide which exit codes block.
@@ -687,7 +688,7 @@ func compileCondition(log *slog.Logger, ruleName string, index int, c *Condition
 		c.Kind = "regex"
 	}
 	switch ConditionKind(c.Kind) {
-	case ConditionKindRegex, ConditionKindCommand, ConditionKindProject, ConditionKindDiff, ConditionKindShellRead, ConditionKindShellWrite, ConditionKindExec:
+	case ConditionKindRegex, ConditionKindCommand, ConditionKindProject, ConditionKindDiff, ConditionKindShellRead, ConditionKindShellWrite, ConditionKindExec, ConditionKindGitDefaultBranch:
 	default:
 		return fmt.Errorf("rule %q condition %d: unknown kind %q", ruleName, index, c.Kind)
 	}
