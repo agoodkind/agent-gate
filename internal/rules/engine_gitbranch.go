@@ -15,9 +15,10 @@ import (
 // edit's file_path, or cmd_write_targets for a shell write). This mirrors how
 // projectConditionMatch sources its directories, so the decision is the branch
 // of the affected repo, never the shell's cwd shape. A detached or unresolved
-// repo never matches, so a block built on this condition fails open. It runs
-// only after the cheaper conditions in the rule already matched (a git command,
-// or an edit tool), so the go-git open happens on candidate events only.
+// repo never matches, so a block built on this condition fails open. allConditionsMatch
+// evaluates conditions in config order, so place this condition after the cheaper
+// gate (an edit-tool regex or a git command condition) in the rule; that preceding
+// gate then short-circuits and the go-git open runs on candidate events only.
 func gitDefaultBranchConditionMatch(fields FieldSet, c *config.Condition, ctx conditionContext) bool {
 	for _, target := range gitBranchTargets(fields, c, ctx) {
 		if match, resolved := gitbranch.OnDefaultBranch(target); resolved && match {
