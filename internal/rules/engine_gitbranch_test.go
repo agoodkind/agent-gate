@@ -105,6 +105,54 @@ field_paths = ["tool_input.file_path"]
 	}
 }
 
+// A write hidden inside bash -c is no longer opaque: shelldecomp parses the
+// embedded body, cmd_write_targets surfaces the real file, and git_default_branch
+// blocks it on a default-branch repo while allowing it on a feature branch.
+func TestEvaluateAll_GitDefaultBranch_EmbeddedShellWrite(t *testing.T) {
+	const tomlBody = `
+[[rules]]
+name = "default-branch-no-shell-writes"
+claude_events = ["PreToolUse"]
+action = "block"
+violation_message = "no shell writes while on the default branch"
+
+[[rules.conditions]]
+kind = "regex"
+field_paths = ["tool_name"]
+pattern = '(?i)^(bash|shell)$'
+
+[[rules.conditions]]
+kind = "git_default_branch"
+field_paths = ["cmd_write_targets"]
+`
+	cfg := loadTOML(t, tomlBody)
+
+	onMain := makeGitRepo(t, true)
+	onFeature := makeGitRepo(t, false)
+
+	cases := []struct {
+		name    string
+		repo    string
+		blocked bool
+	}{
+		{name: "bash -c redirect into default-branch repo", repo: onMain, blocked: true},
+		{name: "bash -c redirect into feature-branch repo", repo: onFeature, blocked: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fields := rules.FieldSet{
+				ToolName:         "Bash",
+				ToolInputCommand: "bash -c \"cd " + tc.repo + " && echo x > f.txt\"",
+				CWD:              t.TempDir(),
+			}
+			got := rules.EvaluateAll(context.Background(), "claude", "PreToolUse", fields, cfg.Rules, nil)
+			if (len(got) > 0) != tc.blocked {
+				t.Fatalf("blocked=%v, got %d violations: %#v", tc.blocked, len(got), got)
+			}
+		})
+	}
+}
+
 // The git_default_branch condition resolves the target repo from a git verb's
 // -C flag, so the verdict follows the -C repo's branch regardless of the shell
 // cwd (here a throwaway /tmp that is not a repo).

@@ -97,6 +97,45 @@ func ExtractWriteTargets(cmd, cwd string) []WriteTarget {
 			Raw:    target.Raw,
 		})
 	}
+	// An interpreter -c body, eval, or command substitution is opaque to the
+	// top-level write scan (hence the sentinel above), but shelldecomp still
+	// parses those embedded shell/interpreter bodies. Recurse into them so a real
+	// write hidden inside `bash -c 'echo x > f'` surfaces its resolved target
+	// (here f, cd-aware) rather than only the default-deny sentinel.
+	out = append(out, embeddedWriteTargets(decomposition, 0)...)
+	return out
+}
+
+// maxEmbeddedDepth bounds recursion into nested embedded regions. shelldecomp
+// already caps its own parse depth, so this is a defensive backstop.
+const maxEmbeddedDepth = 5
+
+// embeddedWriteTargets collects the resolved write targets of every parsed
+// embedded region (an interpreter -c body, a command substitution, a heredoc fed
+// to an interpreter), recursively. Unresolvable embedded writes are dropped; the
+// outer sentinel already covers the default-deny case for those.
+func embeddedWriteTargets(decomposition *shelldecomp.Decomposition, depth int) []WriteTarget {
+	if decomposition == nil || depth >= maxEmbeddedDepth {
+		return nil
+	}
+	var out []WriteTarget
+	for _, region := range decomposition.EmbeddedRegions() {
+		if region.Parsed == nil {
+			continue
+		}
+		for _, target := range region.Parsed.WriteTargets() {
+			if !target.Resolvable || target.Path == shelldecomp.Unresolvable {
+				continue
+			}
+			out = append(out, WriteTarget{
+				Path:   target.Path,
+				Tool:   toolLabel(target.Argv0),
+				Reason: ReasonOK,
+				Raw:    target.Raw,
+			})
+		}
+		out = append(out, embeddedWriteTargets(region.Parsed, depth+1)...)
+	}
 	return out
 }
 
