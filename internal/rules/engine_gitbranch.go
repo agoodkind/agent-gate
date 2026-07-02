@@ -29,16 +29,16 @@ func gitDefaultBranchConditionMatch(fields FieldSet, c *config.Condition, ctx co
 }
 
 // gitBranchTargets returns the deduplicated set of filesystem targets to test:
-// the resolved command cwds when present, else every non-empty line of every
-// configured selector value. A relative selector value (a provider may pass a
-// relative tool_input.file_path straight through) is resolved against the event
-// cwd first, so a relative target is enforced rather than silently skipped.
+// the resolved command cwds (a git verb's -C/cd/process-cwd repo) merged with
+// every non-empty line of every configured selector value. Both sources are
+// used, so a rule that pairs a command condition with a file selector checks the
+// repos of both. A relative selector value (a provider may pass a relative
+// tool_input.file_path straight through) is resolved against the event cwd first,
+// so a relative target is enforced rather than silently skipped.
 func gitBranchTargets(fields FieldSet, c *config.Condition, ctx conditionContext) []string {
-	if len(ctx.commandCwds) > 0 {
-		return dedupeUsable(ctx.commandCwds)
-	}
 	base := fields.BaseCWD()
-	var targets []string
+	targets := make([]string, 0, len(ctx.commandCwds))
+	targets = append(targets, ctx.commandCwds...)
 	for _, spec := range c.Selectors() {
 		value := fields.String(spec.Selector)
 		if value == "" {

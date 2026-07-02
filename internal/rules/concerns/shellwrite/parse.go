@@ -80,7 +80,8 @@ func ExtractWriteTargets(cmd, cwd string) []WriteTarget {
 	}
 
 	var out []WriteTarget
-	if sentinel, ok := unparseableSentinel(decomposition); ok {
+	sentinel, opaque := unparseableSentinel(decomposition)
+	if opaque {
 		out = append(out, sentinel)
 	}
 	for _, target := range decomposition.WriteTargets() {
@@ -100,12 +101,15 @@ func ExtractWriteTargets(cmd, cwd string) []WriteTarget {
 			Raw:    target.Raw,
 		})
 	}
-	// An interpreter -c body, eval, or command substitution is opaque to the
-	// top-level write scan (hence the sentinel above), but shelldecomp still
-	// parses those embedded shell/interpreter bodies. Recurse into them so a real
-	// write hidden inside `bash -c 'echo x > f'` surfaces its resolved target
-	// (here f, cd-aware) rather than only the default-deny sentinel.
-	out = append(out, embeddedWriteTargets(decomposition, 0)...)
+	// Only recurse into embedded bodies for the local opaque shapes the sentinel
+	// already covers (eval/exec, interpreter -c, command substitution). This
+	// surfaces a real local write hidden inside `bash -c 'echo x > f'` (f,
+	// cd-aware) while deliberately not descending into a remote shell (ssh),
+	// whose writes are remote, not local files, and which never triggers the
+	// sentinel. An unresolved embedded write is still covered by the sentinel.
+	if opaque {
+		out = append(out, embeddedWriteTargets(decomposition, 0)...)
+	}
 	return out
 }
 
