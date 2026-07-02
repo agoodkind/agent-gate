@@ -306,6 +306,9 @@ func TestEnsureDefaultsCreatesCanonicalConfig(t *testing.T) {
 	if !strings.Contains(got, `mode = "apply"`) {
 		t.Fatalf("config missing apply mode:\n%s", got)
 	}
+	if !strings.Contains(got, "allow_prerelease = true") {
+		t.Fatalf("config missing rolling channel default:\n%s", got)
+	}
 }
 
 func TestEnsureDefaultsAppendsMissingUpdateTable(t *testing.T) {
@@ -335,6 +338,9 @@ func TestEnsureDefaultsAppendsMissingUpdateTable(t *testing.T) {
 	}
 	if strings.Count(got, "[update]") != 1 {
 		t.Fatalf("config expected one [update] block:\n%s", got)
+	}
+	if !strings.Contains(got, "allow_prerelease = true") {
+		t.Fatalf("config missing rolling channel default:\n%s", got)
 	}
 }
 
@@ -396,6 +402,39 @@ func TestEnsureDefaultsPreservesExistingUpdateSettingsWhenOverridingMode(t *test
 		`interval = "48h"`,
 		`repo = "example/custom"`,
 		"allow_prerelease = true",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("config missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestEnsureDefaultsPreservesExplicitStableChannel(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	configDir := filepath.Join(dir, "agent-gate")
+	if err := os.MkdirAll(configDir, 0o700); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	path := filepath.Join(configDir, "config.toml")
+	initial := "[update]\nenabled = true\nmode = \"check\"\ninterval = \"24h\"\nrepo = \"agoodkind/agent-gate\"\nallow_prerelease = false\n"
+	if err := os.WriteFile(path, []byte(initial), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	configPath, err := config.EnsureDefaults(config.EnsureDefaultsOptions{AutoUpdateMode: "apply"})
+	if err != nil {
+		t.Fatalf("EnsureDefaults() error: %v", err)
+	}
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	got := string(content)
+	for _, want := range []string{
+		"enabled = true",
+		`mode = "apply"`,
+		"allow_prerelease = false",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("config missing %q:\n%s", want, got)

@@ -93,7 +93,7 @@ func New(log *slog.Logger, cfg *config.Config) (*Server, error) {
 				Mode:            "",
 				Interval:        "",
 				Repo:            "",
-				AllowPrerelease: false,
+				AllowPrerelease: nil,
 			},
 			Telemetry: config.TelemetryConfig{OTLPEndpoint: "", SlowOpThresholdMs: 0},
 			Rules:     nil,
