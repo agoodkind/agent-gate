@@ -25,6 +25,7 @@ import (
 	"goodkind.io/agent-gate/internal/updateopts"
 	"goodkind.io/agent-gate/internal/version"
 	"goodkind.io/gklog"
+	gkversion "goodkind.io/gklog/version"
 	"goodkind.io/go-makefile/selfupdate"
 )
 
@@ -99,12 +100,13 @@ const (
 )
 
 // printVersion writes the build metadata used in log entries to stdout.
-// Output mirrors the slog attrs from internal/version.Attrs so that what
-// appears in audit logs is exactly what `agent-gate version` reports.
+// Release identity (version, commit, dirty) comes from gklog/version, the
+// shared stamp used across every daemon consumer; buildHash is the runtime
+// hash of the on-disk binary used for audit stamping.
 func printVersion(writer io.Writer) {
-	_, _ = fmt.Fprintf(writer, "version:   %s\n", version.Version)
-	_, _ = fmt.Fprintf(writer, "commit:    %s\n", version.Commit)
-	_, _ = fmt.Fprintf(writer, "dirty:     %s\n", version.Dirty)
+	_, _ = fmt.Fprintf(writer, "version:   %s\n", gkversion.Version)
+	_, _ = fmt.Fprintf(writer, "commit:    %s\n", gkversion.Commit)
+	_, _ = fmt.Fprintf(writer, "dirty:     %s\n", gkversion.Dirty)
 	_, _ = fmt.Fprintf(writer, "buildHash: %s\n", version.BuildHash())
 }
 
@@ -360,8 +362,8 @@ func runUpdateStatus(args []string) int {
 		fmt.Fprintf(os.Stderr, "agent-gate: update status failed: %v\n", err)
 		return 1
 	}
-	writeUserLine(os.Stdout, "current version:   "+version.Version)
-	writeUserLine(os.Stdout, "current commit:    "+version.Commit)
+	writeUserLine(os.Stdout, "current version:   "+gkversion.Version)
+	writeUserLine(os.Stdout, "current commit:    "+gkversion.Commit)
 	writeUserLine(os.Stdout, "current buildHash: "+version.BuildHash())
 	if !state.LastCheckAt.IsZero() {
 		writeUserLine(os.Stdout, "last check:        "+state.LastCheckAt.Format(time.RFC3339))

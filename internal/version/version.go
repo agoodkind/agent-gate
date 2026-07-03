@@ -1,20 +1,13 @@
-// Package version exposes build identifiers (commit, version, dirty,
-// build hash) populated via -ldflags at link time.
+// Package version computes the runtime hash of the on-disk binary for audit
+// stamping. Release identity (version, commit, dirty) lives in gklog/version,
+// the shared stamp used across every daemon consumer.
 package version
 
 import (
 	"crypto/sha256"
 	"encoding/hex"
 	"io"
-	"log/slog"
 	"os"
-)
-
-// Set via ldflags at build time.
-var (
-	Commit  = "unknown"
-	Version = "dev"
-	Dirty   = "false"
 )
 
 // BuildHash computes the SHA-256 of the running binary, truncated to
@@ -32,14 +25,4 @@ func BuildHash() string {
 	h := sha256.New()
 	_, _ = io.Copy(h, f)
 	return hex.EncodeToString(h.Sum(nil))[:12]
-}
-
-// Attrs returns slog attributes for build metadata.
-func Attrs() []slog.Attr {
-	return []slog.Attr{
-		slog.String("commit", Commit),
-		slog.String("version", Version),
-		slog.String("buildHash", BuildHash()),
-		slog.String("dirty", Dirty),
-	}
 }

@@ -27,6 +27,7 @@ import (
 	"goodkind.io/agent-gate/internal/intake"
 	"goodkind.io/agent-gate/internal/rules"
 	"goodkind.io/agent-gate/internal/version"
+	gkversion "goodkind.io/gklog/version"
 	"goodkind.io/gksyntax/shelldecomp"
 )
 
@@ -661,9 +662,9 @@ func (s *Server) Status(_ context.Context, _ *daemonpb.StatusRequest) (*daemonpb
 		Pid:            int64(os.Getpid()),
 		ExecutablePath: exe,
 		SocketPath:     config.DaemonSocketPath(),
-		Version:        version.Version,
-		Commit:         version.Commit,
-		Dirty:          version.Dirty,
+		Version:        gkversion.Version,
+		Commit:         gkversion.Commit,
+		Dirty:          gkversion.Dirty,
 		BuildHash:      version.BuildHash(),
 	}, nil
 }

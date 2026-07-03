@@ -16,7 +16,6 @@
 # Identity
 BINARY     := agent-gate
 CMD        := ./cmd/$(BINARY)
-VPKG       := goodkind.io/agent-gate/internal/version
 GKLOG_VPKG := goodkind.io/gklog/version
 
 # CGO=1 for the daemon's runtime requirements.
