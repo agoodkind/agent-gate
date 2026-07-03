@@ -569,7 +569,7 @@ install_config() {
     if [[ -n "$AUTO_UPDATE_MODE" ]]; then
         args+=(--auto-update "$AUTO_UPDATE_MODE")
     fi
-    "$installed_path" config ensure-defaults "${args[@]}" || install_error "config ensure-defaults failed"
+    "$installed_path" config ensure-defaults ${args[@]+"${args[@]}"} || install_error "config ensure-defaults failed"
     "$installed_path" config check || install_error "config check failed after merge"
 }
 
@@ -579,7 +579,7 @@ run_hooks() {
     if [[ "$HOOK_TEMPLATES_SET" -eq 0 && -n "$DEFAULT_HOOK_TEMPLATES" ]]; then
         HOOK_INSTALL_ARGS+=(--templates "$DEFAULT_HOOK_TEMPLATES")
     fi
-    installer_args "$installed_path" hooks "${HOOK_INSTALL_ARGS[@]}"
+    installer_args "$installed_path" hooks ${HOOK_INSTALL_ARGS[@]+"${HOOK_INSTALL_ARGS[@]}"}
 }
 
 run_service() {
@@ -588,7 +588,7 @@ run_service() {
     if [[ "$SERVICE_TEMPLATES_SET" -eq 0 && -n "$DEFAULT_SERVICE_TEMPLATES" ]]; then
         SERVICE_INSTALL_ARGS+=(--service-templates "$DEFAULT_SERVICE_TEMPLATES")
     fi
-    installer_args "$installed_path" service "${SERVICE_INSTALL_ARGS[@]}"
+    installer_args "$installed_path" service ${SERVICE_INSTALL_ARGS[@]+"${SERVICE_INSTALL_ARGS[@]}"}
 }
 
 ensure_installed_binary() {
@@ -620,7 +620,7 @@ main() {
     parse_agent_gate_args "$@"
     installed_path="$BIN_DIR/$BINARY"
     if [[ "$DO_BIN" -eq 1 ]]; then
-        run_install "${CORE_ARGS[@]}"
+        run_install ${CORE_ARGS[@]+"${CORE_ARGS[@]}"}
         return
     fi
 
