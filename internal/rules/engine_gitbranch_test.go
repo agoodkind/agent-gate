@@ -181,17 +181,22 @@ kind = "git_default_branch"
 
 	cases := []struct {
 		name    string
-		repo    string
+		command string
 		blocked bool
 	}{
-		{name: "git -C repo-on-default commit", repo: onMain, blocked: true},
-		{name: "git -C repo-on-feature commit", repo: onFeature, blocked: false},
+		{name: "git -C repo-on-default commit", command: "git -C " + onMain + " commit --allow-empty -m x", blocked: true},
+		{name: "git -C repo-on-feature commit", command: "git -C " + onFeature + " commit --allow-empty -m x", blocked: false},
+		// Global -c flags before the subcommand must not hide the verb: the
+		// subcommand is interpreted, not read positionally.
+		{name: "git -c k=v -C default commit", command: "git -c user.email=a@a -c user.name=a -C " + onMain + " commit --allow-empty -m x", blocked: true},
+		{name: "git -c k=v -C feature commit", command: "git -c user.email=a@a -C " + onFeature + " commit --allow-empty -m x", blocked: false},
+		{name: "git --no-pager -C default add", command: "git --no-pager -C " + onMain + " add .", blocked: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			fields := rules.FieldSet{
 				ToolName:         "Bash",
-				ToolInputCommand: "git -C " + tc.repo + " commit --allow-empty -m x",
+				ToolInputCommand: tc.command,
 				CWD:              t.TempDir(),
 			}
 			got := rules.EvaluateAll(context.Background(), "claude", "PreToolUse", fields, cfg.Rules, nil)
