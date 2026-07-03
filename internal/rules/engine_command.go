@@ -115,17 +115,23 @@ func applyCwdFlagWords(cwd string, words []shelldecomp.Word, flags []string) (st
 	out := make([]shelldecomp.Word, 0, len(words))
 	for i := 0; i < len(words); i++ {
 		word := words[i]
-		if value, ok := splitCwdFlag(word.Value, flags); ok {
-			if value == "" && i+1 < len(words) {
-				value = words[i+1].Value
-				i++
-			}
-			if value != "" {
-				cwd = resolvePath(cwd, value)
-			}
+		// Only a flag word can be a cwd redirect: a quoted literal whose value
+		// happens to equal a cwd flag (a filename "-C") must not be treated as one.
+		value, ok := "", false
+		if word.Kind == shelldecomp.WordKindFlag {
+			value, ok = splitCwdFlag(word.Value, flags)
+		}
+		if !ok {
+			out = append(out, word)
 			continue
 		}
-		out = append(out, word)
+		if value == "" && i+1 < len(words) {
+			value = words[i+1].Value
+			i++
+		}
+		if value != "" {
+			cwd = resolvePath(cwd, value)
+		}
 	}
 	return cwd, out
 }
