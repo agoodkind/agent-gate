@@ -9,6 +9,7 @@ import (
 
 	"goodkind.io/agent-gate/internal/config"
 	"goodkind.io/agent-gate/internal/version"
+	gkversion "goodkind.io/gklog/version"
 	"goodkind.io/go-makefile/selfupdate"
 )
 
@@ -30,8 +31,8 @@ func Options(cfg *config.Config, overrides Overrides) selfupdate.Options {
 		Config: selfupdate.Config{
 			Repo:             updateRepo(cfg),
 			Binary:           "agent-gate",
-			CurrentVersion:   version.Version,
-			CurrentCommit:    version.Commit,
+			CurrentVersion:   gkversion.Version,
+			CurrentCommit:    gkversion.Commit,
 			CurrentBuildHash: version.BuildHash(),
 			AllowPrerelease:  &allowPrerelease,
 			Interval:         updateInterval(cfg),

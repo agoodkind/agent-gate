@@ -9,6 +9,7 @@ import (
 
 	"goodkind.io/agent-gate/internal/config"
 	"goodkind.io/agent-gate/internal/version"
+	gkversion "goodkind.io/gklog/version"
 )
 
 func TestOptionsPreserveAgentGatePathsAndRollingDefault(t *testing.T) {
@@ -25,11 +26,11 @@ func TestOptionsPreserveAgentGatePathsAndRollingDefault(t *testing.T) {
 	if options.Config.Binary != "agent-gate" {
 		t.Fatalf("Binary = %q, want agent-gate", options.Config.Binary)
 	}
-	if options.Config.CurrentVersion != version.Version {
-		t.Fatalf("CurrentVersion = %q, want %q", options.Config.CurrentVersion, version.Version)
+	if options.Config.CurrentVersion != gkversion.Version {
+		t.Fatalf("CurrentVersion = %q, want %q", options.Config.CurrentVersion, gkversion.Version)
 	}
-	if options.Config.CurrentCommit != version.Commit {
-		t.Fatalf("CurrentCommit = %q, want %q", options.Config.CurrentCommit, version.Commit)
+	if options.Config.CurrentCommit != gkversion.Commit {
+		t.Fatalf("CurrentCommit = %q, want %q", options.Config.CurrentCommit, gkversion.Commit)
 	}
 	if options.Config.CurrentBuildHash != version.BuildHash() {
 		t.Fatalf("CurrentBuildHash = %q, want %q", options.Config.CurrentBuildHash, version.BuildHash())
