@@ -899,29 +899,3 @@ func effectiveCwdAfterChain(startCwd, homeDir, command string) string {
 	}
 	return cwd
 }
-
-// segmentCwds returns the working directory in effect at the start of each
-// cmdChainRe segment of command, computed by shelldecomp. The returned slice is
-// aligned one-to-one with cmdChainRe.Split(command, -1), so a caller can pair a
-// raw segment string with its cwd. A segment whose cwd shelldecomp cannot pin
-// carries shelldecomp.Unresolvable.
-func segmentCwds(command, startCwd, homeDir string) []string {
-	decomposition := shelldecomp.Parse(command, startCwd, homeDir)
-	segments := cmdChainRe.Split(command, -1)
-	out := make([]string, len(segments))
-	offset := 0
-	for index, segment := range segments {
-		cwd := decomposition.EffectiveCwdAt(uint(offset))
-		if cwd == "" {
-			cwd = startCwd
-		}
-		out[index] = cwd
-		// Advance past this segment plus the one operator cmdChainRe consumed
-		// between it and the next. The exact operator width does not matter for
-		// EffectiveCwdAt, which finds the last cd span at or before the offset,
-		// so a one-byte step past the segment is enough to land inside or after
-		// the operator that follows it.
-		offset += len(segment) + 1
-	}
-	return out
-}
