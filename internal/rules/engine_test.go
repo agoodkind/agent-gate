@@ -2926,6 +2926,52 @@ func TestEvaluate_CommandSubcommand_LeadingGlobalFlagsDoNotDefeatPattern(t *test
 	}
 }
 
+// Wrapper commands (time, command, env) can carry their own leading options.
+// stripCommandWrappers must skip those option words so argv0 lands on the
+// wrapped command; otherwise `time -p git commit` promotes `-p` to argv0 and the
+// git rule silently stops matching.
+func TestEvaluate_CommandWrapper_OptionsDoNotDefeatArgv0(t *testing.T) {
+	rule := config.Rule{
+		Name:         "git-commit",
+		ClaudeEvents: []string{"PreToolUse"},
+		CodexEvents:  []string{"PreToolUse"},
+		Conditions: []config.Condition{
+			{
+				Kind:        "command",
+				Argv0:       "git",
+				Subcommands: []string{"commit"},
+				StripEnv:    true,
+				StripArgs:   []string{"sudo", "doas", "env", "time", "command"},
+				CwdFlags:    []string{"-C"},
+			},
+		},
+		Action:           "block",
+		ViolationMessage: "no commit",
+	}
+
+	cases := []struct {
+		name        string
+		command     string
+		wantBlocked bool
+	}{
+		{name: "bare wrapper blocks", command: "time git commit -m x", wantBlocked: true},
+		{name: "time option before git blocks", command: "time -p git commit -m x", wantBlocked: true},
+		{name: "command option terminator before git blocks", command: "command -- git commit -m x", wantBlocked: true},
+		{name: "command path option before git blocks", command: "command -p git commit -m x", wantBlocked: true},
+		{name: "wrapper option before non-git command is allowed", command: "time -p ls -la", wantBlocked: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			v := rules.Evaluate(context.Background(), "codex", "PreToolUse",
+				rules.FieldSet{CWD: t.TempDir(), ToolInputCommand: tc.command}, []config.Rule{rule})
+			if got := v != nil; got != tc.wantBlocked {
+				t.Fatalf("blocked = %v, want %v; violation = %#v", got, tc.wantBlocked, v)
+			}
+		})
+	}
+}
+
 func TestEvaluate_CommandAndProjectConditions_OrderIndependent(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "go.mod"), "module example.test/project\n")

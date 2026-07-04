@@ -103,8 +103,18 @@ func commandSubcommand(argv0 string, words []shelldecomp.Word) (string, int) {
 // need no handling here.
 func stripCommandWrappers(argv0 string, words []shelldecomp.Word, stripArgs []string) (string, []shelldecomp.Word) {
 	for slices.Contains(stripArgs, argv0) && len(words) > 0 {
-		argv0 = filepath.Base(words[0].Value)
-		words = words[1:]
+		// Skip the wrapper's own leading option words (time -p, command -p) and
+		// the -- end-of-options marker so argv0 lands on the wrapped command
+		// rather than an option like -p, which would defeat the argv0 match.
+		i := 0
+		for i < len(words) && (words[i].Kind == shelldecomp.WordKindFlag || words[i].Value == "--") {
+			i++
+		}
+		if i == len(words) {
+			break // nothing but options after the wrapper; leave argv0 as the wrapper
+		}
+		argv0 = filepath.Base(words[i].Value)
+		words = words[i+1:]
 	}
 	return argv0, words
 }
