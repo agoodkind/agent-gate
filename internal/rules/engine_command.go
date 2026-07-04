@@ -45,15 +45,17 @@ func commandConditionCwds(fields FieldSet, c *config.Condition) ([]string, bool)
 			cwd = base
 		}
 		cwd, words = applyCwdFlagWords(cwd, words, c.CwdFlags)
-		tail := wordsTail(words)
 		if len(c.Subcommands) == 0 {
-			if conditionTextMatch(tail, c) {
+			if conditionTextMatch(wordsTail(words), c) {
 				matches = append(matches, cwd)
 			}
 			continue
 		}
-		if sub := commandSubcommand(argv0, words); sub != "" && slices.Contains(c.Subcommands, sub) {
-			if conditionTextMatch(tail, c) {
+		// Normalize the tail to start at the resolved subcommand so an anchored
+		// pattern (for example ^commit) is not defeated by leading global flags
+		// like `git -c name=value` or `git -C path` that precede the subcommand.
+		if sub, idx := commandSubcommand(argv0, words); sub != "" && slices.Contains(c.Subcommands, sub) {
+			if conditionTextMatch(wordsTail(words[idx:]), c) {
 				matches = append(matches, cwd)
 			}
 		}
@@ -75,10 +77,12 @@ var gitGlobalValueFlags = map[string]bool{
 // commandSubcommand interprets the effective subcommand from the AST's
 // flag/literal word classification rather than assuming the word right after
 // argv0. It skips the leading flag words (and, for git, the value word of a
-// value-taking global like -c) and returns the first literal word. This makes
-// `git -c user.email=a commit` interpret to `commit`, which a positional read
-// (which sees `-c`) misses. The empty string means no subcommand.
-func commandSubcommand(argv0 string, words []shelldecomp.Word) string {
+// value-taking global like -c) and returns the first literal word with its
+// index in words. This makes `git -c user.email=a commit` interpret to
+// `commit`, which a positional read (which sees `-c`) misses. The index lets a
+// caller normalize the command tail from the subcommand onward. The empty
+// string with index -1 means no subcommand.
+func commandSubcommand(argv0 string, words []shelldecomp.Word) (string, int) {
 	isGit := argv0 == "git"
 	for i := 0; i < len(words); i++ {
 		word := words[i]
@@ -88,9 +92,9 @@ func commandSubcommand(argv0 string, words []shelldecomp.Word) string {
 			}
 			continue
 		}
-		return word.Value
+		return word.Value, i
 	}
-	return ""
+	return "", -1
 }
 
 // stripCommandWrappers removes the configured wrapper argv0s (time, command,

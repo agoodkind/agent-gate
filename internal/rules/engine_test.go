@@ -2858,6 +2858,74 @@ func TestEvaluate_CommandAndProjectConditions_GoBuildThroughMake(t *testing.T) {
 	}
 }
 
+// A command rule that pairs subcommands with an anchored pattern must still
+// match when leading global flags (git -c name=value, git -C path) sit before
+// the subcommand. The pattern is evaluated against the tail normalized from the
+// resolved subcommand, not from the raw words, so `git -c user.email=a commit`
+// cannot slip past `^commit`.
+func TestEvaluate_CommandSubcommand_LeadingGlobalFlagsDoNotDefeatPattern(t *testing.T) {
+	rule := config.Rule{
+		Name:         "git-commit-anchored",
+		ClaudeEvents: []string{"PreToolUse"},
+		CodexEvents:  []string{"PreToolUse"},
+		Conditions: []config.Condition{
+			{
+				Kind:        "command",
+				Argv0:       "git",
+				Subcommands: []string{"commit"},
+				StripEnv:    true,
+				StripArgs:   []string{"env", "time", "command"},
+				CwdFlags:    []string{"-C"},
+				Pattern:     `^commit(?:\s|$)`,
+			},
+		},
+		Action:           "block",
+		ViolationMessage: "no commit",
+	}
+
+	cases := []struct {
+		name        string
+		command     string
+		wantBlocked bool
+	}{
+		{
+			name:        "plain commit blocks",
+			command:     "git commit -m x",
+			wantBlocked: true,
+		},
+		{
+			name:        "config global flag before commit still blocks",
+			command:     "git -c user.email=a@a.com commit -m x",
+			wantBlocked: true,
+		},
+		{
+			name:        "cwd flag and config global flag before commit still blocks",
+			command:     "git -C /tmp -c user.email=a@a.com commit -m x",
+			wantBlocked: true,
+		},
+		{
+			name:        "unlisted subcommand is allowed",
+			command:     "git -c user.email=a@a.com status",
+			wantBlocked: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			v := rules.Evaluate(
+				context.Background(),
+				"codex",
+				"PreToolUse",
+				rules.FieldSet{CWD: t.TempDir(), ToolInputCommand: tc.command},
+				[]config.Rule{rule},
+			)
+			if got := v != nil; got != tc.wantBlocked {
+				t.Fatalf("blocked = %v, want %v; violation = %#v", got, tc.wantBlocked, v)
+			}
+		})
+	}
+}
+
 func TestEvaluate_CommandAndProjectConditions_OrderIndependent(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "go.mod"), "module example.test/project\n")
