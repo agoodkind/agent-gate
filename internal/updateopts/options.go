@@ -34,6 +34,7 @@ func Options(cfg *config.Config, overrides Overrides) selfupdate.Options {
 			CurrentVersion:   gkversion.Version,
 			CurrentCommit:    gkversion.Commit,
 			CurrentBuildHash: version.BuildHash(),
+			CurrentDirty:     gkversion.Dirty == "true",
 			AllowPrerelease:  &allowPrerelease,
 			Interval:         updateInterval(cfg),
 			APIBaseURLEnv:    "AGENT_GATE_UPDATE_API_BASE_URL",

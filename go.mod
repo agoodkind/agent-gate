@@ -12,9 +12,9 @@ require (
 	go.opentelemetry.io/otel/metric v1.44.0
 	go.opentelemetry.io/otel/sdk v1.44.0
 	go.opentelemetry.io/otel/sdk/metric v1.44.0
-	goodkind.io/gklog v0.4.5-0.20260702232325-ad10cc197e6c
+	goodkind.io/gklog v0.4.5-0.20260704010614-fd04ab29700e
 	goodkind.io/gksyntax v0.0.0-20260618054600-30485de6d77b
-	goodkind.io/go-makefile/selfupdate v0.0.0-20260702065731-57b5629e5d03
+	goodkind.io/go-makefile/selfupdate v0.0.0-20260704015044-f28c82087910
 	google.golang.org/grpc v1.82.0
 	google.golang.org/protobuf v1.36.11
 )
