@@ -9,47 +9,155 @@ import (
 
 	"goodkind.io/agent-gate/internal/config"
 	"goodkind.io/agent-gate/internal/regex"
+	"goodkind.io/gksyntax/shelldecomp"
 )
 
+// commandConditionCwds matches a command condition against the shell AST that
+// gksyntax exposes. It consumes shelldecomp.Commands() directly (each with a
+// resolved argv0, a cd-resolved Cwd, and Args classified as flag or literal
+// words) rather than re-tokenizing, so the git subcommand is interpreted from
+// the word classification instead of read positionally. It returns the resolved
+// cwds of the matching commands.
 func commandConditionCwds(fields FieldSet, c *config.Condition) ([]string, bool) {
-	var matches []string
-	for _, segment := range commandSegmentsWithCwd(fields) {
-		fields := shellFields(segment.command)
-		if c.StripEnv {
-			fields = trimEnvAssignments(fields)
-		}
-		fields, cwd := normalizeCommandFields(fields, segment.cwd, c)
-		if len(fields) == 0 {
-			continue
-		}
+	command := fields.CommandValue()
+	base := fields.BaseCWD()
+	if command == "" || base == "" {
+		return nil, false
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		home = base
+	}
+	// Parse the raw command: shelldecomp handles heredocs natively (the body is an
+	// embedded region, not split on), so no pre-stripping is needed.
+	decomposition := shelldecomp.Parse(command, base, home)
 
-		argv0 := filepath.Base(fields[0])
+	var matches []string
+	for _, parsed := range decomposition.Commands() {
+		argv0 := filepath.Base(parsed.Argv0)
+		words := parsed.Args
+		argv0, words = stripCommandWrappers(argv0, words, c.StripArgs)
 		if c.Argv0 != "" && argv0 != c.Argv0 {
 			continue
 		}
+		cwd := parsed.Cwd
+		if cwd == "" {
+			cwd = base
+		}
+		cwd, words = applyCwdFlagWords(cwd, words, c.CwdFlags)
 		if len(c.Subcommands) == 0 {
-			if !conditionTextMatch(strings.Join(fields[1:], " "), c) {
-				continue
+			if conditionTextMatch(wordsTail(words), c) {
+				matches = append(matches, cwd)
 			}
-			matches = append(matches, cwd)
 			continue
 		}
-		if len(fields) > 1 && slices.Contains(c.Subcommands, fields[1]) {
-			if !commandTailMatch(fields, c) {
-				continue
+		// Normalize the tail to start at the resolved subcommand so an anchored
+		// pattern (for example ^commit) is not defeated by leading global flags
+		// like `git -c name=value` or `git -C path` that precede the subcommand.
+		if sub, idx := commandSubcommand(argv0, words); sub != "" && slices.Contains(c.Subcommands, sub) {
+			if conditionTextMatch(wordsTail(words[idx:]), c) {
+				matches = append(matches, cwd)
 			}
-			matches = append(matches, cwd)
 		}
 	}
-
 	return matches, len(matches) > 0
 }
 
-func commandTailMatch(fields []string, c *config.Condition) bool {
-	if len(fields) < 2 {
-		return conditionTextMatch("", c)
+// gitGlobalValueFlags are git's pre-subcommand global options that take the
+// following word as a separate value (git -c <name=value>, git -C <path>, and
+// the space forms of --git-dir/--work-tree/etc.). The subcommand scan skips both
+// the flag word and its value word. The =form (--git-dir=/x) is a single flag
+// word handled by the generic flag skip.
+var gitGlobalValueFlags = map[string]bool{
+	"-c": true, "-C": true, "--exec-path": true, "--git-dir": true,
+	"--work-tree": true, "--namespace": true, "--super-prefix": true,
+	"--config-env": true, "--attr-source": true,
+}
+
+// commandSubcommand interprets the effective subcommand from the AST's
+// flag/literal word classification rather than assuming the word right after
+// argv0. It skips the leading flag words (and, for git, the value word of a
+// value-taking global like -c) and returns the first literal word with its
+// index in words. This makes `git -c user.email=a commit` interpret to
+// `commit`, which a positional read (which sees `-c`) misses. The index lets a
+// caller normalize the command tail from the subcommand onward. The empty
+// string with index -1 means no subcommand.
+func commandSubcommand(argv0 string, words []shelldecomp.Word) (string, int) {
+	isGit := argv0 == "git"
+	for i := 0; i < len(words); i++ {
+		word := words[i]
+		if word.Kind == shelldecomp.WordKindFlag {
+			if isGit && gitGlobalValueFlags[word.Value] {
+				i++ // the flag's value is a separate word; skip it too
+			}
+			continue
+		}
+		return word.Value, i
 	}
-	return conditionTextMatch(strings.Join(fields[1:], " "), c)
+	return "", -1
+}
+
+// stripCommandWrappers removes the configured wrapper argv0s (time, command,
+// doas, xargs) that shelldecomp keeps as the command's argv0, promoting the next
+// word to argv0. shelldecomp already drops env assignments and sudo, so those
+// need no handling here.
+func stripCommandWrappers(argv0 string, words []shelldecomp.Word, stripArgs []string) (string, []shelldecomp.Word) {
+	for slices.Contains(stripArgs, argv0) && len(words) > 0 {
+		// Skip the wrapper's own leading option words (time -p, command -p) and
+		// the -- end-of-options marker so argv0 lands on the wrapped command
+		// rather than an option like -p, which would defeat the argv0 match.
+		i := 0
+		for i < len(words) && (words[i].Kind == shelldecomp.WordKindFlag || words[i].Value == "--") {
+			i++
+		}
+		if i == len(words) {
+			break // nothing but options after the wrapper; leave argv0 as the wrapper
+		}
+		argv0 = filepath.Base(words[i].Value)
+		words = words[i+1:]
+	}
+	return argv0, words
+}
+
+// applyCwdFlagWords resolves a cwd-redirecting flag (for example git/make -C, or
+// swift --package-path) from the command's words, returning the redirected cwd
+// and the words with the flag (and its separate value) removed.
+func applyCwdFlagWords(cwd string, words []shelldecomp.Word, flags []string) (string, []shelldecomp.Word) {
+	if len(flags) == 0 {
+		return cwd, words
+	}
+	out := make([]shelldecomp.Word, 0, len(words))
+	for i := 0; i < len(words); i++ {
+		word := words[i]
+		// Only a flag word can be a cwd redirect: a quoted literal whose value
+		// happens to equal a cwd flag (a filename "-C") must not be treated as one.
+		value, ok := "", false
+		if word.Kind == shelldecomp.WordKindFlag {
+			value, ok = splitCwdFlag(word.Value, flags)
+		}
+		if !ok {
+			out = append(out, word)
+			continue
+		}
+		if value == "" && i+1 < len(words) {
+			value = words[i+1].Value
+			i++
+		}
+		if value != "" {
+			cwd = resolvePath(cwd, value)
+		}
+	}
+	return cwd, out
+}
+
+// wordsTail joins the resolved values of a command's words for pattern matching,
+// matching the unquoted form the condition patterns expect.
+func wordsTail(words []shelldecomp.Word) string {
+	parts := make([]string, len(words))
+	for i, word := range words {
+		parts[i] = word.Value
+	}
+	return strings.Join(parts, " ")
 }
 
 func conditionTextMatch(value string, c *config.Condition) bool {
@@ -78,52 +186,18 @@ func conditionTextMatch(value string, c *config.Condition) bool {
 	return true
 }
 
-func normalizeCommandFields(fields []string, cwd string, c *config.Condition) ([]string, string) {
-	fields, cwd = applyCwdFlags(fields, cwd, c.CwdFlags)
-	for len(fields) > 0 && slices.Contains(c.StripArgs, filepath.Base(fields[0])) {
-		fields = fields[1:]
-		if c.StripEnv {
-			fields = trimEnvAssignments(fields)
-		}
-		fields, cwd = applyCwdFlags(fields, cwd, c.CwdFlags)
-	}
-	return fields, cwd
-}
-
-func applyCwdFlags(fields []string, cwd string, flags []string) ([]string, string) {
-	if len(fields) == 0 || len(flags) == 0 {
-		return fields, cwd
-	}
-
-	out := make([]string, 0, len(fields))
-	out = append(out, fields[0])
-	for i := 1; i < len(fields); i++ {
-		field := fields[i]
-		if _, value, ok := splitCwdFlag(field, flags); ok {
-			if value == "" && i+1 < len(fields) {
-				value = fields[i+1]
-				i++
-			}
-			if value != "" {
-				cwd = resolvePath(cwd, value)
-			}
-			continue
-		}
-		out = append(out, field)
-	}
-	return out, cwd
-}
-
-func splitCwdFlag(field string, flags []string) (string, string, bool) {
+// splitCwdFlag reports whether field is one of the cwd-redirecting flags and, if
+// so, returns the flag's inline value (empty when the value is a separate word).
+func splitCwdFlag(field string, flags []string) (string, bool) {
 	for _, flag := range flags {
 		if field == flag {
-			return flag, "", true
+			return "", true
 		}
 		if after, ok := strings.CutPrefix(field, flag+"="); ok {
-			return flag, after, true
+			return after, true
 		}
 	}
-	return "", "", false
+	return "", false
 }
 
 func resolvePath(cwd, path string) string {
@@ -187,46 +261,6 @@ func projectConditionMatchCwd(cwd string, c *config.Condition) bool {
 	}
 
 	return true
-}
-
-type commandSegment struct {
-	command string
-	cwd     string
-}
-
-func commandSegmentsWithCwd(fields FieldSet) []commandSegment {
-	baseCwd := fields.BaseCWD()
-	if baseCwd == "" {
-		return nil
-	}
-
-	cmd := fields.CommandValue()
-	if cmd == "" {
-		return nil
-	}
-
-	home, err := os.UserHomeDir()
-	if err != nil {
-		home = baseCwd
-	}
-
-	// Strip heredoc bodies before splitting so a chain operator inside a
-	// heredoc body is not mistaken for a segment boundary. segmentCwds parses
-	// the stripped command so its per-segment cwd aligns with this split: the
-	// structural cd model (shelldecomp) supplies each segment's working
-	// directory instead of a cd regex.
-	cmd = stripHeredocBodies(cmd)
-	cwds := segmentCwds(cmd, baseCwd, home)
-
-	var out []commandSegment
-	for index, seg := range cmdChainRe.Split(cmd, -1) {
-		seg = strings.TrimSpace(seg)
-		if seg == "" {
-			continue
-		}
-		out = append(out, commandSegment{command: seg, cwd: cwds[index]})
-	}
-	return out
 }
 
 func stripHeredocBodies(command string) string {
