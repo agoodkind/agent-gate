@@ -14,6 +14,10 @@
 - Hooks must stay transport-only. Enforcement, provider detection, payload enrichment, response formatting, and audit logging belong in the daemon.
 - Use `make proto` after editing protobuf definitions; generated files are managed by Buf.
 
+## Composer
+
+The rule composer resolves search-guard and worktree-guard events with a deterministic oracle (`internal/oracle/`) and a parallel lm-review model verdict, then enforces one per the `[judge] authority` setting. See `docs/composer/overview.md`.
+
 ## Hook Inventory
 
 `HOOKS.md` is the hook inventory and install-template reference. Keep it focused on registered hook events and template behavior.
