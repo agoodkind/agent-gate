@@ -17,6 +17,21 @@ hot_queue_wait_ms = 0
 deferred_queue_limit = 0
 deferred_workers = 0
 
+[judge]
+enabled = false
+# authority selects how the composer combines the deterministic oracle verdict
+# and the lm-review model verdict. "union" (default) blocks when either side
+# blocks, the superset of both, so the model catches launderings the oracle
+# cannot parse (for example an MCP tool write) and the oracle catches what the
+# model misses. "oracle" enforces the oracle and consults the model only when
+# the oracle cannot decide. "llm" enforces the model and uses the oracle only
+# as a safety net. Every disagreement is recorded, and an unset or unknown
+# value is treated as "union".
+authority = "union"
+lm_review_grpc_address = ""
+clyde_grpc_address = ""
+disagreement_log_path = ""
+
 [telemetry]
 otlp_endpoint = ""
 slow_op_threshold_ms = 0

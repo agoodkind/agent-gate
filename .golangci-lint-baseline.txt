@@ -1,1 +1,3 @@
 # golangci-lint: generated_at=2026-06-06T15:19:02Z
+go.mod:138:1: local replacement are not allowed: goodkind.io/lm-review (gomoddirectives)	# golangci-lint:first_added=2026-07-07T00:07:44Z last_seen=2026-07-07T00:07:44Z
+go.mod:140:1: local replacement are not allowed: goodkind.io/clyde (gomoddirectives)	# golangci-lint:first_added=2026-07-07T00:07:44Z last_seen=2026-07-07T00:07:44Z

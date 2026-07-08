@@ -9,6 +9,7 @@ import (
 	"slices"
 	"sync/atomic"
 
+	"goodkind.io/agent-gate/internal/composer"
 	"goodkind.io/agent-gate/internal/config"
 	"goodkind.io/agent-gate/internal/regex"
 	diffconcern "goodkind.io/agent-gate/internal/rules/concerns/diff"
@@ -225,7 +226,7 @@ func isMatchingConditionKind(c *config.Condition) bool {
 	case config.ConditionKindRegex, config.ConditionKindDiff, config.ConditionKindShellRead, config.ConditionKindShellWrite:
 		return true
 	case config.ConditionKindCommand, config.ConditionKindProject, config.ConditionKindExec,
-		config.ConditionKindGitDefaultBranch:
+		config.ConditionKindComposer, config.ConditionKindGitDefaultBranch:
 		// Gate-only kinds. They must pass for the rule to fire but they do
 		// not by themselves emit per-match diagnostics, so they are evaluated
 		// as part of the gate inside [allConditionsMatch] and surfaced via
@@ -410,7 +411,7 @@ func (r *ruleRegexCondition) Execute(ctx context.Context, _ pipeline.Input) (pip
 			gateMatched:      true,
 		}, nil
 	case config.ConditionKindCommand, config.ConditionKindProject, config.ConditionKindExec,
-		config.ConditionKindGitDefaultBranch:
+		config.ConditionKindComposer, config.ConditionKindGitDefaultBranch:
 		// Gate-only kinds are handled by [allConditionsMatch] above and
 		// produce no per-condition Condition. Reaching this arm means
 		// [buildRuleRegexConditions] mis-routed a condition; emit nothing
@@ -665,16 +666,8 @@ func conditionFallbackViolation(fields FieldSet, rule *config.Rule) Violation {
 // fields (for example tool_name when absent) can use not_pattern alone.
 func allConditionsMatch(ctx context.Context, fields FieldSet, rule *config.Rule, conditions []config.Condition) bool {
 	condCtx := conditionContext{commandCwds: nil}
-	for i := range conditions {
-		c := &conditions[i]
-		if conditionKind(c) != config.ConditionKindCommand {
-			continue
-		}
-		cwds, ok := commandConditionCwds(fields, c)
-		if !ok {
-			return false
-		}
-		condCtx.commandCwds = append(condCtx.commandCwds, cwds...)
+	if !collectCommandConditionContext(fields, conditions, &condCtx) {
+		return false
 	}
 
 	for i := range conditions {
@@ -713,11 +706,67 @@ func allConditionsMatch(ctx context.Context, fields FieldSet, rule *config.Rule,
 			if !execConditionGateMatch(ctx, fields, rule, i, c) {
 				return false
 			}
+		case config.ConditionKindComposer:
+			if !composerConditionGateMatch(ctx, fields, c) {
+				return false
+			}
 		default:
 			return false
 		}
 	}
 	return true
+}
+
+func collectCommandConditionContext(fields FieldSet, conditions []config.Condition, condCtx *conditionContext) bool {
+	for i := range conditions {
+		c := &conditions[i]
+		if conditionKind(c) != config.ConditionKindCommand {
+			continue
+		}
+		cwds, ok := commandConditionCwds(fields, c)
+		if !ok {
+			return false
+		}
+		condCtx.commandCwds = append(condCtx.commandCwds, cwds...)
+	}
+	return true
+}
+
+type composerDecider interface {
+	Decide(ruleSetID string, command string, cwd string) composer.Verdict
+}
+
+type composerDeciderKey struct{}
+
+type defaultComposerDecider struct{}
+
+func (defaultComposerDecider) Decide(ruleSetID string, command string, cwd string) composer.Verdict {
+	return composer.Decide(ruleSetID, command, cwd)
+}
+
+// WithComposerDecider returns a context carrying decider for composer conditions.
+func WithComposerDecider(ctx context.Context, decider composerDecider) context.Context {
+	return context.WithValue(ctx, composerDeciderKey{}, decider)
+}
+
+func composerDeciderFromContext(ctx context.Context) composerDecider {
+	if ctx != nil {
+		decider, _ := ctx.Value(composerDeciderKey{}).(composerDecider)
+		if decider != nil {
+			return decider
+		}
+	}
+	return defaultComposerDecider{}
+}
+
+func composerConditionGateMatch(ctx context.Context, fields FieldSet, c *config.Condition) bool {
+	command := fields.CommandValue()
+	cwd := fields.BaseCWD()
+	if command == "" {
+		return false
+	}
+	verdict := composerDeciderFromContext(ctx).Decide(c.RuleSetID, command, cwd)
+	return verdict == composer.Block || verdict == composer.Unknown
 }
 
 // diffConditionGateMatch reports whether the diff condition would emit any
