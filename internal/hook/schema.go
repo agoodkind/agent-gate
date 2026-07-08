@@ -407,7 +407,7 @@ func isKnownConditionKind(kind string) bool {
 	switch config.ConditionKind(kind) {
 	case "", config.ConditionKindRegex, config.ConditionKindCommand, config.ConditionKindProject,
 		config.ConditionKindDiff, config.ConditionKindShellRead, config.ConditionKindShellWrite,
-		config.ConditionKindExec, config.ConditionKindGitDefaultBranch:
+		config.ConditionKindExec, config.ConditionKindComposer, config.ConditionKindGitDefaultBranch:
 		return true
 	default:
 		return false

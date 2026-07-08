@@ -12,9 +12,46 @@ Claude Code, Cursor, Codex, and Gemini CLI all expose lifecycle hook systems tha
 
 ## Installation
 
+### One-liner (recommended)
+
+Pulls the latest rolling release tarball for your platform, installs the binary
+to `${XDG_BIN_HOME:-$HOME/.local/bin}`, installs and starts the user daemon
+service, writes or merges the canonical `agent-gate` config with daemon-owned
+auto-update enabled, and merges hook templates into your Claude, Codex,
+Cursor, Gemini, and Copilot config files. Existing user settings in those
+files are
+preserved.
+
 ```sh
 curl -fsSL https://raw.githubusercontent.com/agoodkind/agent-gate/main/install.sh | bash
 ```
+
+Flags:
+
+```sh
+./install.sh --bin-only          # binary only, skip hook config updates
+./install.sh --hooks-only        # update hook configs, skip download
+./install.sh --service-only      # install/start only the user daemon service
+./install.sh --no-service        # skip launchd/systemd user service setup
+./install.sh --no-config         # skip agent-gate config creation / merge
+./install.sh --no-auto-update    # write or merge config with auto-update off
+./install.sh --auto-update check # write or merge config with check-only mode
+./install.sh --no-claude         # opt out of Claude (additive: combine flags)
+./install.sh --no-codex
+./install.sh --no-cursor
+./install.sh --no-gemini
+./install.sh --no-copilot
+./install.sh --bin-dir /opt/bin  # override $XDG_BIN_HOME
+./install.sh --version v1.2.3    # pin to a specific release tag
+./install.sh --channel stable    # use GitHub's latest stable release
+./install.sh --repo owner/name   # override the GitHub release repo
+./install.sh --require-attestation
+```
+
+`make install-release`, `make install-release-bin`, `make install-release-hooks`,
+and `make install-release-service` are thin wrappers around the script. The script
+downloads or locates the release binary first, then delegates hook and service
+setup to `agent-gate install`.
 
 ### From source
 

@@ -21,6 +21,7 @@ import (
 
 	"goodkind.io/agent-gate/api/daemonpb"
 	"goodkind.io/agent-gate/internal/audit"
+	"goodkind.io/agent-gate/internal/composer"
 	"goodkind.io/agent-gate/internal/config"
 	"goodkind.io/agent-gate/internal/hook"
 	"goodkind.io/agent-gate/internal/hotkv"
@@ -46,6 +47,7 @@ type runtimeSnapshot struct {
 	evaluateQueueWait time.Duration
 	hotEvaluate       func(context.Context, []byte, *config.Config, hook.System, func(string) string, string) hook.HotEvaluation
 	execRuntime       *rules.ExecRuntime
+	composerRuntime   *composer.Runtime
 }
 
 // Server implements the AgentGateD gRPC service.
@@ -97,7 +99,14 @@ func New(log *slog.Logger, cfg *config.Config) (*Server, error) {
 				AllowPrerelease: nil,
 			},
 			Telemetry: config.TelemetryConfig{OTLPEndpoint: "", SlowOpThresholdMs: 0},
-			Rules:     nil,
+			Judge: config.Judge{
+				Enabled:             false,
+				Authority:           "",
+				LMReviewGRPCAddress: "",
+				ClydeGRPCAddress:    "",
+				DisagreementLogPath: "",
+			},
+			Rules: nil,
 		}
 	}
 	if errs := hook.ValidateConfig(cfg); len(errs) > 0 {
@@ -187,6 +196,14 @@ func newRuntimeSnapshot(ctx context.Context, cfg *config.Config, log *slog.Logge
 		}
 		return nil, fmt.Errorf("replay pending intake: %w", err)
 	}
+	composerRuntime, err := composer.NewRuntimeFromConfig(cfg)
+	if err != nil {
+		deferredProcessor.Close()
+		if eventLogger != nil {
+			_ = eventLogger.Close()
+		}
+		return nil, fmt.Errorf("create composer runtime: %w", err)
+	}
 
 	return &runtimeSnapshot{
 		cfg:               cfg,
@@ -197,6 +214,7 @@ func newRuntimeSnapshot(ctx context.Context, cfg *config.Config, log *slog.Logge
 		evaluateQueueWait: cfg.HookHotQueueWait(),
 		hotEvaluate:       defaultHotEvaluate,
 		execRuntime:       rules.NewExecRuntimeWithCache(nil, log, hotStore),
+		composerRuntime:   composerRuntime,
 	}, nil
 }
 
@@ -218,6 +236,9 @@ func (s *runtimeSnapshot) close(ctx context.Context, log *slog.Logger) {
 		if err := s.eventLogger.Close(); err != nil && log != nil {
 			log.WarnContext(ctx, "audit logger close failed", "err", err)
 		}
+	}
+	if s.composerRuntime != nil {
+		s.composerRuntime.Close()
 	}
 	if s.intakeStore != nil {
 		if err := s.intakeStore.Close(); err != nil && log != nil {
@@ -396,6 +417,7 @@ func (s *Server) EvaluateHook(ctx context.Context, req *daemonpb.EvaluateHookReq
 	defer s.releaseEvaluateSlot(snapshot)
 
 	ctx = rules.WithExecRuntime(ctx, snapshot.execRuntime)
+	ctx = rules.WithComposerDecider(ctx, snapshot.composerRuntime)
 
 	rawJSON := req.GetRawJson()
 	if cwd := req.GetCwd(); cwd != "" {

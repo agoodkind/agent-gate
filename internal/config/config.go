@@ -133,6 +133,10 @@ type Condition struct {
 	RemotePolicy string          `toml:"remote_policy"`
 	ReadSpecs    []ShellReadSpec `toml:"read_specs"`
 
+	// Composer condition fields. RuleSetID selects the lm-review rule set and
+	// deterministic oracle pair that decides this gate after cheap prefilters.
+	RuleSetID string `toml:"rule_set_id"`
+
 	// Exec condition fields. Command is the argv executed synchronously as an
 	// external validator (no shell). TimeoutMs bounds the run. CacheKey is a
 	// field selector whose canonicalized value keys the cross-event result
@@ -218,6 +222,7 @@ const (
 	ConditionKindRegex            ConditionKind = "regex"
 	ConditionKindShellRead        ConditionKind = "shell_read_secret"
 	ConditionKindShellWrite       ConditionKind = "shell_write"
+	ConditionKindComposer         ConditionKind = "composer"
 	ConditionKindGitDefaultBranch ConditionKind = "git_default_branch"
 )
 
@@ -464,6 +469,7 @@ type Config struct {
 	Audit       Audit           `toml:"audit"`
 	Paths       Paths           `toml:"paths"`
 	Performance Performance     `toml:"performance"`
+	Judge       Judge           `toml:"judge"`
 	Telemetry   TelemetryConfig `toml:"telemetry"`
 	Update      Update          `toml:"update"`
 	Rules       []Rule          `toml:"rules"`
@@ -688,7 +694,7 @@ func compileCondition(log *slog.Logger, ruleName string, index int, c *Condition
 		c.Kind = "regex"
 	}
 	switch ConditionKind(c.Kind) {
-	case ConditionKindRegex, ConditionKindCommand, ConditionKindProject, ConditionKindDiff, ConditionKindShellRead, ConditionKindShellWrite, ConditionKindExec, ConditionKindGitDefaultBranch:
+	case ConditionKindRegex, ConditionKindCommand, ConditionKindProject, ConditionKindDiff, ConditionKindShellRead, ConditionKindShellWrite, ConditionKindExec, ConditionKindComposer, ConditionKindGitDefaultBranch:
 	default:
 		return fmt.Errorf("rule %q condition %d: unknown kind %q", ruleName, index, c.Kind)
 	}
@@ -729,9 +735,23 @@ func compileCondition(log *slog.Logger, ruleName string, index int, c *Condition
 	if err := validateShellReadSpecConfig(ruleName, index, c); err != nil {
 		return err
 	}
+	if err := validateComposerConfig(ruleName, index, c); err != nil {
+		return err
+	}
 	if err := compileExecConfig(ruleName, index, c, meta); err != nil {
 		return err
 	}
+	return nil
+}
+
+func validateComposerConfig(ruleName string, index int, c *Condition) error {
+	if ConditionKind(c.Kind) != ConditionKindComposer {
+		return nil
+	}
+	if strings.TrimSpace(c.RuleSetID) == "" {
+		return fmt.Errorf("rule %q condition %d: composer requires rule_set_id", ruleName, index)
+	}
+	c.RuleSetID = strings.TrimSpace(c.RuleSetID)
 	return nil
 }
 
