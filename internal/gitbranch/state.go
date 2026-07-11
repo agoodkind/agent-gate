@@ -10,8 +10,12 @@ import (
 	"slices"
 	"strings"
 
-	git "github.com/go-git/go-git/v5"
+	"github.com/go-git/go-billy/v5/osfs"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/cache"
+	"github.com/go-git/go-git/v5/storage"
+	"github.com/go-git/go-git/v5/storage/filesystem"
+	"github.com/go-git/go-git/v5/storage/filesystem/dotgit"
 )
 
 // State describes one repository and its registered worktrees.
@@ -32,18 +36,15 @@ type Worktree struct {
 }
 
 // ReadState reads repository and worktree state for path without invoking git.
+// It reads references through a go-git filesystem storer rather than opening the
+// repository with PlainOpen, because PlainOpen runs an extension check that
+// rejects any repository with the (harmless) extensions.worktreeconfig setting
+// that git enables for linked worktrees. Reading the storer directly still uses
+// go-git for HEAD, branches, packed-refs, and origin/HEAD, but skips that check.
 func ReadState(path string) (State, error) {
 	start := nearestExistingDir(path)
 	if start == "" {
 		return State{}, errors.New("no existing ancestor")
-	}
-	repo, err := git.PlainOpenWithOptions(start, &git.PlainOpenOptions{
-		DetectDotGit:          true,
-		EnableDotGitCommonDir: true,
-	})
-	if err != nil {
-		slog.Warn("open git repository failed", "path", path, "err", err)
-		return State{}, fmt.Errorf("open repository: %w", err)
 	}
 	currentWorktree, gitDir, err := findWorktreeRoot(start)
 	if err != nil {
@@ -58,26 +59,45 @@ func ReadState(path string) (State, error) {
 	if err != nil {
 		return State{}, err
 	}
-	head, err := repo.Head()
-	if err != nil {
-		return State{}, fmt.Errorf("read HEAD: %w", err)
-	}
-	currentBranch := ""
-	if head.Name().IsBranch() {
-		currentBranch = head.Name().Short()
-	}
-	localBranches, err := readLocalBranches(repo)
+	storer := openStorer(gitDir, commonDir)
+	localBranches, err := readLocalBranches(storer)
 	if err != nil {
 		return State{}, err
 	}
 	return State{
 		PrimaryCheckout: primaryCheckout,
-		DefaultBranch:   resolveDefaultBranch(repo),
+		DefaultBranch:   resolveDefaultBranch(storer),
 		CurrentWorktree: currentWorktree,
-		CurrentBranch:   currentBranch,
+		CurrentBranch:   headBranch(storer),
 		LocalBranches:   localBranches,
 		Worktrees:       worktrees,
 	}, nil
+}
+
+// openStorer builds a go-git filesystem storer for a worktree's git directory,
+// wiring in the shared common directory so a linked worktree resolves its
+// branches and packed-refs from the primary repository. It never runs the
+// PlainOpen extension check.
+func openStorer(gitDir string, commonDir string) storage.Storer {
+	dotFs := osfs.New(gitDir)
+	if commonDir != "" && cleanStatePath(commonDir) != cleanStatePath(gitDir) {
+		repoFs := dotgit.NewRepositoryFilesystem(dotFs, osfs.New(commonDir))
+		return filesystem.NewStorage(repoFs, cache.NewObjectLRUDefault())
+	}
+	return filesystem.NewStorage(dotFs, cache.NewObjectLRUDefault())
+}
+
+// headBranch returns the branch HEAD points at, or empty when HEAD is detached,
+// unreadable, or not a branch.
+func headBranch(storer storage.Storer) string {
+	ref, err := storer.Reference(plumbing.HEAD)
+	if err != nil {
+		return ""
+	}
+	if ref.Type() == plumbing.SymbolicReference && ref.Target().IsBranch() {
+		return ref.Target().Short()
+	}
+	return ""
 }
 
 // WorktreeForPath returns the most specific worktree containing path.
@@ -178,18 +198,7 @@ func resolveCommonDir(gitDir string) (string, error) {
 }
 
 func readWorktrees(primaryCheckout, commonDir string) ([]Worktree, error) {
-	primaryRepo, err := git.PlainOpenWithOptions(primaryCheckout, &git.PlainOpenOptions{
-		DetectDotGit:          true,
-		EnableDotGitCommonDir: true,
-	})
-	if err != nil {
-		slog.Warn("open primary git checkout failed", "path", primaryCheckout, "err", err)
-		return nil, fmt.Errorf("open primary checkout: %w", err)
-	}
-	primaryBranch, err := readBranch(primaryRepo)
-	if err != nil {
-		return nil, err
-	}
+	primaryBranch := headBranch(openStorer(commonDir, commonDir))
 	worktrees := []Worktree{{Path: cleanStatePath(primaryCheckout), Branch: primaryBranch, IsPrimary: true}}
 	entries, err := os.ReadDir(filepath.Join(commonDir, "worktrees"))
 	if errors.Is(err, os.ErrNotExist) {
@@ -244,28 +253,18 @@ func readWorktreeBranch(adminDir string) (string, error) {
 	return branch, nil
 }
 
-func readBranch(repo *git.Repository) (string, error) {
-	head, err := repo.Head()
-	if err != nil {
-		slog.Warn("read git worktree HEAD failed", "err", err)
-		return "", fmt.Errorf("read worktree HEAD: %w", err)
-	}
-	if !head.Name().IsBranch() {
-		return "", nil
-	}
-	return head.Name().Short(), nil
-}
-
-func readLocalBranches(repo *git.Repository) ([]string, error) {
-	branches, err := repo.Branches()
+func readLocalBranches(storer storage.Storer) ([]string, error) {
+	references, err := storer.IterReferences()
 	if err != nil {
 		slog.Warn("read local git branches failed", "err", err)
 		return nil, fmt.Errorf("read local branches: %w", err)
 	}
-	defer branches.Close()
+	defer references.Close()
 	branchNames := make(map[string]struct{})
-	if err := branches.ForEach(func(reference *plumbing.Reference) error {
-		branchNames[reference.Name().Short()] = struct{}{}
+	if err := references.ForEach(func(reference *plumbing.Reference) error {
+		if reference.Name().IsBranch() {
+			branchNames[reference.Name().Short()] = struct{}{}
+		}
 		return nil
 	}); err != nil {
 		slog.Warn("iterate local git branches failed", "err", err)
