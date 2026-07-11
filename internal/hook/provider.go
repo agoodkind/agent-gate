@@ -72,7 +72,7 @@ func evaluatePayloadHot(ctx context.Context, payload Payload, rawBytes []byte, c
 	eventName := payload.EventName()
 	fields := payload.Fields()
 	ruleSet := rulesForConfig(cfg)
-	violations := rules.EvaluateAll(ctx, systemStr, eventName, fields, ruleSet, getenv)
+	violations := evaluateStagedRules(ctx, cfg, systemStr, eventName, fields, ruleSet, getenv)
 	blockingViolations := blockingMatches(violations)
 	auditOnlyViolations := auditOnlyMatches(violations)
 	canBlock := CanBlock(payload.System, eventName)

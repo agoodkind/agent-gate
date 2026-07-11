@@ -21,9 +21,11 @@ const (
 	defaultHookMinimumHotConcurrency = 4
 	defaultHookHotConcurrencyFactor  = 4
 	defaultHookHotQueueWait          = 25 * time.Millisecond
+	defaultHookInferencePhaseTimeout = 4 * time.Second
 	defaultHookDeferredQueueLimit    = 8192
 	defaultHookDeferredWorkers       = 1
 	defaultUpdateInterval            = 24 * time.Hour
+	maxHookInferencePhaseTimeoutMS   = 4000
 )
 
 // Log holds logging configuration decoded from the [log] TOML table.
@@ -59,11 +61,12 @@ type Performance struct {
 
 // HookPerformance tunes the daemon-owned hook evaluation pipeline.
 type HookPerformance struct {
-	HotConcurrency     int                  `toml:"hot_concurrency"`
-	HotQueueWaitMS     int                  `toml:"hot_queue_wait_ms"`
-	DeferredQueueLimit int                  `toml:"deferred_queue_limit"`
-	DeferredWorkers    int                  `toml:"deferred_workers"`
-	Cache              HookCachePerformance `toml:"cache"`
+	HotConcurrency          int                  `toml:"hot_concurrency"`
+	HotQueueWaitMS          int                  `toml:"hot_queue_wait_ms"`
+	InferencePhaseTimeoutMS int                  `toml:"inference_phase_timeout_ms"`
+	DeferredQueueLimit      int                  `toml:"deferred_queue_limit"`
+	DeferredWorkers         int                  `toml:"deferred_workers"`
+	Cache                   HookCachePerformance `toml:"cache"`
 }
 
 // HookCachePerformance tunes the daemon-owned hot memory cache used by hook
@@ -537,6 +540,18 @@ func (c *Config) HookHotQueueWait() time.Duration {
 	return defaultHookHotQueueWait
 }
 
+// HookInferencePhaseTimeout returns the shared deadline for infer-bearing hot rules.
+func (c *Config) HookInferencePhaseTimeout() time.Duration {
+	if c != nil && c.Performance.Hook.InferencePhaseTimeoutMS > 0 {
+		milliseconds := min(
+			c.Performance.Hook.InferencePhaseTimeoutMS,
+			maxHookInferencePhaseTimeoutMS,
+		)
+		return time.Duration(milliseconds) * time.Millisecond
+	}
+	return defaultHookInferencePhaseTimeout
+}
+
 // HookDeferredQueueLimit returns the bounded queue size for cool audit work.
 func (c *Config) HookDeferredQueueLimit() int {
 	if c != nil && c.Performance.Hook.DeferredQueueLimit > 0 {
@@ -612,6 +627,9 @@ func loadPath(path string, requireExisting bool) (*Config, error) {
 		log.Error("decode config failed", "path", path, "err", err)
 		return nil, fmt.Errorf("decode config %s: %w", path, err)
 	}
+	if err := validateHookPerformance(cfg.Performance.Hook); err != nil {
+		return nil, err
+	}
 
 	for i := range cfg.Rules {
 		if err := compileRule(log, &cfg.Rules[i], meta, filepath.Dir(path)); err != nil {
@@ -623,6 +641,19 @@ func loadPath(path string, requireExisting bool) (*Config, error) {
 	}
 
 	return &cfg, nil
+}
+
+func validateHookPerformance(performance HookPerformance) error {
+	if performance.InferencePhaseTimeoutMS < 0 {
+		return errors.New("performance.hook.inference_phase_timeout_ms must be non-negative")
+	}
+	if performance.InferencePhaseTimeoutMS > maxHookInferencePhaseTimeoutMS {
+		return fmt.Errorf(
+			"performance.hook.inference_phase_timeout_ms must not exceed %d",
+			maxHookInferencePhaseTimeoutMS,
+		)
+	}
+	return nil
 }
 
 // compileRule attaches compiled regexes and selectors to rule and its

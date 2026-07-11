@@ -71,6 +71,19 @@ func ruleHasInference(rule config.Rule) bool {
 	return false
 }
 
+func partitionInferenceRules(ruleSet []config.Rule) ([]config.Rule, []config.Rule) {
+	deterministicRules := make([]config.Rule, 0, len(ruleSet))
+	inferenceRules := make([]config.Rule, 0, len(ruleSet))
+	for _, rule := range ruleSet {
+		if ruleHasInference(rule) {
+			inferenceRules = append(inferenceRules, rule)
+			continue
+		}
+		deterministicRules = append(deterministicRules, rule)
+	}
+	return deterministicRules, inferenceRules
+}
+
 // DeferredConfig returns a shallow config copy that keeps only deferred rules.
 func DeferredConfig(cfg *config.Config) *config.Config {
 	_, deferredRules := PartitionRules(cfg)
