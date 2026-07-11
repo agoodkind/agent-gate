@@ -14,8 +14,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode"
-	"unicode/utf8"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -29,20 +27,7 @@ import (
 	"goodkind.io/clyde/api/contextpb"
 )
 
-const (
-	inferenceCacheNamespace         = "infer-condition"
-	minMetadataPayloadFragmentRunes = 8
-	maxMetadataRequestIDBytes       = 128
-	maxMetadataModelBytes           = 256
-	maxMetadataVersionBytes         = 128
-	maxMetadataFingerprintBytes     = 256
-	maxMetadataFinishReasonBytes    = 64
-	maxMetadataRequestIDRunes       = 128
-	maxMetadataModelRunes           = 64
-	maxMetadataVersionRunes         = 128
-	maxMetadataFingerprintRunes     = 256
-	maxMetadataFinishReasonRunes    = 64
-)
+const inferenceCacheNamespace = "infer-condition"
 
 // InferenceTrace is the payload-free record of one attempted inference layer.
 type InferenceTrace struct {
@@ -257,14 +242,14 @@ func (runtime *InferRuntime) resolve(
 	contextWorkspace string,
 	contextSession string,
 ) inferResult {
-	if result, found := runtime.cacheLookup(cacheKey, condition, input); found {
+	if result, found := runtime.cacheLookup(cacheKey); found {
 		result.cacheHit = true
 		result.cacheStatus = "hit"
 		return result
 	}
 	return runtime.singleflight(ctx, cacheKey, func() inferResult {
 		if condition.CacheTTLMs > 0 {
-			if cached, found := runtime.cacheLookup(cacheKey, condition, input); found {
+			if cached, found := runtime.cacheLookup(cacheKey); found {
 				cached.cacheHit = true
 				cached.cacheStatus = "hit"
 				return cached
@@ -338,38 +323,28 @@ func (runtime *InferRuntime) call(
 	if err != nil {
 		return mergeInferResult(base, inferError("invalid_endpoint"))
 	}
-	request := &inferencepb.InferRequest{
+	reply, err := client.Infer(callCtx, &inferencepb.InferRequest{
 		Prompt: condition.Prompt, Input: input,
 		OutputSchema: condition.OutputSchema, Context: contextJSON, Model: condition.Model,
 		GenerationOptions: generationOptions(condition),
-	}
-	reply, err := client.Infer(callCtx, request)
+	})
 	if err != nil {
 		return mergeInferResult(base, inferError(grpcErrorClass(err)))
 	}
 	if reply == nil {
 		return mergeInferResult(base, inferError("non_complete"))
 	}
-	sanitizedMetadata := sanitizeInvocationMetadata(
-		request,
-		reply.GetOutputJson(),
-		reply.GetMetadata(),
-		condition.TimeoutMs,
-	)
 	if reply.GetStatus() != inferencepb.InferenceStatus_INFERENCE_STATUS_COMPLETE {
-		return mergeInferResult(base, inferErrorWithMetadata("non_complete", sanitizedMetadata))
+		return mergeInferResult(base, inferErrorWithMetadata("non_complete", reply.GetMetadata()))
 	}
 	matched, err := inferenceJSONMatches(condition, reply.GetOutputJson())
 	if err != nil {
-		return mergeInferResult(base, inferErrorWithMetadata("invalid_response", sanitizedMetadata))
+		return mergeInferResult(base, inferErrorWithMetadata("invalid_response", reply.GetMetadata()))
 	}
 	if invocationHashMismatch(reply.GetMetadata(), localPromptHash, localSchemaHash) {
-		return mergeInferResult(base, inferErrorWithMetadata("hash_mismatch", sanitizedMetadata))
+		return mergeInferResult(base, inferErrorWithMetadata("hash_mismatch", reply.GetMetadata()))
 	}
-	return mergeInferResult(
-		base,
-		inferSuccess(matched, json.RawMessage(reply.GetOutputJson()), sanitizedMetadata),
-	)
+	return mergeInferResult(base, inferSuccess(matched, json.RawMessage(reply.GetOutputJson()), reply.GetMetadata()))
 }
 
 func generationOptions(condition *config.Condition) *inferencepb.GenerationOptions {
@@ -483,125 +458,6 @@ func cloneInvocationMetadata(metadata *inferencepb.InvocationMetadata) *inferenc
 		return nil
 	}
 	return cloned
-}
-
-func sanitizeInvocationMetadata(
-	request *inferencepb.InferRequest,
-	output string,
-	metadata *inferencepb.InvocationMetadata,
-	maxLatencyMilliseconds int,
-) *inferencepb.InvocationMetadata {
-	sanitized := &inferencepb.InvocationMetadata{
-		RequestedModel: request.GetModel(),
-		PromptSha256:   traceJSONHash([]byte(request.GetPrompt())),
-		SchemaSha256:   traceJSONHash([]byte(request.GetOutputSchema())),
-	}
-	if metadata == nil {
-		return sanitized
-	}
-	payloads := []string{
-		request.GetPrompt(), request.GetInput(), request.GetContext(),
-		request.GetOutputSchema(), output,
-	}
-	sanitized.RequestId = sanitizeMetadataString(
-		metadata.GetRequestId(), maxMetadataRequestIDBytes, maxMetadataRequestIDRunes, payloads,
-	)
-	sanitized.ServiceVersion = sanitizeMetadataString(
-		metadata.GetServiceVersion(), maxMetadataVersionBytes, maxMetadataVersionRunes, payloads,
-	)
-	sanitized.ActualModel = sanitizeMetadataString(
-		metadata.GetActualModel(), maxMetadataModelBytes, maxMetadataModelRunes, payloads,
-	)
-	sanitized.BackendFingerprint = sanitizeMetadataString(
-		metadata.GetBackendFingerprint(),
-		maxMetadataFingerprintBytes,
-		maxMetadataFingerprintRunes,
-		payloads,
-	)
-	sanitized.BackendVersion = sanitizeMetadataString(
-		metadata.GetBackendVersion(), maxMetadataVersionBytes, maxMetadataVersionRunes, payloads,
-	)
-	sanitized.FinishReason = sanitizeMetadataString(
-		metadata.GetFinishReason(), maxMetadataFinishReasonBytes,
-		maxMetadataFinishReasonRunes, payloads,
-	)
-	sanitized.PromptTokens, sanitized.CompletionTokens, sanitized.TotalTokens = sanitizeTokenUsage(metadata)
-	if metadata.GetLatencyMs() >= 0 && metadata.GetLatencyMs() <= int64(maxLatencyMilliseconds) {
-		sanitized.LatencyMs = metadata.GetLatencyMs()
-	}
-	return sanitized
-}
-
-func sanitizeMetadataString(value string, maxBytes int, maxRunes int, payloads []string) string {
-	if value == "" || strings.TrimSpace(value) == "" || !utf8.ValidString(value) {
-		return ""
-	}
-	if len(value) > maxBytes || utf8.RuneCountInString(value) > maxRunes {
-		return ""
-	}
-	for _, character := range value {
-		if unicode.IsControl(character) {
-			return ""
-		}
-	}
-	if sharesPayloadFragment(value, payloads) {
-		return ""
-	}
-	return value
-}
-
-func sharesPayloadFragment(value string, payloads []string) bool {
-	valueRunes := []rune(value)
-	for _, payload := range payloads {
-		if payload == "" {
-			continue
-		}
-		if strings.Contains(value, payload) {
-			return true
-		}
-		if len(valueRunes) < minMetadataPayloadFragmentRunes {
-			continue
-		}
-		for start := 0; start+minMetadataPayloadFragmentRunes <= len(valueRunes); start++ {
-			fragment := string(valueRunes[start : start+minMetadataPayloadFragmentRunes])
-			if strings.Contains(payload, fragment) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func sanitizeTokenUsage(metadata *inferencepb.InvocationMetadata) (*int64, *int64, *int64) {
-	promptTokens := cloneOptionalNonnegativeInt64(metadata.PromptTokens)
-	completionTokens := cloneOptionalNonnegativeInt64(metadata.CompletionTokens)
-	totalTokens := cloneOptionalNonnegativeInt64(metadata.TotalTokens)
-	if (metadata.PromptTokens != nil && promptTokens == nil) ||
-		(metadata.CompletionTokens != nil && completionTokens == nil) ||
-		(metadata.TotalTokens != nil && totalTokens == nil) {
-		return nil, nil, nil
-	}
-	if totalTokens != nil && promptTokens != nil && *totalTokens < *promptTokens {
-		return nil, nil, nil
-	}
-	if totalTokens != nil && completionTokens != nil && *totalTokens < *completionTokens {
-		return nil, nil, nil
-	}
-	if promptTokens != nil && completionTokens != nil && totalTokens != nil {
-		if *promptTokens > math.MaxInt64-*completionTokens ||
-			*totalTokens != *promptTokens+*completionTokens {
-			return nil, nil, nil
-		}
-	}
-	return promptTokens, completionTokens, totalTokens
-}
-
-func cloneOptionalNonnegativeInt64(value *int64) *int64 {
-	if value == nil || *value < 0 {
-		return nil
-	}
-	cloned := *value
-	return &cloned
 }
 
 func (runtime *InferRuntime) contextJSON(
@@ -726,11 +582,7 @@ func (runtime *InferRuntime) singleflight(ctx context.Context, key string, funct
 	return flight.result
 }
 
-func (runtime *InferRuntime) cacheLookup(
-	key string,
-	condition *config.Condition,
-	input string,
-) (inferResult, bool) {
+func (runtime *InferRuntime) cacheLookup(key string) (inferResult, bool) {
 	if runtime.cache == nil {
 		return emptyInferResult(), false
 	}
@@ -743,14 +595,7 @@ func (runtime *InferRuntime) cacheLookup(
 		_, _ = runtime.cache.Delete(inferenceCacheNamespace, key)
 		return emptyInferResult(), false
 	}
-	request := &inferencepb.InferRequest{
-		Prompt: condition.Prompt, Input: input,
-		OutputSchema: condition.OutputSchema, Model: condition.Model,
-	}
-	metadata := sanitizeInvocationMetadata(
-		request, string(cached.OutputJSON), cached.Metadata, condition.TimeoutMs,
-	)
-	result := inferSuccess(cached.Matched, cached.OutputJSON, metadata)
+	result := inferSuccess(cached.Matched, cached.OutputJSON, cached.Metadata)
 	result.localPromptHash = cached.LocalPromptHash
 	result.localSchemaHash = cached.LocalSchemaHash
 	if entry.Version <= math.MaxInt64 {

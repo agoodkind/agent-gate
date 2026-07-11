@@ -53,7 +53,6 @@ type clydeFake struct {
 	requests []*contextpb.GetRecentTurnsRequest
 	err      error
 	delay    time.Duration
-	turns    []*contextpb.Turn
 }
 
 func (server *clydeFake) GetRecentTurns(ctx context.Context, request *contextpb.GetRecentTurnsRequest) (*contextpb.GetRecentTurnsReply, error) {
@@ -70,11 +69,7 @@ func (server *clydeFake) GetRecentTurns(ctx context.Context, request *contextpb.
 	if server.err != nil {
 		return nil, server.err
 	}
-	turns := server.turns
-	if turns == nil {
-		turns = []*contextpb.Turn{{Role: "user", Text: "hello", Ts: "now"}}
-	}
-	return &contextpb.GetRecentTurnsReply{Turns: turns}, nil
+	return &contextpb.GetRecentTurnsReply{Turns: []*contextpb.Turn{{Role: "user", Text: "hello", Ts: "now"}}}, nil
 }
 
 type connectionCounter struct{ count atomic.Int32 }
@@ -142,12 +137,6 @@ response_json_equals = "block"
 `
 	if strings.Contains(extra, "response_json_field =") {
 		body = strings.Replace(body, "response_json_field = \"decision\"\n", "", 1)
-	}
-	if strings.Contains(extra, "prompt =") {
-		body = strings.Replace(body, "prompt = \"Classify\"\n", "", 1)
-	}
-	if strings.Contains(extra, "output_schema =") {
-		body = strings.Replace(body, "output_schema = '{\"type\":\"object\"}'\n", "", 1)
 	}
 	if strings.Contains(extra, "response_json_equals =") {
 		body = strings.Replace(body, "response_json_equals = \"block\"\n", "", 1)
@@ -275,8 +264,8 @@ func TestInferSendsGenerationOptionsAndPreservesMetadataInCacheTraces(t *testing
 				BackendFingerprint: "fp-1", BackendVersion: "backend-1",
 				PromptSha256: traceHash([]byte("Classify")),
 				SchemaSha256: traceHash([]byte(`{"type":"object"}`)),
-				PromptTokens: int64Pointer(41), CompletionTokens: int64Pointer(0),
-				TotalTokens: int64Pointer(41), FinishReason: "stop", LatencyMs: 12,
+				PromptTokens: int64Pointer(41), CompletionTokens: int64Pointer(7),
+				TotalTokens: int64Pointer(48), FinishReason: "stop", LatencyMs: 12,
 			},
 		}, nil
 	}}
@@ -296,8 +285,8 @@ func TestInferSendsGenerationOptionsAndPreservesMetadataInCacheTraces(t *testing
 	}
 	for _, trace := range collector.traces {
 		if trace.Metadata == nil || trace.Metadata.GetRequestId() != "request-1" ||
-			trace.Metadata.GetPromptTokens() != 41 || trace.Metadata.GetCompletionTokens() != 0 ||
-			trace.Metadata.GetTotalTokens() != 41 || trace.Metadata.PromptTokens == nil ||
+			trace.Metadata.GetPromptTokens() != 41 || trace.Metadata.GetCompletionTokens() != 7 ||
+			trace.Metadata.GetTotalTokens() != 48 || trace.Metadata.PromptTokens == nil ||
 			trace.Metadata.CompletionTokens == nil || trace.Metadata.TotalTokens == nil {
 			t.Fatalf("trace metadata = %+v", trace.Metadata)
 		}
@@ -306,114 +295,6 @@ func TestInferSendsGenerationOptionsAndPreservesMetadataInCacheTraces(t *testing
 			trace.Metadata.GetSchemaSha256() != traceHash([]byte(`{"type":"object"}`)) {
 			t.Fatalf("trace provenance = %+v", trace.Metadata)
 		}
-	}
-}
-
-func TestInferSanitizesPayloadExcerptsBeforeCacheAndTraceMetadata(t *testing.T) {
-	const (
-		promptCanary  = "PROMPT_CANARY_ABCDEFGHIJKLMNOPQRSTUVWXYZ_0123456789"
-		inputCanary   = "INPUT_CANARY_ABCDEFGHIJKLMNOPQRSTUVWXYZ_0123456789"
-		contextCanary = "CONTEXT_CANARY_ABCDEFGHIJKLMNOPQRSTUVWXYZ_0123456789"
-		schemaCanary  = "SCHEMA_CANARY_ABCDEFGHIJKLMNOPQRSTUVWXYZ_0123456789"
-		outputCanary  = "OUTPUT_CANARY_ABCDEFGHIJKLMNOPQRSTUVWXYZ_0123456789"
-	)
-	clyde := &clydeFake{turns: []*contextpb.Turn{{Role: "user", Text: contextCanary, Ts: "now"}}}
-	clydeEndpoint, _ := startClydeServer(t, clyde)
-	output := `{"decision":"block","canary":"` + outputCanary + `"}`
-	forbidden := []string{
-		promptCanary[7:23], inputCanary[6:22], contextCanary[8:24],
-		schemaCanary[7:23], outputCanary[7:23], "wrapped-" + promptCanary[12:28],
-	}
-	fake := &inferenceFake{handler: func(_ context.Context, request *inferencepb.InferRequest) (*inferencepb.InferReply, error) {
-		return &inferencepb.InferReply{
-			OutputJson: output, Status: inferencepb.InferenceStatus_INFERENCE_STATUS_COMPLETE,
-			Metadata: &inferencepb.InvocationMetadata{
-				RequestId: forbidden[0], ServiceVersion: forbidden[1],
-				RequestedModel: "attacker-model", ActualModel: forbidden[2],
-				BackendFingerprint: forbidden[3], BackendVersion: forbidden[4],
-				PromptSha256: traceHash([]byte(request.GetPrompt())),
-				SchemaSha256: traceHash([]byte(request.GetOutputSchema())),
-				PromptTokens: int64Pointer(-1), CompletionTokens: int64Pointer(7),
-				TotalTokens: int64Pointer(3), FinishReason: forbidden[5], LatencyMs: 5000,
-			},
-		}, nil
-	}}
-	endpoint, _ := startInferenceServer(t, fake)
-	store := hotkv.New(hotkv.Options{PruneInterval: 0})
-	t.Cleanup(store.Close)
-	runtime := rules.NewInferRuntimeWithCache(nil, store)
-	t.Cleanup(runtime.Close)
-	collector := &traceCollector{}
-	ctx := rules.WithInferenceTraceCollector(rules.WithInferRuntime(context.Background(), runtime), collector)
-	schema := `{"type":"object","title":"` + schemaCanary + `"}`
-	extra := "prompt = \"" + promptCanary + "\"\n" +
-		"output_schema = '" + schema + "'\nmodel = \"trusted-model\"\ncache_ttl_ms = 1000\n" +
-		"context_source = \"clyde_recent_turns\"\ncontext_endpoint = \"" + clydeEndpoint + "\"\n" +
-		"context_workspace_field = \"cwd\"\ncontext_session_field = \"session_id\"\ncontext_on_error = \"error\""
-	rule := loadInferRule(t, endpoint, extra)
-	evaluateInfer(t, ctx, rule, inputCanary)
-	evaluateInfer(t, ctx, rule, inputCanary)
-	if fake.count() != 1 || len(collector.traces) != 2 || !collector.traces[1].CacheHit {
-		t.Fatalf("calls/traces = %d/%+v", fake.count(), collector.traces)
-	}
-	entries, err := store.List("infer-condition", "", 0, true)
-	if err != nil || len(entries) != 1 {
-		t.Fatalf("cache entries = %d, err = %v", len(entries), err)
-	}
-	var cached struct {
-		Metadata json.RawMessage `json:"metadata"`
-	}
-	if err := json.Unmarshal(entries[0].Value, &cached); err != nil {
-		t.Fatalf("decode cached metadata: %v", err)
-	}
-	encodedMetadata := [][]byte{cached.Metadata}
-	for _, trace := range collector.traces {
-		encoded, marshalErr := json.Marshal(trace.Metadata)
-		if marshalErr != nil {
-			t.Fatalf("marshal trace metadata: %v", marshalErr)
-		}
-		encodedMetadata = append(encodedMetadata, encoded)
-		if trace.Metadata.GetRequestedModel() != "trusted-model" ||
-			trace.Metadata.GetPromptSha256() != traceHash([]byte(promptCanary)) ||
-			trace.Metadata.GetSchemaSha256() != traceHash([]byte(schema)) {
-			t.Fatalf("metadata provenance = %+v", trace.Metadata)
-		}
-		if trace.Metadata.PromptTokens != nil || trace.Metadata.CompletionTokens != nil ||
-			trace.Metadata.TotalTokens != nil || trace.Metadata.GetLatencyMs() != 0 {
-			t.Fatalf("unsafe numeric metadata survived = %+v", trace.Metadata)
-		}
-	}
-	for _, encoded := range encodedMetadata {
-		for _, excerpt := range forbidden {
-			if strings.Contains(string(encoded), excerpt) {
-				t.Fatalf("metadata leaked payload excerpt %q: %s", excerpt, encoded)
-			}
-		}
-	}
-}
-
-func TestInferOmitsInvalidBackendMetadata(t *testing.T) {
-	fake := &inferenceFake{handler: func(context.Context, *inferencepb.InferRequest) (*inferencepb.InferReply, error) {
-		return &inferencepb.InferReply{
-			OutputJson: `{"decision":"block"}`, Status: inferencepb.InferenceStatus_INFERENCE_STATUS_COMPLETE,
-			Metadata: &inferencepb.InvocationMetadata{
-				RequestId: "unsafe\nrequest", ServiceVersion: strings.Repeat("s", 129),
-				ActualModel: strings.Repeat("é", 65), BackendFingerprint: strings.Repeat("f", 257),
-				BackendVersion: "   ", FinishReason: strings.Repeat("x", 65), LatencyMs: -1,
-			},
-		}, nil
-	}}
-	endpoint, _ := startInferenceServer(t, fake)
-	runtime := rules.NewInferRuntimeWithCache(nil, nil)
-	t.Cleanup(runtime.Close)
-	collector := &traceCollector{}
-	ctx := rules.WithInferenceTraceCollector(rules.WithInferRuntime(context.Background(), runtime), collector)
-	evaluateInfer(t, ctx, loadInferRule(t, endpoint, ""), "input")
-	metadata := collector.traces[0].Metadata
-	if metadata.GetRequestId() != "" || metadata.GetServiceVersion() != "" ||
-		metadata.GetActualModel() != "" || metadata.GetBackendFingerprint() != "" ||
-		metadata.GetBackendVersion() != "" || metadata.GetFinishReason() != "" || metadata.GetLatencyMs() != 0 {
-		t.Fatalf("invalid backend metadata survived = %+v", metadata)
 	}
 }
 
@@ -501,10 +382,8 @@ func TestInferErrorRepliesPreserveMetadataAndClientLatency(t *testing.T) {
 			if trace.Latency < 10*time.Millisecond {
 				t.Fatalf("client latency = %s, want reply duration", trace.Latency)
 			}
-			expected := proto.Clone(metadata).(*inferencepb.InvocationMetadata)
-			expected.RequestedModel = ""
-			if !proto.Equal(trace.Metadata, expected) {
-				t.Fatalf("metadata = %+v, want sanitized metadata %+v", trace.Metadata, expected)
+			if !proto.Equal(trace.Metadata, metadata) {
+				t.Fatalf("metadata = %+v, want exact upstream metadata %+v", trace.Metadata, metadata)
 			}
 		})
 	}
