@@ -15,7 +15,7 @@ import (
 )
 
 type deferredProcessor struct {
-	events   chan string
+	events   chan deferredWork
 	store    intakeStore
 	sink     audit.Sink
 	cfg      *config.Config
@@ -23,6 +23,11 @@ type deferredProcessor struct {
 	done     chan struct{}
 	wg       sync.WaitGroup
 	stopping atomic.Bool
+}
+
+type deferredWork struct {
+	eventID  string
+	hotEvent hook.DeferredAuditEvent
 }
 
 func newDeferredProcessor(ctx context.Context, store intakeStore, sink audit.Sink, cfg *config.Config, queueLimit int, workers int, log *slog.Logger) *deferredProcessor {
@@ -34,7 +39,7 @@ func newDeferredProcessor(ctx context.Context, store intakeStore, sink audit.Sin
 	}
 
 	processor := &deferredProcessor{
-		events:   make(chan string, queueLimit),
+		events:   make(chan deferredWork, queueLimit),
 		store:    store,
 		sink:     sink,
 		cfg:      cfg,
@@ -63,7 +68,7 @@ func (p *deferredProcessor) ReplayPending(ctx context.Context) error {
 	}
 
 	if err := p.store.ReplayPending(ctx, func(record intake.Record) error {
-		p.processRecord(ctx, record)
+		p.processRecord(ctx, record, nil)
 		return nil
 	}); err != nil {
 		if p.log != nil {
@@ -74,13 +79,13 @@ func (p *deferredProcessor) ReplayPending(ctx context.Context) error {
 	return nil
 }
 
-func (p *deferredProcessor) Enqueue(eventID string) bool {
+func (p *deferredProcessor) Enqueue(eventID string, hotEvent hook.DeferredAuditEvent) bool {
 	if p == nil || p.store == nil || eventID == "" || p.stopping.Load() {
 		return false
 	}
 
 	select {
-	case p.events <- eventID:
+	case p.events <- deferredWork{eventID: eventID, hotEvent: hotEvent}:
 		return true
 	default:
 		if p.log != nil {
@@ -108,30 +113,34 @@ func (p *deferredProcessor) Close() {
 func (p *deferredProcessor) worker(ctx context.Context) {
 	for {
 		select {
-		case eventID := <-p.events:
-			p.processEvent(ctx, eventID)
+		case work := <-p.events:
+			p.processEvent(ctx, work)
 		case <-p.done:
 			return
 		}
 	}
 }
 
-func (p *deferredProcessor) processEvent(ctx context.Context, eventID string) {
-	record, err := p.store.Get(ctx, eventID)
+func (p *deferredProcessor) processEvent(ctx context.Context, work deferredWork) {
+	record, err := p.store.Get(ctx, work.eventID)
 	if err != nil {
 		if p.log != nil {
-			p.log.WarnContext(ctx, "load deferred intake failed", "event_id", eventID, "err", err)
+			p.log.WarnContext(ctx, "load deferred intake failed", "event_id", work.eventID, "err", err)
 		}
 		return
 	}
 	if record.DeferredState != intake.DeferredStatePending {
 		return
 	}
-	p.processRecord(ctx, record)
+	p.processRecord(ctx, record, &work.hotEvent)
 }
 
-func (p *deferredProcessor) processRecord(ctx context.Context, record intake.Record) {
-	deferredEvent, ok := p.rebuildDeferredAudit(ctx, record)
+func (p *deferredProcessor) processRecord(
+	ctx context.Context,
+	record intake.Record,
+	hotEvent *hook.DeferredAuditEvent,
+) {
+	deferredEvent, ok := p.rebuildDeferredAudit(ctx, record, hotEvent)
 	if !ok {
 		return
 	}
@@ -143,23 +152,38 @@ func (p *deferredProcessor) processRecord(ctx context.Context, record intake.Rec
 	}
 }
 
-func (p *deferredProcessor) rebuildDeferredAudit(ctx context.Context, record intake.Record) (hook.DeferredAuditEvent, bool) {
+func (p *deferredProcessor) rebuildDeferredAudit(
+	ctx context.Context,
+	record intake.Record,
+	hotEvent *hook.DeferredAuditEvent,
+) (hook.DeferredAuditEvent, bool) {
 	getenv := func(key string) string {
 		return record.EnvFingerprint[key]
 	}
 	hint := hook.SystemFromString(record.System)
 
-	syncCfg := hook.SyncConfig(p.cfg)
-	syncEval := hook.EvaluateHotWithEventID(ctx, record.RawPayload, syncCfg, hint, getenv, record.EventID)
-	if !syncEval.Deferred.Valid {
-		if p.log != nil {
-			p.log.WarnContext(ctx, "replay sync evaluation produced invalid deferred event", "event_id", record.EventID)
+	var merged hook.DeferredAuditEvent
+	if hotEvent != nil && hotEvent.Valid {
+		merged = *hotEvent
+	} else {
+		syncCfg := hook.ReplaySyncConfig(p.cfg)
+		syncEval := hook.EvaluateHotWithEventID(
+			ctx,
+			record.RawPayload,
+			syncCfg,
+			hint,
+			getenv,
+			record.EventID,
+		)
+		if !syncEval.Deferred.Valid {
+			if p.log != nil {
+				p.log.WarnContext(ctx, "replay sync evaluation produced invalid deferred event", "event_id", record.EventID)
+			}
+			var empty hook.DeferredAuditEvent
+			return empty, false
 		}
-		var empty hook.DeferredAuditEvent
-		return empty, false
+		merged = syncEval.Deferred
 	}
-
-	merged := syncEval.Deferred
 	syncRules, deferredRules := hook.PartitionRules(p.cfg)
 	merged.Rules = append(append([]config.Rule(nil), syncRules...), deferredRules...)
 

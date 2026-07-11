@@ -4,7 +4,7 @@
 
 The generic `infer` condition is implemented in the commit that contains this report. The exact commit SHA is recorded in the task handoff because a commit cannot contain its own hash.
 
-Repository-wide verification is blocked by concurrent work outside Task 5b. `internal/config/identity_test.go` references a missing `Config.Identity`, and `internal/evaluation/store.go` has ten new staticcheck findings. Task 5b focused tests, race tests, protobuf generation, deadcode, formatting, and diff checks pass.
+The initial implementation is `1d7a2dd82589576f261cb397c159a253854951a6`. Integrated lint and review fixes begin at `acb0207`, with deferred outcome reuse in the follow-up commit containing this report update.
 
 ## RED evidence
 
@@ -44,6 +44,18 @@ Repository-wide verification is blocked by concurrent work outside Task 5b. `int
 
    Failed at about 86ms because clyde context collection and inference each received a separate 50ms timeout budget.
 
+7. Resolved clyde cache identity:
+
+   `go test ./internal/rules -run '^TestInfer(CacheIdentity|SingleflightIdentity|ClydeContextPolicies)' -count=1`
+
+   Failed because different workspace and session values shared one cache or flight, and whitespace around the same clyde endpoint opened a second channel.
+
+8. Deferred inference reuse:
+
+   `go test ./internal/daemon -run '^Test(DeferredAuditReusesHotInferenceOutcomeAndTrace|DurableDeferredReplayExcludesSynchronousInference)$' -count=1`
+
+   Failed because deferred audit events had no inference trace field and reconstruction accepted no hot evaluation outcome.
+
 ## GREEN evidence
 
 - `go test ./internal/config -run 'TestInferCondition' -count=1`: pass before unrelated `identity_test.go` appeared.
@@ -56,12 +68,16 @@ Repository-wide verification is blocked by concurrent work outside Task 5b. `int
 - `make lint-deadcode`: pass with zero new findings.
 - `make lint-format`: pass.
 - `git diff --check`: pass.
+- Resolved clyde cache and singleflight identity tests: pass with separate RPCs for different workspace or session values.
+- Deferred inference reuse tests: pass with one inference RPC, preserved trace continuity, audit-only evaluation, and no inference during durable reconstruction.
 
 ## Full verification
 
 - `make proto`: pass.
-- `make test`: failed only while compiling concurrent `internal/config/identity_test.go`, which references missing `Config.Identity`. All other listed packages passed, including `api/inferencepb`, `internal/daemon`, `internal/evaluation`, `internal/hook`, and `internal/rules`.
-- `make check`: failed on the same identity test plus ten staticcheck findings in concurrent `internal/evaluation/store.go`. The first run also identified Task 5b formatting, clock, logging, and trace reachability issues; those Task 5b findings were fixed. A follow-up `make staticcheck-extra` reported only the concurrent evaluation findings.
+- The initial `make test` and `make check` runs were blocked by concurrent identity and evaluation work. Those external changes are now integrated, and the final follow-up verification below records the current repository result.
+- Final `make test`: pass across all packages.
+- Final `make check`: pass for `lint-golangci`, formatting, cyclomatic complexity, deadcode, and extended static analysis.
+- Final `go test -race ./internal/rules -run '^TestInfer' -count=1`: pass.
 - `git diff --check`: pass after final edits.
 
 ## Wire compatibility proof
@@ -80,7 +96,7 @@ Only `go_package` differs, as allowed by the brief, so agent-gate builds without
 
 `InferRuntime` keeps separate endpoint-keyed inference and clyde `grpc.ClientConn` maps. In-process servers count physical `ConnBegin` events. Repeated calls use one connection, different endpoints use separate connections, and repeated clyde requests use one clyde connection.
 
-The daemon owns one `InferRuntime` outside `runtimeSnapshot`, passes it to replacement snapshots, and closes it only when `Server.Close` runs. `TestRuntimeSnapshotsShareInferenceRuntime` verifies snapshot reuse. The daemon hot cache is shared with the runtime, and tests cover hit traces, TTL expiry, declaration identity separation, and concurrent identical-call coalescing.
+The daemon owns one `InferRuntime` outside `runtimeSnapshot`, passes it to replacement snapshots, and closes it only when `Server.Close` runs. `TestRuntimeSnapshotsShareInferenceRuntime` verifies snapshot reuse. The daemon hot cache is shared with the runtime, and tests cover hit traces, TTL expiry, declaration identity separation, concurrent identical-call coalescing, and resolved clyde workspace and session separation.
 
 ## Standalone failure proof
 
@@ -97,8 +113,7 @@ The daemon owns one `InferRuntime` outside `runtimeSnapshot`, passes it to repla
 
 ## Concerns
 
-1. Full repository verification needs the concurrent identity and evaluation work to become internally consistent, then `make test` and `make check` should be rerun.
-2. The daemon currently collects inference traces in memory and discards them after hook evaluation. This is the intended extension point for the later persistent intake task, which must connect the existing collector to durable records without adding payload fields.
-3. The brief does not prescribe public names or numeric maxima for clyde context bounds. This implementation uses `context_turn_budget` with a maximum of 32 and `context_max_chars_per_turn` with a maximum of 8000, defaulting to the published clyde values 4 and 280.
-4. The current lm-review checkout has additive fields beyond pinned commit `54e8c88`, including generation options and reply metadata. This task intentionally preserves the pinned wire contract; a later integration task should reconcile those additions explicitly.
-5. One infer condition now shares its timeout across clyde and inference. A shared deadline across several ordered inference conditions remains a later orchestration concern.
+1. The daemon carries inference traces from hot evaluation into immediate deferred audit reconstruction, but durable restart replay cannot recover those in-memory traces. The later persistence task must store them before the response boundary.
+2. The brief does not prescribe public names or numeric maxima for clyde context bounds. This implementation uses `context_turn_budget` with a maximum of 32 and `context_max_chars_per_turn` with a maximum of 8000, defaulting to the published clyde values 4 and 280.
+3. The current lm-review checkout has additive fields beyond pinned commit `54e8c88`, including generation options and reply metadata. This task intentionally preserves the pinned wire contract; a later integration task should reconcile those additions explicitly.
+4. One infer condition now shares its timeout across clyde and inference. A shared deadline across several ordered inference conditions remains a later orchestration concern.

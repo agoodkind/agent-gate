@@ -59,6 +59,13 @@ func (sink *inferenceTraceSink) CollectInferenceTrace(trace rules.InferenceTrace
 	sink.traces = append(sink.traces, trace)
 }
 
+func (sink *inferenceTraceSink) snapshot() []rules.InferenceTrace {
+	if sink == nil {
+		return nil
+	}
+	return append([]rules.InferenceTrace(nil), sink.traces...)
+}
+
 // Server implements the AgentGateD gRPC service.
 type Server struct {
 	daemonpb.UnimplementedAgentGateDServer
@@ -436,8 +443,10 @@ func (s *Server) EvaluateHook(ctx context.Context, req *daemonpb.EvaluateHookReq
 
 	ctx = rules.WithExecRuntime(ctx, snapshot.execRuntime)
 	ctx = rules.WithInferRuntime(ctx, snapshot.inferRuntime)
+	var traceSink *inferenceTraceSink
 	if configHasInference(snapshot.cfg) {
-		ctx = rules.WithInferenceTraceCollector(ctx, &inferenceTraceSink{traces: nil})
+		traceSink = &inferenceTraceSink{traces: nil}
+		ctx = rules.WithInferenceTraceCollector(ctx, traceSink)
 	}
 	ctx = rules.WithComposerDecider(ctx, snapshot.composerRuntime)
 
@@ -473,8 +482,9 @@ func (s *Server) EvaluateHook(ctx context.Context, req *daemonpb.EvaluateHookReq
 	syncCfg := hook.SyncConfig(snapshot.cfg)
 	evalStart := hotEvalNow()
 	result := snapshot.hotEvaluate(ctx, rawJSON, syncCfg, hook.SystemFromString(req.GetProviderHint()), getenv, appendResult.EventID)
+	result.Deferred.InferenceTraces = traceSink.snapshot()
 	s.recordHotEvalLatency(ctx, snapshot, appendResult.EventID, hotEvalNow().Sub(evalStart).Microseconds())
-	if err := enqueueDeferredReplay(ctx, requestLog, snapshot, appendResult, result.Deferred.Valid); err != nil {
+	if err := enqueueDeferredReplay(ctx, requestLog, snapshot, appendResult, result.Deferred); err != nil {
 		return failOpenEvaluateHookResponse(), nil
 	}
 	return &daemonpb.EvaluateHookResponse{
@@ -575,8 +585,14 @@ func cloneStringMap(values map[string]string) map[string]string {
 	return cloned
 }
 
-func enqueueDeferredReplay(ctx context.Context, log *slog.Logger, snapshot *runtimeSnapshot, appendResult intake.AppendResult, deferredValid bool) error {
-	if !deferredValid {
+func enqueueDeferredReplay(
+	ctx context.Context,
+	log *slog.Logger,
+	snapshot *runtimeSnapshot,
+	appendResult intake.AppendResult,
+	deferredEvent hook.DeferredAuditEvent,
+) error {
+	if !deferredEvent.Valid {
 		return nil
 	}
 
@@ -598,7 +614,7 @@ func enqueueDeferredReplay(ctx context.Context, log *slog.Logger, snapshot *runt
 		return fmt.Errorf("mark deferred intake pending %q: %w", appendResult.EventID, err)
 	}
 	if snapshot.deferredProcessor != nil {
-		snapshot.deferredProcessor.Enqueue(appendResult.EventID)
+		snapshot.deferredProcessor.Enqueue(appendResult.EventID, deferredEvent)
 	}
 	return nil
 }

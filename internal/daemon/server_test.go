@@ -961,7 +961,10 @@ func fillDeferredProcessorQueue(t testing.TB, srv *Server) {
 	if snapshot == nil || snapshot.deferredProcessor == nil {
 		t.Fatal("deferred processor is nil")
 	}
-	snapshot.deferredProcessor.events <- "occupied"
+	snapshot.deferredProcessor.events <- deferredWork{
+		eventID:  "occupied",
+		hotEvent: hook.DeferredAuditEvent{},
+	}
 }
 
 func setHotEvaluatorForTest(t testing.TB, srv *Server, evaluator func(context.Context, []byte, *config.Config, hook.System, func(string) string, string) hook.HotEvaluation) {

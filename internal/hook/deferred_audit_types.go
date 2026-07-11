@@ -27,6 +27,7 @@ type DeferredAuditEvent struct {
 	Rules               []config.Rule
 	BlockingViolations  []rules.Violation
 	AuditOnlyViolations []rules.Violation
+	InferenceTraces     []rules.InferenceTrace
 	Decision            ResponseDecision
 	DiagnosticText      string
 }

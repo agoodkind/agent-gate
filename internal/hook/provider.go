@@ -56,6 +56,7 @@ func emptyDeferredAuditEvent(system System) DeferredAuditEvent {
 		Rules:               nil,
 		BlockingViolations:  nil,
 		AuditOnlyViolations: nil,
+		InferenceTraces:     nil,
 		Decision:            ResponseDecisionAllow,
 		DiagnosticText:      "",
 	}
@@ -148,6 +149,7 @@ func newDeferredAuditEvent(
 		Rules:               ruleSet,
 		BlockingViolations:  blockingViolations,
 		AuditOnlyViolations: auditOnlyViolations,
+		InferenceTraces:     nil,
 		Decision:            decision,
 		DiagnosticText:      diagnosticText,
 	}
