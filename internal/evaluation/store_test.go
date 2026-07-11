@@ -1,0 +1,262 @@
+package evaluation_test
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"path/filepath"
+	"reflect"
+	"testing"
+	"time"
+
+	_ "github.com/mattn/go-sqlite3"
+
+	"goodkind.io/agent-gate/internal/evaluation"
+	"goodkind.io/agent-gate/internal/intake"
+)
+
+func TestStoreRoundTripsCompletedEvaluation(t *testing.T) {
+	store, receipt := newEvaluationStore(t)
+	record := completeRecord(receipt)
+
+	if err := store.RecordCompleted(context.Background(), record); err != nil {
+		t.Fatalf("RecordCompleted: %v", err)
+	}
+	got, err := store.Get(context.Background(), record.Evaluation.EvaluationID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if !reflect.DeepEqual(got, record) {
+		t.Fatalf("round trip mismatch\ngot:  %#v\nwant: %#v", got, record)
+	}
+}
+
+func TestStoreRollsBackCompleteRecordOnLateFailure(t *testing.T) {
+	store, receipt := newEvaluationStore(t)
+	record := completeRecord(receipt)
+	record.Labels = append(record.Labels, record.Labels[0])
+
+	err := store.RecordCompleted(context.Background(), record)
+	if err == nil {
+		t.Fatal("RecordCompleted succeeded with duplicate label identity")
+	}
+	_, err = store.Get(context.Background(), record.Evaluation.EvaluationID)
+	if !errors.Is(err, evaluation.ErrNotFound) {
+		t.Fatalf("Get error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestStoreSchemaHasForeignKeysAndIndices(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.db")
+	intakeStore, err := intake.OpenSQLite(context.Background(), path, nil)
+	if err != nil {
+		t.Fatalf("OpenSQLite: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := intakeStore.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	})
+
+	database, err := sql.Open("sqlite3", path)
+	if err != nil {
+		t.Fatalf("open schema database: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := database.Close(); err != nil {
+			t.Fatalf("close schema database: %v", err)
+		}
+	})
+
+	assertForeignKey(t, database, "gate_evaluations", "intake_receipts")
+	assertForeignKey(t, database, "gate_evaluation_layers", "gate_evaluations")
+	assertForeignKey(t, database, "gate_evaluation_layers", "gate_evaluation_layers")
+	assertForeignKey(t, database, "gate_evaluation_labels", "gate_evaluations")
+	assertIndex(t, database, "gate_evaluations", "gate_evaluations_event_id_idx")
+	assertIndex(t, database, "gate_evaluations", "gate_evaluations_receipt_id_idx")
+	assertIndex(t, database, "gate_evaluation_layers", "gate_evaluation_layers_kind_name_idx")
+	assertIndex(t, database, "gate_evaluation_labels", "gate_evaluation_labels_verdict_idx")
+}
+
+func newEvaluationStore(t *testing.T) (*evaluation.Store, intake.AppendResult) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "audit.db")
+	intakeStore, err := intake.OpenSQLite(context.Background(), path, nil)
+	if err != nil {
+		t.Fatalf("OpenSQLite: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := intakeStore.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	})
+	receipt, err := intakeStore.Append(context.Background(), intake.Record{
+		EventID:        "evt-evaluation",
+		RecordedAt:     time.Date(2026, 7, 10, 1, 2, 3, 4, time.UTC),
+		System:         "codex",
+		SessionID:      "session-1",
+		TurnID:         "turn-2",
+		EventName:      "PreToolUse",
+		ToolName:       "exec_command",
+		ToolUseID:      "tool-3",
+		RawPayload:     []byte(`{"command":"make check"}`),
+		NormalizedJSON: json.RawMessage(`{"command":"make check"}`),
+	})
+	if err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	return intakeStore.Evaluations(), receipt
+}
+
+func completeRecord(receipt intake.AppendResult) evaluation.Record {
+	confidence := 0.875
+	parentIndex := 0
+	cacheVersion := int64(7)
+	cacheExpiry := time.Date(2026, 7, 10, 2, 30, 0, 0, time.UTC)
+	return evaluation.Record{
+		Evaluation: evaluation.Evaluation{
+			EvaluationID:      "eval-1",
+			ReceiptID:         receipt.ReceiptID,
+			EventID:           receipt.EventID,
+			Attempt:           2,
+			Mode:              "hot",
+			ConfigHash:        "sha256:config",
+			EngineVersion:     "v6",
+			EngineCommit:      "abc123",
+			EngineBuildHash:   "sha256:build",
+			InputHash:         "sha256:input",
+			StartedAt:         time.Date(2026, 7, 10, 1, 2, 4, 0, time.UTC),
+			CompletedAt:       time.Date(2026, 7, 10, 1, 2, 5, 0, time.UTC),
+			FinalVerdict:      "block",
+			FinalSource:       "model",
+			EnforcementAction: "deny",
+			Enforced:          true,
+			TotalLatencyUS:    1_000_000,
+			ErrorJSON:         json.RawMessage(`{"code":"degraded","retryable":false}`),
+		},
+		Layers: []evaluation.Layer{
+			{
+				LayerIndex:     0,
+				Kind:           "oracle",
+				Name:           "deterministic",
+				Status:         "complete",
+				InputReference: "normalized_payload",
+				InputJSON:      json.RawMessage(`{"command":"make check"}`),
+				InputHash:      "sha256:layer-input-0",
+				OutputHash:     "sha256:layer-output-0",
+				OutputJSON:     json.RawMessage(`{"verdict":"allow"}`),
+				StartedAt:      time.Date(2026, 7, 10, 1, 2, 4, 0, time.UTC),
+				CompletedAt:    time.Date(2026, 7, 10, 1, 2, 4, 200_000_000, time.UTC),
+				LatencyUS:      200_000,
+				ServiceName:    "agent-gate",
+				ServiceVersion: "v6",
+				RetryCount:     0,
+			},
+			{
+				LayerIndex:        1,
+				ParentLayerIndex:  &parentIndex,
+				Kind:              "model",
+				Name:              "lm-review",
+				Status:            "error",
+				InputReference:    "layer:0.output",
+				InputJSON:         json.RawMessage(`{"command":"make check","oracle":"allow"}`),
+				InputHash:         "sha256:layer-input-1",
+				OutputHash:        "sha256:layer-output-1",
+				OutputJSON:        json.RawMessage(`{"verdict":"block","confidence":0.875}`),
+				StartedAt:         time.Date(2026, 7, 10, 1, 2, 4, 200_000_000, time.UTC),
+				CompletedAt:       time.Date(2026, 7, 10, 1, 2, 5, 0, time.UTC),
+				LatencyUS:         800_000,
+				ServiceName:       "lm-review",
+				ServiceVersion:    "2026-07-10",
+				ModelName:         "reviewer",
+				ModelVersion:      "v3",
+				PromptHash:        "sha256:prompt",
+				SchemaHash:        "sha256:schema",
+				CacheStatus:       "hit",
+				CacheKeyHash:      "sha256:cache-key",
+				CacheEntryVersion: &cacheVersion,
+				CacheExpiresAt:    &cacheExpiry,
+				ErrorCode:         "timeout",
+				ErrorMessage:      "upstream deadline exceeded",
+				RetryCount:        3,
+			},
+		},
+		Labels: []evaluation.Label{
+			{
+				Namespace:    "human-review",
+				LabelVersion: 4,
+				Verdict:      "block",
+				Source:       "reviewer@example.invalid",
+				Confidence:   &confidence,
+				Rationale:    "The command crosses the configured boundary.",
+				CreatedAt:    time.Date(2026, 7, 10, 1, 5, 0, 0, time.UTC),
+			},
+		},
+	}
+}
+
+func assertForeignKey(t *testing.T, database *sql.DB, table string, referencedTable string) {
+	t.Helper()
+	rows, err := database.QueryContext(context.Background(), "pragma foreign_key_list("+table+")")
+	if err != nil {
+		t.Fatalf("foreign keys for %s: %v", table, err)
+	}
+	defer func() {
+		_ = rows.Close()
+	}()
+	found := false
+	for rows.Next() {
+		var id int
+		var sequence int
+		var target string
+		var from string
+		var to string
+		var onUpdate string
+		var onDelete string
+		var match string
+		if err := rows.Scan(&id, &sequence, &target, &from, &to, &onUpdate, &onDelete, &match); err != nil {
+			t.Fatalf("scan foreign key for %s: %v", table, err)
+		}
+		if target == referencedTable {
+			found = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate foreign keys for %s: %v", table, err)
+	}
+	if !found {
+		t.Fatalf("%s has no foreign key to %s", table, referencedTable)
+	}
+}
+
+func assertIndex(t *testing.T, database *sql.DB, table string, index string) {
+	t.Helper()
+	rows, err := database.QueryContext(context.Background(), "pragma index_list("+table+")")
+	if err != nil {
+		t.Fatalf("indices for %s: %v", table, err)
+	}
+	defer func() {
+		_ = rows.Close()
+	}()
+	found := false
+	for rows.Next() {
+		var sequence int
+		var name string
+		var unique int
+		var origin string
+		var partial int
+		if err := rows.Scan(&sequence, &name, &unique, &origin, &partial); err != nil {
+			t.Fatalf("scan index for %s: %v", table, err)
+		}
+		if name == index {
+			found = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate indices for %s: %v", table, err)
+	}
+	if !found {
+		t.Fatalf("%s has no %s index", table, index)
+	}
+}

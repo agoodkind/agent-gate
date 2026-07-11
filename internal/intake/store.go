@@ -22,6 +22,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 
 	"goodkind.io/agent-gate/internal/config"
+	"goodkind.io/agent-gate/internal/evaluation"
 )
 
 const schemaVersion = 1
@@ -89,8 +90,9 @@ type AppendResult struct {
 
 // Store owns the SQLite-backed durable intake tables.
 type Store struct {
-	db  *sql.DB
-	log *slog.Logger
+	db          *sql.DB
+	log         *slog.Logger
+	evaluations *evaluation.Store
 }
 
 var intakeNow = time.Now
@@ -124,6 +126,11 @@ func OpenSQLite(ctx context.Context, path string, log *slog.Logger) (*Store, err
 		_ = db.Close()
 		return nil, err
 	}
+	store.evaluations, err = evaluation.NewStore(ctx, db)
+	if err != nil {
+		_ = db.Close()
+		return nil, wrapLoggedError(ctx, log, "init evaluation store", err)
+	}
 	return store, nil
 }
 
@@ -141,6 +148,14 @@ func (s *Store) Handle() *sql.DB {
 		return nil
 	}
 	return s.db
+}
+
+// Evaluations returns the typed evaluation store that shares this connection.
+func (s *Store) Evaluations() *evaluation.Store {
+	if s == nil {
+		return nil
+	}
+	return s.evaluations
 }
 
 // Close closes the underlying SQLite handle.
