@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"math"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -42,6 +43,107 @@ func TestStoreRollsBackCompleteRecordOnLateFailure(t *testing.T) {
 		t.Fatal("RecordCompleted succeeded with duplicate label identity")
 	}
 	_, err = store.Get(context.Background(), record.Evaluation.EvaluationID)
+	if !errors.Is(err, evaluation.ErrNotFound) {
+		t.Fatalf("Get error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestStoreRejectsInvalidJSONBeforeWriting(t *testing.T) {
+	store, receipt := newEvaluationStore(t)
+	tests := []struct {
+		name   string
+		mutate func(*evaluation.Record)
+	}{
+		{
+			name: "evaluation error",
+			mutate: func(record *evaluation.Record) {
+				record.Evaluation.ErrorJSON = json.RawMessage(`{"broken"`)
+			},
+		},
+		{
+			name: "layer input",
+			mutate: func(record *evaluation.Record) {
+				record.Layers[0].InputJSON = json.RawMessage(`{"broken"`)
+			},
+		},
+		{
+			name: "layer output",
+			mutate: func(record *evaluation.Record) {
+				record.Layers[0].OutputJSON = json.RawMessage(`{"broken"`)
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			record := completeRecord(receipt)
+			record.Evaluation.EvaluationID = "invalid-" + test.name
+			test.mutate(&record)
+			if err := store.RecordCompleted(context.Background(), record); err == nil {
+				t.Fatal("RecordCompleted accepted invalid JSON")
+			}
+			_, err := store.Get(context.Background(), record.Evaluation.EvaluationID)
+			if !errors.Is(err, evaluation.ErrNotFound) {
+				t.Fatalf("Get error = %v, want ErrNotFound", err)
+			}
+		})
+	}
+}
+
+func TestStoreRejectsInvalidLabelConfidence(t *testing.T) {
+	store, receipt := newEvaluationStore(t)
+	for _, confidence := range []float64{-0.01, 1.01, math.NaN(), math.Inf(1)} {
+		record := completeRecord(receipt)
+		record.Evaluation.EvaluationID = "invalid-confidence"
+		record.Labels[0].Confidence = &confidence
+		if err := store.RecordCompleted(context.Background(), record); err == nil {
+			t.Fatalf("RecordCompleted accepted confidence %v", confidence)
+		}
+	}
+}
+
+func TestNewStoreEnablesForeignKeyEnforcement(t *testing.T) {
+	database, err := sql.Open("sqlite3", filepath.Join(t.TempDir(), "evaluation.db"))
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	database.SetMaxOpenConns(1)
+	t.Cleanup(func() {
+		if err := database.Close(); err != nil {
+			t.Fatalf("close database: %v", err)
+		}
+	})
+	_, err = database.ExecContext(context.Background(), `
+		create table intake_events (event_id text primary key);
+		create table intake_receipts (
+			receipt_id integer primary key,
+			event_id text not null,
+			unique(receipt_id, event_id)
+		);
+	`)
+	if err != nil {
+		t.Fatalf("create intake schema: %v", err)
+	}
+	if _, err := evaluation.NewStore(context.Background(), database); err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	var enabled int
+	if err := database.QueryRowContext(context.Background(), "pragma foreign_keys").Scan(&enabled); err != nil {
+		t.Fatalf("query foreign_keys: %v", err)
+	}
+	if enabled != 1 {
+		t.Fatalf("foreign_keys = %d, want 1", enabled)
+	}
+}
+
+func TestStoreRejectsMismatchedReceiptEvent(t *testing.T) {
+	store, receipt := newEvaluationStore(t)
+	record := completeRecord(receipt)
+	record.Evaluation.EventID = "different-event"
+
+	if err := store.RecordCompleted(context.Background(), record); err == nil {
+		t.Fatal("RecordCompleted accepted a receipt from a different event")
+	}
+	_, err := store.Get(context.Background(), record.Evaluation.EvaluationID)
 	if !errors.Is(err, evaluation.ErrNotFound) {
 		t.Fatalf("Get error = %v, want ErrNotFound", err)
 	}

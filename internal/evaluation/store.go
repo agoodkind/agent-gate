@@ -3,8 +3,10 @@ package evaluation
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"time"
 )
 
@@ -75,6 +77,16 @@ func (s *Store) Get(ctx context.Context, evaluationID string) (Record, error) {
 }
 
 func (s *Store) initialize(ctx context.Context) error {
+	if _, err := s.database.ExecContext(ctx, `pragma foreign_keys = on`); err != nil {
+		return fmt.Errorf("enable evaluation foreign keys: %w", err)
+	}
+	var foreignKeysEnabled int
+	if err := s.database.QueryRowContext(ctx, `pragma foreign_keys`).Scan(&foreignKeysEnabled); err != nil {
+		return fmt.Errorf("verify evaluation foreign keys: %w", err)
+	}
+	if foreignKeysEnabled != 1 {
+		return errors.New("evaluation foreign keys are disabled")
+	}
 	transaction, err := s.database.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin evaluation schema transaction: %w", err)
@@ -189,9 +201,18 @@ func validateRecord(record Record) error {
 	if record.Evaluation.EvaluationID == "" {
 		return errors.New("evaluation id is required")
 	}
+	if len(record.Evaluation.ErrorJSON) > 0 && !json.Valid(record.Evaluation.ErrorJSON) {
+		return errors.New("evaluation error JSON is invalid")
+	}
 	for index, layer := range record.Layers {
 		if layer.LayerIndex != index {
 			return fmt.Errorf("layer index %d is not ordered position %d", layer.LayerIndex, index)
+		}
+		if !json.Valid(layer.InputJSON) {
+			return fmt.Errorf("layer index %d input JSON is invalid", layer.LayerIndex)
+		}
+		if !json.Valid(layer.OutputJSON) {
+			return fmt.Errorf("layer index %d output JSON is invalid", layer.LayerIndex)
 		}
 		if layer.ParentLayerIndex == nil {
 			continue
@@ -202,6 +223,17 @@ func validateRecord(record Record) error {
 				layer.LayerIndex,
 				*layer.ParentLayerIndex,
 			)
+		}
+	}
+	for _, label := range record.Labels {
+		if label.Confidence == nil {
+			continue
+		}
+		if math.IsNaN(*label.Confidence) || math.IsInf(*label.Confidence, 0) {
+			return fmt.Errorf("label %q confidence must be finite", label.Namespace)
+		}
+		if *label.Confidence < 0 || *label.Confidence > 1 {
+			return fmt.Errorf("label %q confidence must be between 0 and 1", label.Namespace)
 		}
 	}
 	return nil
