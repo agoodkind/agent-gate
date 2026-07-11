@@ -3,17 +3,23 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"goodkind.io/agent-gate/api/daemonpb"
 	"goodkind.io/agent-gate/internal/audit"
 	"goodkind.io/agent-gate/internal/config"
+	"goodkind.io/agent-gate/internal/evaluation"
 	"goodkind.io/agent-gate/internal/hook"
+	"goodkind.io/agent-gate/internal/intake"
 )
 
 type readError struct{}
@@ -293,6 +299,212 @@ func TestRunQueryDecisionsPreservesAuditQueryBehavior(t *testing.T) {
 	if !strings.Contains(stdout, "use-make-not-go-direct") {
 		t.Fatalf("stdout = %q, want matched rule", stdout)
 	}
+}
+
+func TestRunQueryEvaluationsEmitsSafeNestedJSONLWithFilters(t *testing.T) {
+	setupQueryEnvironment(t)
+	record := appendCLIQueryEvaluation(t)
+
+	exitCode, stdout, stderr := captureRunQuery(t, []string{
+		"evaluations",
+		"--evaluation-id", record.Evaluation.EvaluationID,
+		"--event-id", record.Evaluation.EventID,
+		"--receipt-id", strconv.FormatInt(record.Evaluation.ReceiptID, 10),
+		"--mode", record.Evaluation.Mode,
+		"--since", "2026-07-11T00:00:00Z",
+		"--until", "2026-07-12T00:00:00Z",
+		"--system", "codex",
+		"--session", "session-cli",
+		"--event", "PreToolUse",
+		"--tool", "exec_command",
+		"--rule", "cli-rule",
+		"--layer", "cli-layer",
+		"--kind", "inference",
+		"--outcome", "match",
+		"--model", "gpt-cli",
+		"--verdict", "block",
+		"--limit", "10",
+		"--offset", "0",
+		"--json",
+	})
+
+	if exitCode != 0 || stderr != "" {
+		t.Fatalf("exitCode = %d, stderr = %q", exitCode, stderr)
+	}
+	lines := strings.Split(strings.TrimSpace(stdout), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("JSONL lines = %d, want 1: %q", len(lines), stdout)
+	}
+	var got evaluation.QueryRecord
+	if err := json.Unmarshal([]byte(lines[0]), &got); err != nil {
+		t.Fatalf("decode JSONL: %v", err)
+	}
+	if got.EvaluationID != record.Evaluation.EvaluationID || len(got.Layers) != 1 ||
+		got.Layers[0].Outcome != "match" || got.Layers[0].ModelName != "gpt-cli" {
+		t.Fatalf("JSONL record = %+v", got)
+	}
+	for _, prohibited := range []string{"selected input secret", "backend secret", "authorization", "rationale"} {
+		if strings.Contains(strings.ToLower(stdout), prohibited) {
+			t.Fatalf("JSONL exposes prohibited %q: %s", prohibited, stdout)
+		}
+	}
+	if !strings.Contains(stdout, `"verified_provenance":{"requested_model":"gpt-cli"}`) ||
+		!strings.Contains(stdout, `"upstream_metadata":{"source":"inference_reply","trust":"untrusted","status":"present","raw":{"prompt_tokens":"0"}}`) ||
+		strings.Contains(stdout, "completion_tokens") {
+		t.Fatalf("JSONL provenance envelope = %s", stdout)
+	}
+}
+
+func TestRunQueryEvaluationsPrintsSafeSummaryTable(t *testing.T) {
+	setupQueryEnvironment(t)
+	record := appendCLIQueryEvaluation(t)
+
+	exitCode, stdout, stderr := captureRunQuery(t, []string{
+		"evaluations", "--evaluation-id", record.Evaluation.EvaluationID,
+	})
+
+	if exitCode != 0 || stderr != "" {
+		t.Fatalf("exitCode = %d, stderr = %q", exitCode, stderr)
+	}
+	for _, required := range []string{
+		"source=sqlite rows=1", "completed_at", "codex", "hot", "block",
+		"PreToolUse", "exec_command", record.Evaluation.EvaluationID,
+	} {
+		if !strings.Contains(stdout, required) {
+			t.Fatalf("table missing %q: %s", required, stdout)
+		}
+	}
+	for _, prohibited := range []string{"selected input secret", "backend secret", "authorization"} {
+		if strings.Contains(strings.ToLower(stdout), prohibited) {
+			t.Fatalf("table exposes prohibited %q: %s", prohibited, stdout)
+		}
+	}
+}
+
+func TestRunQueryEvaluationsHandlesEmptyHistory(t *testing.T) {
+	setupQueryEnvironment(t)
+
+	exitCode, stdout, stderr := captureRunQuery(t, []string{"evaluations", "--json"})
+
+	if exitCode != 0 || stdout != "" {
+		t.Fatalf("exitCode = %d, stdout = %q, stderr = %q", exitCode, stdout, stderr)
+	}
+	if !strings.Contains(stderr, "no evaluation history") {
+		t.Fatalf("stderr = %q, want friendly empty history note", stderr)
+	}
+}
+
+func TestExistingQueryTableRenderersRemainByteCompatible(t *testing.T) {
+	seen := intake.QueryResult{
+		Source: "sqlite",
+		Records: []intake.QueryRecord{
+			{
+				RecordedAt: "2026-07-11T01:02:03Z", System: "codex",
+				SessionID: "session-1", EventName: "PreToolUse", ToolName: "Shell",
+				Operation: intake.Operation{Command: "make test"},
+				Deferred:  intake.QueryDeferred{State: intake.DeferredStatePending},
+			},
+		},
+	}
+	seenOutput := captureStdoutCall(t, func() { printSeenTable(seen) })
+	wantSeen := "source=sqlite rows=1\n" +
+		fmt.Sprintf("%-25s  %-8s  %-12s  %-12s  %-9s  %-10s  %s\n", "recorded_at", "system", "state", "event", "tool", "session", "command") +
+		fmt.Sprintf("%-25s  %-8s  %-12s  %-12s  %-9s  %-10s  %s\n", "2026-07-11T01:02:03Z", "codex", "pending", "PreToolUse", "Shell", "session-1", "make test")
+	if seenOutput != wantSeen {
+		t.Fatalf("seen table changed\ngot:  %q\nwant: %q", seenOutput, wantSeen)
+	}
+
+	events := []audit.Event{
+		{
+			Time: "2026-07-11T01:02:03Z", System: "codex", EventName: "PreToolUse",
+			ToolName: "Shell", Operation: audit.Operation{Command: "make test"},
+			Decision: audit.Decision{Kind: "block", RulesMatched: []string{"rule-1"}},
+		},
+	}
+	eventOutput := captureStdoutCall(t, func() { printEventTable("sqlite", events) })
+	wantEvent := "source=sqlite rows=1\n" +
+		fmt.Sprintf("%-25s  %-8s  %-12s  %-12s  %-9s  %-24s  %s\n", "time", "system", "decision", "event", "tool", "rules", "command") +
+		fmt.Sprintf("%-25s  %-8s  %-12s  %-12s  %-9s  %-24s  %s\n", "2026-07-11T01:02:03Z", "codex", "block", "PreToolUse", "Shell", "rule-1", "make test")
+	if eventOutput != wantEvent {
+		t.Fatalf("decision table changed\ngot:  %q\nwant: %q", eventOutput, wantEvent)
+	}
+}
+
+func appendCLIQueryEvaluation(t *testing.T) evaluation.Record {
+	t.Helper()
+	ctx := context.Background()
+	store, err := intake.OpenSQLite(ctx, config.DefaultAuditSQLitePath(), nil)
+	if err != nil {
+		t.Fatalf("OpenSQLite: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	})
+	receipt, err := store.Append(ctx, intake.Record{
+		EventID: "evt-cli-evaluation", RecordedAt: time.Date(2026, 7, 11, 1, 0, 0, 0, time.UTC),
+		System: "codex", SessionID: "session-cli", EventName: "PreToolUse",
+		ToolName: "exec_command", RawPayload: []byte(`{"authorization":"raw"}`),
+		NormalizedJSON: json.RawMessage(`{"command":"make check"}`),
+	})
+	if err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	startedAt := time.Date(2026, 7, 11, 1, 0, 1, 0, time.UTC)
+	record := evaluation.Record{
+		Evaluation: evaluation.Evaluation{
+			EvaluationID: "eval-cli", ReceiptID: receipt.ReceiptID, EventID: receipt.EventID,
+			Attempt: 1, Mode: "hot", ConfigHash: "sha256:config", EngineVersion: "v1",
+			EngineCommit: "commit", EngineBuildHash: "sha256:build", InputHash: "sha256:input",
+			StartedAt: startedAt, CompletedAt: startedAt.Add(time.Millisecond),
+			FinalVerdict: "block", FinalSource: "inference", EnforcementAction: "deny",
+			Enforced: true, TotalLatencyUS: 1000, ErrorJSON: json.RawMessage(`{}`),
+		},
+		Layers: []evaluation.Layer{
+			{
+				LayerIndex: 0, Kind: "inference", Name: "cli-layer", Status: "complete",
+				Outcome: "match", InputReference: "intake.normalized_json",
+				InputJSON: json.RawMessage(`{"input":"selected input secret","authorization":"backend secret"}`),
+				InputHash: "sha256:layer-input", OutputHash: "sha256:layer-output",
+				OutputJSON: json.RawMessage(`{"decision":"block"}`),
+				MetadataJSON: json.RawMessage(`{
+					"schema_version":2,
+					"rule_name":"cli-rule",
+					"verified_provenance":{"requested_model":"gpt-cli"},
+					"upstream_metadata":{"source":"inference_reply","trust":"untrusted","status":"present","raw":{"prompt_tokens":"0"}}
+				}`),
+				StartedAt: startedAt, CompletedAt: startedAt.Add(time.Millisecond), LatencyUS: 1000,
+				ServiceName: "inference", ModelName: "gpt-cli", PromptHash: "sha256:prompt",
+				SchemaHash: "sha256:schema", ErrorMessage: "backend secret",
+			},
+		},
+		Labels: []evaluation.Label{
+			{
+				Namespace: "human", LabelVersion: 1, Verdict: "block", Source: "reviewer",
+				Rationale: "authorization", CreatedAt: startedAt.Add(time.Second),
+			},
+		},
+	}
+	if err := store.Evaluations().RecordCompleted(ctx, record); err != nil {
+		t.Fatalf("RecordCompleted: %v", err)
+	}
+	return record
+}
+
+func captureStdoutCall(t *testing.T, call func()) string {
+	t.Helper()
+	stdoutFile, err := os.CreateTemp(t.TempDir(), "stdout-*")
+	if err != nil {
+		t.Fatalf("CreateTemp stdout: %v", err)
+	}
+	originalStdout := os.Stdout
+	os.Stdout = stdoutFile
+	defer func() {
+		os.Stdout = originalStdout
+	}()
+	call()
+	return readCapturedFile(t, stdoutFile)
 }
 
 func testHookRuntime(stdin io.Reader, connect func(context.Context) (hookClient, error)) (hookRuntime, *bytes.Buffer, *bytes.Buffer) {

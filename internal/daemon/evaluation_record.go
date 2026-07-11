@@ -132,7 +132,7 @@ func payloadValidationLayer(input hotEvaluationRecordInput) evaluation.Layer {
 	outputJSON := json.RawMessage(`{"valid":false}`)
 	return evaluation.Layer{
 		LayerIndex: 0, ParentLayerIndex: nil, Kind: "validation", Name: "payload-parse",
-		Status: "error", InputReference: "intake.raw_payload",
+		Status: "error", Outcome: "", InputReference: "intake.raw_payload",
 		InputJSON: json.RawMessage(`{}`), InputHash: evaluationHash(input.Intake.RawPayload),
 		OutputHash: evaluationHash(outputJSON), OutputJSON: outputJSON,
 		MetadataJSON: json.RawMessage(`{"schema_version":1}`), StartedAt: input.StartedAt,
@@ -203,12 +203,19 @@ func evaluationHash(value []byte) string {
 func deterministicEvaluationLayer(trace rules.DeterministicTrace) evaluation.Layer {
 	latency := trace.CompletedAt.Sub(trace.StartedAt)
 	latency = max(latency, 0)
+	outcome := "nonmatch"
+	for _, decision := range trace.CheckedRules {
+		if decision.Matched {
+			outcome = "match"
+			break
+		}
+	}
 	metadata := marshalDeterministicMetadata(deterministicLayerMetadata{
 		SchemaVersion: 1, CheckedRules: trace.CheckedRules,
 	})
 	return evaluation.Layer{
 		LayerIndex: 0, ParentLayerIndex: nil, Kind: "deterministic", Name: "rule-engine",
-		Status: "complete", InputReference: "intake.normalized_json",
+		Status: "complete", Outcome: outcome, InputReference: "intake.normalized_json",
 		InputJSON: append(json.RawMessage(nil), trace.InputJSON...), InputHash: trace.InputHash,
 		OutputHash: trace.OutputHash, OutputJSON: append(json.RawMessage(nil), trace.OutputJSON...),
 		MetadataJSON: metadata, StartedAt: trace.StartedAt, CompletedAt: trace.CompletedAt,
@@ -231,7 +238,7 @@ func richEvaluationLayer(layerIndex int, trace rules.LayerTrace) evaluation.Laye
 	}
 	return evaluation.Layer{
 		LayerIndex: layerIndex, ParentLayerIndex: cloneIntPointer(trace.ParentTraceIndex),
-		Kind: trace.Kind, Name: trace.LayerName, Status: trace.Status,
+		Kind: trace.Kind, Name: trace.LayerName, Status: trace.Status, Outcome: trace.Outcome,
 		InputReference: trace.InputReference, InputJSON: append(json.RawMessage(nil), trace.InputJSON...),
 		InputHash: trace.InputHash, OutputHash: trace.OutputHash,
 		OutputJSON:   append(json.RawMessage(nil), trace.OutputJSON...),
@@ -264,7 +271,7 @@ func hotFinalLayer(
 	})
 	return evaluation.Layer{
 		LayerIndex: layerIndex, ParentLayerIndex: &parentIndex, Kind: "final", Name: "hook-response",
-		Status: disposition.status, InputReference: "evaluation.layers",
+		Status: disposition.status, Outcome: "", InputReference: "evaluation.layers",
 		InputJSON: json.RawMessage(`{}`), InputHash: evaluationHash([]byte(`{}`)),
 		OutputHash: evaluationHash(outputJSON), OutputJSON: outputJSON,
 		MetadataJSON: json.RawMessage(`{"schema_version":1}`), StartedAt: completedAt,
@@ -291,7 +298,7 @@ func deferredFinalLayer(
 	})
 	return evaluation.Layer{
 		LayerIndex: layerIndex, ParentLayerIndex: &parentIndex, Kind: "final", Name: "audit-result",
-		Status: disposition.status, InputReference: "evaluation.layers",
+		Status: disposition.status, Outcome: "", InputReference: "evaluation.layers",
 		InputJSON: json.RawMessage(`{}`), InputHash: evaluationHash([]byte(`{}`)),
 		OutputHash: evaluationHash(outputJSON), OutputJSON: outputJSON,
 		MetadataJSON: json.RawMessage(`{"schema_version":1}`), StartedAt: completedAt,

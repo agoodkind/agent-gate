@@ -19,6 +19,7 @@ import (
 	"goodkind.io/agent-gate/internal/audit"
 	"goodkind.io/agent-gate/internal/config"
 	"goodkind.io/agent-gate/internal/daemon"
+	"goodkind.io/agent-gate/internal/evaluation"
 	"goodkind.io/agent-gate/internal/hook"
 	"goodkind.io/agent-gate/internal/intake"
 	"goodkind.io/agent-gate/internal/rules/concerns/shellparse"
@@ -57,8 +58,9 @@ const (
 type queryCommandName string
 
 const (
-	queryCommandDecisions queryCommandName = "decisions"
-	queryCommandSeen      queryCommandName = "seen"
+	queryCommandDecisions   queryCommandName = "decisions"
+	queryCommandEvaluations queryCommandName = "evaluations"
+	queryCommandSeen        queryCommandName = "seen"
 )
 
 type updateCommandName string
@@ -839,7 +841,7 @@ func openLog(component string) (*slog.Logger, func()) {
 
 func runQuery(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: agent-gate query seen|decisions [flags]")
+		fmt.Fprintln(os.Stderr, "usage: agent-gate query seen|decisions|evaluations [flags]")
 		return 2
 	}
 	switch queryCommandName(args[0]) {
@@ -847,6 +849,8 @@ func runQuery(args []string) int {
 		return runSeenQuery(args[1:])
 	case queryCommandDecisions:
 		return runDecisionQuery(args[1:])
+	case queryCommandEvaluations:
+		return runEvaluationQuery(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "agent-gate query: unknown subcommand %q\n", args[0])
 		return 2
@@ -883,6 +887,20 @@ func applySharedAuditQueryFlags(shared sharedQueryFlags, filter *audit.QueryFilt
 }
 
 func applySharedSeenQueryFlags(shared sharedQueryFlags, filter *intake.QueryFilter, command string) bool {
+	since, until, ok := parseSharedQueryRange(shared, command)
+	if !ok {
+		return false
+	}
+	filter.Since = since
+	filter.Until = until
+	return true
+}
+
+func applySharedEvaluationQueryFlags(
+	shared sharedQueryFlags,
+	filter *evaluation.QueryFilter,
+	command string,
+) bool {
 	since, until, ok := parseSharedQueryRange(shared, command)
 	if !ok {
 		return false
@@ -1001,6 +1019,65 @@ func runSeenQuery(args []string) int {
 	return 0
 }
 
+func runEvaluationQuery(args []string) int {
+	fs := flag.NewFlagSet("agent-gate query evaluations", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	var filter evaluation.QueryFilter
+	var shared sharedQueryFlags
+	registerSharedQueryFlags(
+		fs,
+		&shared,
+		&filter.System,
+		&filter.SessionID,
+		&filter.EventName,
+		&filter.ToolName,
+		&filter.Limit,
+	)
+	fs.StringVar(&filter.EvaluationID, "evaluation-id", "", "filter by evaluation id")
+	fs.StringVar(&filter.EventID, "event-id", "", "filter by durable event id")
+	fs.Int64Var(&filter.ReceiptID, "receipt-id", 0, "filter by receipt id")
+	fs.StringVar(&filter.Mode, "mode", "", "filter by evaluation mode")
+	fs.StringVar(&filter.RuleName, "rule", "", "filter by rule name")
+	fs.StringVar(&filter.LayerName, "layer", "", "filter by layer name")
+	fs.StringVar(&filter.LayerKind, "kind", "", "filter by layer kind")
+	fs.StringVar(&filter.LayerOutcome, "outcome", "", "filter by layer outcome")
+	fs.StringVar(&filter.ModelName, "model", "", "filter by model")
+	fs.StringVar(&filter.FinalVerdict, "verdict", "", "filter by final verdict")
+	fs.IntVar(&filter.Offset, "offset", 0, "rows to skip")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if !applySharedEvaluationQueryFlags(shared, &filter, "query evaluations") {
+		return 2
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-gate query evaluations: config load failed: %v\n", err)
+		return 2
+	}
+	result, err := evaluation.Query(context.Background(), cfg.AuditSQLitePath(), filter)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-gate query evaluations: %v\n", err)
+		return 1
+	}
+	if shared.jsonOut {
+		if result.Note != "" {
+			fmt.Fprintf(os.Stderr, "agent-gate query evaluations: %s\n", result.Note)
+		}
+		encoder := json.NewEncoder(os.Stdout)
+		for _, record := range result.Records {
+			if err := encoder.Encode(record); err != nil {
+				fmt.Fprintf(os.Stderr, "agent-gate query evaluations: encode: %v\n", err)
+				return 1
+			}
+		}
+		return 0
+	}
+	printEvaluationTable(result)
+	return 0
+}
+
 func parseQueryTime(s string) (time.Time, error) {
 	if d, err := time.ParseDuration(s); err == nil {
 		return time.Now().Add(-d), nil
@@ -1051,6 +1128,41 @@ func printSeenTable(result intake.QueryResult) {
 			record.ToolName,
 			record.SessionID,
 			cmd,
+		)
+	}
+}
+
+func printEvaluationTable(result evaluation.QueryResult) {
+	_, _ = fmt.Fprintf(os.Stdout, "source=%s rows=%d\n", result.Source, len(result.Records))
+	if result.Note != "" {
+		_, _ = fmt.Fprintf(os.Stdout, "note=%s\n", result.Note)
+	}
+	_, _ = fmt.Fprintf(
+		os.Stdout,
+		"%-25s  %-8s  %-9s  %-12s  %-12s  %-12s  %-8s  %-7s  %s\n",
+		"completed_at",
+		"system",
+		"mode",
+		"verdict",
+		"event",
+		"tool",
+		"receipt",
+		"layers",
+		"evaluation_id",
+	)
+	for _, record := range result.Records {
+		_, _ = fmt.Fprintf(
+			os.Stdout,
+			"%-25s  %-8s  %-9s  %-12s  %-12s  %-12s  %-8d  %-7d  %s\n",
+			record.CompletedAt.Format(time.RFC3339Nano),
+			record.System,
+			record.Mode,
+			record.FinalVerdict,
+			record.EventName,
+			record.ToolName,
+			record.ReceiptID,
+			len(record.Layers),
+			record.EvaluationID,
 		)
 	}
 }

@@ -90,6 +90,7 @@ type LayerTrace struct {
 	LayerName          string
 	Kind               string
 	Status             string
+	Outcome            string
 	SkipReason         string
 	ParentTraceIndex   *int
 	StartedAt          time.Time
@@ -115,7 +116,7 @@ type LayerTrace struct {
 func newLayerTrace(ruleName string, conditionIndex int, layerName string, kind string) LayerTrace {
 	return LayerTrace{
 		RuleName: ruleName, ConditionIndex: conditionIndex, LayerName: layerName,
-		Kind: kind, Status: "", SkipReason: "", ParentTraceIndex: nil,
+		Kind: kind, Status: "", Outcome: "", SkipReason: "", ParentTraceIndex: nil,
 		StartedAt: time.Time{}, CompletedAt: time.Time{}, InputReference: "",
 		InputJSON: nil, OutputJSON: nil, InputHash: "", OutputHash: "",
 		ServiceName: "", ServiceVersion: "", VerifiedProvenance: emptyVerifiedProvenance(),

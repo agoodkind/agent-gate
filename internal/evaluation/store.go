@@ -41,7 +41,13 @@ func (s *Store) RecordCompleted(ctx context.Context, record Record) error {
 		_ = transaction.Rollback()
 	}()
 
-	if err := insertEvaluation(ctx, transaction, record.Evaluation); err != nil {
+	if err := insertEvaluation(
+		ctx,
+		transaction,
+		record.Evaluation,
+		len(record.Layers),
+		len(record.Labels),
+	); err != nil {
 		return err
 	}
 	for _, layer := range record.Layers {
@@ -99,6 +105,8 @@ var evaluationSchemaStatements = []string{
 			enforced integer not null,
 			total_latency_us integer not null,
 			error_json blob,
+			layer_count integer not null default -1,
+			label_count integer not null default -1,
 			foreign key(receipt_id, event_id)
 				references intake_receipts(receipt_id, event_id),
 			foreign key(event_id) references intake_events(event_id)
@@ -110,6 +118,7 @@ var evaluationSchemaStatements = []string{
 			kind text not null,
 			name text not null,
 			status text not null,
+			outcome text not null default '',
 			input_reference text not null,
 			input_json blob,
 			input_hash text not null,
@@ -197,6 +206,18 @@ func (s *Store) initialize(ctx context.Context) error {
 	if err := ensureLayerMetadataColumn(ctx, transaction); err != nil {
 		return err
 	}
+	if err := ensureLayerOutcomeColumn(ctx, transaction); err != nil {
+		return err
+	}
+	if err := ensureEvaluationChildCountColumns(ctx, transaction); err != nil {
+		return err
+	}
+	if _, err := transaction.ExecContext(ctx, `
+		create index if not exists gate_evaluation_layers_outcome_idx
+		on gate_evaluation_layers(outcome)
+	`); err != nil {
+		return wrapError("initialize evaluation outcome index", err)
+	}
 	if err := transaction.Commit(); err != nil {
 		return wrapError("commit evaluation schema transaction", err)
 	}
@@ -252,6 +273,116 @@ func ensureLayerMetadataColumn(ctx context.Context, transaction *sql.Tx) error {
 	return nil
 }
 
+func ensureLayerOutcomeColumn(ctx context.Context, transaction *sql.Tx) error {
+	rows, err := transaction.QueryContext(ctx, `pragma table_info(gate_evaluation_layers)`)
+	if err != nil {
+		return wrapError("query evaluation layer outcome schema", err)
+	}
+	defer func() {
+		_ = rows.Close()
+	}()
+	found := false
+	for rows.Next() {
+		var columnID int
+		var name string
+		var columnType string
+		var notNull int
+		var defaultValue sql.NullString
+		var primaryKey int
+		if err := rows.Scan(
+			&columnID,
+			&name,
+			&columnType,
+			&notNull,
+			&defaultValue,
+			&primaryKey,
+		); err != nil {
+			_ = rows.Close()
+			return wrapError("scan evaluation layer outcome schema", err)
+		}
+		if name == "outcome" {
+			found = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return wrapError("iterate evaluation layer outcome schema", err)
+	}
+	if err := rows.Close(); err != nil {
+		return wrapError("close evaluation layer outcome schema", err)
+	}
+	if found {
+		return nil
+	}
+	_, err = transaction.ExecContext(ctx, `
+		alter table gate_evaluation_layers
+		add column outcome text not null default ''
+	`)
+	if err != nil {
+		return wrapError("add evaluation layer outcome column", err)
+	}
+	return nil
+}
+
+func ensureEvaluationChildCountColumns(ctx context.Context, transaction *sql.Tx) error {
+	rows, err := transaction.QueryContext(ctx, `pragma table_info(gate_evaluations)`)
+	if err != nil {
+		return wrapError("query evaluation child count schema", err)
+	}
+	defer func() {
+		_ = rows.Close()
+	}()
+	foundLayerCount := false
+	foundLabelCount := false
+	for rows.Next() {
+		var columnID int
+		var name string
+		var columnType string
+		var notNull int
+		var defaultValue sql.NullString
+		var primaryKey int
+		if err := rows.Scan(
+			&columnID,
+			&name,
+			&columnType,
+			&notNull,
+			&defaultValue,
+			&primaryKey,
+		); err != nil {
+			return wrapError("scan evaluation child count schema", err)
+		}
+		if name == "layer_count" {
+			foundLayerCount = true
+		}
+		if name == "label_count" {
+			foundLabelCount = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return wrapError("iterate evaluation child count schema", err)
+	}
+	if err := rows.Close(); err != nil {
+		return wrapError("close evaluation child count schema", err)
+	}
+	if !foundLayerCount {
+		if _, err := transaction.ExecContext(ctx, `
+			alter table gate_evaluations
+			add column layer_count integer not null default -1
+		`); err != nil {
+			return wrapError("add evaluation layer count column", err)
+		}
+	}
+	if !foundLabelCount {
+		if _, err := transaction.ExecContext(ctx, `
+			alter table gate_evaluations
+			add column label_count integer not null default -1
+		`); err != nil {
+			return wrapError("add evaluation label count column", err)
+		}
+	}
+	return nil
+}
+
 func validateRecord(record Record) error {
 	if record.Evaluation.EvaluationID == "" {
 		return errors.New("evaluation id is required")
@@ -271,6 +402,9 @@ func validateRecord(record Record) error {
 		}
 		if !json.Valid(layer.MetadataJSON) {
 			return fmt.Errorf("layer index %d metadata JSON is invalid", layer.LayerIndex)
+		}
+		if layer.Outcome != "" && layer.Outcome != "match" && layer.Outcome != "nonmatch" {
+			return fmt.Errorf("layer index %d outcome %q is invalid", layer.LayerIndex, layer.Outcome)
 		}
 		if layer.ParentLayerIndex == nil {
 			continue
@@ -297,14 +431,21 @@ func validateRecord(record Record) error {
 	return nil
 }
 
-func insertEvaluation(ctx context.Context, transaction *sql.Tx, value Evaluation) error {
+func insertEvaluation(
+	ctx context.Context,
+	transaction *sql.Tx,
+	value Evaluation,
+	layerCount int,
+	labelCount int,
+) error {
 	_, err := transaction.ExecContext(ctx, `
 		insert into gate_evaluations (
 			evaluation_id, receipt_id, event_id, attempt, mode, config_hash,
 			engine_version, engine_commit, engine_build_hash, input_hash,
 			started_at, completed_at, final_verdict, final_source,
-			enforcement_action, enforced, total_latency_us, error_json
-		) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			enforcement_action, enforced, total_latency_us, error_json,
+			layer_count, label_count
+		) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		value.EvaluationID,
 		value.ReceiptID,
@@ -324,6 +465,8 @@ func insertEvaluation(ctx context.Context, transaction *sql.Tx, value Evaluation
 		value.Enforced,
 		value.TotalLatencyUS,
 		[]byte(value.ErrorJSON),
+		layerCount,
+		labelCount,
 	)
 	if err != nil {
 		return wrapError("insert evaluation", err)
@@ -339,13 +482,13 @@ func insertLayer(
 ) error {
 	_, err := transaction.ExecContext(ctx, `
 		insert into gate_evaluation_layers (
-			evaluation_id, layer_index, parent_layer_index, kind, name, status,
+			evaluation_id, layer_index, parent_layer_index, kind, name, status, outcome,
 			input_reference, input_json, input_hash, output_hash, output_json,
 			metadata_json, started_at, completed_at, latency_us, service_name, service_version,
 			model_name, model_version, prompt_hash, schema_hash, cache_status,
 			cache_key_hash, cache_entry_version, cache_expires_at, error_code,
 			error_message, retry_count
-		) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		evaluationID,
 		value.LayerIndex,
@@ -353,6 +496,7 @@ func insertLayer(
 		value.Kind,
 		value.Name,
 		value.Status,
+		value.Outcome,
 		value.InputReference,
 		[]byte(value.InputJSON),
 		value.InputHash,
@@ -464,7 +608,7 @@ func (s *Store) getEvaluation(ctx context.Context, evaluationID string) (Evaluat
 
 func (s *Store) getLayers(ctx context.Context, evaluationID string) ([]Layer, error) {
 	rows, err := s.database.QueryContext(ctx, `
-		select layer_index, parent_layer_index, kind, name, status,
+		select layer_index, parent_layer_index, kind, name, status, outcome,
 			input_reference, input_json, input_hash, output_hash, output_json,
 			metadata_json, started_at, completed_at, latency_us, service_name, service_version,
 			model_name, model_version, prompt_hash, schema_hash, cache_status,
@@ -508,6 +652,7 @@ func scanLayer(rows *sql.Rows) (Layer, error) {
 		&value.Kind,
 		&value.Name,
 		&value.Status,
+		&value.Outcome,
 		&value.InputReference,
 		&value.InputJSON,
 		&value.InputHash,

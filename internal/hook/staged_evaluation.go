@@ -246,7 +246,7 @@ func skippedStagedLayer(
 	emptyJSON := json.RawMessage(`{}`)
 	return rules.LayerTrace{
 		RuleName: ruleName, ConditionIndex: conditionIndex, LayerName: layerName,
-		Kind: kind, Status: "skipped", SkipReason: "prior_condition_nonmatch",
+		Kind: kind, Status: "skipped", Outcome: "", SkipReason: "prior_condition_nonmatch",
 		ParentTraceIndex: &parent, StartedAt: time.Time{}, CompletedAt: time.Time{},
 		InputReference: "intake.normalized_json", InputJSON: emptyJSON, OutputJSON: emptyJSON,
 		InputHash: hookTraceHash(emptyJSON), OutputHash: hookTraceHash(emptyJSON),

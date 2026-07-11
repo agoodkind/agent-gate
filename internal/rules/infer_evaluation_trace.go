@@ -163,11 +163,17 @@ func collectRichInferenceTrace(
 		inferenceStartedAt = result.contextCompletedAt
 	}
 	statusValue := traceStatusComplete
+	outcome := "nonmatch"
+	if result.matched {
+		outcome = "match"
+	}
 	if result.errored {
 		statusValue = traceStatusError
+		outcome = ""
 	}
 	layer := newLayerTrace(call.rule.Name, call.conditionIndex, condition.LayerName, "inference")
 	layer.Status = statusValue
+	layer.Outcome = outcome
 	layer.ParentTraceIndex = &parentIndex
 	layer.StartedAt = inferenceStartedAt
 	layer.CompletedAt = call.completedAt
