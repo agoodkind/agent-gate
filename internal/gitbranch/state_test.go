@@ -57,6 +57,28 @@ func TestReadStateLinkedWorktree(t *testing.T) {
 	}
 }
 
+func TestReadStateLinkedDefaultBranchWorktree(t *testing.T) {
+	primary, repo := initStateRepository(t)
+	setBranch(t, repo, "feature-primary")
+	setReference(t, repo, plumbing.NewHashReference(
+		plumbing.NewBranchReferenceName("main"),
+		plumbing.NewHash(testHash),
+	))
+	linked := filepath.Join(t.TempDir(), "main-copy")
+	addLinkedWorktree(t, primary, linked, "main")
+
+	state, err := ReadState(linked)
+	if err != nil {
+		t.Fatalf("ReadState: %v", err)
+	}
+	if state.DefaultBranch != "main" || state.CurrentBranch != "main" {
+		t.Fatalf("branches = %q, %q; want main, main", state.DefaultBranch, state.CurrentBranch)
+	}
+	if !IsDefaultBranchWorktree(state, filepath.Join(linked, "new.go")) {
+		t.Fatal("linked main checkout was not recognized as the default-branch worktree")
+	}
+}
+
 func TestReadStateUsesOriginHeadAndSupportsDetachedHead(t *testing.T) {
 	primary, repo := initStateRepository(t)
 	setBranch(t, repo, "release")
