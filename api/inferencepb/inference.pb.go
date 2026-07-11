@@ -342,9 +342,9 @@ type InvocationMetadata struct {
 	BackendVersion     string                 `protobuf:"bytes,6,opt,name=backend_version,json=backendVersion,proto3" json:"backend_version,omitempty"`
 	PromptSha256       string                 `protobuf:"bytes,7,opt,name=prompt_sha256,json=promptSha256,proto3" json:"prompt_sha256,omitempty"`
 	SchemaSha256       string                 `protobuf:"bytes,8,opt,name=schema_sha256,json=schemaSha256,proto3" json:"schema_sha256,omitempty"`
-	PromptTokens       int64                  `protobuf:"varint,9,opt,name=prompt_tokens,json=promptTokens,proto3" json:"prompt_tokens,omitempty"`
-	CompletionTokens   int64                  `protobuf:"varint,10,opt,name=completion_tokens,json=completionTokens,proto3" json:"completion_tokens,omitempty"`
-	TotalTokens        int64                  `protobuf:"varint,11,opt,name=total_tokens,json=totalTokens,proto3" json:"total_tokens,omitempty"`
+	PromptTokens       *int64                 `protobuf:"varint,9,opt,name=prompt_tokens,json=promptTokens,proto3,oneof" json:"prompt_tokens,omitempty"`
+	CompletionTokens   *int64                 `protobuf:"varint,10,opt,name=completion_tokens,json=completionTokens,proto3,oneof" json:"completion_tokens,omitempty"`
+	TotalTokens        *int64                 `protobuf:"varint,11,opt,name=total_tokens,json=totalTokens,proto3,oneof" json:"total_tokens,omitempty"`
 	FinishReason       string                 `protobuf:"bytes,12,opt,name=finish_reason,json=finishReason,proto3" json:"finish_reason,omitempty"`
 	LatencyMs          int64                  `protobuf:"varint,13,opt,name=latency_ms,json=latencyMs,proto3" json:"latency_ms,omitempty"`
 	unknownFields      protoimpl.UnknownFields
@@ -438,22 +438,22 @@ func (x *InvocationMetadata) GetSchemaSha256() string {
 }
 
 func (x *InvocationMetadata) GetPromptTokens() int64 {
-	if x != nil {
-		return x.PromptTokens
+	if x != nil && x.PromptTokens != nil {
+		return *x.PromptTokens
 	}
 	return 0
 }
 
 func (x *InvocationMetadata) GetCompletionTokens() int64 {
-	if x != nil {
-		return x.CompletionTokens
+	if x != nil && x.CompletionTokens != nil {
+		return *x.CompletionTokens
 	}
 	return 0
 }
 
 func (x *InvocationMetadata) GetTotalTokens() int64 {
-	if x != nil {
-		return x.TotalTokens
+	if x != nil && x.TotalTokens != nil {
+		return *x.TotalTokens
 	}
 	return 0
 }
@@ -495,7 +495,7 @@ const file_inferencepb_inference_proto_rawDesc = "" +
 	"\x15max_completion_tokens\x18\x02 \x01(\x03H\x00R\x13maxCompletionTokens\x88\x01\x01\x12%\n" +
 	"\vtemperature\x18\x03 \x01(\x01H\x01R\vtemperature\x88\x01\x01B\x18\n" +
 	"\x16_max_completion_tokensB\x0e\n" +
-	"\f_temperature\"\x85\x04\n" +
+	"\f_temperature\"\xcd\x04\n" +
 	"\x12InvocationMetadata\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\tR\trequestId\x12'\n" +
@@ -505,14 +505,17 @@ const file_inferencepb_inference_proto_rawDesc = "" +
 	"\x13backend_fingerprint\x18\x05 \x01(\tR\x12backendFingerprint\x12'\n" +
 	"\x0fbackend_version\x18\x06 \x01(\tR\x0ebackendVersion\x12#\n" +
 	"\rprompt_sha256\x18\a \x01(\tR\fpromptSha256\x12#\n" +
-	"\rschema_sha256\x18\b \x01(\tR\fschemaSha256\x12#\n" +
-	"\rprompt_tokens\x18\t \x01(\x03R\fpromptTokens\x12+\n" +
+	"\rschema_sha256\x18\b \x01(\tR\fschemaSha256\x12(\n" +
+	"\rprompt_tokens\x18\t \x01(\x03H\x00R\fpromptTokens\x88\x01\x01\x120\n" +
 	"\x11completion_tokens\x18\n" +
-	" \x01(\x03R\x10completionTokens\x12!\n" +
-	"\ftotal_tokens\x18\v \x01(\x03R\vtotalTokens\x12#\n" +
+	" \x01(\x03H\x01R\x10completionTokens\x88\x01\x01\x12&\n" +
+	"\ftotal_tokens\x18\v \x01(\x03H\x02R\vtotalTokens\x88\x01\x01\x12#\n" +
 	"\rfinish_reason\x18\f \x01(\tR\ffinishReason\x12\x1d\n" +
 	"\n" +
-	"latency_ms\x18\r \x01(\x03R\tlatencyMs*R\n" +
+	"latency_ms\x18\r \x01(\x03R\tlatencyMsB\x10\n" +
+	"\x0e_prompt_tokensB\x14\n" +
+	"\x12_completion_tokensB\x0f\n" +
+	"\r_total_tokens*R\n" +
 	"\x0fInferenceStatus\x12 \n" +
 	"\x1cINFERENCE_STATUS_UNSPECIFIED\x10\x00\x12\x1d\n" +
 	"\x19INFERENCE_STATUS_COMPLETE\x10\x01*\xda\x01\n" +
@@ -569,6 +572,7 @@ func file_inferencepb_inference_proto_init() {
 		return
 	}
 	file_inferencepb_inference_proto_msgTypes[2].OneofWrappers = []any{}
+	file_inferencepb_inference_proto_msgTypes[3].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{

@@ -1,8 +1,11 @@
 package inferencepb_test
 
 import (
+	"strings"
 	"testing"
 
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 
 	"goodkind.io/agent-gate/api/inferencepb"
@@ -71,6 +74,11 @@ func TestInferenceWireContract(t *testing.T) {
 			t.Fatalf("invocation metadata %s = %v, want field %d", name, field, number)
 		}
 	}
+	for _, name := range []protoreflect.Name{"prompt_tokens", "completion_tokens", "total_tokens"} {
+		if !metadata.Fields().ByName(name).HasPresence() {
+			t.Fatalf("invocation metadata %s does not preserve presence", name)
+		}
+	}
 	if inferencepb.InferenceStatus_INFERENCE_STATUS_UNSPECIFIED != 0 || inferencepb.InferenceStatus_INFERENCE_STATUS_COMPLETE != 1 {
 		t.Fatal("status enum values differ from upstream")
 	}
@@ -78,5 +86,62 @@ func TestInferenceWireContract(t *testing.T) {
 		inferencepb.ReasoningEffort_REASONING_EFFORT_HIGH != 5 ||
 		inferencepb.ReasoningEffort_REASONING_EFFORT_XHIGH != 6 {
 		t.Fatal("reasoning effort enum values differ from upstream")
+	}
+}
+
+func TestInvocationTokenUsagePresenceOnWireAndJSON(t *testing.T) {
+	usageFields := []protoreflect.Name{"prompt_tokens", "completion_tokens", "total_tokens"}
+	tests := []struct {
+		name        string
+		inputJSON   string
+		wantPresent bool
+	}{
+		{name: "omitted", inputJSON: `{}`, wantPresent: false},
+		{
+			name:        "null",
+			inputJSON:   `{"promptTokens":null,"completionTokens":null,"totalTokens":null}`,
+			wantPresent: false,
+		},
+		{
+			name:        "explicit zero",
+			inputJSON:   `{"promptTokens":"0","completionTokens":"0","totalTokens":"0"}`,
+			wantPresent: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			metadata := &inferencepb.InvocationMetadata{}
+			if err := protojson.Unmarshal([]byte(test.inputJSON), metadata); err != nil {
+				t.Fatalf("unmarshal JSON: %v", err)
+			}
+			for _, name := range usageFields {
+				present := metadata.ProtoReflect().Has(
+					metadata.ProtoReflect().Descriptor().Fields().ByName(name),
+				)
+				if present != test.wantPresent {
+					t.Fatalf("%s JSON presence = %v, want %v", name, present, test.wantPresent)
+				}
+			}
+
+			wire, err := proto.Marshal(metadata)
+			if err != nil {
+				t.Fatalf("marshal wire: %v", err)
+			}
+			decoded := &inferencepb.InvocationMetadata{}
+			if err := proto.Unmarshal(wire, decoded); err != nil {
+				t.Fatalf("unmarshal wire: %v", err)
+			}
+			encodedJSON, err := protojson.Marshal(decoded)
+			if err != nil {
+				t.Fatalf("marshal JSON: %v", err)
+			}
+			jsonPresent := strings.Contains(string(encodedJSON), `"promptTokens":"0"`) &&
+				strings.Contains(string(encodedJSON), `"completionTokens":"0"`) &&
+				strings.Contains(string(encodedJSON), `"totalTokens":"0"`)
+			if jsonPresent != test.wantPresent {
+				t.Fatalf("round-trip JSON presence = %v, want %v: %s", jsonPresent, test.wantPresent, encodedJSON)
+			}
+		})
 	}
 }

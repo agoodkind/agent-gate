@@ -220,8 +220,8 @@ func TestInferSendsGenerationOptionsAndPreservesMetadataInCacheTraces(t *testing
 				RequestedModel: "gpt-5.4-mini", ActualModel: "gpt-5.4-mini-2026-07-01",
 				BackendFingerprint: "fp-1", BackendVersion: "backend-1",
 				PromptSha256: "prompt-hash", SchemaSha256: "schema-hash",
-				PromptTokens: 41, CompletionTokens: 7,
-				TotalTokens: 48, FinishReason: "stop", LatencyMs: 12,
+				PromptTokens: int64Pointer(41), CompletionTokens: int64Pointer(7),
+				TotalTokens: int64Pointer(48), FinishReason: "stop", LatencyMs: 12,
 			},
 		}, nil
 	}}
@@ -241,10 +241,21 @@ func TestInferSendsGenerationOptionsAndPreservesMetadataInCacheTraces(t *testing
 	}
 	for _, trace := range collector.traces {
 		if trace.Metadata == nil || trace.Metadata.GetRequestId() != "request-1" ||
-			trace.Metadata.GetPromptTokens() != 41 {
+			trace.Metadata.GetPromptTokens() != 41 || trace.Metadata.GetCompletionTokens() != 7 ||
+			trace.Metadata.GetTotalTokens() != 48 || trace.Metadata.PromptTokens == nil ||
+			trace.Metadata.CompletionTokens == nil || trace.Metadata.TotalTokens == nil {
 			t.Fatalf("trace metadata = %+v", trace.Metadata)
 		}
+		if trace.Metadata.GetRequestedModel() != "gpt-5.4-mini" ||
+			trace.Metadata.GetPromptSha256() != "prompt-hash" ||
+			trace.Metadata.GetSchemaSha256() != "schema-hash" {
+			t.Fatalf("trace provenance = %+v", trace.Metadata)
+		}
 	}
+}
+
+func int64Pointer(value int64) *int64 {
+	return &value
 }
 
 func TestInferFailedRPCCapturesClientLatency(t *testing.T) {
