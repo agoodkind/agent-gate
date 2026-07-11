@@ -40,6 +40,7 @@ const (
 	commandConfig     commandName = "config"
 	commandCodexHook  commandName = "codex-hook"
 	commandDaemon     commandName = "daemon"
+	commandExport     commandName = "export"
 	commandGeminiHook commandName = "gemini-hook"
 	commandInstall    commandName = "install"
 	commandKV         commandName = "kv"
@@ -142,6 +143,8 @@ func main() {
 			os.Exit(runKV(os.Args[2:]))
 		case commandQuery:
 			os.Exit(runQuery(os.Args[2:]))
+		case commandExport:
+			os.Exit(runExport(os.Args[2:]))
 		case commandConfig:
 			os.Exit(runConfig(os.Args[2:]))
 		case commandInstall:
@@ -1019,8 +1022,8 @@ func runSeenQuery(args []string) int {
 	return 0
 }
 
-func runEvaluationQuery(args []string) int {
-	fs := flag.NewFlagSet("agent-gate query evaluations", flag.ContinueOnError)
+func parseEvaluationQueryFilter(command string, args []string) (evaluation.QueryFilter, bool, int) {
+	fs := flag.NewFlagSet("agent-gate "+command, flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	var filter evaluation.QueryFilter
 	var shared sharedQueryFlags
@@ -1045,37 +1048,74 @@ func runEvaluationQuery(args []string) int {
 	fs.StringVar(&filter.FinalVerdict, "verdict", "", "filter by final verdict")
 	fs.IntVar(&filter.Offset, "offset", 0, "rows to skip")
 	if err := fs.Parse(args); err != nil {
-		return 2
+		return filter, false, 2
 	}
-	if !applySharedEvaluationQueryFlags(shared, &filter, "query evaluations") {
-		return 2
+	if !applySharedEvaluationQueryFlags(shared, &filter, command) {
+		return filter, false, 2
 	}
+	return filter, shared.jsonOut, 0
+}
 
+func loadEvaluationQueryResult(command string, filter evaluation.QueryFilter) (evaluation.QueryResult, int) {
 	cfg, err := config.Load()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "agent-gate query evaluations: config load failed: %v\n", err)
-		return 2
+		fmt.Fprintf(os.Stderr, "agent-gate %s: config load failed: %v\n", command, err)
+		return evaluation.QueryResult{}, 2
 	}
 	result, err := evaluation.Query(context.Background(), cfg.AuditSQLitePath(), filter)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "agent-gate query evaluations: %v\n", err)
-		return 1
+		fmt.Fprintf(os.Stderr, "agent-gate %s: %v\n", command, err)
+		return evaluation.QueryResult{}, 1
 	}
-	if shared.jsonOut {
-		if result.Note != "" {
-			fmt.Fprintf(os.Stderr, "agent-gate query evaluations: %s\n", result.Note)
+	return result, 0
+}
+
+func encodeEvaluationJSONL(command string, result evaluation.QueryResult) int {
+	if result.Note != "" {
+		fmt.Fprintf(os.Stderr, "agent-gate %s: %s\n", command, result.Note)
+	}
+	encoder := json.NewEncoder(os.Stdout)
+	for _, record := range result.Records {
+		if err := encoder.Encode(record); err != nil {
+			fmt.Fprintf(os.Stderr, "agent-gate %s: encode: %v\n", command, err)
+			return 1
 		}
-		encoder := json.NewEncoder(os.Stdout)
-		for _, record := range result.Records {
-			if err := encoder.Encode(record); err != nil {
-				fmt.Fprintf(os.Stderr, "agent-gate query evaluations: encode: %v\n", err)
-				return 1
-			}
-		}
-		return 0
+	}
+	return 0
+}
+
+func runEvaluationQuery(args []string) int {
+	filter, jsonOut, code := parseEvaluationQueryFilter("query evaluations", args)
+	if code != 0 {
+		return code
+	}
+	result, code := loadEvaluationQueryResult("query evaluations", filter)
+	if code != 0 {
+		return code
+	}
+	if jsonOut {
+		return encodeEvaluationJSONL("query evaluations", result)
 	}
 	printEvaluationTable(result)
 	return 0
+}
+
+// runExport emits the training export: one JSONL row per evaluation with its
+// ordered typed layers and labels, read from the read-only evaluation query.
+func runExport(args []string) int {
+	if len(args) == 0 || queryCommandName(args[0]) != queryCommandEvaluations {
+		fmt.Fprintln(os.Stderr, "usage: agent-gate export evaluations [flags]")
+		return 2
+	}
+	filter, _, code := parseEvaluationQueryFilter("export evaluations", args[1:])
+	if code != 0 {
+		return code
+	}
+	result, code := loadEvaluationQueryResult("export evaluations", filter)
+	if code != 0 {
+		return code
+	}
+	return encodeEvaluationJSONL("export evaluations", result)
 }
 
 func parseQueryTime(s string) (time.Time, error) {
