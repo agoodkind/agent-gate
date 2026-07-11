@@ -68,7 +68,7 @@ func validateShellWriteSpecConfig(ruleName string, index int, condition *Conditi
 func conditionConsumesCmdWriteTargets(condition *Condition) bool {
 	switch ConditionKind(condition.Kind) {
 	case ConditionKindRegex, ConditionKindExec, ConditionKindGitDefaultBranch,
-		ConditionKindGitPrimaryCheckout:
+		ConditionKindGitPrimaryCheckout, ConditionKindInfer:
 	case ConditionKindCommand,
 		ConditionKindDiff,
 		ConditionKindProject,
@@ -84,7 +84,8 @@ func conditionConsumesCmdWriteTargets(condition *Condition) bool {
 		}
 	}
 	return condition.cacheKeySelector.Selector == FieldCmdWriteTargets ||
-		condition.forEachSelector.Selector == FieldCmdWriteTargets
+		condition.forEachSelector.Selector == FieldCmdWriteTargets ||
+		condition.inputSelector.Selector == FieldCmdWriteTargets
 }
 
 func nonEmptyFlagEntries(values []string) bool {

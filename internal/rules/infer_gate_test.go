@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
 	"net"
 	"os"
 	"path/filepath"
@@ -153,6 +154,11 @@ response_json_equals = "block"
 func evaluateInfer(t *testing.T, ctx context.Context, rule config.Rule, command string) []rules.Violation {
 	t.Helper()
 	fields := rules.FieldSet{ToolInputCommand: command, CWD: "/workspace", SessionID: "session"}
+	return evaluateInferFields(t, ctx, rule, fields)
+}
+
+func evaluateInferFields(t *testing.T, ctx context.Context, rule config.Rule, fields rules.FieldSet) []rules.Violation {
+	t.Helper()
 	return rules.EvaluateAll(ctx, "claude", "PreToolUse", fields, []config.Rule{rule}, nil)
 }
 
@@ -330,6 +336,60 @@ func TestInferPersistentChannelsEndpointSeparationCacheTTLAndIdentity(t *testing
 	}
 }
 
+func TestInferCacheIdentityIncludesResolvedClydeFields(t *testing.T) {
+	clyde := &clydeFake{}
+	clydeEndpoint, _ := startClydeServer(t, clyde)
+	inference := &inferenceFake{handler: func(context.Context, *inferencepb.InferRequest) (*inferencepb.InferReply, error) {
+		return &inferencepb.InferReply{OutputJson: `{"decision":"block"}`, Status: 1}, nil
+	}}
+	endpoint, _ := startInferenceServer(t, inference)
+	extra := "cache_ttl_ms = 1000\ncontext_source = \"clyde_recent_turns\"\ncontext_endpoint = \"" + clydeEndpoint + "\"\ncontext_workspace_field = \"cwd\"\ncontext_session_field = \"session_id\"\ncontext_on_error = \"error\""
+	rule := loadInferRule(t, endpoint, extra)
+	runtime := rules.NewInferRuntimeWithCache(nil, nil)
+	t.Cleanup(runtime.Close)
+	ctx := rules.WithInferRuntime(context.Background(), runtime)
+
+	evaluateInferFields(t, ctx, rule, rules.FieldSet{ToolInputCommand: "same", CWD: "/first", SessionID: "session"})
+	evaluateInferFields(t, ctx, rule, rules.FieldSet{ToolInputCommand: "same", CWD: "/second", SessionID: "session"})
+	evaluateInferFields(t, ctx, rule, rules.FieldSet{ToolInputCommand: "same", CWD: "/second", SessionID: "other"})
+
+	if inference.count() != 3 {
+		t.Fatalf("inference calls = %d, want 3", inference.count())
+	}
+}
+
+func TestInferSingleflightIdentityIncludesResolvedClydeFields(t *testing.T) {
+	clyde := &clydeFake{delay: 20 * time.Millisecond}
+	clydeEndpoint, _ := startClydeServer(t, clyde)
+	inference := &inferenceFake{handler: func(context.Context, *inferencepb.InferRequest) (*inferencepb.InferReply, error) {
+		time.Sleep(30 * time.Millisecond)
+		return &inferencepb.InferReply{OutputJson: `{"decision":"block"}`, Status: 1}, nil
+	}}
+	endpoint, _ := startInferenceServer(t, inference)
+	extra := "context_source = \"clyde_recent_turns\"\ncontext_endpoint = \"" + clydeEndpoint + "\"\ncontext_workspace_field = \"cwd\"\ncontext_session_field = \"session_id\"\ncontext_on_error = \"error\""
+	rule := loadInferRule(t, endpoint, extra)
+	runtime := rules.NewInferRuntimeWithCache(nil, nil)
+	t.Cleanup(runtime.Close)
+	ctx := rules.WithInferRuntime(context.Background(), runtime)
+	fields := []rules.FieldSet{
+		{ToolInputCommand: "same", CWD: "/first", SessionID: "session"},
+		{ToolInputCommand: "same", CWD: "/second", SessionID: "other"},
+	}
+	var waitGroup sync.WaitGroup
+	for _, fieldSet := range fields {
+		waitGroup.Add(1)
+		go func() {
+			defer waitGroup.Done()
+			evaluateInferFields(t, ctx, rule, fieldSet)
+		}()
+	}
+	waitGroup.Wait()
+
+	if inference.count() != 2 {
+		t.Fatalf("inference calls = %d, want 2", inference.count())
+	}
+}
+
 func TestInferConcurrentIdenticalCallsSingleflight(t *testing.T) {
 	fake := &inferenceFake{handler: func(context.Context, *inferencepb.InferRequest) (*inferencepb.InferReply, error) {
 		time.Sleep(40 * time.Millisecond)
@@ -372,7 +432,8 @@ func TestInferClydeContextPoliciesSelectorsBoundsAndChannelReuse(t *testing.T) {
 	ctx := rules.WithInferRuntime(context.Background(), runtime)
 	rule := loadInferRule(t, endpoint, extra)
 	evaluateInfer(t, ctx, rule, "one")
-	evaluateInfer(t, ctx, rule, "two")
+	spaceEndpointRule := loadInferRule(t, endpoint, strings.Replace(extra, clydeEndpoint, "  "+clydeEndpoint+"  ", 1))
+	evaluateInfer(t, ctx, spaceEndpointRule, "two")
 	if clydeConnections.count.Load() != 1 || len(clyde.requests) != 2 {
 		t.Fatalf("clyde connections/requests = %d/%d", clydeConnections.count.Load(), len(clyde.requests))
 	}
@@ -409,6 +470,29 @@ func TestInferClydeContextAndInferenceShareConditionTimeout(t *testing.T) {
 
 	if elapsed >= 75*time.Millisecond {
 		t.Fatalf("elapsed = %s, want one shared 50ms timeout budget", elapsed)
+	}
+}
+
+func TestInferRejectsOutOfRangeContextBoundsBeforeClydeCall(t *testing.T) {
+	clyde := &clydeFake{}
+	clydeEndpoint, _ := startClydeServer(t, clyde)
+	inference := &inferenceFake{handler: func(context.Context, *inferencepb.InferRequest) (*inferencepb.InferReply, error) {
+		return &inferencepb.InferReply{OutputJson: `{"decision":"block"}`, Status: 1}, nil
+	}}
+	endpoint, _ := startInferenceServer(t, inference)
+	extra := "context_source = \"clyde_recent_turns\"\ncontext_endpoint = \"" + clydeEndpoint + "\"\ncontext_workspace_field = \"cwd\"\ncontext_session_field = \"session_id\"\ncontext_on_error = \"error\"\non_error = \"closed\""
+	rule := loadInferRule(t, endpoint, extra)
+	rule.Conditions[0].ContextTurnBudget = math.MaxInt32 + 1
+	runtime := rules.NewInferRuntimeWithCache(nil, nil)
+	t.Cleanup(runtime.Close)
+
+	violations := evaluateInfer(t, rules.WithInferRuntime(context.Background(), runtime), rule, "one")
+
+	if len(violations) != 1 {
+		t.Fatalf("violations = %d, want closed inference error", len(violations))
+	}
+	if len(clyde.requests) != 0 {
+		t.Fatalf("clyde requests = %d, want 0", len(clyde.requests))
 	}
 }
 

@@ -437,7 +437,7 @@ func (s *Server) EvaluateHook(ctx context.Context, req *daemonpb.EvaluateHookReq
 	ctx = rules.WithExecRuntime(ctx, snapshot.execRuntime)
 	ctx = rules.WithInferRuntime(ctx, snapshot.inferRuntime)
 	if configHasInference(snapshot.cfg) {
-		ctx = rules.WithInferenceTraceCollector(ctx, &inferenceTraceSink{})
+		ctx = rules.WithInferenceTraceCollector(ctx, &inferenceTraceSink{traces: nil})
 	}
 	ctx = rules.WithComposerDecider(ctx, snapshot.composerRuntime)
 

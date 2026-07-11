@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"strconv"
 	"strings"
 	"sync"
@@ -89,11 +90,18 @@ func NewInferRuntimeWithCache(log *slog.Logger, cache *hotkv.Store) *InferRuntim
 	}
 	ownsCache := false
 	if cache == nil {
-		cache = hotkv.New(hotkv.Options{PruneInterval: 0})
+		cache = hotkv.New(hotkv.Options{
+			MaxEntries:    0,
+			MaxValueBytes: 0,
+			PruneInterval: 0,
+		})
 		ownsCache = true
 	}
 	return &InferRuntime{
-		log: log, cache: cache, ownsCache: ownsCache,
+		log:                  log,
+		cache:                cache,
+		ownsCache:            ownsCache,
+		mu:                   sync.Mutex{},
 		inferenceConnections: map[string]*grpc.ClientConn{},
 		inferenceClients:     map[string]inferencepb.InferenceClient{},
 		contextConnections:   map[string]*grpc.ClientConn{},
@@ -153,7 +161,10 @@ type inferEventMemo struct {
 type inferEventMemoKey struct{}
 
 func withInferEventMemo(ctx context.Context) context.Context {
-	return context.WithValue(ctx, inferEventMemoKey{}, &inferEventMemo{results: map[*config.Condition]bool{}})
+	return context.WithValue(ctx, inferEventMemoKey{}, &inferEventMemo{
+		mu:      sync.Mutex{},
+		results: map[*config.Condition]bool{},
+	})
 }
 
 func inferConditionGateMatch(ctx context.Context, fields FieldSet, rule *config.Rule, conditionIndex int, condition *config.Condition) bool {
@@ -177,33 +188,23 @@ func (runtime *InferRuntime) evaluate(ctx context.Context, fields FieldSet, rule
 	started := runtime.now()
 	input := fields.StringForCondition(condition.InputFieldSelector().Selector, condition)
 	keyValue := fields.StringForCondition(condition.CacheKeySelector().Selector, condition)
-	cacheKey := stableInferenceKey(condition, input, keyValue)
-	result, found := runtime.cacheLookup(cacheKey)
-	if found {
-		result.cacheHit = true
-	} else {
-		result = runtime.singleflight(ctx, cacheKey, func() inferResult {
-			if condition.CacheTTLMs > 0 {
-				if cached, cachedFound := runtime.cacheLookup(cacheKey); cachedFound {
-					cached.cacheHit = true
-					return cached
-				}
-			}
-			callResult := runtime.call(ctx, fields, condition)
-			if !callResult.errored && condition.CacheTTLMs > 0 {
-				runtime.cacheStore(cacheKey, condition.CacheTTLMs, callResult)
-			}
-			return callResult
-		})
-	}
-	blocked := false
-	if result.errored {
-		blocked = condition.OnError == config.OnErrorClosed
-	} else if condition.BlockOn == config.BlockOnMatch {
-		blocked = result.matched
-	} else {
-		blocked = !result.matched
-	}
+	contextWorkspace, contextSession := resolvedContextIdentity(fields, condition)
+	cacheKey := stableInferenceKey(
+		condition,
+		input,
+		keyValue,
+		contextWorkspace,
+		contextSession,
+	)
+	result := runtime.resolve(
+		ctx,
+		condition,
+		cacheKey,
+		input,
+		contextWorkspace,
+		contextSession,
+	)
+	blocked := inferResultBlocks(condition, result)
 	runtime.collectTrace(ctx, condition, conditionIndex, result, runtime.now().Sub(started))
 	if result.errored {
 		runtime.log.WarnContext(ctx, "inference condition failed",
@@ -213,35 +214,110 @@ func (runtime *InferRuntime) evaluate(ctx context.Context, fields FieldSet, rule
 	return blocked
 }
 
-func (runtime *InferRuntime) call(ctx context.Context, fields FieldSet, condition *config.Condition) inferResult {
+func (runtime *InferRuntime) resolve(
+	ctx context.Context,
+	condition *config.Condition,
+	cacheKey string,
+	input string,
+	contextWorkspace string,
+	contextSession string,
+) inferResult {
+	if result, found := runtime.cacheLookup(cacheKey); found {
+		result.cacheHit = true
+		return result
+	}
+	return runtime.singleflight(ctx, cacheKey, func() inferResult {
+		if condition.CacheTTLMs > 0 {
+			if cached, found := runtime.cacheLookup(cacheKey); found {
+				cached.cacheHit = true
+				return cached
+			}
+		}
+		result := runtime.call(ctx, condition, input, contextWorkspace, contextSession)
+		if !result.errored && condition.CacheTTLMs > 0 {
+			runtime.cacheStore(cacheKey, condition.CacheTTLMs, result)
+		}
+		return result
+	})
+}
+
+func resolvedContextIdentity(fields FieldSet, condition *config.Condition) (string, string) {
+	if condition.ContextSource == "" {
+		return "", ""
+	}
+	workspace := fields.StringForCondition(condition.ContextWorkspaceSelector().Selector, condition)
+	session := fields.StringForCondition(condition.ContextSessionSelector().Selector, condition)
+	return workspace, session
+}
+
+func inferResultBlocks(condition *config.Condition, result inferResult) bool {
+	switch {
+	case result.errored:
+		return condition.OnError == config.OnErrorClosed
+	case condition.BlockOn == config.BlockOnMatch:
+		return result.matched
+	default:
+		return !result.matched
+	}
+}
+
+func (runtime *InferRuntime) call(
+	ctx context.Context,
+	condition *config.Condition,
+	input string,
+	contextWorkspace string,
+	contextSession string,
+) inferResult {
 	callCtx, cancel := context.WithTimeout(ctx, time.Duration(condition.TimeoutMs)*time.Millisecond)
 	defer cancel()
-	contextJSON, errClass := runtime.contextJSON(callCtx, fields, condition)
+	contextJSON, errClass := runtime.contextJSON(
+		callCtx,
+		condition,
+		contextWorkspace,
+		contextSession,
+	)
 	if errClass != "" && condition.ContextOnError == "error" {
-		return inferResult{errored: true, errorClass: errClass}
+		return inferError(errClass)
 	}
 	client, err := runtime.inferenceClient(condition.Endpoint)
 	if err != nil {
-		return inferResult{errored: true, errorClass: "invalid_endpoint"}
+		return inferError("invalid_endpoint")
 	}
 	reply, err := client.Infer(callCtx, &inferencepb.InferRequest{
-		Prompt: condition.Prompt, Input: fields.StringForCondition(condition.InputFieldSelector().Selector, condition),
+		Prompt: condition.Prompt, Input: input,
 		OutputSchema: condition.OutputSchema, Context: contextJSON, Model: condition.Model,
 	})
 	if err != nil {
-		return inferResult{errored: true, errorClass: grpcErrorClass(err)}
+		return inferError(grpcErrorClass(err))
 	}
 	if reply == nil || reply.GetStatus() != inferencepb.InferenceStatus_INFERENCE_STATUS_COMPLETE {
-		return inferResult{errored: true, errorClass: "non_complete"}
+		return inferError("non_complete")
 	}
 	matched, err := inferenceJSONMatches(condition, reply.GetOutputJson())
 	if err != nil {
-		return inferResult{errored: true, errorClass: "invalid_response"}
+		return inferError("invalid_response")
 	}
-	return inferResult{matched: matched}
+	return inferSuccess(matched)
 }
 
-func (runtime *InferRuntime) contextJSON(ctx context.Context, fields FieldSet, condition *config.Condition) (string, string) {
+func inferError(errorClass string) inferResult {
+	return inferResult{matched: false, errored: true, errorClass: errorClass, cacheHit: false}
+}
+
+func inferSuccess(matched bool) inferResult {
+	return inferResult{matched: matched, errored: false, errorClass: "", cacheHit: false}
+}
+
+func emptyInferResult() inferResult {
+	return inferResult{matched: false, errored: false, errorClass: "", cacheHit: false}
+}
+
+func (runtime *InferRuntime) contextJSON(
+	ctx context.Context,
+	condition *config.Condition,
+	contextWorkspace string,
+	contextSession string,
+) (string, string) {
 	if condition.ContextSource == "" {
 		return "", ""
 	}
@@ -249,10 +325,16 @@ func (runtime *InferRuntime) contextJSON(ctx context.Context, fields FieldSet, c
 	if err != nil {
 		return "", "context_unavailable"
 	}
+	turnBudget, turnBudgetValid := checkedInt32(condition.ContextTurnBudget)
+	maxCharsPerTurn, maxCharsValid := checkedInt32(condition.ContextMaxCharsPerTurn)
+	if !turnBudgetValid || !maxCharsValid {
+		return "", "context_invalid"
+	}
 	reply, err := client.GetRecentTurns(ctx, &contextpb.GetRecentTurnsRequest{
-		WorkspaceRef: fields.StringForCondition(condition.ContextWorkspaceSelector().Selector, condition),
-		SessionRef:   fields.StringForCondition(condition.ContextSessionSelector().Selector, condition),
-		TurnBudget:   int32(condition.ContextTurnBudget), MaxCharsPerTurn: int32(condition.ContextMaxCharsPerTurn),
+		WorkspaceRef:    contextWorkspace,
+		SessionRef:      contextSession,
+		TurnBudget:      turnBudget,
+		MaxCharsPerTurn: maxCharsPerTurn,
 	})
 	if err != nil || reply == nil {
 		return "", "context_unavailable"
@@ -278,7 +360,15 @@ func (runtime *InferRuntime) contextJSON(ctx context.Context, fields FieldSet, c
 	return string(encoded), ""
 }
 
+func checkedInt32(value int) (int32, bool) {
+	if value < math.MinInt32 || value > math.MaxInt32 {
+		return 0, false
+	}
+	return int32(value), true
+}
+
 func (runtime *InferRuntime) inferenceClient(endpoint string) (inferencepb.InferenceClient, error) {
+	endpoint = strings.TrimSpace(endpoint)
 	runtime.mu.Lock()
 	defer runtime.mu.Unlock()
 	if client := runtime.inferenceClients[endpoint]; client != nil {
@@ -286,7 +376,8 @@ func (runtime *InferRuntime) inferenceClient(endpoint string) (inferencepb.Infer
 	}
 	connection, err := grpc.NewClient(grpcEndpoint(endpoint), grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
-		return nil, err
+		runtime.log.Warn("create inference client failed", "endpoint", endpoint, "err", err)
+		return nil, fmt.Errorf("create inference client: %w", err)
 	}
 	runtime.inferenceConnections[endpoint] = connection
 	client := inferencepb.NewInferenceClient(connection)
@@ -295,6 +386,7 @@ func (runtime *InferRuntime) inferenceClient(endpoint string) (inferencepb.Infer
 }
 
 func (runtime *InferRuntime) contextClient(endpoint string) (contextpb.ConversationContextClient, error) {
+	endpoint = strings.TrimSpace(endpoint)
 	runtime.mu.Lock()
 	defer runtime.mu.Unlock()
 	if client := runtime.contextClients[endpoint]; client != nil {
@@ -302,7 +394,8 @@ func (runtime *InferRuntime) contextClient(endpoint string) (contextpb.Conversat
 	}
 	connection, err := grpc.NewClient(grpcEndpoint(endpoint), grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
-		return nil, err
+		runtime.log.Warn("create context client failed", "endpoint", endpoint, "err", err)
+		return nil, fmt.Errorf("create context client: %w", err)
 	}
 	runtime.contextConnections[endpoint] = connection
 	client := contextpb.NewConversationContextClient(connection)
@@ -325,10 +418,10 @@ func (runtime *InferRuntime) singleflight(ctx context.Context, key string, funct
 		case <-flight.done:
 			return flight.result
 		case <-ctx.Done():
-			return inferResult{errored: true, errorClass: grpcErrorClass(ctx.Err())}
+			return inferError(grpcErrorClass(ctx.Err()))
 		}
 	}
-	flight := &inferFlight{done: make(chan struct{})}
+	flight := &inferFlight{done: make(chan struct{}), result: emptyInferResult()}
 	runtime.inflight[key] = flight
 	runtime.mu.Unlock()
 	flight.result = function()
@@ -341,18 +434,18 @@ func (runtime *InferRuntime) singleflight(ctx context.Context, key string, funct
 
 func (runtime *InferRuntime) cacheLookup(key string) (inferResult, bool) {
 	if runtime.cache == nil {
-		return inferResult{}, false
+		return emptyInferResult(), false
 	}
 	entry, found, err := runtime.cache.Get(inferenceCacheNamespace, key)
 	if err != nil || !found {
-		return inferResult{}, false
+		return emptyInferResult(), false
 	}
 	var cached cachedInferResult
 	if json.Unmarshal(entry.Value, &cached) != nil {
 		_, _ = runtime.cache.Delete(inferenceCacheNamespace, key)
-		return inferResult{}, false
+		return emptyInferResult(), false
 	}
-	return inferResult{matched: cached.Matched}, true
+	return inferSuccess(cached.Matched), true
 }
 
 func (runtime *InferRuntime) cacheStore(key string, ttlMilliseconds int, result inferResult) {
@@ -360,21 +453,31 @@ func (runtime *InferRuntime) cacheStore(key string, ttlMilliseconds int, result 
 	if err != nil {
 		return
 	}
-	_, _, _ = runtime.cache.Set(inferenceCacheNamespace, key, encoded, hotkv.SetOptions{
+	_, _, err = runtime.cache.Set(inferenceCacheNamespace, key, encoded, hotkv.SetOptions{
 		Mode: hotkv.SetModeAny, TTL: time.Duration(ttlMilliseconds) * time.Millisecond,
 	})
+	if err != nil {
+		runtime.log.Warn("store inference cache result failed", "status_class", "cache_error", "err", err)
+	}
 }
 
-func stableInferenceKey(condition *config.Condition, input string, selectedKey string) string {
+func stableInferenceKey(
+	condition *config.Condition,
+	input string,
+	selectedKey string,
+	contextWorkspace string,
+	contextSession string,
+) string {
 	hash := sha256.New()
 	parts := []string{
 		condition.Endpoint, condition.LayerName, condition.Prompt, condition.OutputSchema,
 		condition.Model, condition.InputField, input, condition.CacheKey, selectedKey,
 		condition.ResponseJSONField, string(condition.ResponseJSONEqualsValue().Kind()),
 		condition.ResponseJSONEqualsValue().CanonicalString(), condition.BlockOn, condition.OnError,
-		fmt.Sprint(condition.TimeoutMs), fmt.Sprint(condition.CacheTTLMs), condition.ContextSource,
+		strconv.Itoa(condition.TimeoutMs), strconv.Itoa(condition.CacheTTLMs), condition.ContextSource,
 		condition.ContextEndpoint, condition.ContextWorkspaceField, condition.ContextSessionField,
-		fmt.Sprint(condition.ContextTurnBudget), fmt.Sprint(condition.ContextMaxCharsPerTurn), condition.ContextOnError,
+		contextWorkspace, contextSession,
+		strconv.Itoa(condition.ContextTurnBudget), strconv.Itoa(condition.ContextMaxCharsPerTurn), condition.ContextOnError,
 	}
 	for _, part := range parts {
 		_, _ = hash.Write([]byte{0})
@@ -398,22 +501,26 @@ func inferenceJSONMatches(condition *config.Condition, document string) (bool, e
 	}
 	expected := condition.ResponseJSONEqualsValue()
 	switch expected.Kind() {
+	case config.TOMLScalarUnset:
+		return false, errors.New("unsupported scalar")
 	case config.TOMLScalarBool:
 		var actual bool
 		if err := json.Unmarshal(current, &actual); err != nil {
-			return false, err
+			return false, errors.New("decode boolean response")
 		}
 		return actual == expected.BoolValue(), nil
 	case config.TOMLScalarString:
 		var actual string
-		err := json.Unmarshal(current, &actual)
-		return actual == expected.StringValue(), err
+		if err := json.Unmarshal(current, &actual); err != nil {
+			return false, errors.New("decode string response")
+		}
+		return actual == expected.StringValue(), nil
 	case config.TOMLScalarInt:
 		var actual json.Number
 		decoder := json.NewDecoder(bytes.NewReader(current))
 		decoder.UseNumber()
 		if err := decoder.Decode(&actual); err != nil {
-			return false, err
+			return false, errors.New("decode integer response")
 		}
 		value, err := actual.Int64()
 		if err == nil {
@@ -421,7 +528,7 @@ func inferenceJSONMatches(condition *config.Condition, document string) (bool, e
 		}
 		floatValue, floatErr := actual.Float64()
 		if floatErr != nil {
-			return false, floatErr
+			return false, errors.New("decode integer response number")
 		}
 		return floatValue == float64(expected.IntValue()), nil
 	case config.TOMLScalarFloat:
@@ -429,7 +536,7 @@ func inferenceJSONMatches(condition *config.Condition, document string) (bool, e
 		decoder := json.NewDecoder(bytes.NewReader(current))
 		decoder.UseNumber()
 		if err := decoder.Decode(&actual); err != nil {
-			return false, err
+			return false, errors.New("decode float response")
 		}
 		value, err := actual.Float64()
 		if err == nil {
@@ -437,7 +544,7 @@ func inferenceJSONMatches(condition *config.Condition, document string) (bool, e
 		}
 		integerValue, integerErr := strconv.ParseInt(actual.String(), 10, 64)
 		if integerErr != nil {
-			return false, integerErr
+			return false, errors.New("decode float response integer")
 		}
 		return float64(integerValue) == expected.FloatValue(), nil
 	default:
@@ -460,6 +567,11 @@ func grpcErrorClass(err error) string {
 		return "failed_precondition"
 	case codes.Unavailable:
 		return "unavailable"
+	case codes.OK, codes.Unknown, codes.NotFound, codes.AlreadyExists,
+		codes.PermissionDenied, codes.ResourceExhausted, codes.Aborted,
+		codes.OutOfRange, codes.Unimplemented, codes.Internal, codes.DataLoss,
+		codes.Unauthenticated:
+		return "rpc_error"
 	default:
 		return "rpc_error"
 	}

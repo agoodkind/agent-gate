@@ -150,7 +150,7 @@ func gitConditionMatch(
 		return gitRefMoveConditionMatch(fields, readState)
 	case config.ConditionKindCommand, config.ConditionKindDiff, config.ConditionKindExec,
 		config.ConditionKindProject, config.ConditionKindRegex, config.ConditionKindShellRead,
-		config.ConditionKindShellWrite, config.ConditionKindComposer:
+		config.ConditionKindShellWrite, config.ConditionKindComposer, config.ConditionKindInfer:
 		return false
 	}
 	return false

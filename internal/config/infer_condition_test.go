@@ -210,7 +210,7 @@ func TestInferConditionCompilesClydeContextDefaults(t *testing.T) {
 prompt = "inline"
 output_schema = '` + validOutputSchema + `'
 context_source = "clyde_recent_turns"
-context_endpoint = "127.0.0.1:5402"
+context_endpoint = "  127.0.0.1:5402  "
 context_workspace_field = "cwd"
 context_session_field = "session_id"
 context_on_error = "error"
@@ -220,10 +220,37 @@ context_on_error = "error"
 		t.Fatalf("LoadExisting: %v", err)
 	}
 	condition := cfg.Rules[0].Conditions[0]
+	if condition.ContextEndpoint != "127.0.0.1:5402" {
+		t.Fatalf("context endpoint = %q, want trimmed endpoint", condition.ContextEndpoint)
+	}
 	if condition.ContextWorkspaceSelector().Selector != config.FieldCWD || condition.ContextSessionSelector().Selector != config.FieldSessionID {
 		t.Fatal("context selectors were not compiled")
 	}
 	if condition.ContextTurnBudget != config.DefaultContextTurnBudget || condition.ContextMaxCharsPerTurn != config.DefaultContextMaxCharsPerTurn {
 		t.Fatalf("context defaults = (%d, %d)", condition.ContextTurnBudget, condition.ContextMaxCharsPerTurn)
+	}
+}
+
+func TestInferConditionCanConsumeDeclaredCommandWriteTargets(t *testing.T) {
+	body := strings.Replace(
+		inferRulePrefix,
+		`input_field = "tool_input.command"`,
+		`input_field = "cmd_write_targets"`,
+		1,
+	) + `
+prompt = "inline"
+output_schema = '` + validOutputSchema + `'
+cache_key = "cwd"
+[[rules.conditions.write_specs]]
+argv0 = ["writer"]
+target_mode = "all_operands"
+`
+	cfg, err := writeExecConfig(t, body)
+	if err != nil {
+		t.Fatalf("LoadExisting: %v", err)
+	}
+	condition := cfg.Rules[0].Conditions[0]
+	if condition.InputFieldSelector().Selector != config.FieldCmdWriteTargets {
+		t.Fatalf("input selector = %v, want cmd_write_targets", condition.InputFieldSelector())
 	}
 }

@@ -680,55 +680,47 @@ func allConditionsMatch(ctx context.Context, fields FieldSet, rule *config.Rule,
 
 	for i := range conditions {
 		c := &conditions[i]
-		switch conditionKind(c) {
-		case config.ConditionKindRegex:
-			accessor := conditionFieldAccessor{fields: &fields, condition: c}
-			if !regexconcern.ConditionMatch(accessor, c) {
-				return false
-			}
-		case config.ConditionKindCommand:
-			continue
-		case config.ConditionKindProject:
-			if !projectConditionMatch(fields, c, condCtx) {
-				return false
-			}
-		case config.ConditionKindDiff:
-			if !diffConditionGateMatch(fields, c) {
-				return false
-			}
-		case config.ConditionKindShellWrite:
-			if !shellWriteConditionGateMatch(fields, c) {
-				return false
-			}
-		case config.ConditionKindShellRead:
-			if !shellReadConditionGateMatch(fields, c) {
-				return false
-			}
-		case config.ConditionKindGitDefaultBranch, config.ConditionKindGitPrimaryCheckout,
-			config.ConditionKindGitRefMove:
-			if !gitConditionMatch(fields, c, condCtx, gitbranch.ReadState) {
-				return false
-			}
-		case config.ConditionKindExec:
-			// Exec runs last in config order because it is the only kind that
-			// forks a process; placing it after the cheap conditions means the
-			// short-circuit above keeps it from running on non-candidates.
-			if !execConditionGateMatch(ctx, fields, rule, i, c) {
-				return false
-			}
-		case config.ConditionKindInfer:
-			if !inferConditionGateMatch(ctx, fields, rule, i, c) {
-				return false
-			}
-		case config.ConditionKindComposer:
-			if !composerConditionGateMatch(ctx, fields, c) {
-				return false
-			}
-		default:
+		if !conditionGateMatches(ctx, fields, rule, i, c, condCtx) {
 			return false
 		}
 	}
 	return true
+}
+
+func conditionGateMatches(
+	ctx context.Context,
+	fields FieldSet,
+	rule *config.Rule,
+	conditionIndex int,
+	condition *config.Condition,
+	conditionContextValue conditionContext,
+) bool {
+	switch conditionKind(condition) {
+	case config.ConditionKindRegex:
+		accessor := conditionFieldAccessor{fields: &fields, condition: condition}
+		return regexconcern.ConditionMatch(accessor, condition)
+	case config.ConditionKindCommand:
+		return true
+	case config.ConditionKindProject:
+		return projectConditionMatch(fields, condition, conditionContextValue)
+	case config.ConditionKindDiff:
+		return diffConditionGateMatch(fields, condition)
+	case config.ConditionKindShellWrite:
+		return shellWriteConditionGateMatch(fields, condition)
+	case config.ConditionKindShellRead:
+		return shellReadConditionGateMatch(fields, condition)
+	case config.ConditionKindGitDefaultBranch, config.ConditionKindGitPrimaryCheckout,
+		config.ConditionKindGitRefMove:
+		return gitConditionMatch(fields, condition, conditionContextValue, gitbranch.ReadState)
+	case config.ConditionKindExec:
+		return execConditionGateMatch(ctx, fields, rule, conditionIndex, condition)
+	case config.ConditionKindInfer:
+		return inferConditionGateMatch(ctx, fields, rule, conditionIndex, condition)
+	case config.ConditionKindComposer:
+		return composerConditionGateMatch(ctx, fields, condition)
+	default:
+		return false
+	}
 }
 
 func collectCommandConditionContext(fields FieldSet, conditions []config.Condition, condCtx *conditionContext) bool {

@@ -1,7 +1,6 @@
 package config
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -204,21 +203,6 @@ func (c *Condition) CacheKeySelector() FieldSelectorSpec { return c.cacheKeySele
 // command across many target values.
 func (c *Condition) ForEachSelector() FieldSelectorSpec { return c.forEachSelector }
 
-// StdoutJSONEqualsValue returns the decoded scalar used by stdout_json_field.
-func (c *Condition) StdoutJSONEqualsValue() TOMLScalarValue { return c.stdoutJSONValue }
-
-// InputFieldSelector returns the compiled infer input selector.
-func (c *Condition) InputFieldSelector() FieldSelectorSpec { return c.inputSelector }
-
-// ContextWorkspaceSelector returns the compiled clyde workspace selector.
-func (c *Condition) ContextWorkspaceSelector() FieldSelectorSpec { return c.contextWorkspaceSelector }
-
-// ContextSessionSelector returns the compiled clyde session selector.
-func (c *Condition) ContextSessionSelector() FieldSelectorSpec { return c.contextSessionSelector }
-
-// ResponseJSONEqualsValue returns the decoded infer response predicate scalar.
-func (c *Condition) ResponseJSONEqualsValue() TOMLScalarValue { return c.responseJSONValue }
-
 // ShellReadSpec describes one configurable shell command shape for the
 // shell_read_secret condition kind.
 type ShellReadSpec struct {
@@ -249,25 +233,6 @@ type FieldPairSpec struct {
 // The slice has length zero when [Condition.FieldPair] is unset.
 func (c *Condition) FieldPairs() []FieldPairSpec { return c.fieldPairs }
 
-// ConditionKind selects which evaluator applies to a rule condition.
-type ConditionKind string
-
-// ConditionKind variants.
-const (
-	ConditionKindCommand            ConditionKind = "command"
-	ConditionKindDiff               ConditionKind = "diff"
-	ConditionKindExec               ConditionKind = "exec"
-	ConditionKindProject            ConditionKind = "project"
-	ConditionKindRegex              ConditionKind = "regex"
-	ConditionKindShellRead          ConditionKind = "shell_read_secret"
-	ConditionKindShellWrite         ConditionKind = "shell_write"
-	ConditionKindComposer           ConditionKind = "composer"
-	ConditionKindGitDefaultBranch   ConditionKind = "git_default_branch"
-	ConditionKindGitPrimaryCheckout ConditionKind = "git_primary_checkout"
-	ConditionKindGitRefMove         ConditionKind = "git_ref_move"
-	ConditionKindInfer              ConditionKind = "infer"
-)
-
 // Exec condition block_on variants decide which exit codes block.
 const (
 	BlockOnNonzero = "nonzero"
@@ -292,15 +257,9 @@ const (
 // hook client deadline at internal/daemon/client.go so a slow validator cannot
 // stall the hook past its own timeout.
 const (
-	DefaultExecTimeoutMs          = 1500
-	MaxExecTimeoutMs              = 4000
-	DefaultExecCacheKey           = "effective_cwd"
-	DefaultInferTimeoutMs         = 1500
-	MaxInferTimeoutMs             = 4000
-	DefaultContextTurnBudget      = 4
-	MaxContextTurnBudget          = 32
-	DefaultContextMaxCharsPerTurn = 280
-	MaxContextMaxCharsPerTurn     = 8000
+	DefaultExecTimeoutMs = 1500
+	MaxExecTimeoutMs     = 4000
+	DefaultExecCacheKey  = "effective_cwd"
 )
 
 // CompiledPattern returns the pre-compiled regex for Pattern.
@@ -808,151 +767,6 @@ func compileCondition(log *slog.Logger, ruleName string, index int, c *Condition
 	}
 	if ConditionKind(c.Kind) == ConditionKindGitRefMove && len(c.FieldPaths) > 0 {
 		return fmt.Errorf("rule %q condition %d: git_ref_move does not accept field_paths", ruleName, index)
-	}
-	return nil
-}
-
-func compileInferConfig(log *slog.Logger, ruleName string, index int, c *Condition, meta toml.MetaData, configDirectory string) error {
-	if ConditionKind(c.Kind) != ConditionKindInfer {
-		return nil
-	}
-	contextLabel := fmt.Sprintf("rule %q condition %d", ruleName, index)
-	c.Endpoint = strings.TrimSpace(c.Endpoint)
-	c.LayerName = strings.TrimSpace(c.LayerName)
-	if c.Endpoint == "" {
-		return fmt.Errorf("%s: infer requires endpoint", contextLabel)
-	}
-	if c.LayerName == "" {
-		return fmt.Errorf("%s: infer requires layer_name", contextLabel)
-	}
-	prompt, err := compileDeclaration(configDirectory, c.Prompt, c.PromptFile, "prompt", "prompt_file")
-	if err != nil {
-		log.Warn("compile inference prompt declaration failed", "rule", ruleName, "condition_index", index, "err", err)
-		return fmt.Errorf("%s: %w", contextLabel, err)
-	}
-	c.Prompt = prompt
-	schema, err := compileDeclaration(configDirectory, c.OutputSchema, c.OutputSchemaFile, "output_schema", "output_schema_file")
-	if err != nil {
-		log.Warn("compile inference schema declaration failed", "rule", ruleName, "condition_index", index, "err", err)
-		return fmt.Errorf("%s: %w", contextLabel, err)
-	}
-	if !json.Valid([]byte(schema)) {
-		return fmt.Errorf("%s: output_schema must be valid JSON", contextLabel)
-	}
-	c.OutputSchema = schema
-
-	c.InputField = strings.TrimSpace(c.InputField)
-	c.inputSelector, err = compileRequiredSelector(c.InputField, "input_field")
-	if err != nil {
-		return fmt.Errorf("%s: %w", contextLabel, err)
-	}
-	if c.CacheKey == "" {
-		c.CacheKey = c.InputField
-	}
-	c.cacheKeySelector, err = compileRequiredSelector(strings.TrimSpace(c.CacheKey), "cache_key")
-	if err != nil {
-		return fmt.Errorf("%s: %w", contextLabel, err)
-	}
-	if c.TimeoutMs == 0 {
-		c.TimeoutMs = DefaultInferTimeoutMs
-	}
-	if c.TimeoutMs < 0 || c.TimeoutMs > MaxInferTimeoutMs {
-		return fmt.Errorf("%s: timeout_ms %d exceeds max %d", contextLabel, c.TimeoutMs, MaxInferTimeoutMs)
-	}
-	if c.CacheTTLMs < 0 {
-		return fmt.Errorf("%s: cache_ttl_ms must be non-negative", contextLabel)
-	}
-	if c.BlockOn == "" {
-		c.BlockOn = BlockOnMatch
-	}
-	if c.BlockOn != BlockOnMatch && c.BlockOn != "nonmatch" {
-		return fmt.Errorf("%s: block_on %q must be %q or %q", contextLabel, c.BlockOn, BlockOnMatch, "nonmatch")
-	}
-	if c.OnError == "" {
-		c.OnError = OnErrorOpen
-	}
-	if c.OnError != OnErrorOpen && c.OnError != OnErrorClosed {
-		return fmt.Errorf("%s: on_error %q must be %q or %q", contextLabel, c.OnError, OnErrorOpen, OnErrorClosed)
-	}
-	c.ResponseJSONField = strings.TrimSpace(c.ResponseJSONField)
-	if err := validateStdoutJSONFieldPath(c.ResponseJSONField); err != nil {
-		return fmt.Errorf("%s: response_json_field: %w", contextLabel, err)
-	}
-	if c.ResponseJSONEquals == nil {
-		return fmt.Errorf("%s: response_json_equals is required", contextLabel)
-	}
-	c.responseJSONValue, err = decodeTOMLScalar(meta, *c.ResponseJSONEquals)
-	if err != nil {
-		return fmt.Errorf("%s: response_json_equals: %w", contextLabel, err)
-	}
-	return compileInferContextConfig(log, contextLabel, c)
-}
-
-func compileDeclaration(configDirectory string, inline string, file string, inlineName string, fileName string) (string, error) {
-	hasInline := inline != ""
-	hasFile := strings.TrimSpace(file) != ""
-	if hasInline == hasFile {
-		return "", fmt.Errorf("exactly one of %s or %s must be set", inlineName, fileName)
-	}
-	if hasInline {
-		return inline, nil
-	}
-	path := file
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(configDirectory, path)
-	}
-	content, err := os.ReadFile(path)
-	if err != nil {
-		slog.Warn("read inference declaration file failed", "field", fileName, "path", path, "err", err)
-		return "", fmt.Errorf("read %s: %w", fileName, err)
-	}
-	return string(content), nil
-}
-
-func compileRequiredSelector(path string, fieldName string) (FieldSelectorSpec, error) {
-	spec := FieldSelectorSpec{Path: path, Selector: CompileFieldSelector(path)}
-	if path == "" || spec.Selector == FieldSelectorInvalid {
-		return spec, fmt.Errorf("%s %q is not a valid field selector", fieldName, path)
-	}
-	return spec, nil
-}
-
-func compileInferContextConfig(log *slog.Logger, contextLabel string, c *Condition) error {
-	c.ContextSource = strings.TrimSpace(c.ContextSource)
-	if c.ContextSource == "" {
-		return nil
-	}
-	if c.ContextSource != "clyde_recent_turns" {
-		return fmt.Errorf("%s: unknown context_source %q", contextLabel, c.ContextSource)
-	}
-	if strings.TrimSpace(c.ContextEndpoint) == "" {
-		return fmt.Errorf("%s: context_endpoint is required", contextLabel)
-	}
-	var err error
-	c.contextWorkspaceSelector, err = compileRequiredSelector(strings.TrimSpace(c.ContextWorkspaceField), "context_workspace_field")
-	if err != nil {
-		log.Warn("compile inference context workspace selector failed", "context", contextLabel, "err", err)
-		return fmt.Errorf("%s: %w", contextLabel, err)
-	}
-	c.contextSessionSelector, err = compileRequiredSelector(strings.TrimSpace(c.ContextSessionField), "context_session_field")
-	if err != nil {
-		log.Warn("compile inference context session selector failed", "context", contextLabel, "err", err)
-		return fmt.Errorf("%s: %w", contextLabel, err)
-	}
-	if c.ContextTurnBudget == 0 {
-		c.ContextTurnBudget = DefaultContextTurnBudget
-	}
-	if c.ContextTurnBudget < 1 || c.ContextTurnBudget > MaxContextTurnBudget {
-		return fmt.Errorf("%s: context_turn_budget must be between 1 and %d", contextLabel, MaxContextTurnBudget)
-	}
-	if c.ContextMaxCharsPerTurn == 0 {
-		c.ContextMaxCharsPerTurn = DefaultContextMaxCharsPerTurn
-	}
-	if c.ContextMaxCharsPerTurn < 1 || c.ContextMaxCharsPerTurn > MaxContextMaxCharsPerTurn {
-		return fmt.Errorf("%s: context_max_chars_per_turn must be between 1 and %d", contextLabel, MaxContextMaxCharsPerTurn)
-	}
-	if c.ContextOnError != "empty" && c.ContextOnError != "error" {
-		return fmt.Errorf("%s: context_on_error %q must be %q or %q", contextLabel, c.ContextOnError, "empty", "error")
 	}
 	return nil
 }
