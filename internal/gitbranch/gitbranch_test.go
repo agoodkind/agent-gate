@@ -53,10 +53,24 @@ func assert(t *testing.T, label string, gotMatch, gotResolved, wantMatch, wantRe
 	}
 }
 
+func onDefaultBranchForTest(path string) (bool, bool) {
+	state, err := ReadState(path)
+	if err != nil {
+		return false, false
+	}
+	if state.CurrentBranch == "" {
+		return false, true
+	}
+	if state.DefaultBranch == "" {
+		return false, false
+	}
+	return state.CurrentBranch == state.DefaultBranch, true
+}
+
 func TestCheckoutOnDefaultBranch(t *testing.T) {
 	repo := filepath.Join(t.TempDir(), "repo")
 	initRepo(t, repo)
-	match, resolved := OnDefaultBranch(repo)
+	match, resolved := onDefaultBranchForTest(repo)
 	assert(t, "checkout on main", match, resolved, true, true)
 }
 
@@ -64,7 +78,7 @@ func TestFilePathResolvesRepo(t *testing.T) {
 	repo := filepath.Join(t.TempDir(), "repo")
 	initRepo(t, repo)
 	// A nonexistent nested file path still resolves the enclosing repo.
-	match, resolved := OnDefaultBranch(filepath.Join(repo, "sub", "dir", "new.go"))
+	match, resolved := onDefaultBranchForTest(filepath.Join(repo, "sub", "dir", "new.go"))
 	assert(t, "nested new file on main", match, resolved, true, true)
 }
 
@@ -82,7 +96,7 @@ func TestExistingNestedFileResolvesRepo(t *testing.T) {
 	if err := os.WriteFile(nested, []byte("package x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	match, resolved := OnDefaultBranch(nested)
+	match, resolved := onDefaultBranchForTest(nested)
 	assert(t, "existing nested file on main", match, resolved, true, true)
 }
 
@@ -90,7 +104,7 @@ func TestFeatureBranchNotDefault(t *testing.T) {
 	repo := filepath.Join(t.TempDir(), "repo")
 	initRepo(t, repo)
 	runGit(t, repo, "checkout", "-q", "-b", "feature")
-	match, resolved := OnDefaultBranch(repo)
+	match, resolved := onDefaultBranchForTest(repo)
 	assert(t, "feature branch", match, resolved, false, true)
 }
 
@@ -103,7 +117,7 @@ func TestLinkedWorktreeOnFeatureBranch(t *testing.T) {
 		t.Fatal(err)
 	}
 	runGit(t, repo, "worktree", "add", "-q", "-b", "task", wt)
-	match, resolved := OnDefaultBranch(filepath.Join(wt, "f.txt"))
+	match, resolved := onDefaultBranchForTest(filepath.Join(wt, "f.txt"))
 	assert(t, "worktree on feature", match, resolved, false, true)
 }
 
@@ -114,7 +128,7 @@ func TestLinkedWorktreeOnDefaultBranch(t *testing.T) {
 	runGit(t, repo, "checkout", "-q", "-b", "dev")
 	wt := filepath.Join(base, "wt-main")
 	runGit(t, repo, "worktree", "add", "-q", wt, "main")
-	match, resolved := OnDefaultBranch(wt)
+	match, resolved := onDefaultBranchForTest(wt)
 	assert(t, "worktree on main", match, resolved, true, true)
 }
 
@@ -125,7 +139,7 @@ func TestCloneOnFeatureBranch(t *testing.T) {
 	clone := filepath.Join(base, "clone")
 	runGit(t, base, "clone", "-q", repo, clone)
 	runGit(t, clone, "checkout", "-q", "-b", "feature")
-	match, resolved := OnDefaultBranch(clone)
+	match, resolved := onDefaultBranchForTest(clone)
 	assert(t, "clone on feature", match, resolved, false, true)
 }
 
@@ -139,7 +153,7 @@ func TestCloneReadsOriginHead(t *testing.T) {
 	runGit(t, repo, "branch", "-m", "release")
 	clone := filepath.Join(base, "clone")
 	runGit(t, base, "clone", "-q", repo, clone)
-	match, resolved := OnDefaultBranch(clone)
+	match, resolved := onDefaultBranchForTest(clone)
 	assert(t, "clone on non-conventional default via origin/HEAD", match, resolved, true, true)
 }
 
@@ -147,11 +161,11 @@ func TestDetachedHead(t *testing.T) {
 	repo := filepath.Join(t.TempDir(), "repo")
 	initRepo(t, repo)
 	runGit(t, repo, "checkout", "-q", "--detach")
-	match, resolved := OnDefaultBranch(repo)
+	match, resolved := onDefaultBranchForTest(repo)
 	assert(t, "detached HEAD", match, resolved, false, true)
 }
 
 func TestNoRepo(t *testing.T) {
-	match, resolved := OnDefaultBranch(t.TempDir())
+	match, resolved := onDefaultBranchForTest(t.TempDir())
 	assert(t, "outside any repo", match, resolved, false, false)
 }

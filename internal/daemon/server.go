@@ -24,6 +24,7 @@ import (
 	"goodkind.io/agent-gate/internal/audit"
 	"goodkind.io/agent-gate/internal/composer"
 	"goodkind.io/agent-gate/internal/config"
+	"goodkind.io/agent-gate/internal/gitbranch"
 	"goodkind.io/agent-gate/internal/hook"
 	"goodkind.io/agent-gate/internal/hotkv"
 	"goodkind.io/agent-gate/internal/intake"
@@ -459,6 +460,7 @@ func (s *Server) EvaluateHook(ctx context.Context, req *daemonpb.EvaluateHookReq
 
 	ctx = rules.WithExecRuntime(ctx, snapshot.execRuntime)
 	ctx = rules.WithInferRuntime(ctx, snapshot.inferRuntime)
+	ctx = rules.WithGitStateReader(ctx, gitbranch.ReadState)
 	var traceSink *inferenceTraceSink
 	if configHasInference(snapshot.cfg) {
 		traceSink = &inferenceTraceSink{traces: nil}

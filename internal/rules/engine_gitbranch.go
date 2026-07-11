@@ -12,8 +12,6 @@ import (
 	"goodkind.io/gksyntax/shelldecomp"
 )
 
-type gitStateReader func(string) (gitbranch.State, error)
-
 type gitRefSubcommand string
 
 type branchMoveMode int
@@ -111,9 +109,15 @@ const (
 // evaluates conditions in config order, so place this condition after the cheaper
 // gate (an edit-tool regex or a git command condition) in the rule; that preceding
 // gate then short-circuits and the go-git open runs on candidate events only.
-func gitDefaultBranchConditionMatch(fields FieldSet, c *config.Condition, ctx conditionContext) bool {
+func gitDefaultBranchConditionMatch(
+	fields FieldSet,
+	c *config.Condition,
+	ctx conditionContext,
+	readState gitStateReader,
+) bool {
 	for _, target := range gitBranchTargets(fields, c, ctx) {
-		if match, resolved := gitbranch.OnDefaultBranch(target); resolved && match {
+		state, err := readState(target)
+		if err == nil && gitbranch.IsDefaultBranchWorktree(state, target) {
 			return true
 		}
 	}
@@ -143,7 +147,7 @@ func gitConditionMatch(
 ) bool {
 	switch config.ConditionKind(c.Kind) {
 	case config.ConditionKindGitDefaultBranch:
-		return gitDefaultBranchConditionMatch(fields, c, ctx)
+		return gitDefaultBranchConditionMatch(fields, c, ctx, readState)
 	case config.ConditionKindGitPrimaryCheckout:
 		return gitPrimaryCheckoutConditionMatch(fields, c, ctx, readState)
 	case config.ConditionKindGitRefMove:
@@ -967,7 +971,7 @@ func gitBranchTargets(fields FieldSet, c *config.Condition, ctx conditionContext
 // dedupeUsable returns the distinct usable target paths. It drops empties, the
 // shelldecomp unresolvable sentinel (which carries a NUL byte), and any
 // remaining non-absolute value, so an unpinnable cwd or write target can never
-// collapse to "." inside gitbranch.OnDefaultBranch and accidentally evaluate the
+// collapse to "." inside the git state reader and accidentally evaluate the
 // daemon's own directory. This preserves the fail-open contract for unresolvable
 // targets while gitBranchTargets has already resolved relative selector paths.
 func dedupeUsable(values []string) []string {

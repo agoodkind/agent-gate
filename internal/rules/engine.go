@@ -11,7 +11,6 @@ import (
 
 	"goodkind.io/agent-gate/internal/composer"
 	"goodkind.io/agent-gate/internal/config"
-	"goodkind.io/agent-gate/internal/gitbranch"
 	"goodkind.io/agent-gate/internal/regex"
 	diffconcern "goodkind.io/agent-gate/internal/rules/concerns/diff"
 	concernlimit "goodkind.io/agent-gate/internal/rules/concerns/limit"
@@ -743,7 +742,9 @@ func conditionGateMatches(
 		return shellReadConditionGateMatch(fields, condition)
 	case config.ConditionKindGitDefaultBranch, config.ConditionKindGitPrimaryCheckout,
 		config.ConditionKindGitRefMove:
-		return gitConditionMatch(fields, condition, conditionContextValue, gitbranch.ReadState)
+		return gitConditionMatch(
+			fields, condition, conditionContextValue, gitStateReaderFromContext(ctx),
+		)
 	case config.ConditionKindExec:
 		return execConditionGateMatch(ctx, fields, rule, conditionIndex, condition)
 	case config.ConditionKindInfer:

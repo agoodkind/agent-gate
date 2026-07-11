@@ -1,6 +1,7 @@
 package rules
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -113,6 +114,43 @@ kind = "git_ref_move"
 		fixture.read,
 	) {
 		t.Fatal("ref move condition did not dispatch")
+	}
+}
+
+func TestGitDefaultBranchConditionDispatchesWithInjectedState(t *testing.T) {
+	fixture := &gitStateFixture{state: testGitState()}
+	condition := loadGitCondition(
+		t, "git_default_branch", `field_paths = ["tool_input.file_path"]`,
+	)
+	fields := FieldSet{
+		ToolInputFilePath: "/repo/main/file.go",
+		CWD:               "/repo/feature",
+	}
+
+	if !gitConditionMatch(
+		fields, condition, conditionContext{}, fixture.read,
+	) {
+		t.Fatal("default branch condition did not use the injected state")
+	}
+}
+
+func TestEvaluateAllUsesContextGitStateReader(t *testing.T) {
+	fixture := &gitStateFixture{state: testGitState()}
+	rule := loadGitRule(t, `
+[[rules.conditions]]
+kind = "git_default_branch"
+field_paths = ["tool_input.file_path"]
+`)
+	fields := FieldSet{
+		ToolInputFilePath: "/repo/main/file.go",
+		CWD:               "/repo/feature",
+	}
+	ctx := WithGitStateReader(context.Background(), fixture.read)
+
+	violations := EvaluateAll(ctx, "codex", "AnyEvent", fields, []config.Rule{*rule}, nil)
+
+	if len(violations) != 1 {
+		t.Fatalf("violations = %+v, want one", violations)
 	}
 }
 
@@ -575,6 +613,7 @@ func TestGitRefMoveConditionStateFailureFailsOpen(t *testing.T) {
 func testGitState() gitbranch.State {
 	return gitbranch.State{
 		PrimaryCheckout: "/repo/main",
+		DefaultBranch:   "main",
 		CurrentWorktree: "/repo/feature",
 		CurrentBranch:   "feature",
 		LocalBranches:   []string{"feature", "main", "release/v1"},
