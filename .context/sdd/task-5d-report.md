@@ -68,3 +68,22 @@ missing `collectPreSkippedInferenceLayers`, `deterministicRuleDecisions`, and
 
 Task 5d does not modify `internal/rules`, intake, daemon receipt APIs,
 evaluation storage, composer, oracle, or live configuration.
+
+## Follow-up integration verification
+
+Commit `9b2d4f5` resolved the evaluation-trace blocker described above. The Task
+5d follow-up moves hook performance constants, accessors, and validation into
+`internal/config/hook_performance.go`, which reduces `config.go` from 1024 to
+929 lines without changing behavior.
+
+The daemon's exhaustive zero-value `HookPerformance` literal now includes
+`InferencePhaseTimeoutMS: 0`, preserving the 4000ms accessor default.
+
+`go test -count=1 ./internal/config ./internal/daemon`
+
+Passed both focused packages.
+
+`make check`
+
+Passed `lint-golangci`, formatting, cyclomatic complexity, dead-code analysis,
+and extended static analysis.

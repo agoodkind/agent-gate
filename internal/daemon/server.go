@@ -97,10 +97,11 @@ func New(log *slog.Logger, cfg *config.Config) (*Server, error) {
 			Paths: config.Paths{ConversationsDir: ""},
 			Performance: config.Performance{
 				Hook: config.HookPerformance{
-					HotConcurrency:     0,
-					HotQueueWaitMS:     0,
-					DeferredQueueLimit: 0,
-					DeferredWorkers:    0,
+					HotConcurrency:          0,
+					HotQueueWaitMS:          0,
+					InferencePhaseTimeoutMS: 0,
+					DeferredQueueLimit:      0,
+					DeferredWorkers:         0,
 					Cache: config.HookCachePerformance{
 						MaxEntries:      0,
 						MaxValueBytes:   0,
