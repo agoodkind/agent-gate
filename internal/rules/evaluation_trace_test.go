@@ -239,10 +239,55 @@ func TestInferTraceSanitizesGRPCErrorAndRejectsHashMismatch(t *testing.T) {
 		runtime := rules.NewInferRuntimeWithCache(nil, nil)
 		t.Cleanup(runtime.Close)
 		layer := evaluateInferDetailed(t, runtime, loadInferRule(t, endpoint, ""), "input").Trace.Layers[0]
-		if layer.Status != "error" || layer.ErrorCode != "hash_mismatch" || string(layer.OutputJSON) != `{}` {
+		if layer.Status != "error" || layer.ErrorCode != "hash_mismatch" ||
+			string(layer.OutputJSON) != `{"decision":"block"}` {
 			t.Fatalf("mismatch layer = %+v", layer)
 		}
 	})
+}
+
+func TestInferTracePreservesErroredReplyOutput(t *testing.T) {
+	tests := []struct {
+		name       string
+		outputJSON string
+		status     inferencepb.InferenceStatus
+		errorCode  string
+	}{
+		{
+			name: "non-complete", outputJSON: `{"decision":"partial"}`,
+			status:    inferencepb.InferenceStatus_INFERENCE_STATUS_UNSPECIFIED,
+			errorCode: "non_complete",
+		},
+		{
+			name: "invalid response", outputJSON: `{`,
+			status:    inferencepb.InferenceStatus_INFERENCE_STATUS_COMPLETE,
+			errorCode: "invalid_response",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fake := &inferenceFake{handler: func(context.Context, *inferencepb.InferRequest) (*inferencepb.InferReply, error) {
+				return &inferencepb.InferReply{
+					OutputJson: test.outputJSON, Status: test.status,
+					Metadata: &inferencepb.InvocationMetadata{RequestId: "errored-request"},
+				}, nil
+			}}
+			endpoint, _ := startInferenceServer(t, fake)
+			runtime := rules.NewInferRuntimeWithCache(nil, nil)
+			t.Cleanup(runtime.Close)
+			layer := evaluateInferDetailed(
+				t,
+				runtime,
+				loadInferRule(t, endpoint, ""),
+				"input",
+			).Trace.Layers[0]
+			if layer.Status != "error" || layer.ErrorCode != test.errorCode ||
+				string(layer.OutputJSON) != test.outputJSON ||
+				layer.InvocationMetadata.RequestID != "errored-request" {
+				t.Fatalf("errored layer = %+v", layer)
+			}
+		})
+	}
 }
 
 func evaluateInferDetailed(

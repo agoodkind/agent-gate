@@ -155,7 +155,7 @@ func collectRichInferenceTrace(
 		BlockOn:        condition.BlockOn,
 	})
 	outputJSON := append(json.RawMessage(nil), result.outputJSON...)
-	if result.errored || len(outputJSON) == 0 {
+	if len(outputJSON) == 0 {
 		outputJSON = json.RawMessage(`{}`)
 	}
 	inferenceStartedAt := call.startedAt

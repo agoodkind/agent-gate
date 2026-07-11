@@ -18,7 +18,6 @@ type intakeStore interface {
 	MarkDeferredComplete(context.Context, int64) error
 	ReplayPending(context.Context, func(intake.Record) error) error
 	ListPending(context.Context) ([]int64, error)
-	UpdateHotEvalLatency(context.Context, string, int64) error
 	Close() error
 }
 
@@ -159,6 +158,13 @@ func (s *sqliteIntakeStore) Handle() *sql.DB {
 		return nil
 	}
 	return s.store.Handle()
+}
+
+func (s *sqliteIntakeStore) Evaluations() evaluationRecorder {
+	if s == nil || s.store == nil {
+		return nil
+	}
+	return s.store.Evaluations()
 }
 
 func (s *sqliteIntakeStore) Close() error {

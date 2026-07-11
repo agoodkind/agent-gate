@@ -39,16 +39,17 @@ const (
 )
 
 type runtimeSnapshot struct {
-	cfg               *config.Config
-	eventLogger       *audit.EventLogger
-	intakeStore       intakeStore
-	deferredProcessor *deferredProcessor
-	evaluateSlots     chan struct{}
-	evaluateQueueWait time.Duration
-	hotEvaluate       func(context.Context, []byte, *config.Config, hook.System, func(string) string, string) hook.HotEvaluation
-	execRuntime       *rules.ExecRuntime
-	inferRuntime      *rules.InferRuntime
-	composerRuntime   *composer.Runtime
+	cfg                *config.Config
+	eventLogger        *audit.EventLogger
+	intakeStore        intakeStore
+	evaluationRecorder evaluationRecorder
+	deferredProcessor  *deferredProcessor
+	evaluateSlots      chan struct{}
+	evaluateQueueWait  time.Duration
+	hotEvaluate        func(context.Context, []byte, *config.Config, hook.System, func(string) string, string) hook.HotEvaluation
+	execRuntime        *rules.ExecRuntime
+	inferRuntime       *rules.InferRuntime
+	composerRuntime    *composer.Runtime
 }
 
 type inferenceTraceSink struct {
@@ -229,16 +230,17 @@ func newRuntimeSnapshot(ctx context.Context, cfg *config.Config, log *slog.Logge
 	}
 
 	return &runtimeSnapshot{
-		cfg:               cfg,
-		eventLogger:       eventLogger,
-		intakeStore:       intakeStore,
-		deferredProcessor: deferredProcessor,
-		evaluateSlots:     make(chan struct{}, cfg.HookHotConcurrency()),
-		evaluateQueueWait: cfg.HookHotQueueWait(),
-		hotEvaluate:       defaultHotEvaluate,
-		execRuntime:       rules.NewExecRuntimeWithCache(nil, log, hotStore),
-		inferRuntime:      inferRuntime,
-		composerRuntime:   composerRuntime,
+		cfg:                cfg,
+		eventLogger:        eventLogger,
+		intakeStore:        intakeStore,
+		evaluationRecorder: intakeStore.Evaluations(),
+		deferredProcessor:  deferredProcessor,
+		evaluateSlots:      make(chan struct{}, cfg.HookHotConcurrency()),
+		evaluateQueueWait:  cfg.HookHotQueueWait(),
+		hotEvaluate:        defaultHotEvaluate,
+		execRuntime:        rules.NewExecRuntimeWithCache(nil, log, hotStore),
+		inferRuntime:       inferRuntime,
+		composerRuntime:    composerRuntime,
 	}, nil
 }
 
@@ -485,15 +487,10 @@ func (s *Server) EvaluateHook(ctx context.Context, req *daemonpb.EvaluateHookReq
 	evalStart := hotEvalNow()
 	result := snapshot.hotEvaluate(ctx, rawJSON, syncCfg, hook.SystemFromString(req.GetProviderHint()), getenv, appendResult.EventID)
 	result.Deferred.InferenceTraces = traceSink.snapshot()
-	s.recordHotEvalLatency(ctx, snapshot, appendResult.EventID, hotEvalNow().Sub(evalStart).Microseconds())
-	if err := enqueueDeferredReplay(ctx, requestLog, snapshot, appendResult, result.Deferred); err != nil {
-		return failOpenEvaluateHookResponse(), nil
-	}
-	return &daemonpb.EvaluateHookResponse{
-		ExitCode:   clampExitCode(result.ExitCode),
-		StdoutData: append([]byte(nil), result.Stdout...),
-		StderrData: append([]byte(nil), result.Stderr...),
-	}, nil
+	return s.commitHotEvaluation(ctx, hotEvaluationCommitInput{
+		Log: requestLog, Snapshot: snapshot, Intake: intakeRecord,
+		AppendResult: appendResult, StartedAt: evalStart, Result: result,
+	}), nil
 }
 
 func configHasInference(cfg *config.Config) bool {
@@ -508,28 +505,6 @@ func configHasInference(cfg *config.Config) bool {
 		}
 	}
 	return false
-}
-
-// recordHotEvalLatency writes the synchronous evaluation latency back to the
-// durable intake row off the hot path. It is best-effort: the response has
-// already been computed, so a failed or late write only loses one latency
-// sample and never affects enforcement. The write is detached from the request
-// cancellation (the response is already sent) while preserving context values.
-func (s *Server) recordHotEvalLatency(ctx context.Context, snapshot *runtimeSnapshot, eventID string, latencyMicros int64) {
-	if snapshot == nil || snapshot.intakeStore == nil || eventID == "" {
-		return
-	}
-	writeCtx := context.WithoutCancel(ctx)
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				s.log.Error("recovered in hot eval latency writer", "err", fmt.Errorf("panic: %v", r))
-			}
-		}()
-		if err := snapshot.intakeStore.UpdateHotEvalLatency(writeCtx, eventID, latencyMicros); err != nil {
-			s.log.WarnContext(writeCtx, "record hot eval latency failed", "event_id", eventID, "err", err)
-		}
-	}()
 }
 
 func buildIntakeRecord(rawJSON []byte, providerHint string, envFingerprint map[string]string) (intake.Record, error) {
@@ -587,7 +562,7 @@ func cloneStringMap(values map[string]string) map[string]string {
 	return cloned
 }
 
-func enqueueDeferredReplay(
+func markDeferredReplayPending(
 	ctx context.Context,
 	log *slog.Logger,
 	snapshot *runtimeSnapshot,
@@ -599,13 +574,35 @@ func enqueueDeferredReplay(
 	}
 
 	if err := snapshot.intakeStore.MarkDeferredPending(ctx, appendResult.EventID, appendResult.ReceiptID); err != nil {
-		log.WarnContext(ctx, "mark deferred intake pending failed; failing open", "event_id", appendResult.EventID, "err", err)
+		log.WarnContext(
+			ctx,
+			"mark deferred intake pending failed; failing open",
+			"event_id", appendResult.EventID,
+			"status_class", "deferred_pending_failed",
+		)
 		return fmt.Errorf("mark deferred intake pending %q: %w", appendResult.EventID, err)
+	}
+	return nil
+}
+
+func enqueueDeferredReplay(
+	snapshot *runtimeSnapshot,
+	appendResult intake.AppendResult,
+	deferredEvent hook.DeferredAuditEvent,
+) {
+	if !deferredEvent.Valid {
+		return
 	}
 	if snapshot.deferredProcessor != nil {
 		snapshot.deferredProcessor.Enqueue(appendResult.ReceiptID, appendResult.EventID, deferredEvent)
 	}
-	return nil
+}
+
+func failOpenHotEvaluation(result hook.HotEvaluation) hook.HotEvaluation {
+	result.Stdout = nil
+	result.Stderr = nil
+	result.ExitCode = 0
+	return result
 }
 
 func wrapServerError(message string, err error) error {

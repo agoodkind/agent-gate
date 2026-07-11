@@ -830,3 +830,51 @@ func TestInferConditionsRunInDeclarationOrder(t *testing.T) {
 		})
 	}
 }
+
+func TestInferTraceTimeoutStopsLaterClosedConditions(t *testing.T) {
+	var modelsMu sync.Mutex
+	var models []string
+	fake := &inferenceFake{handler: func(ctx context.Context, request *inferencepb.InferRequest) (*inferencepb.InferReply, error) {
+		modelsMu.Lock()
+		models = append(models, request.GetModel())
+		modelsMu.Unlock()
+		if request.GetModel() == "v4" {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+		return &inferencepb.InferReply{
+			OutputJson: `{"decision":"block"}`,
+			Status:     inferencepb.InferenceStatus_INFERENCE_STATUS_COMPLETE,
+		}, nil
+	}}
+	endpoint, _ := startInferenceServer(t, fake)
+	rule := loadInferChainRule(t, endpoint)
+	rule.Conditions[0].TimeoutMs = 100
+	rule.Conditions[0].OnError = config.OnErrorClosed
+	runtime := rules.NewInferRuntimeWithCache(nil, nil)
+	t.Cleanup(runtime.Close)
+	ctx, cancel := context.WithTimeout(
+		rules.WithInferRuntime(context.Background(), runtime),
+		10*time.Millisecond,
+	)
+	defer cancel()
+	detailed := rules.EvaluateAllDetailed(
+		ctx,
+		"claude",
+		"PreToolUse",
+		rules.FieldSet{ToolInputCommand: "input", CWD: "/workspace", SessionID: "session"},
+		[]config.Rule{rule},
+		nil,
+		json.RawMessage(`{"tool_input":{"command":"input"}}`),
+		"v-test",
+	)
+	modelsMu.Lock()
+	calledModels := append([]string(nil), models...)
+	modelsMu.Unlock()
+	if strings.Join(calledModels, ",") != "v4" {
+		t.Fatalf("models = %v, want timed-out v4 only", calledModels)
+	}
+	if len(detailed.Trace.Layers) != 2 || detailed.Trace.Layers[1].Status != "skipped" {
+		t.Fatalf("layers = %+v", detailed.Trace.Layers)
+	}
+}

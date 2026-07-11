@@ -24,19 +24,19 @@ const (
 
 // InvocationMetadata is the exact inference service provenance returned for a call.
 type InvocationMetadata struct {
-	RequestID          string
-	ServiceVersion     string
-	RequestedModel     string
-	ActualModel        string
-	BackendFingerprint string
-	BackendVersion     string
-	PromptSHA256       string
-	SchemaSHA256       string
-	PromptTokens       *int64
-	CompletionTokens   *int64
-	TotalTokens        *int64
-	FinishReason       string
-	UpstreamLatency    time.Duration
+	RequestID          string        `json:"request_id"`
+	ServiceVersion     string        `json:"service_version"`
+	RequestedModel     string        `json:"requested_model"`
+	ActualModel        string        `json:"actual_model"`
+	BackendFingerprint string        `json:"backend_fingerprint"`
+	BackendVersion     string        `json:"backend_version"`
+	PromptSHA256       string        `json:"prompt_sha256"`
+	SchemaSHA256       string        `json:"schema_sha256"`
+	PromptTokens       *int64        `json:"prompt_tokens"`
+	CompletionTokens   *int64        `json:"completion_tokens"`
+	TotalTokens        *int64        `json:"total_tokens"`
+	FinishReason       string        `json:"finish_reason"`
+	UpstreamLatency    time.Duration `json:"upstream_latency"`
 }
 
 // DecisionTrace contains the deterministic rule decision and ordered optional layers.

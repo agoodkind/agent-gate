@@ -335,14 +335,23 @@ func (runtime *InferRuntime) call(
 		return mergeInferResult(base, inferError("non_complete"))
 	}
 	if reply.GetStatus() != inferencepb.InferenceStatus_INFERENCE_STATUS_COMPLETE {
-		return mergeInferResult(base, inferErrorWithMetadata("non_complete", reply.GetMetadata()))
+		return mergeInferResult(
+			base,
+			inferErrorWithMetadata("non_complete", reply.GetOutputJson(), reply.GetMetadata()),
+		)
 	}
 	matched, err := inferenceJSONMatches(condition, reply.GetOutputJson())
 	if err != nil {
-		return mergeInferResult(base, inferErrorWithMetadata("invalid_response", reply.GetMetadata()))
+		return mergeInferResult(
+			base,
+			inferErrorWithMetadata("invalid_response", reply.GetOutputJson(), reply.GetMetadata()),
+		)
 	}
 	if invocationHashMismatch(reply.GetMetadata(), localPromptHash, localSchemaHash) {
-		return mergeInferResult(base, inferErrorWithMetadata("hash_mismatch", reply.GetMetadata()))
+		return mergeInferResult(
+			base,
+			inferErrorWithMetadata("hash_mismatch", reply.GetOutputJson(), reply.GetMetadata()),
+		)
 	}
 	return mergeInferResult(base, inferSuccess(matched, json.RawMessage(reply.GetOutputJson()), reply.GetMetadata()))
 }
@@ -388,9 +397,14 @@ func inferError(errorClass string) inferResult {
 
 func inferErrorWithMetadata(
 	errorClass string,
+	outputJSON string,
 	metadata *inferencepb.InvocationMetadata,
 ) inferResult {
 	result := inferError(errorClass)
+	result.outputJSON = json.RawMessage(outputJSON)
+	if len(result.outputJSON) == 0 {
+		result.outputJSON = json.RawMessage(`{}`)
+	}
 	result.metadata = cloneInvocationMetadata(metadata)
 	return result
 }

@@ -686,6 +686,10 @@ func allConditionsMatch(ctx context.Context, fields FieldSet, rule *config.Rule,
 	}
 
 	for i := range conditions {
+		if ctx.Err() != nil {
+			collectRemainingInferenceSkips(ctx, rule, conditions, i)
+			return false
+		}
 		c := &conditions[i]
 		if !conditionGateMatches(ctx, fields, rule, i, c, condCtx) {
 			collectRemainingInferenceSkips(ctx, rule, conditions, i+1)

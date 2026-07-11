@@ -11,6 +11,7 @@ type HotEvaluation struct {
 	Stderr   []byte
 	ExitCode int
 	Deferred DeferredAuditEvent
+	Trace    rules.DecisionTrace
 }
 
 // DeferredAuditEvent is the durable audit input rebuilt from stored intake.
