@@ -223,6 +223,21 @@ func verdictFromOutcome(status string, outcome string) string {
 	return ""
 }
 
+// verdictFromFinalDisposition keeps the typed layer verdict within the allow or
+// block domain. A final disposition can also be "audit" (rules matched but
+// enforcement is off, which is a would-block) or "error" (evaluation failed).
+// Audit normalizes to block, error and anything else leave the verdict empty.
+// The full disposition is still preserved in the final layer output_json.
+func verdictFromFinalDisposition(verdict string) string {
+	if verdict == "allow" || verdict == "block" {
+		return verdict
+	}
+	if verdict == "audit" {
+		return "block"
+	}
+	return ""
+}
+
 func deterministicEvaluationLayer(trace rules.DeterministicTrace) evaluation.Layer {
 	latency := trace.CompletedAt.Sub(trace.StartedAt)
 	latency = max(latency, 0)
@@ -296,7 +311,7 @@ func hotFinalLayer(
 	})
 	return evaluation.Layer{
 		LayerIndex: layerIndex, ParentLayerIndex: &parentIndex, Kind: "final", Name: "hook-response",
-		Status: disposition.status, Outcome: "", Verdict: disposition.verdict,
+		Status: disposition.status, Outcome: "", Verdict: verdictFromFinalDisposition(disposition.verdict),
 		InputReference: "evaluation.layers",
 		InputJSON:      json.RawMessage(`{}`), InputHash: evaluationHash([]byte(`{}`)),
 		OutputHash: evaluationHash(outputJSON), OutputJSON: outputJSON,
@@ -324,7 +339,7 @@ func deferredFinalLayer(
 	})
 	return evaluation.Layer{
 		LayerIndex: layerIndex, ParentLayerIndex: &parentIndex, Kind: "final", Name: "audit-result",
-		Status: disposition.status, Outcome: "", Verdict: disposition.verdict,
+		Status: disposition.status, Outcome: "", Verdict: verdictFromFinalDisposition(disposition.verdict),
 		InputReference: "evaluation.layers",
 		InputJSON:      json.RawMessage(`{}`), InputHash: evaluationHash([]byte(`{}`)),
 		OutputHash: evaluationHash(outputJSON), OutputJSON: outputJSON,
