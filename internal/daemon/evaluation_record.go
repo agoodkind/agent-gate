@@ -32,6 +32,7 @@ type hotEvaluationRecordInput struct {
 	CompletedAt     time.Time
 	Result          hook.HotEvaluation
 	SystemError     string
+	ErrorMessage    string
 }
 
 type deferredEvaluationRecordInput struct {
@@ -79,7 +80,8 @@ type finalDisposition struct {
 }
 
 type evaluationErrorJSON struct {
-	Code string `json:"code"`
+	Code    string `json:"code"`
+	Message string `json:"message,omitempty"`
 }
 
 type deterministicLayerMetadata struct {
@@ -89,17 +91,22 @@ type deterministicLayerMetadata struct {
 
 func buildHotEvaluationRecord(input hotEvaluationRecordInput) evaluation.Record {
 	disposition := hotFinalDisposition(input.Result, input.SystemError)
-	deterministic := deterministicEvaluationLayer(input.Result.Trace.Deterministic)
 	layers := make([]evaluation.Layer, 0, len(input.Result.Trace.Layers)+2)
-	layers = append(layers, deterministic)
-	for i := range input.Result.Trace.Layers {
-		layers = append(layers, richEvaluationLayer(i+1, input.Result.Trace.Layers[i]))
+	if input.SystemError == intakeParseFailed {
+		layers = append(layers, payloadValidationLayer(input))
+	} else {
+		layers = append(layers, deterministicEvaluationLayer(input.Result.Trace.Deterministic))
+		for i := range input.Result.Trace.Layers {
+			layers = append(layers, richEvaluationLayer(i+1, input.Result.Trace.Layers[i]))
+		}
 	}
 	finalLayer := hotFinalLayer(len(layers), input.Result, disposition, input.CompletedAt)
 	layers = append(layers, finalLayer)
 	errorJSON := json.RawMessage(`{}`)
 	if input.SystemError != "" {
-		errorJSON = marshalEvaluationError(evaluationErrorJSON{Code: input.SystemError})
+		errorJSON = marshalEvaluationError(evaluationErrorJSON{
+			Code: input.SystemError, Message: input.ErrorMessage,
+		})
 	}
 	latency := input.CompletedAt.Sub(input.StartedAt)
 	latency = max(latency, 0)
@@ -117,6 +124,23 @@ func buildHotEvaluationRecord(input hotEvaluationRecordInput) evaluation.Record 
 		},
 		Layers: layers,
 		Labels: make([]evaluation.Label, 0),
+	}
+}
+
+func payloadValidationLayer(input hotEvaluationRecordInput) evaluation.Layer {
+	outputJSON := json.RawMessage(`{"valid":false}`)
+	return evaluation.Layer{
+		LayerIndex: 0, ParentLayerIndex: nil, Kind: "validation", Name: "payload-parse",
+		Status: "error", InputReference: "intake.raw_payload",
+		InputJSON: json.RawMessage(`{}`), InputHash: evaluationHash(input.Intake.RawPayload),
+		OutputHash: evaluationHash(outputJSON), OutputJSON: outputJSON,
+		MetadataJSON: json.RawMessage(`{"schema_version":1}`), StartedAt: input.StartedAt,
+		CompletedAt: input.CompletedAt,
+		LatencyUS:   max(input.CompletedAt.Sub(input.StartedAt), 0).Microseconds(),
+		ServiceName: "agent-gate", ServiceVersion: input.EngineVersion,
+		ModelName: "", ModelVersion: "", PromptHash: "", SchemaHash: "",
+		CacheStatus: "", CacheKeyHash: "", CacheEntryVersion: nil, CacheExpiresAt: nil,
+		ErrorCode: input.SystemError, ErrorMessage: input.ErrorMessage, RetryCount: 0,
 	}
 }
 
@@ -297,6 +321,12 @@ func deferredFinalDisposition(event hook.DeferredAuditEvent) finalDisposition {
 }
 
 func hotFinalDisposition(result hook.HotEvaluation, systemError string) finalDisposition {
+	if systemError == intakeParseFailed {
+		return finalDisposition{
+			verdict: "error", source: "input_validation", enforcementAction: "reject_invalid",
+			enforced: true, status: "error",
+		}
+	}
 	if systemError != "" {
 		return finalDisposition{
 			verdict: "error", source: "system_error", enforcementAction: "fail_open",

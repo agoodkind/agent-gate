@@ -19,6 +19,8 @@ type hotEvaluationCommitInput struct {
 	AppendResult intake.AppendResult
 	StartedAt    time.Time
 	Result       hook.HotEvaluation
+	SystemError  string
+	ErrorMessage string
 }
 
 func (s *Server) commitHotEvaluation(
@@ -26,16 +28,19 @@ func (s *Server) commitHotEvaluation(
 	input hotEvaluationCommitInput,
 ) *daemonpb.EvaluateHookResponse {
 	result := input.Result
-	systemError := ""
+	systemError := input.SystemError
+	errorMessage := input.ErrorMessage
 	if err := markDeferredReplayPending(
 		ctx, input.Log, input.Snapshot, input.AppendResult, result.Deferred,
 	); err != nil {
 		systemError = "deferred_pending_failed"
+		errorMessage = err.Error()
 		result = failOpenHotEvaluation(result)
 	}
 	configHash, err := input.Snapshot.cfg.Identity()
 	if err != nil {
 		systemError = "config_identity_failed"
+		errorMessage = err.Error()
 		configHash = "unknown"
 		result = failOpenHotEvaluation(result)
 	}
@@ -45,6 +50,7 @@ func (s *Server) commitHotEvaluation(
 		EngineVersion: gkversion.Version, EngineCommit: gkversion.Commit,
 		EngineBuildHash: version.BuildHash(), StartedAt: input.StartedAt,
 		CompletedAt: hotEvalNow(), Result: result, SystemError: systemError,
+		ErrorMessage: errorMessage,
 	})
 	if input.Snapshot.evaluationRecorder == nil {
 		s.logHotEvaluationFailure(

@@ -186,6 +186,46 @@ func TestEvaluateHookAllowPersistsEvaluation(t *testing.T) {
 	}
 }
 
+func TestEvaluateHookParseFailurePersistsValidationEvaluation(t *testing.T) {
+	setDaemonTestDirs(t)
+	server, err := New(newDiscardLogger(), daemonTestConfig(t))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer server.Close()
+	recorder := &recordingEvaluationRecorder{
+		mu: sync.Mutex{}, records: nil, err: nil, started: nil, release: nil,
+	}
+	server.runtime.Load().evaluationRecorder = recorder
+
+	response, err := server.EvaluateHook(
+		context.Background(),
+		&daemonpb.EvaluateHookRequest{RawJson: []byte(`{`), ProviderHint: "codex"},
+	)
+	if err != nil {
+		t.Fatalf("EvaluateHook: %v", err)
+	}
+	if response.ExitCode != 2 {
+		t.Fatalf("exit_code = %d, want 2", response.ExitCode)
+	}
+	records := recorder.snapshot()
+	if len(records) != 1 {
+		t.Fatalf("records = %d, want 1", len(records))
+	}
+	record := records[0]
+	if record.Evaluation.ReceiptID <= 0 || record.Evaluation.FinalVerdict != "error" ||
+		record.Evaluation.FinalSource != "input_validation" ||
+		record.Evaluation.EnforcementAction != "reject_invalid" ||
+		!record.Evaluation.Enforced {
+		t.Fatalf("parse evaluation = %+v", record.Evaluation)
+	}
+	if len(record.Layers) != 2 || record.Layers[0].Kind != "validation" ||
+		record.Layers[0].Name != "payload-parse" || record.Layers[0].Status != "error" ||
+		record.Layers[0].ErrorCode != "intake_parse_failed" {
+		t.Fatalf("parse layers = %+v", record.Layers)
+	}
+}
+
 func TestEvaluateHookQueueSaturationAfterEvaluationDoesNotChangeVerdict(t *testing.T) {
 	setDaemonTestDirs(t)
 	server, err := New(newDiscardLogger(), daemonTestConfig(t))

@@ -3,6 +3,7 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -33,6 +34,8 @@ import (
 )
 
 const configReloadDebounce = 200 * time.Millisecond
+
+const intakeParseFailed = "intake_parse_failed"
 
 const (
 	overloadLogInterval = 5 * time.Second
@@ -476,14 +479,12 @@ func (s *Server) EvaluateHook(ctx context.Context, req *daemonpb.EvaluateHookReq
 		return envFingerprint[key]
 	}
 
-	intakeRecord, err := buildIntakeRecord(rawJSON, req.GetProviderHint(), envFingerprint)
-	if err != nil {
-		result := snapshot.hotEvaluate(ctx, rawJSON, snapshot.cfg, hook.SystemFromString(req.GetProviderHint()), getenv, "")
-		return &daemonpb.EvaluateHookResponse{
-			ExitCode:   clampExitCode(result.ExitCode),
-			StdoutData: append([]byte(nil), result.Stdout...),
-			StderrData: append([]byte(nil), result.Stderr...),
-		}, nil
+	evalStart := hotEvalNow()
+	intakeRecord, intakeErr := buildIntakeRecord(rawJSON, req.GetProviderHint(), envFingerprint)
+	if intakeErr != nil {
+		intakeRecord = buildInvalidIntakeRecord(
+			rawJSON, req.GetProviderHint(), envFingerprint,
+		)
 	}
 
 	appendResult, err := snapshot.intakeStore.Append(ctx, intakeRecord)
@@ -493,12 +494,18 @@ func (s *Server) EvaluateHook(ctx context.Context, req *daemonpb.EvaluateHookReq
 	}
 
 	syncCfg := hook.SyncConfig(snapshot.cfg)
-	evalStart := hotEvalNow()
 	result := snapshot.hotEvaluate(ctx, rawJSON, syncCfg, hook.SystemFromString(req.GetProviderHint()), getenv, appendResult.EventID)
 	result.Deferred.InferenceTraces = traceSink.snapshot()
+	systemError := ""
+	errorMessage := ""
+	if intakeErr != nil {
+		systemError = intakeParseFailed
+		errorMessage = intakeErr.Error()
+	}
 	return s.commitHotEvaluation(ctx, hotEvaluationCommitInput{
 		Log: requestLog, Snapshot: snapshot, Intake: intakeRecord,
 		AppendResult: appendResult, StartedAt: evalStart, Result: result,
+		SystemError: systemError, ErrorMessage: errorMessage,
 	}), nil
 }
 
@@ -551,6 +558,25 @@ func buildIntakeRecord(rawJSON []byte, providerHint string, envFingerprint map[s
 	record.Operation.Command = fields.CommandValue()
 	record.Operation.FilePath = fields.FilePathValue()
 	return record, nil
+}
+
+func buildInvalidIntakeRecord(
+	rawJSON []byte,
+	providerHint string,
+	envFingerprint map[string]string,
+) intake.Record {
+	return intake.Record{
+		ReceiptID: 0, ReceivedAt: time.Time{}, EventID: "", SchemaVersion: 0,
+		RecordedAt: time.Time{}, System: hook.SystemFromString(providerHint).String(),
+		SessionID: "_no-session", TurnID: "", EventName: "_invalid",
+		ToolName: "", ToolUseID: "", Operation: intake.Operation{
+			CWD: "", EffectiveCWD: "", Command: "", FilePath: "",
+		},
+		RawPayload: append([]byte(nil), rawJSON...), NormalizedJSON: json.RawMessage(`{}`),
+		RawPayloadHash: "", EnvFingerprint: cloneStringMap(envFingerprint),
+		DeferredState: intake.DeferredStateNone, PendingAt: nil, CompletedAt: nil,
+		LastReplayAt: nil, DeferredReplays: 0, Sequence: 0,
+	}
 }
 
 func firstNonEmpty(values ...string) string {
