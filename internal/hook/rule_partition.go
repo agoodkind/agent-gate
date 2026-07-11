@@ -76,3 +76,17 @@ func DeferredConfig(cfg *config.Config) *config.Config {
 	_, deferredRules := PartitionRules(cfg)
 	return cloneConfigWithRules(cfg, deferredRules)
 }
+
+// ReplayDeferredConfig returns deferred rules that can be reconstructed
+// without repeating external inference after process-local hot state is lost.
+func ReplayDeferredConfig(cfg *config.Config) *config.Config {
+	_, deferredRules := PartitionRules(cfg)
+	replayRules := make([]config.Rule, 0, len(deferredRules))
+	for _, rule := range deferredRules {
+		if ruleHasInference(rule) {
+			continue
+		}
+		replayRules = append(replayRules, rule)
+	}
+	return cloneConfigWithRules(cfg, replayRules)
+}

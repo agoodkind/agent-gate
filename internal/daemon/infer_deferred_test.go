@@ -143,6 +143,46 @@ func TestDurableDeferredReplayExcludesSynchronousInference(t *testing.T) {
 	}
 }
 
+func TestDurableDeferredReplayExcludesAuditInferenceAndReportsEvaluatedRules(t *testing.T) {
+	fake := &deferredInferenceFake{}
+	endpoint := startDeferredInferenceServer(t, fake)
+	cfg := loadDeferredAuditInferConfig(t, endpoint)
+	processor := newDeferredProcessor(
+		context.Background(),
+		nil,
+		nil,
+		cfg,
+		nil,
+		1,
+		0,
+		newDiscardLogger(),
+	)
+	t.Cleanup(processor.Close)
+	record := intake.Record{
+		EventID:        "evt-audit-replay",
+		System:         "codex",
+		SessionID:      "s1",
+		EventName:      "PreToolUse",
+		RawPayload:     []byte(`{"session_id":"s1","hook_event_name":"PreToolUse","tool_name":"Shell","tool_input":{"command":"echo audit"}}`),
+		EnvFingerprint: map[string]string{},
+	}
+
+	deferredEvent, ok := processor.rebuildDeferredAudit(context.Background(), record, nil)
+
+	if !ok {
+		t.Fatal("rebuildDeferredAudit returned invalid event")
+	}
+	if fake.callCount() != 0 {
+		t.Fatalf("inference calls = %d, want 0", fake.callCount())
+	}
+	if len(deferredEvent.Rules) != 0 {
+		t.Fatalf("reported evaluated rules = %+v, want none", deferredEvent.Rules)
+	}
+	if deferredEvent.Decision != hook.ResponseDecisionAllow {
+		t.Fatalf("reconstructed decision = %q, want allow", deferredEvent.Decision)
+	}
+}
+
 func TestDeferredAuditOnlyInferenceUsesDaemonRuntimeAndAppendsTraces(t *testing.T) {
 	fake := &deferredInferenceFake{}
 	endpoint, connections := startCountedDeferredInferenceServer(t, fake)

@@ -196,10 +196,17 @@ func (p *deferredProcessor) rebuildDeferredAudit(
 		merged = syncEval.Deferred
 	}
 	syncRules, deferredRules := hook.PartitionRules(p.cfg)
+	deferredCfg := hook.DeferredConfig(p.cfg)
+	if hotEvent == nil || !hotEvent.Valid {
+		replaySyncCfg := hook.ReplaySyncConfig(p.cfg)
+		replayDeferredCfg := hook.ReplayDeferredConfig(p.cfg)
+		syncRules = replaySyncCfg.Rules
+		deferredRules = replayDeferredCfg.Rules
+		deferredCfg = replayDeferredCfg
+	}
 	merged.Rules = append(append([]config.Rule(nil), syncRules...), deferredRules...)
 
 	if len(deferredRules) > 0 {
-		deferredCfg := hook.DeferredConfig(p.cfg)
 		collector := &inferenceTraceSink{traces: nil}
 		deferredCtx := rules.WithInferenceTraceCollector(ctx, collector)
 		if p.inferRuntime != nil {
