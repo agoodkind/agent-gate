@@ -27,16 +27,17 @@ const (
 )
 
 type guardTruthCase struct {
-	ID           string           `json:"id"`
-	Guard        guardArea        `json:"guard"`
-	Category     string           `json:"category"`
-	Command      string           `json:"command"`
-	CWD          string           `json:"cwd"`
-	IndexedRoots []string         `json:"indexed_roots,omitempty"`
-	GitState     *gitStateFixture `json:"git_state,omitempty"`
-	Expected     expectedDecision `json:"expected"`
-	Rationale    string           `json:"rationale"`
-	LegacyCase   string           `json:"legacy_case,omitempty"`
+	ID           string            `json:"id"`
+	Guard        guardArea         `json:"guard"`
+	Category     string            `json:"category"`
+	Command      string            `json:"command"`
+	CWD          string            `json:"cwd"`
+	Environment  map[string]string `json:"environment,omitempty"`
+	IndexedRoots []string          `json:"indexed_roots,omitempty"`
+	GitState     *gitStateFixture  `json:"git_state,omitempty"`
+	Expected     expectedDecision  `json:"expected"`
+	Rationale    string            `json:"rationale"`
+	LegacyCase   string            `json:"legacy_case,omitempty"`
 }
 
 type gitStateFixture struct {
@@ -130,6 +131,8 @@ func TestGuardTruthSetSchemaAndCoverage(t *testing.T) {
 	}
 	counts := make(map[string]int)
 	seenLegacyCases := make(map[string]struct{})
+	foundProtectedEnvironmentCase := false
+	foundTemporaryEnvironmentCase := false
 	for _, truthCase := range cases {
 		delete(requiredCategories, truthCase.Category)
 		if truthCase.LegacyCase != "" {
@@ -142,6 +145,12 @@ func TestGuardTruthSetSchemaAndCoverage(t *testing.T) {
 			seenLegacyCases[truthCase.LegacyCase] = struct{}{}
 			delete(legacyCases, truthCase.LegacyCase)
 		}
+		if truthCase.LegacyCase == "worktree:w14" {
+			foundProtectedEnvironmentCase = truthCase.Environment["TARGET"] == "/repo/main/f.txt" && truthCase.Expected == expectedBlock
+		}
+		if truthCase.ID == "worktree-env-target-tmp" {
+			foundTemporaryEnvironmentCase = truthCase.Environment["TARGET"] == "/tmp/f.txt" && truthCase.Expected == expectedAllow
+		}
 		counts[string(truthCase.Guard)+"/"+string(truthCase.Expected)]++
 	}
 
@@ -150,6 +159,12 @@ func TestGuardTruthSetSchemaAndCoverage(t *testing.T) {
 	}
 	if len(legacyCases) != 0 {
 		t.Errorf("missing re-adjudicated legacy cases: %v", sortedKeys(legacyCases))
+	}
+	if !foundProtectedEnvironmentCase {
+		t.Error("legacy worktree:w14 must define TARGET=/repo/main/f.txt and block")
+	}
+	if !foundTemporaryEnvironmentCase {
+		t.Error("truth set must allow the same TARGET command when TARGET=/tmp/f.txt")
 	}
 	for _, key := range []string{"search/block", "search/allow", "worktree/block", "worktree/allow"} {
 		if counts[key] == 0 {
@@ -178,6 +193,7 @@ func TestLoadGuardTruthSetRejectsInvalidRecords(t *testing.T) {
 		{"cross-guard legacy case", strings.Replace(validSearch, `"rationale":"The target is outside the indexed root."`, `"rationale":"The target is outside the indexed root.","legacy_case":"worktree:w01"`, 1), "does not match guard"},
 		{"duplicate worktree path", strings.Replace(validWorktree, `]}`, `,{"path":"/worktrees/feature","branch":"other","is_primary":false}]}`, 1), "duplicate worktree path"},
 		{"secondary default category requires secondary default worktree", strings.Replace(strings.Replace(validWorktree, `"worktree/allow/tmp-redirect"`, `"worktree/block/file-write-default-secondary"`, 1), `"expected":"allow"`, `"expected":"block"`, 1), "requires a non-primary default-branch worktree"},
+		{"non-portable environment path", strings.Replace(validWorktree, `"cwd":"/worktrees/feature"`, `"cwd":"/worktrees/feature","environment":{"TARGET":"/Users/alice/file"}`, 1), "environment TARGET"},
 		{"private path", strings.Replace(validSearch, "/repo/main", "/Users/alice/repo", 1), "not a portable absolute path"},
 	}
 
@@ -255,6 +271,11 @@ func validateGuardTruthCase(truthCase guardTruthCase) error {
 	}
 	if len(truthCase.Rationale) > 160 || strings.Contains(truthCase.Rationale, "\n") {
 		return fmt.Errorf("rationale must be one concise line of at most 160 characters")
+	}
+	for name, value := range truthCase.Environment {
+		if name == "" || !portableAbsolutePath(value) {
+			return fmt.Errorf("environment %s value %q is not a portable absolute path", name, value)
+		}
 	}
 	if truthCase.Guard == guardAreaSearch {
 		if len(truthCase.IndexedRoots) == 0 {
