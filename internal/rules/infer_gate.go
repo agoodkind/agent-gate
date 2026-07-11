@@ -30,7 +30,6 @@ import (
 const (
 	inferenceCacheNamespace      = "infer-condition"
 	maxUpstreamMetadataJSONBytes = 4096
-	maxReportedHashBytes         = 128
 )
 
 // InferenceTrace is the payload-free record of one attempted inference layer.
@@ -63,30 +62,39 @@ type inferFlight struct {
 }
 
 type inferResult struct {
-	matched            bool
-	errored            bool
-	errorClass         string
-	cacheHit           bool
-	cacheStatus        string
-	cacheEntryVersion  *int64
-	cacheExpiresAt     *time.Time
-	outputJSON         json.RawMessage
-	upstreamMetadata   UpstreamMetadata
-	reportedPromptHash string
-	reportedSchemaHash string
-	contextJSON        json.RawMessage
-	contextStartedAt   time.Time
-	contextCompletedAt time.Time
-	contextErrorClass  string
+	matched                   bool
+	errored                   bool
+	errorClass                string
+	cacheHit                  bool
+	cacheStatus               string
+	cacheEntryVersion         *int64
+	cacheExpiresAt            *time.Time
+	outputJSON                json.RawMessage
+	upstreamMetadata          UpstreamMetadata
+	reportedPromptHash        string
+	reportedSchemaHash        string
+	reportedHashesUnavailable bool
+	contextJSON               json.RawMessage
+	contextStartedAt          time.Time
+	contextCompletedAt        time.Time
+	contextErrorClass         string
 }
 
 type cachedInferResult struct {
-	SchemaVersion      int              `json:"schema_version"`
-	Matched            bool             `json:"matched"`
-	OutputJSON         json.RawMessage  `json:"output_json"`
-	UpstreamMetadata   UpstreamMetadata `json:"upstream_metadata"`
-	ReportedPromptHash string           `json:"reported_prompt_hash,omitempty"`
-	ReportedSchemaHash string           `json:"reported_schema_hash,omitempty"`
+	SchemaVersion    int              `json:"schema_version"`
+	Matched          bool             `json:"matched"`
+	OutputJSON       json.RawMessage  `json:"output_json"`
+	UpstreamMetadata UpstreamMetadata `json:"upstream_metadata"`
+}
+
+type inferenceErrorOutput struct {
+	Error inferenceErrorDetails `json:"error"`
+}
+
+type inferenceErrorDetails struct {
+	Code       string `json:"code"`
+	ByteLength int    `json:"byte_length"`
+	SHA256     string `json:"sha256"`
 }
 
 // InferRuntime owns reusable inference and context channels plus call state.
@@ -403,12 +411,22 @@ func inferErrorWithMetadata(
 	metadata *inferencepb.InvocationMetadata,
 ) inferResult {
 	result := inferError(errorClass)
-	result.outputJSON = json.RawMessage(outputJSON)
-	if len(result.outputJSON) == 0 {
-		result.outputJSON = json.RawMessage(`{}`)
-	}
+	result.outputJSON = safeInferenceErrorOutput(errorClass, outputJSON)
 	result = applyInvocationMetadata(result, metadata)
 	return result
+}
+
+func safeInferenceErrorOutput(errorClass string, outputJSON string) json.RawMessage {
+	if errorClass != "invalid_response" && json.Valid([]byte(outputJSON)) {
+		return append(json.RawMessage(nil), outputJSON...)
+	}
+	encoded, err := json.Marshal(inferenceErrorOutput{Error: inferenceErrorDetails{
+		Code: errorClass, ByteLength: len(outputJSON), SHA256: traceJSONHash([]byte(outputJSON)),
+	}})
+	if err != nil {
+		return json.RawMessage(`{"error":{"code":"invalid_response","byte_length":0,"sha256":"sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}}`)
+	}
+	return encoded
 }
 
 func inferSuccess(
@@ -428,7 +446,8 @@ func emptyInferResult() inferResult {
 		matched: false, errored: false, errorClass: "", cacheHit: false,
 		cacheStatus: "", cacheEntryVersion: nil, cacheExpiresAt: nil,
 		outputJSON: json.RawMessage(`{}`), upstreamMetadata: emptyUpstreamMetadata(),
-		reportedPromptHash: "", reportedSchemaHash: "", contextJSON: nil,
+		reportedPromptHash: "", reportedSchemaHash: "", reportedHashesUnavailable: false,
+		contextJSON:      nil,
 		contextStartedAt: time.Time{}, contextCompletedAt: time.Time{},
 		contextErrorClass: "",
 	}
@@ -625,8 +644,8 @@ func (runtime *InferRuntime) cacheLookup(key string) (inferResult, bool) {
 	if err != nil || !found {
 		return emptyInferResult(), false
 	}
-	var cached cachedInferResult
-	if json.Unmarshal(entry.Value, &cached) != nil || !validCachedInferResult(cached) {
+	cached, metadata, valid := decodeCachedInferResult(entry.Value)
+	if !valid {
 		_, _ = runtime.cache.Delete(inferenceCacheNamespace, key)
 		return emptyInferResult(), false
 	}
@@ -635,8 +654,13 @@ func (runtime *InferRuntime) cacheLookup(key string) (inferResult, bool) {
 	result.outputJSON = append(json.RawMessage(nil), cached.OutputJSON...)
 	result.upstreamMetadata = cached.UpstreamMetadata
 	result.upstreamMetadata.Raw = append(json.RawMessage(nil), cached.UpstreamMetadata.Raw...)
-	result.reportedPromptHash = cached.ReportedPromptHash
-	result.reportedSchemaHash = cached.ReportedSchemaHash
+	if metadata != nil {
+		result.reportedPromptHash = metadata.GetPromptSha256()
+		result.reportedSchemaHash = metadata.GetSchemaSha256()
+	} else if cached.UpstreamMetadata.Status == UpstreamMetadataOmittedMalformed ||
+		cached.UpstreamMetadata.Status == UpstreamMetadataOmittedOversize {
+		result.reportedHashesUnavailable = true
+	}
 	if entry.Version <= math.MaxInt64 {
 		version := int64(entry.Version)
 		result.cacheEntryVersion = &version
@@ -648,30 +672,54 @@ func (runtime *InferRuntime) cacheLookup(key string) (inferResult, bool) {
 	return result, true
 }
 
-func validCachedInferResult(cached cachedInferResult) bool {
-	if cached.SchemaVersion != 2 || len(cached.ReportedPromptHash) > maxReportedHashBytes ||
-		len(cached.ReportedSchemaHash) > maxReportedHashBytes {
-		return false
+func decodeCachedInferResult(
+	value []byte,
+) (cachedInferResult, *inferencepb.InvocationMetadata, bool) {
+	var cached cachedInferResult
+	if json.Unmarshal(value, &cached) != nil {
+		return emptyCachedInferResult(), nil, false
 	}
-	metadata := cached.UpstreamMetadata
-	if metadata.Source != "inference_reply" || metadata.Trust != "untrusted" {
-		return false
-	}
-	switch metadata.Status {
-	case UpstreamMetadataPresent:
-		return len(metadata.Raw) > 0 && len(metadata.Raw) <= maxUpstreamMetadataJSONBytes &&
-			validInvocationMetadataJSON(metadata.Raw)
-	case UpstreamMetadataAbsent, UpstreamMetadataOmittedMalformed,
-		UpstreamMetadataOmittedOversize:
-		return len(metadata.Raw) == 0
-	default:
-		return false
+	metadata, valid := cachedInvocationMetadata(cached)
+	return cached, metadata, valid
+}
+
+func emptyCachedInferResult() cachedInferResult {
+	return cachedInferResult{
+		SchemaVersion: 0, Matched: false, OutputJSON: nil,
+		UpstreamMetadata: UpstreamMetadata{
+			Source: "", Trust: "", Status: "", Raw: nil,
+		},
 	}
 }
 
-func validInvocationMetadataJSON(raw json.RawMessage) bool {
-	metadata := new(inferencepb.InvocationMetadata)
-	return (protojson.UnmarshalOptions{DiscardUnknown: false}).Unmarshal(raw, metadata) == nil
+func cachedInvocationMetadata(
+	cached cachedInferResult,
+) (*inferencepb.InvocationMetadata, bool) {
+	if cached.SchemaVersion != 2 {
+		return nil, false
+	}
+	metadata := cached.UpstreamMetadata
+	if metadata.Source != "inference_reply" || metadata.Trust != "untrusted" {
+		return nil, false
+	}
+	switch metadata.Status {
+	case UpstreamMetadataPresent:
+		if len(metadata.Raw) == 0 || len(metadata.Raw) > maxUpstreamMetadataJSONBytes {
+			return nil, false
+		}
+		parsed := new(inferencepb.InvocationMetadata)
+		if (protojson.UnmarshalOptions{DiscardUnknown: false}).Unmarshal(
+			metadata.Raw, parsed,
+		) != nil {
+			return nil, false
+		}
+		return parsed, true
+	case UpstreamMetadataAbsent, UpstreamMetadataOmittedMalformed,
+		UpstreamMetadataOmittedOversize:
+		return nil, len(metadata.Raw) == 0
+	default:
+		return nil, false
+	}
 }
 
 func (runtime *InferRuntime) cacheStore(key string, ttlMilliseconds int, result inferResult) {
@@ -683,8 +731,6 @@ func (runtime *InferRuntime) cacheStore(key string, ttlMilliseconds int, result 
 			Status: result.upstreamMetadata.Status,
 			Raw:    append(json.RawMessage(nil), result.upstreamMetadata.Raw...),
 		},
-		ReportedPromptHash: result.reportedPromptHash,
-		ReportedSchemaHash: result.reportedSchemaHash,
 	})
 	if err != nil {
 		return
@@ -874,13 +920,20 @@ func verifiedInferenceProvenance(
 		EndpointHash:   traceJSONHash([]byte(condition.Endpoint)),
 		CacheKeyHash:   traceJSONHash([]byte(cacheKey)), InputHash: traceJSONHash([]byte(input)),
 		PromptSHA256: promptHash, SchemaSHA256: schemaHash,
-		ReportedPromptHashStatus: reportedHashStatus(result.reportedPromptHash, promptHash),
-		ReportedSchemaHashStatus: reportedHashStatus(result.reportedSchemaHash, schemaHash),
+		ReportedPromptHashStatus: reportedHashStatus(
+			result.reportedPromptHash, promptHash, result.reportedHashesUnavailable,
+		),
+		ReportedSchemaHashStatus: reportedHashStatus(
+			result.reportedSchemaHash, schemaHash, result.reportedHashesUnavailable,
+		),
 	}
 }
 
-func reportedHashStatus(reported string, local string) string {
+func reportedHashStatus(reported string, local string, unavailable bool) string {
 	if reported == "" {
+		if unavailable {
+			return "unavailable"
+		}
 		return "absent"
 	}
 	if hashValueMismatch(reported, local) {

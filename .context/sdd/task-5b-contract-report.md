@@ -51,23 +51,28 @@ usage, and latency never populate verified columns.
 
 ## Cache behavior
 
-Cache schema version 2 stores the schema-valid inference output, bounded raw
-upstream metadata, and bounded reported hash values. Cache reads reject legacy,
-malformed, oversized, or incorrectly labeled provenance records. Raw cache
-metadata must also decode as `InvocationMetadata` protobuf JSON with no unknown
-fields. Scalar, array, unknown-field, and malformed JSON values are rejected,
-while an explicit-zero optional token remains valid.
+Cache schema version 2 stores the schema-valid inference output and bounded raw
+upstream metadata. It does not store separate reported-hash siblings. Cache
+reads reject legacy, malformed, oversized, or incorrectly labeled provenance
+records. Raw cache metadata must also decode as `InvocationMetadata` protobuf
+JSON with no unknown fields. Scalar, array, unknown-field, and malformed JSON
+values are rejected, while an explicit-zero optional token remains valid.
 
 Each cache hit recomputes `VerifiedProvenance` from the current local condition,
-input, endpoint, and cache key. The cache does not replay a compact trace from
-the upstream response.
+input, endpoint, and cache key. Reported prompt and schema hashes come only from
+the parsed bounded raw metadata. Absent raw metadata reports `absent`, and
+omitted raw metadata reports `unavailable`. The cache does not replay a compact
+trace from the upstream response.
 
 ## Output contract
 
 Schema-valid `OutputJSON` and its `OutputHash` remain unchanged for successful
-inference replies. Error and non-complete replies retain their prior rich output
-behavior. The provenance split does not replace training output with an empty
-object.
+inference replies. Valid non-complete replies retain their prior rich output.
+An `invalid_response` or any non-JSON error reply stores a bounded structured
+object with the stable error code, original byte length, and original SHA-256.
+Raw invalid bytes never enter `OutputJSON`, so the hot ledger can commit the
+configured open or closed error result. The provenance split does not replace
+schema-valid training output with an empty object.
 
 ## Verification evidence
 
@@ -100,4 +105,6 @@ branch and its later tool setup and baseline.
 The focused tests cover cold and cache-hit compact traces, error and
 non-complete replies, local hash match status, bounded and malformed raw
 metadata, optional-zero token presence, verified evaluation columns, retained
-output JSON, payload-free compact provenance, and cache-poisoning inputs.
+successful output JSON, structured invalid-output digests, closed-error ledger
+blocking, payload-free compact provenance, and contradictory cache-poisoning
+inputs.

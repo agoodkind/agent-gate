@@ -2,13 +2,61 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 
 	"goodkind.io/agent-gate/api/daemonpb"
 	"goodkind.io/agent-gate/internal/evaluation"
 )
+
+func TestEvaluateHookClosedInferenceErrorBlocksAndPersistsValidLayer(t *testing.T) {
+	setDaemonTestDirs(t)
+	fake := newDeferredInferenceFake(`{`)
+	endpoint := startDeferredInferenceServer(t, fake)
+	cfg := loadDeferredInferConfig(t, endpoint)
+	cfg.Rules[0].Conditions[0].OnError = "closed"
+	server, err := New(newDiscardLogger(), cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer server.Close()
+	recorder := &recordingEvaluationRecorder{
+		mu: sync.Mutex{}, records: nil, err: nil, started: nil, release: nil,
+	}
+	server.runtime.Load().evaluationRecorder = recorder
+
+	response, err := server.EvaluateHook(context.Background(), blockingLedgerRequest(t))
+	if err != nil {
+		t.Fatalf("EvaluateHook: %v", err)
+	}
+	if len(response.StdoutData) == 0 {
+		t.Fatalf("closed inference response = %+v", response)
+	}
+	records := recorder.snapshot()
+	if len(records) != 1 || records[0].Evaluation.FinalVerdict != "block" ||
+		records[0].Evaluation.FinalSource != "inference" || !records[0].Evaluation.Enforced {
+		t.Fatalf("records = %+v", records)
+	}
+	var inferenceLayerFound bool
+	for _, layer := range records[0].Layers {
+		if layer.Kind != "inference" {
+			continue
+		}
+		inferenceLayerFound = true
+		if layer.Status != "error" || layer.ErrorCode != "invalid_response" ||
+			!json.Valid(layer.OutputJSON) || strings.Contains(string(layer.OutputJSON), `"raw"`) ||
+			!strings.Contains(string(layer.OutputJSON), `"byte_length":1`) ||
+			!strings.Contains(string(layer.OutputJSON), `"sha256":"sha256:`) {
+			t.Fatalf("inference layer = %+v", layer)
+		}
+	}
+	if !inferenceLayerFound {
+		t.Fatalf("inference layer missing: %+v", records[0].Layers)
+	}
+}
 
 type recordingEvaluationRecorder struct {
 	mu      sync.Mutex

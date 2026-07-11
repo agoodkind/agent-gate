@@ -22,8 +22,16 @@ import (
 
 type deferredInferenceFake struct {
 	inferencepb.UnimplementedInferenceServer
-	mu    sync.Mutex
-	calls int
+	mu         sync.Mutex
+	calls      int
+	outputJSON string
+}
+
+func newDeferredInferenceFake(outputJSON string) *deferredInferenceFake {
+	return &deferredInferenceFake{
+		UnimplementedInferenceServer: inferencepb.UnimplementedInferenceServer{},
+		mu:                           sync.Mutex{}, calls: 0, outputJSON: outputJSON,
+	}
 }
 
 func (server *deferredInferenceFake) Infer(
@@ -32,9 +40,13 @@ func (server *deferredInferenceFake) Infer(
 ) (*inferencepb.InferReply, error) {
 	server.mu.Lock()
 	server.calls++
+	outputJSON := server.outputJSON
 	server.mu.Unlock()
+	if outputJSON == "" {
+		outputJSON = `{"decision":"block"}`
+	}
 	return &inferencepb.InferReply{
-		OutputJson: `{"decision":"block"}`,
+		OutputJson: outputJSON,
 		Status:     inferencepb.InferenceStatus_INFERENCE_STATUS_COMPLETE,
 	}, nil
 }
@@ -46,7 +58,7 @@ func (server *deferredInferenceFake) callCount() int {
 }
 
 func TestDeferredAuditReusesHotInferenceOutcomeAndTrace(t *testing.T) {
-	fake := &deferredInferenceFake{}
+	fake := newDeferredInferenceFake("")
 	endpoint := startDeferredInferenceServer(t, fake)
 	cfg := loadDeferredInferConfig(t, endpoint)
 	runtime := rules.NewInferRuntimeWithCache(nil, nil)
@@ -107,7 +119,7 @@ func TestDeferredAuditReusesHotInferenceOutcomeAndTrace(t *testing.T) {
 }
 
 func TestDurableDeferredReplayExcludesSynchronousInference(t *testing.T) {
-	fake := &deferredInferenceFake{}
+	fake := newDeferredInferenceFake("")
 	endpoint := startDeferredInferenceServer(t, fake)
 	cfg := loadDeferredInferConfig(t, endpoint)
 	processor := newDeferredProcessor(
@@ -144,7 +156,7 @@ func TestDurableDeferredReplayExcludesSynchronousInference(t *testing.T) {
 }
 
 func TestDurableDeferredReplayExcludesAuditInferenceAndReportsEvaluatedRules(t *testing.T) {
-	fake := &deferredInferenceFake{}
+	fake := newDeferredInferenceFake("")
 	endpoint := startDeferredInferenceServer(t, fake)
 	cfg := loadDeferredAuditInferConfig(t, endpoint)
 	processor := newDeferredProcessor(
@@ -184,7 +196,7 @@ func TestDurableDeferredReplayExcludesAuditInferenceAndReportsEvaluatedRules(t *
 }
 
 func TestDeferredAuditOnlyInferenceUsesDaemonRuntimeAndAppendsTraces(t *testing.T) {
-	fake := &deferredInferenceFake{}
+	fake := newDeferredInferenceFake("")
 	endpoint, connections := startCountedDeferredInferenceServer(t, fake)
 	cfg := loadDeferredAuditInferConfig(t, endpoint)
 	runtime := rules.NewInferRuntimeWithCache(nil, nil)

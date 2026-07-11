@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -285,16 +286,22 @@ func TestInferTracePreservesErroredReplyOutput(t *testing.T) {
 	tests := []struct {
 		name       string
 		outputJSON string
+		wantRaw    bool
 		status     inferencepb.InferenceStatus
 		errorCode  string
 	}{
 		{
 			name: "non-complete", outputJSON: `{"decision":"partial"}`,
 			status:    inferencepb.InferenceStatus_INFERENCE_STATUS_UNSPECIFIED,
-			errorCode: "non_complete",
+			errorCode: "non_complete", wantRaw: true,
 		},
 		{
 			name: "invalid response", outputJSON: `{`,
+			status:    inferencepb.InferenceStatus_INFERENCE_STATUS_COMPLETE,
+			errorCode: "invalid_response",
+		},
+		{
+			name: "missing response field", outputJSON: `{}`,
 			status:    inferencepb.InferenceStatus_INFERENCE_STATUS_COMPLETE,
 			errorCode: "invalid_response",
 		},
@@ -317,10 +324,22 @@ func TestInferTracePreservesErroredReplyOutput(t *testing.T) {
 				"input",
 			).Trace.Layers[0]
 			if layer.Status != "error" || layer.ErrorCode != test.errorCode ||
-				string(layer.OutputJSON) != test.outputJSON ||
 				layer.UpstreamMetadata.Status != "present" ||
 				!strings.Contains(string(layer.UpstreamMetadata.Raw), `"request_id":"errored-request"`) {
 				t.Fatalf("errored layer = %+v", layer)
+			}
+			if test.wantRaw && string(layer.OutputJSON) != test.outputJSON {
+				t.Fatalf("errored output = %s, want %s", layer.OutputJSON, test.outputJSON)
+			}
+			if !test.wantRaw && (!json.Valid(layer.OutputJSON) ||
+				!strings.Contains(string(layer.OutputJSON), `"code":"invalid_response"`) ||
+				!strings.Contains(
+					string(layer.OutputJSON), `"byte_length":`+strconv.Itoa(len(test.outputJSON)),
+				) ||
+				!strings.Contains(
+					string(layer.OutputJSON), `"sha256":"`+traceHash([]byte(test.outputJSON))+`"`,
+				)) {
+				t.Fatalf("sanitized error output = %s", layer.OutputJSON)
 			}
 		})
 	}
