@@ -521,6 +521,8 @@ type Config struct {
 	Telemetry   TelemetryConfig `toml:"telemetry"`
 	Update      Update          `toml:"update"`
 	Rules       []Rule          `toml:"rules"`
+
+	sourceIdentity string
 }
 
 // ConversationsDir returns the resolved base directory for per-conversation
@@ -645,7 +647,13 @@ func loadPath(path string, requireExisting bool) (*Config, error) {
 		return nil, fmt.Errorf("stat config %s: %w", path, err)
 	}
 
-	meta, err := toml.DecodeFile(path, &cfg)
+	sourceBytes, err := os.ReadFile(path)
+	if err != nil {
+		log.Error("read config failed", "path", path, "err", err)
+		return nil, fmt.Errorf("read config %s: %w", path, err)
+	}
+	cfg.sourceIdentity = hashIdentity(sourceBytes)
+	meta, err := toml.Decode(string(sourceBytes), &cfg)
 	if err != nil {
 		log.Error("decode config failed", "path", path, "err", err)
 		return nil, fmt.Errorf("decode config %s: %w", path, err)
