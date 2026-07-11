@@ -263,6 +263,55 @@ func (el *EventLogger) Log(system, sessionID, eventName, level, msg string, attr
 	el.mu.Unlock()
 }
 
+// LogDurable writes a normalized audit event to every configured output before
+// returning. Failed writes remain eligible for a later retry.
+func (el *EventLogger) LogDurable(
+	ctx context.Context,
+	system string,
+	sessionID string,
+	eventName string,
+	level string,
+	msg string,
+	attrs Attrs,
+) error {
+	if el == nil || !el.enabled || !el.shouldLog(level) {
+		return nil
+	}
+
+	event := normalizeEvent(system, sessionID, eventName, level, msg, attrs)
+	fingerprint := dedupFingerprint(event, attrs)
+	rawPayload := ""
+	if value, ok := attrs["raw_payload"]; ok {
+		rawPayload = value.String()
+	}
+	if rawPayload != "" && el.rawHash {
+		event.RawPayloadHash = payloadHash(rawPayload)
+	}
+	event.EventID = "evt_" + fingerprint[:32]
+
+	el.mu.Lock()
+	defer el.mu.Unlock()
+	if el.stopping {
+		return fmt.Errorf("audit logger is stopping")
+	}
+	if _, seen := el.dedup.Get(fingerprint); seen {
+		return nil
+	}
+	for _, output := range el.outputs {
+		if err := output.Write(event, rawPayload); err != nil {
+			el.log.WarnContext(
+				ctx, "durable audit output write failed",
+				slog.String("event_id", event.EventID), slog.Any("err", err),
+			)
+			return fmt.Errorf("write durable audit event: %w", err)
+		}
+	}
+	el.dedup.Add(fingerprint, struct{}{})
+	return nil
+}
+
+var _ DurableSink = (*LocalSink)(nil)
+
 func (el *EventLogger) hasQueueCapacity() bool {
 	el.mu.Lock()
 	defer el.mu.Unlock()
@@ -656,12 +705,25 @@ func (s *sqliteEventSink) Write(event Event, _ string) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if _, err := tx.ExecContext(ctx, `insert or ignore into events values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	eventResult, err := tx.ExecContext(ctx, `insert or ignore into events values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		event.EventID, event.SchemaVersion, event.Time, event.Level, event.Message, event.System,
 		event.SessionID, event.TurnID, event.EventName, event.ToolUseID, event.ToolName, event.RawPayloadHash,
-	); err != nil {
+	)
+	if err != nil {
 		s.log.Warn("insert audit event failed", slog.String("event_id", event.EventID), slog.Any("err", err))
 		return fmt.Errorf("insert audit event: %w", err)
+	}
+	insertedCount, err := eventResult.RowsAffected()
+	if err != nil {
+		s.log.Warn("read inserted audit event count failed", slog.String("event_id", event.EventID), slog.Any("err", err))
+		return fmt.Errorf("read inserted audit event count: %w", err)
+	}
+	if insertedCount == 0 {
+		if err := tx.Commit(); err != nil {
+			s.log.Warn("commit replayed audit tx failed", slog.String("event_id", event.EventID), slog.Any("err", err))
+			return fmt.Errorf("commit replayed audit tx: %w", err)
+		}
+		return nil
 	}
 	if _, err := tx.ExecContext(ctx, `insert or ignore into operations values (?, ?, ?, ?, ?)`,
 		event.EventID, event.Operation.CWD, event.Operation.EffectiveCWD, event.Operation.Command, event.Operation.FilePath,

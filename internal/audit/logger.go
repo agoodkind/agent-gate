@@ -210,6 +210,13 @@ type Sink interface {
 	Close() error
 }
 
+// DurableSink extends [Sink] with a synchronous write used before durable
+// intake receipts are marked complete.
+type DurableSink interface {
+	Sink
+	LogDurable(ctx context.Context, system, sessionID, eventName, level, msg string, attrs Attrs) error
+}
+
 // LocalSink is a [Sink] backed by a local [EventLogger]. Used by the daemon.
 type LocalSink struct {
 	logger *EventLogger
@@ -226,6 +233,14 @@ func (s *LocalSink) Log(_ context.Context, system, sessionID, eventName, level, 
 		return
 	}
 	s.logger.Log(system, sessionID, eventName, level, msg, attrs)
+}
+
+// LogDurable writes through the underlying logger before returning.
+func (s *LocalSink) LogDurable(ctx context.Context, system, sessionID, eventName, level, msg string, attrs Attrs) error {
+	if s == nil || s.logger == nil {
+		return nil
+	}
+	return s.logger.LogDurable(ctx, system, sessionID, eventName, level, msg, attrs)
 }
 
 // Close closes the underlying [EventLogger].

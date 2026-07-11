@@ -12,18 +12,21 @@ import (
 	"goodkind.io/agent-gate/internal/hook"
 	"goodkind.io/agent-gate/internal/intake"
 	"goodkind.io/agent-gate/internal/rules"
+	"goodkind.io/agent-gate/internal/version"
+	gkversion "goodkind.io/gklog/version"
 )
 
 type deferredProcessor struct {
-	events       chan deferredWork
-	store        intakeStore
-	sink         audit.Sink
-	cfg          *config.Config
-	inferRuntime *rules.InferRuntime
-	log          *slog.Logger
-	done         chan struct{}
-	wg           sync.WaitGroup
-	stopping     atomic.Bool
+	events             chan deferredWork
+	store              intakeStore
+	sink               audit.Sink
+	cfg                *config.Config
+	inferRuntime       *rules.InferRuntime
+	evaluationRecorder evaluationRecorder
+	log                *slog.Logger
+	done               chan struct{}
+	wg                 sync.WaitGroup
+	stopping           atomic.Bool
 }
 
 type deferredWork struct {
@@ -50,15 +53,16 @@ func newDeferredProcessor(
 	}
 
 	processor := &deferredProcessor{
-		events:       make(chan deferredWork, queueLimit),
-		store:        store,
-		sink:         sink,
-		cfg:          cfg,
-		inferRuntime: inferRuntime,
-		log:          log,
-		done:         make(chan struct{}),
-		wg:           sync.WaitGroup{},
-		stopping:     atomic.Bool{},
+		events:             make(chan deferredWork, queueLimit),
+		store:              store,
+		sink:               sink,
+		cfg:                cfg,
+		inferRuntime:       inferRuntime,
+		evaluationRecorder: nil,
+		log:                log,
+		done:               make(chan struct{}),
+		wg:                 sync.WaitGroup{},
+		stopping:           atomic.Bool{},
 	}
 
 	for range workers {
@@ -156,12 +160,102 @@ func (p *deferredProcessor) processRecord(
 	if !ok {
 		return
 	}
-	if p.sink != nil {
-		hook.WriteDeferredAudit(ctx, deferredEvent, p.sink)
+	mode := "deferred"
+	if hotEvent == nil {
+		mode = "deferred_replay"
+	}
+	attempt := record.DeferredReplays + 1
+	configHash, err := p.cfg.Identity()
+	if err != nil {
+		p.logDeferredFailure(ctx, record, "config_identity_failed", err)
+		return
+	}
+	completedAt := hotEvalNow()
+	startedAt := deferredEvent.Trace.Deterministic.StartedAt
+	if startedAt.IsZero() {
+		startedAt = completedAt
+	}
+	evaluationRecord := buildDeferredEvaluationRecord(deferredEvaluationRecordInput{
+		ReceiptID: record.ReceiptID, EventID: record.EventID, Intake: record,
+		Mode: mode, Attempt: attempt, ConfigHash: configHash,
+		EngineVersion: gkversion.Version, EngineCommit: gkversion.Commit,
+		EngineBuildHash: version.BuildHash(), StartedAt: startedAt,
+		CompletedAt: completedAt, Event: deferredEvent,
+	})
+	if p.evaluationRecorder == nil {
+		p.logDeferredFailure(ctx, record, "evaluation_recorder_unavailable", nil)
+		return
+	}
+	if err := p.evaluationRecorder.RecordCompleted(ctx, evaluationRecord); err != nil {
+		p.logDeferredFailure(ctx, record, "evaluation_persistence_failed", err)
+		return
+	}
+	if err := writeDeferredAuditDurable(ctx, deferredEvent, p.sink); err != nil {
+		p.logDeferredFailure(ctx, record, "audit_persistence_failed", err)
+		return
 	}
 	if err := p.store.MarkDeferredComplete(ctx, record.ReceiptID); err != nil && p.log != nil {
 		p.log.WarnContext(ctx, "mark deferred intake complete failed", "receipt_id", record.ReceiptID, "event_id", record.EventID, "err", err)
 	}
+}
+
+func (p *deferredProcessor) logDeferredFailure(
+	ctx context.Context,
+	record intake.Record,
+	statusClass string,
+	err error,
+) {
+	if p.log == nil {
+		return
+	}
+	p.log.WarnContext(
+		ctx, "record deferred evaluation failed; leaving receipt pending",
+		"receipt_id", record.ReceiptID, "event_id", record.EventID,
+		"status_class", statusClass, "err", err,
+	)
+}
+
+type durableAuditForwarder struct {
+	sink audit.DurableSink
+	err  error
+}
+
+func (forwarder *durableAuditForwarder) Log(
+	ctx context.Context,
+	system string,
+	sessionID string,
+	eventName string,
+	level string,
+	msg string,
+	attrs audit.Attrs,
+) {
+	if forwarder.err != nil {
+		return
+	}
+	forwarder.err = forwarder.sink.LogDurable(
+		ctx, system, sessionID, eventName, level, msg, attrs,
+	)
+}
+
+func (forwarder *durableAuditForwarder) Close() error {
+	return nil
+}
+
+func writeDeferredAuditDurable(
+	ctx context.Context,
+	event hook.DeferredAuditEvent,
+	sink audit.Sink,
+) error {
+	if sink == nil {
+		return nil
+	}
+	durableSink, ok := sink.(audit.DurableSink)
+	if !ok {
+		return fmt.Errorf("audit sink does not support durable writes")
+	}
+	forwarder := &durableAuditForwarder{sink: durableSink, err: nil}
+	hook.WriteDeferredAudit(ctx, event, forwarder)
+	return forwarder.err
 }
 
 func (p *deferredProcessor) rebuildDeferredAudit(
@@ -227,6 +321,7 @@ func (p *deferredProcessor) rebuildDeferredAudit(
 				deferredEval.Deferred.AuditOnlyViolations...,
 			)
 			merged.InferenceTraces = append(merged.InferenceTraces, collector.snapshot()...)
+			merged.Trace = deferredEval.Trace
 		} else if p.log != nil {
 			p.log.WarnContext(ctx, "replay deferred evaluation produced invalid deferred event", "event_id", record.EventID)
 		}

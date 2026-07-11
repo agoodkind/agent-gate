@@ -73,6 +73,7 @@ func emptyDeferredAuditEvent(system System) DeferredAuditEvent {
 		BlockingViolations:  nil,
 		AuditOnlyViolations: nil,
 		InferenceTraces:     nil,
+		Trace:               emptyDecisionTrace(),
 		Decision:            ResponseDecisionAllow,
 		DiagnosticText:      "",
 	}
@@ -124,7 +125,7 @@ func evaluatePayloadHot(ctx context.Context, payload Payload, rawBytes []byte, c
 			Stdout:   response.Stdout,
 			Stderr:   response.Stderr,
 			ExitCode: response.ExitCode,
-			Deferred: newDeferredAuditEvent(rawBytes, payload, fields, ruleSet, blockingViolations, auditOnlyViolations, decision, diagnostic, eventID),
+			Deferred: newDeferredAuditEvent(rawBytes, payload, fields, ruleSet, blockingViolations, auditOnlyViolations, staged.trace, decision, diagnostic, eventID),
 			Trace:    staged.trace,
 		}
 	}
@@ -141,7 +142,7 @@ func evaluatePayloadHot(ctx context.Context, payload Payload, rawBytes []byte, c
 		Stdout:   response.Stdout,
 		Stderr:   response.Stderr,
 		ExitCode: response.ExitCode,
-		Deferred: newDeferredAuditEvent(rawBytes, payload, fields, ruleSet, blockingViolations, auditOnlyViolations, decision, diagnostic, eventID),
+		Deferred: newDeferredAuditEvent(rawBytes, payload, fields, ruleSet, blockingViolations, auditOnlyViolations, staged.trace, decision, diagnostic, eventID),
 		Trace:    staged.trace,
 	}
 }
@@ -160,6 +161,7 @@ func newDeferredAuditEvent(
 	ruleSet []config.Rule,
 	blockingViolations []rules.Violation,
 	auditOnlyViolations []rules.Violation,
+	trace rules.DecisionTrace,
 	decision ResponseDecision,
 	diagnosticText string,
 	eventID string,
@@ -178,6 +180,7 @@ func newDeferredAuditEvent(
 		BlockingViolations:  blockingViolations,
 		AuditOnlyViolations: auditOnlyViolations,
 		InferenceTraces:     nil,
+		Trace:               trace,
 		Decision:            decision,
 		DiagnosticText:      diagnosticText,
 	}

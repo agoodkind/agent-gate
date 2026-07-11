@@ -34,6 +34,21 @@ type hotEvaluationRecordInput struct {
 	SystemError     string
 }
 
+type deferredEvaluationRecordInput struct {
+	ReceiptID       int64
+	EventID         string
+	Intake          intake.Record
+	Mode            string
+	Attempt         int
+	ConfigHash      string
+	EngineVersion   string
+	EngineCommit    string
+	EngineBuildHash string
+	StartedAt       time.Time
+	CompletedAt     time.Time
+	Event           hook.DeferredAuditEvent
+}
+
 type layerMetadataV1 struct {
 	SchemaVersion      int                      `json:"schema_version"`
 	RuleName           string                   `json:"rule_name,omitempty"`
@@ -105,11 +120,43 @@ func buildHotEvaluationRecord(input hotEvaluationRecordInput) evaluation.Record 
 	}
 }
 
+func buildDeferredEvaluationRecord(input deferredEvaluationRecordInput) evaluation.Record {
+	trace := input.Event.Trace
+	layers := make([]evaluation.Layer, 0, len(trace.Layers)+2)
+	layers = append(layers, deterministicEvaluationLayer(trace.Deterministic))
+	for i := range trace.Layers {
+		layers = append(layers, richEvaluationLayer(i+1, trace.Layers[i]))
+	}
+	disposition := deferredFinalDisposition(input.Event)
+	layers = append(layers, deferredFinalLayer(len(layers), input.Event, disposition, input.CompletedAt))
+	latency := input.CompletedAt.Sub(input.StartedAt)
+	latency = max(latency, 0)
+	return evaluation.Record{
+		Evaluation: evaluation.Evaluation{
+			EvaluationID: evaluationID(input.ReceiptID, input.Mode, input.Attempt),
+			ReceiptID:    input.ReceiptID, EventID: input.EventID, Attempt: input.Attempt,
+			Mode: input.Mode, ConfigHash: input.ConfigHash, EngineVersion: input.EngineVersion,
+			EngineCommit: input.EngineCommit, EngineBuildHash: input.EngineBuildHash,
+			InputHash: evaluationHash(input.Intake.RawPayload), StartedAt: input.StartedAt,
+			CompletedAt: input.CompletedAt, FinalVerdict: disposition.verdict,
+			FinalSource: disposition.source, EnforcementAction: disposition.enforcementAction,
+			Enforced: disposition.enforced, TotalLatencyUS: latency.Microseconds(),
+			ErrorJSON: json.RawMessage(`{}`),
+		},
+		Layers: layers,
+		Labels: make([]evaluation.Label, 0),
+	}
+}
+
 func hotEvaluationID(receiptID int64) string {
+	return evaluationID(receiptID, "hot", hotEvaluationAttempt)
+}
+
+func evaluationID(receiptID int64, mode string, attempt int) string {
 	hash := sha256.New()
 	writeEvaluationHashPart(hash, strconv.FormatInt(receiptID, 10))
-	writeEvaluationHashPart(hash, "hot")
-	writeEvaluationHashPart(hash, strconv.Itoa(hotEvaluationAttempt))
+	writeEvaluationHashPart(hash, mode)
+	writeEvaluationHashPart(hash, strconv.Itoa(attempt))
 	return "eval_" + hex.EncodeToString(hash.Sum(nil))
 }
 
@@ -202,6 +249,50 @@ func hotFinalLayer(
 		ServiceVersion: "", ModelName: "", ModelVersion: "", PromptHash: "",
 		SchemaHash: "", CacheStatus: "", CacheKeyHash: "", CacheEntryVersion: nil,
 		CacheExpiresAt: nil, ErrorCode: "", ErrorMessage: "", RetryCount: 0,
+	}
+}
+
+func deferredFinalLayer(
+	layerIndex int,
+	event hook.DeferredAuditEvent,
+	disposition finalDisposition,
+	completedAt time.Time,
+) evaluation.Layer {
+	parentIndex := lastAttemptedLayerIndex(event.Trace.Layers)
+	outputJSON := marshalFinalLayerOutput(finalLayerOutput{
+		Verdict: disposition.verdict, Source: disposition.source,
+		EnforcementAction: disposition.enforcementAction, Enforced: disposition.enforced,
+		BlockingRuleNames:  violationRuleNames(event.BlockingViolations),
+		AuditOnlyRuleNames: violationRuleNames(event.AuditOnlyViolations),
+		ExitCode:           0, StdoutHash: evaluationHash(nil), StderrHash: evaluationHash(nil),
+	})
+	return evaluation.Layer{
+		LayerIndex: layerIndex, ParentLayerIndex: &parentIndex, Kind: "final", Name: "audit-result",
+		Status: disposition.status, InputReference: "evaluation.layers",
+		InputJSON: json.RawMessage(`{}`), InputHash: evaluationHash([]byte(`{}`)),
+		OutputHash: evaluationHash(outputJSON), OutputJSON: outputJSON,
+		MetadataJSON: json.RawMessage(`{"schema_version":1}`), StartedAt: completedAt,
+		CompletedAt: completedAt, LatencyUS: 0, ServiceName: "agent-gate",
+		ServiceVersion: "", ModelName: "", ModelVersion: "", PromptHash: "",
+		SchemaHash: "", CacheStatus: "", CacheKeyHash: "", CacheEntryVersion: nil,
+		CacheExpiresAt: nil, ErrorCode: "", ErrorMessage: "", RetryCount: 0,
+	}
+}
+
+func deferredFinalDisposition(event hook.DeferredAuditEvent) finalDisposition {
+	source := "deterministic"
+	if hasAttemptedInference(event.Trace.Layers) {
+		source = "inference"
+	}
+	if len(event.BlockingViolations) > 0 || len(event.AuditOnlyViolations) > 0 {
+		return finalDisposition{
+			verdict: "audit", source: source, enforcementAction: "audit",
+			enforced: false, status: "complete",
+		}
+	}
+	return finalDisposition{
+		verdict: "allow", source: source, enforcementAction: "audit",
+		enforced: false, status: "complete",
 	}
 }
 

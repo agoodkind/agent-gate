@@ -213,6 +213,7 @@ func newRuntimeSnapshot(ctx context.Context, cfg *config.Config, log *slog.Logge
 		cfg.HookDeferredWorkers(),
 		log,
 	)
+	deferredProcessor.evaluationRecorder = intakeStore.Evaluations()
 	if err := deferredProcessor.ReplayPending(ctx); err != nil {
 		deferredProcessor.Close()
 		if eventLogger != nil {

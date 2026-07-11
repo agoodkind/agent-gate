@@ -73,6 +73,50 @@ func TestEventLogger_WritesSQLiteAndDedups(t *testing.T) {
 	}
 }
 
+func TestEventLogger_DurableReplayDoesNotDuplicateViolations(t *testing.T) {
+	cfg := testConfig(t)
+	attrs := audit.Attrs{
+		"system":         audit.NewStringValue("codex"),
+		"session_id":     audit.NewStringValue("session-1"),
+		"event":          audit.NewStringValue("PreToolUse"),
+		"decision":       audit.NewStringValue("block"),
+		"blocking_rules": audit.NewStringSliceValue([]string{"durable-rule"}),
+	}
+
+	for range 2 {
+		logger, err := audit.NewEventLoggerWithOptions(
+			context.Background(), cfg, nil, audit.LoggerOptions{QueueLimit: 0},
+		)
+		if err != nil {
+			t.Fatalf("NewEventLogger: %v", err)
+		}
+		if err := logger.LogDurable(
+			context.Background(), "codex", "session-1", "PreToolUse", "info",
+			"hook.blocked", attrs,
+		); err != nil {
+			t.Fatalf("LogDurable: %v", err)
+		}
+		if err := logger.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	}
+
+	database, err := sql.Open("sqlite3", cfg.AuditSQLitePath())
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	defer func() { _ = database.Close() }()
+	var count int
+	if err := database.QueryRow(
+		"select count(*) from violations where rule = 'durable-rule'",
+	).Scan(&count); err != nil {
+		t.Fatalf("count violations: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("sqlite violations = %d, want 1 after durable replay", count)
+	}
+}
+
 func TestQuery_SQLite(t *testing.T) {
 	cfg := testConfig(t)
 	logger, err := audit.NewEventLoggerWithOptions(context.Background(), cfg, nil, audit.LoggerOptions{QueueLimit: 0})
