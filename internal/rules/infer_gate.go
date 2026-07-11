@@ -295,12 +295,15 @@ func (runtime *InferRuntime) call(
 	if err != nil {
 		return inferError(grpcErrorClass(err))
 	}
-	if reply == nil || reply.GetStatus() != inferencepb.InferenceStatus_INFERENCE_STATUS_COMPLETE {
+	if reply == nil {
 		return inferError("non_complete")
+	}
+	if reply.GetStatus() != inferencepb.InferenceStatus_INFERENCE_STATUS_COMPLETE {
+		return inferErrorWithMetadata("non_complete", reply.GetMetadata())
 	}
 	matched, err := inferenceJSONMatches(condition, reply.GetOutputJson())
 	if err != nil {
-		return inferError("invalid_response")
+		return inferErrorWithMetadata("invalid_response", reply.GetMetadata())
 	}
 	return inferSuccess(matched, reply.GetMetadata())
 }
@@ -339,6 +342,15 @@ func reasoningEffortValue(value config.ReasoningEffort) inferencepb.ReasoningEff
 
 func inferError(errorClass string) inferResult {
 	return inferResult{matched: false, errored: true, errorClass: errorClass, cacheHit: false, metadata: nil}
+}
+
+func inferErrorWithMetadata(
+	errorClass string,
+	metadata *inferencepb.InvocationMetadata,
+) inferResult {
+	result := inferError(errorClass)
+	result.metadata = cloneInvocationMetadata(metadata)
+	return result
 }
 
 func inferSuccess(matched bool, metadata *inferencepb.InvocationMetadata) inferResult {

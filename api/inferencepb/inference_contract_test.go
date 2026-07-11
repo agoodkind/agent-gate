@@ -34,11 +34,23 @@ func TestInferenceWireContract(t *testing.T) {
 	if message.Fields().ByName("generation_options").Message().Name() != "GenerationOptions" {
 		t.Fatal("generation_options does not reference GenerationOptions")
 	}
+	if message.Fields().ByName("generation_options").Cardinality() != protoreflect.Optional ||
+		!message.Fields().ByName("generation_options").HasPresence() {
+		t.Fatal("generation_options cardinality or presence differs from upstream")
+	}
 	reply := (&inferencepb.InferReply{}).ProtoReflect().Descriptor()
 	if reply.Fields().ByName("output_json").Number() != 1 ||
 		reply.Fields().ByName("status").Number() != 2 ||
 		reply.Fields().ByName("metadata").Number() != 3 {
 		t.Fatal("reply field numbers differ from upstream")
+	}
+	if reply.Fields().ByName("output_json").Kind() != protoreflect.StringKind ||
+		reply.Fields().ByName("status").Kind() != protoreflect.EnumKind ||
+		reply.Fields().ByName("metadata").Kind() != protoreflect.MessageKind ||
+		reply.Fields().ByName("metadata").Message().Name() != "InvocationMetadata" ||
+		reply.Fields().ByName("metadata").Cardinality() != protoreflect.Optional ||
+		!reply.Fields().ByName("metadata").HasPresence() {
+		t.Fatal("reply field contract differs from upstream")
 	}
 	options := inferencepb.File_inferencepb_inference_proto.Messages().ByName("GenerationOptions")
 	wantOptions := map[protoreflect.Name]protoreflect.FieldNumber{
@@ -54,6 +66,11 @@ func TestInferenceWireContract(t *testing.T) {
 		options.Fields().ByName("max_completion_tokens").Kind() != protoreflect.Int64Kind ||
 		options.Fields().ByName("temperature").Kind() != protoreflect.DoubleKind {
 		t.Fatal("generation option field types differ from upstream")
+	}
+	for _, name := range []protoreflect.Name{"reasoning_effort", "max_completion_tokens", "temperature"} {
+		if options.Fields().ByName(name).Cardinality() != protoreflect.Optional {
+			t.Fatalf("generation option %s cardinality differs from upstream", name)
+		}
 	}
 	for _, name := range []protoreflect.Name{"max_completion_tokens", "temperature"} {
 		if !options.Fields().ByName(name).HasPresence() {
@@ -74,9 +91,33 @@ func TestInferenceWireContract(t *testing.T) {
 			t.Fatalf("invocation metadata %s = %v, want field %d", name, field, number)
 		}
 	}
+	metadataKinds := map[protoreflect.Name]protoreflect.Kind{
+		"request_id": protoreflect.StringKind, "service_version": protoreflect.StringKind,
+		"requested_model": protoreflect.StringKind, "actual_model": protoreflect.StringKind,
+		"backend_fingerprint": protoreflect.StringKind, "backend_version": protoreflect.StringKind,
+		"prompt_sha256": protoreflect.StringKind, "schema_sha256": protoreflect.StringKind,
+		"prompt_tokens": protoreflect.Int64Kind, "completion_tokens": protoreflect.Int64Kind,
+		"total_tokens": protoreflect.Int64Kind, "finish_reason": protoreflect.StringKind,
+		"latency_ms": protoreflect.Int64Kind,
+	}
+	for name, kind := range metadataKinds {
+		field := metadata.Fields().ByName(name)
+		if field.Kind() != kind || field.Cardinality() != protoreflect.Optional {
+			t.Fatalf("invocation metadata %s kind/cardinality = %s/%s, want %s/optional", name, field.Kind(), field.Cardinality(), kind)
+		}
+	}
 	for _, name := range []protoreflect.Name{"prompt_tokens", "completion_tokens", "total_tokens"} {
 		if !metadata.Fields().ByName(name).HasPresence() {
 			t.Fatalf("invocation metadata %s does not preserve presence", name)
+		}
+	}
+	for _, name := range []protoreflect.Name{
+		"request_id", "service_version", "requested_model", "actual_model",
+		"backend_fingerprint", "backend_version", "prompt_sha256", "schema_sha256",
+		"finish_reason", "latency_ms",
+	} {
+		if metadata.Fields().ByName(name).HasPresence() {
+			t.Fatalf("invocation metadata %s unexpectedly has presence", name)
 		}
 	}
 	if inferencepb.InferenceStatus_INFERENCE_STATUS_UNSPECIFIED != 0 || inferencepb.InferenceStatus_INFERENCE_STATUS_COMPLETE != 1 {

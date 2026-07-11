@@ -18,6 +18,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/stats"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 
 	"goodkind.io/agent-gate/api/inferencepb"
 	"goodkind.io/agent-gate/internal/config"
@@ -141,6 +142,48 @@ response_json_equals = "block"
 		body = strings.Replace(body, "response_json_equals = \"block\"\n", "", 1)
 	}
 	body += extra + "\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.LoadExisting(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cfg.Rules[0]
+}
+
+func loadInferChainRule(t *testing.T, endpoint string) config.Rule {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config.toml")
+	body := `[[rules]]
+name = "infer-chain"
+events = ["PreToolUse"]
+action = "block"
+violation_message = "blocked"
+
+[[rules.conditions]]
+kind = "infer"
+endpoint = "` + endpoint + `"
+layer_name = "v4"
+prompt = "Classify"
+input_field = "tool_input.command"
+output_schema = '{"type":"object"}'
+response_json_field = "decision"
+response_json_equals = "block"
+model = "v4"
+
+[[rules.conditions]]
+kind = "infer"
+endpoint = "` + endpoint + `"
+layer_name = "mini-high"
+prompt = "Classify"
+input_field = "tool_input.command"
+output_schema = '{"type":"object"}'
+response_json_field = "decision"
+response_json_equals = "block"
+model = "gpt-5.4-mini"
+reasoning_effort = "high"
+`
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -277,6 +320,70 @@ func TestInferFailedRPCCapturesClientLatency(t *testing.T) {
 	}
 	if collector.traces[0].Metadata != nil {
 		t.Fatalf("failed RPC metadata = %+v, want nil", collector.traces[0].Metadata)
+	}
+}
+
+func TestInferErrorRepliesPreserveMetadataAndClientLatency(t *testing.T) {
+	metadata := &inferencepb.InvocationMetadata{
+		RequestId: "upstream-request", ServiceVersion: "service-version",
+		RequestedModel: "requested-model", ActualModel: "actual-model",
+		BackendFingerprint: "backend-fingerprint", BackendVersion: "backend-version",
+		PromptSha256: "prompt-sha256", SchemaSha256: "schema-sha256",
+		PromptTokens: int64Pointer(11), CompletionTokens: int64Pointer(4),
+		TotalTokens: int64Pointer(15), FinishReason: "upstream-finish", LatencyMs: 7,
+	}
+	tests := []struct {
+		name       string
+		outputJSON string
+		status     inferencepb.InferenceStatus
+		errorClass string
+	}{
+		{
+			name: "non-complete reply", outputJSON: `{"decision":"block"}`,
+			status:     inferencepb.InferenceStatus_INFERENCE_STATUS_UNSPECIFIED,
+			errorClass: "non_complete",
+		},
+		{
+			name: "complete reply with invalid output", outputJSON: `{`,
+			status:     inferencepb.InferenceStatus_INFERENCE_STATUS_COMPLETE,
+			errorClass: "invalid_response",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fake := &inferenceFake{handler: func(context.Context, *inferencepb.InferRequest) (*inferencepb.InferReply, error) {
+				time.Sleep(15 * time.Millisecond)
+				return &inferencepb.InferReply{
+					OutputJson: test.outputJSON,
+					Status:     test.status,
+					Metadata:   metadata,
+				}, nil
+			}}
+			endpoint, _ := startInferenceServer(t, fake)
+			runtime := rules.NewInferRuntimeWithCache(nil, nil)
+			t.Cleanup(runtime.Close)
+			collector := &traceCollector{}
+			ctx := rules.WithInferenceTraceCollector(
+				rules.WithInferRuntime(context.Background(), runtime),
+				collector,
+			)
+
+			evaluateInfer(t, ctx, loadInferRule(t, endpoint, "on_error = \"open\""), "input")
+
+			if len(collector.traces) != 1 {
+				t.Fatalf("traces = %+v", collector.traces)
+			}
+			trace := collector.traces[0]
+			if trace.ErrorClass != test.errorClass {
+				t.Fatalf("error class = %q, want %q", trace.ErrorClass, test.errorClass)
+			}
+			if trace.Latency < 10*time.Millisecond {
+				t.Fatalf("client latency = %s, want reply duration", trace.Latency)
+			}
+			if !proto.Equal(trace.Metadata, metadata) {
+				t.Fatalf("metadata = %+v, want exact upstream metadata %+v", trace.Metadata, metadata)
+			}
+		})
 	}
 }
 
@@ -703,11 +810,12 @@ func TestInferConditionsRunInDeclarationOrder(t *testing.T) {
 				return &inferencepb.InferReply{OutputJson: `{"decision":"` + test.firstDecision + `"}`, Status: 1}, nil
 			}}
 			endpoint, _ := startInferenceServer(t, fake)
-			rule := loadInferRule(t, endpoint, "model = \"v4\"")
-			second := rule.Conditions[0]
-			second.Model = "gpt-5.4-mini"
-			second.ReasoningEffort = "high"
-			rule.Conditions = append(rule.Conditions, second)
+			rule := loadInferChainRule(t, endpoint)
+			if len(rule.Conditions) != 2 || rule.Conditions[0].Model != "v4" ||
+				rule.Conditions[1].Model != "gpt-5.4-mini" ||
+				rule.Conditions[1].ReasoningEffort != config.ReasoningEffortHigh {
+				t.Fatalf("compiled inference chain = %+v", rule.Conditions)
+			}
 			runtime := rules.NewInferRuntimeWithCache(nil, nil)
 			t.Cleanup(runtime.Close)
 			blocked := len(evaluateInfer(t, rules.WithInferRuntime(context.Background(), runtime), rule, "input")) > 0
