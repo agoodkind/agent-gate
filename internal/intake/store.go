@@ -85,6 +85,15 @@ type Record struct {
 	Sequence        int64
 }
 
+// DeferredClaim fences one deferred evaluation attempt to a single processor.
+type DeferredClaim struct {
+	ReceiptID int64
+	EventID   string
+	Owner     string
+	Attempt   int
+	ExpiresAt time.Time
+}
+
 // AppendResult reports the durable event id and whether a new row was
 // inserted.
 type AppendResult struct {
@@ -263,30 +272,10 @@ func (s *Store) Append(ctx context.Context, record Record) (AppendResult, error)
 
 // MarkDeferredPending marks an intake record ready for deferred replay.
 func (s *Store) MarkDeferredPending(ctx context.Context, eventID string, receiptID int64) error {
-	now := intakeNow().UTC().Format(time.RFC3339Nano)
 	return s.withExistingReceipt(ctx, eventID, receiptID, func(tx *sql.Tx, canonicalEventID string) error {
-		_, err := tx.ExecContext(ctx, `
-			insert into intake_deferred (
-				receipt_id,
-				event_id,
-				state,
-				pending_at,
-				completed_at,
-				last_replay_at,
-				replay_count
-			) values (?, ?, ?, ?,
-				null,
-				cast(null as text),
-				0)
-			on conflict(receipt_id) do update set
-				state = excluded.state,
-				pending_at = coalesce(intake_deferred.pending_at, excluded.pending_at),
-				completed_at = null
-		`, receiptID, canonicalEventID, DeferredStatePending, now)
-		if err != nil {
-			return wrapLoggedError(ctx, s.log, "mark intake deferred pending", err)
-		}
-		return nil
+		return markDeferredPendingInTx(
+			ctx, tx, receiptID, canonicalEventID, intakeNow().UTC(),
+		)
 	})
 }
 
@@ -476,6 +465,9 @@ func (s *Store) init(ctx context.Context) error {
 			completed_at text,
 			last_replay_at text,
 			replay_count integer not null default 0,
+			claim_owner text,
+			claim_expires_at text,
+			claim_attempt integer not null default 0,
 			foreign key(receipt_id, event_id)
 				references intake_receipts(receipt_id, event_id) on delete cascade,
 			check(state in ('none', 'pending', 'complete'))

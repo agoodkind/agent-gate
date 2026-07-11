@@ -971,6 +971,30 @@ func (failingIntakeStore) MarkDeferredComplete(context.Context, int64) error {
 	return errors.New("mark complete failed")
 }
 
+func (failingIntakeStore) ClaimDeferred(
+	context.Context,
+	int64,
+	string,
+	time.Duration,
+) (intake.Record, intake.DeferredClaim, error) {
+	return intake.Record{}, intake.DeferredClaim{}, errors.New("claim failed")
+}
+
+func (failingIntakeStore) ReleaseDeferredClaim(
+	context.Context,
+	intake.DeferredClaim,
+) error {
+	return errors.New("release claim failed")
+}
+
+func (failingIntakeStore) RenewDeferredClaim(
+	context.Context,
+	intake.DeferredClaim,
+	time.Duration,
+) error {
+	return errors.New("renew claim failed")
+}
+
 func (failingIntakeStore) ReplayPending(context.Context, func(intake.Record) error) error {
 	return errors.New("replay failed")
 }

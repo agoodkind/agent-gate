@@ -575,29 +575,6 @@ func cloneStringMap(values map[string]string) map[string]string {
 	return cloned
 }
 
-func markDeferredReplayPending(
-	ctx context.Context,
-	log *slog.Logger,
-	snapshot *runtimeSnapshot,
-	appendResult intake.AppendResult,
-	deferredEvent hook.DeferredAuditEvent,
-) error {
-	if !deferredEvent.Valid {
-		return nil
-	}
-
-	if err := snapshot.intakeStore.MarkDeferredPending(ctx, appendResult.EventID, appendResult.ReceiptID); err != nil {
-		log.WarnContext(
-			ctx,
-			"mark deferred intake pending failed; failing open",
-			"event_id", appendResult.EventID,
-			"status_class", "deferred_pending_failed",
-		)
-		return fmt.Errorf("mark deferred intake pending %q: %w", appendResult.EventID, err)
-	}
-	return nil
-}
-
 func enqueueDeferredReplay(
 	snapshot *runtimeSnapshot,
 	appendResult intake.AppendResult,

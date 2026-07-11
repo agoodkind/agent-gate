@@ -16,6 +16,12 @@ import (
 
 type evaluationRecorder interface {
 	RecordCompleted(context.Context, evaluation.Record) error
+	CommitHotEvaluation(
+		context.Context, string, int64, bool, evaluation.Record,
+	) error
+	CommitDeferredEvaluation(
+		context.Context, intake.DeferredClaim, evaluation.Record,
+	) error
 }
 
 const hotEvaluationAttempt = 1
@@ -339,11 +345,11 @@ func hotFinalDisposition(result hook.HotEvaluation, systemError string) finalDis
 			enforced: false, status: "error",
 		}
 	}
+	source := "deterministic"
+	if hasAttemptedInference(result.Trace.Layers) {
+		source = "inference"
+	}
 	if len(result.Deferred.BlockingViolations) > 0 && result.Deferred.Decision == hook.ResponseDecisionBlock {
-		source := "deterministic"
-		if hasAttemptedInference(result.Trace.Layers) {
-			source = "inference"
-		}
 		enforcementAction := "deny"
 		if hook.LookupCapability(
 			result.Deferred.System, result.Deferred.EventName,
@@ -363,7 +369,7 @@ func hotFinalDisposition(result hook.HotEvaluation, systemError string) finalDis
 		}
 	}
 	return finalDisposition{
-		verdict: "allow", source: "deterministic", enforcementAction: "allow",
+		verdict: "allow", source: source, enforcementAction: "allow",
 		enforced: false, status: "complete",
 	}
 }

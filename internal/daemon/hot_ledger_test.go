@@ -10,6 +10,7 @@ import (
 
 	"goodkind.io/agent-gate/api/daemonpb"
 	"goodkind.io/agent-gate/internal/evaluation"
+	"goodkind.io/agent-gate/internal/intake"
 )
 
 func TestEvaluateHookClosedInferenceErrorBlocksAndPersistsValidLayer(t *testing.T) {
@@ -62,6 +63,7 @@ type recordingEvaluationRecorder struct {
 	mu      sync.Mutex
 	records []evaluation.Record
 	err     error
+	hotErr  error
 	started chan struct{}
 	release chan struct{}
 }
@@ -85,18 +87,31 @@ func (recorder *recordingEvaluationRecorder) RecordCompleted(
 	return nil
 }
 
+func (recorder *recordingEvaluationRecorder) CommitHotEvaluation(
+	ctx context.Context,
+	_ string,
+	_ int64,
+	_ bool,
+	record evaluation.Record,
+) error {
+	if recorder.hotErr != nil {
+		return recorder.hotErr
+	}
+	return recorder.RecordCompleted(ctx, record)
+}
+
+func (recorder *recordingEvaluationRecorder) CommitDeferredEvaluation(
+	ctx context.Context,
+	_ intake.DeferredClaim,
+	record evaluation.Record,
+) error {
+	return recorder.RecordCompleted(ctx, record)
+}
+
 func (recorder *recordingEvaluationRecorder) snapshot() []evaluation.Record {
 	recorder.mu.Lock()
 	defer recorder.mu.Unlock()
 	return append([]evaluation.Record(nil), recorder.records...)
-}
-
-type pendingFailureIntakeStore struct {
-	intakeStore
-}
-
-func (store pendingFailureIntakeStore) MarkDeferredPending(context.Context, string, int64) error {
-	return errors.New("pending unavailable")
 }
 
 func TestEvaluateHookEvaluationCommitPrecedesBlockingResponse(t *testing.T) {
@@ -154,7 +169,7 @@ func TestEvaluateHookLedgerFailureReturnsFailOpen(t *testing.T) {
 	}
 }
 
-func TestEvaluateHookPendingFailureRecordsAndReturnsFailOpen(t *testing.T) {
+func TestEvaluateHookAtomicHotCommitFailureRecordsAndReturnsFailOpen(t *testing.T) {
 	setDaemonTestDirs(t)
 	server, err := New(newDiscardLogger(), daemonTestConfig(t))
 	if err != nil {
@@ -162,9 +177,9 @@ func TestEvaluateHookPendingFailureRecordsAndReturnsFailOpen(t *testing.T) {
 	}
 	defer server.Close()
 	snapshot := server.runtime.Load()
-	snapshot.intakeStore = pendingFailureIntakeStore{intakeStore: snapshot.intakeStore}
 	recorder := &recordingEvaluationRecorder{
-		mu: sync.Mutex{}, records: nil, err: nil, started: nil, release: nil,
+		mu: sync.Mutex{}, records: nil, err: nil,
+		hotErr: errors.New("atomic hot commit unavailable"), started: nil, release: nil,
 	}
 	snapshot.evaluationRecorder = recorder
 	response, err := server.EvaluateHook(context.Background(), blockingLedgerRequest(t))
@@ -325,7 +340,4 @@ func blockingLedgerRequest(t *testing.T) *daemonpb.EvaluateHookRequest {
 	}
 }
 
-var (
-	_ intakeStore        = pendingFailureIntakeStore{}
-	_ evaluationRecorder = (*recordingEvaluationRecorder)(nil)
-)
+var _ evaluationRecorder = (*recordingEvaluationRecorder)(nil)

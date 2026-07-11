@@ -152,6 +152,52 @@ func TestBuildHotEvaluationRecordUsesActualFailOpenResult(t *testing.T) {
 	}
 }
 
+func TestBuildHotEvaluationRecordAttributesInferenceAllowAndError(t *testing.T) {
+	for _, status := range []string{"complete", "error"} {
+		t.Run(status, func(t *testing.T) {
+			startedAt := time.Date(2026, 7, 11, 2, 30, 0, 0, time.UTC)
+			parent := 0
+			result := hook.HotEvaluation{
+				Deferred: hook.DeferredAuditEvent{
+					Valid: true, System: hook.SystemCodex, SystemString: "codex",
+					EventName: "PreToolUse", SessionID: "session", EventID: "event-inference-allow",
+					Decision: hook.ResponseDecisionAllow,
+				},
+				Trace: rules.DecisionTrace{
+					Deterministic: rules.DeterministicTrace{
+						StartedAt: startedAt, CompletedAt: startedAt,
+						InputJSON: json.RawMessage(`{}`), OutputJSON: json.RawMessage(`{}`),
+						InputHash: "sha256:input", OutputHash: "sha256:output",
+						ServiceName: "agent-gate", ServiceVersion: "version",
+					},
+					Layers: []rules.LayerTrace{{
+						RuleName: "infer-rule", LayerName: "v4", Kind: "inference", Status: status,
+						ParentTraceIndex: &parent, StartedAt: startedAt, CompletedAt: startedAt,
+						InputJSON: json.RawMessage(`{}`), OutputJSON: json.RawMessage(`{}`),
+					}},
+				},
+			}
+			record := buildHotEvaluationRecord(hotEvaluationRecordInput{
+				ReceiptID: 8, EventID: "event-inference-allow",
+				Intake:     intake.Record{RawPayload: []byte(`{}`), NormalizedJSON: json.RawMessage(`{}`)},
+				ConfigHash: "sha256:config", EngineVersion: "version", EngineCommit: "commit",
+				EngineBuildHash: "build", StartedAt: startedAt, CompletedAt: startedAt,
+				Result: result,
+			})
+			if record.Evaluation.FinalSource != "inference" {
+				t.Fatalf("final source = %q, want inference", record.Evaluation.FinalSource)
+			}
+			var output finalLayerOutput
+			if err := json.Unmarshal(record.Layers[len(record.Layers)-1].OutputJSON, &output); err != nil {
+				t.Fatalf("decode final layer: %v", err)
+			}
+			if output.Source != "inference" {
+				t.Fatalf("final layer source = %q, want inference", output.Source)
+			}
+		})
+	}
+}
+
 func TestHotEvaluationIDSeparatesDuplicateReceipts(t *testing.T) {
 	if hotEvaluationID(100) == hotEvaluationID(101) {
 		t.Fatal("distinct receipts produced the same hot evaluation id")

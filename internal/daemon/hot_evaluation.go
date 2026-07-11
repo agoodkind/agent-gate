@@ -30,13 +30,6 @@ func (s *Server) commitHotEvaluation(
 	result := input.Result
 	systemError := input.SystemError
 	errorMessage := input.ErrorMessage
-	if err := markDeferredReplayPending(
-		ctx, input.Log, input.Snapshot, input.AppendResult, result.Deferred,
-	); err != nil {
-		systemError = "deferred_pending_failed"
-		errorMessage = err.Error()
-		result = failOpenHotEvaluation(result)
-	}
 	configHash, err := input.Snapshot.cfg.Identity()
 	if err != nil {
 		systemError = "config_identity_failed"
@@ -58,9 +51,26 @@ func (s *Server) commitHotEvaluation(
 		)
 		return failOpenEvaluateHookResponse()
 	}
-	if err := input.Snapshot.evaluationRecorder.RecordCompleted(ctx, record); err != nil {
+	deferredPending := result.Deferred.Valid && systemError == ""
+	if err := input.Snapshot.evaluationRecorder.CommitHotEvaluation(
+		ctx,
+		input.AppendResult.EventID,
+		input.AppendResult.ReceiptID,
+		deferredPending,
+		record,
+	); err != nil {
+		result = failOpenHotEvaluation(result)
+		failureRecord := buildHotEvaluationRecord(hotEvaluationRecordInput{
+			ReceiptID: input.AppendResult.ReceiptID, EventID: input.AppendResult.EventID,
+			Intake: input.Intake, ConfigHash: configHash,
+			EngineVersion: gkversion.Version, EngineCommit: gkversion.Commit,
+			EngineBuildHash: version.BuildHash(), StartedAt: input.StartedAt,
+			CompletedAt: hotEvalNow(), Result: result,
+			SystemError: "hot_evaluation_commit_failed", ErrorMessage: err.Error(),
+		})
+		_ = input.Snapshot.evaluationRecorder.RecordCompleted(ctx, failureRecord)
 		s.logHotEvaluationFailure(
-			ctx, input, record.Evaluation.EvaluationID, "evaluation_persistence_failed",
+			ctx, input, record.Evaluation.EvaluationID, "hot_evaluation_commit_failed",
 		)
 		return failOpenEvaluateHookResponse()
 	}

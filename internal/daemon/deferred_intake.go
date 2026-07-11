@@ -2,10 +2,13 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"goodkind.io/agent-gate/internal/audit"
 	"goodkind.io/agent-gate/internal/config"
@@ -27,7 +30,17 @@ type deferredProcessor struct {
 	done               chan struct{}
 	wg                 sync.WaitGroup
 	stopping           atomic.Bool
+	claimOwner         string
+	claimLease         time.Duration
+	claimRenewInterval time.Duration
 }
+
+const (
+	deferredClaimLease         = 30 * time.Second
+	deferredClaimRenewInterval = 10 * time.Second
+)
+
+var deferredProcessorSequence atomic.Uint64
 
 type deferredWork struct {
 	receiptID int64
@@ -63,6 +76,11 @@ func newDeferredProcessor(
 		done:               make(chan struct{}),
 		wg:                 sync.WaitGroup{},
 		stopping:           atomic.Bool{},
+		claimOwner: fmt.Sprintf(
+			"agent-gate-%d-%d", os.Getpid(), deferredProcessorSequence.Add(1),
+		),
+		claimLease:         deferredClaimLease,
+		claimRenewInterval: deferredClaimRenewInterval,
 	}
 
 	for range workers {
@@ -83,14 +101,18 @@ func (p *deferredProcessor) ReplayPending(ctx context.Context) error {
 		return nil
 	}
 
-	if err := p.store.ReplayPending(ctx, func(record intake.Record) error {
-		p.processRecord(ctx, record, nil)
-		return nil
-	}); err != nil {
+	receiptIDs, err := p.store.ListPending(ctx)
+	if err != nil {
 		if p.log != nil {
 			p.log.WarnContext(ctx, "replay pending deferred intake failed", "err", err)
 		}
 		return fmt.Errorf("replay pending deferred intake: %w", err)
+	}
+	var emptyEvent hook.DeferredAuditEvent
+	for _, receiptID := range receiptIDs {
+		p.processEvent(ctx, deferredWork{
+			receiptID: receiptID, eventID: "", hotEvent: emptyEvent,
+		})
 	}
 	return nil
 }
@@ -127,10 +149,14 @@ func (p *deferredProcessor) Close() {
 }
 
 func (p *deferredProcessor) worker(ctx context.Context) {
+	replayTicker := time.NewTicker(deferredClaimLease)
+	defer replayTicker.Stop()
 	for {
 		select {
 		case work := <-p.events:
 			p.processEvent(ctx, work)
+		case <-replayTicker.C:
+			_ = p.ReplayPending(ctx)
 		case <-p.done:
 			return
 		}
@@ -138,36 +164,102 @@ func (p *deferredProcessor) worker(ctx context.Context) {
 }
 
 func (p *deferredProcessor) processEvent(ctx context.Context, work deferredWork) {
-	record, err := p.store.GetReceipt(ctx, work.receiptID)
+	record, claim, err := p.store.ClaimDeferred(
+		ctx, work.receiptID, p.claimOwner, p.claimLease,
+	)
 	if err != nil {
+		if errors.Is(err, intake.ErrDeferredClaimUnavailable) {
+			return
+		}
 		if p.log != nil {
-			p.log.WarnContext(ctx, "load deferred intake failed", "event_id", work.eventID, "err", err)
+			p.log.WarnContext(ctx, "claim deferred intake failed", "event_id", work.eventID, "err", err)
 		}
 		return
 	}
-	if record.DeferredState != intake.DeferredStatePending {
-		return
+	var hotEvent *hook.DeferredAuditEvent
+	if work.hotEvent.Valid {
+		hotEvent = &work.hotEvent
 	}
-	p.processRecord(ctx, record, &work.hotEvent)
+	processingCtx, cancel := context.WithCancel(ctx)
+	stopRenewal := make(chan struct{})
+	renewalDone := make(chan struct{})
+	renewalStopped := false
+	stopRenewalAndWait := func() {
+		if renewalStopped {
+			return
+		}
+		close(stopRenewal)
+		<-renewalDone
+		renewalStopped = true
+	}
+	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil && p.log != nil {
+				p.log.ErrorContext(
+					processingCtx, "deferred claim renewal panic recovered", "err", recovered,
+				)
+			}
+		}()
+		p.renewClaim(processingCtx, cancel, claim, stopRenewal, renewalDone)
+	}()
+	defer stopRenewalAndWait()
+	defer cancel()
+	p.processRecord(processingCtx, ctx, record, claim, hotEvent, stopRenewalAndWait)
+}
+
+func (p *deferredProcessor) renewClaim(
+	ctx context.Context,
+	cancel context.CancelFunc,
+	claim intake.DeferredClaim,
+	stop <-chan struct{},
+	done chan<- struct{},
+) {
+	defer close(done)
+	ticker := time.NewTicker(p.claimRenewInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			if err := p.store.RenewDeferredClaim(ctx, claim, p.claimLease); err != nil {
+				if p.log != nil {
+					p.log.WarnContext(
+						ctx, "renew deferred intake claim failed",
+						"receipt_id", claim.ReceiptID, "attempt", claim.Attempt, "err", err,
+					)
+				}
+				cancel()
+				return
+			}
+		case <-stop:
+			return
+		case <-ctx.Done():
+			return
+		}
+	}
 }
 
 func (p *deferredProcessor) processRecord(
 	ctx context.Context,
+	auditCtx context.Context,
 	record intake.Record,
+	claim intake.DeferredClaim,
 	hotEvent *hook.DeferredAuditEvent,
+	afterCommit func(),
 ) {
 	deferredEvent, ok := p.rebuildDeferredAudit(ctx, record, hotEvent)
 	if !ok {
+		p.releaseClaim(ctx, claim)
 		return
 	}
 	mode := "deferred"
 	if hotEvent == nil {
 		mode = "deferred_replay"
 	}
-	attempt := record.DeferredReplays + 1
+	attempt := claim.Attempt
 	configHash, err := p.cfg.Identity()
 	if err != nil {
 		p.logDeferredFailure(ctx, record, "config_identity_failed", err)
+		p.releaseClaim(ctx, claim)
 		return
 	}
 	completedAt := hotEvalNow()
@@ -184,18 +276,31 @@ func (p *deferredProcessor) processRecord(
 	})
 	if p.evaluationRecorder == nil {
 		p.logDeferredFailure(ctx, record, "evaluation_recorder_unavailable", nil)
+		p.releaseClaim(ctx, claim)
 		return
 	}
-	if err := p.evaluationRecorder.RecordCompleted(ctx, evaluationRecord); err != nil {
+	if err := p.evaluationRecorder.CommitDeferredEvaluation(
+		ctx, claim, evaluationRecord,
+	); err != nil {
 		p.logDeferredFailure(ctx, record, "evaluation_persistence_failed", err)
+		p.releaseClaim(ctx, claim)
 		return
 	}
-	if err := writeDeferredAuditDurable(ctx, deferredEvent, p.sink); err != nil {
+	if afterCommit != nil {
+		afterCommit()
+	}
+	if err := writeDeferredAuditDurable(auditCtx, deferredEvent, p.sink); err != nil {
 		p.logDeferredFailure(ctx, record, "audit_persistence_failed", err)
-		return
 	}
-	if err := p.store.MarkDeferredComplete(ctx, record.ReceiptID); err != nil && p.log != nil {
-		p.log.WarnContext(ctx, "mark deferred intake complete failed", "receipt_id", record.ReceiptID, "event_id", record.EventID, "err", err)
+}
+
+func (p *deferredProcessor) releaseClaim(ctx context.Context, claim intake.DeferredClaim) {
+	if err := p.store.ReleaseDeferredClaim(ctx, claim); err != nil &&
+		!errors.Is(err, intake.ErrDeferredClaimLost) && p.log != nil {
+		p.log.WarnContext(
+			ctx, "release deferred intake claim failed",
+			"receipt_id", claim.ReceiptID, "attempt", claim.Attempt, "err", err,
+		)
 	}
 }
 

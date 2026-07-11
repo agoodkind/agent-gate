@@ -353,6 +353,25 @@ model = "later-model"
 	if len(traces) != 1 || traces[0].ErrorClass != "deadline_exceeded" {
 		t.Fatalf("inference traces = %+v", traces)
 	}
+	if len(evaluation.Trace.Layers) != 2 {
+		t.Fatalf("rich trace layers = %+v, want attempted and skipped inference", evaluation.Trace.Layers)
+	}
+	if evaluation.Trace.Layers[0].LayerName != "slow" ||
+		evaluation.Trace.Layers[0].Status != "error" ||
+		evaluation.Trace.Layers[0].ErrorCode != "deadline_exceeded" {
+		t.Fatalf("attempted inference layer = %+v", evaluation.Trace.Layers[0])
+	}
+	if evaluation.Trace.Layers[1].LayerName != "later" ||
+		evaluation.Trace.Layers[1].Status != "skipped" ||
+		evaluation.Trace.Layers[1].SkipReason != "inference_phase_timeout" {
+		t.Fatalf("skipped inference layer = %+v", evaluation.Trace.Layers[1])
+	}
+	for _, decision := range evaluation.Trace.Deterministic.CheckedRules {
+		if decision.RuleName == "later-inference" &&
+			decision.SkipReason != "inference_phase_timeout" {
+			t.Fatalf("later inference decision = %+v", decision)
+		}
+	}
 }
 
 func TestEvaluateHotCombinesViolationsInPhaseOrder(t *testing.T) {

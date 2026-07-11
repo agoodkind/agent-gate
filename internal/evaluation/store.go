@@ -30,9 +30,6 @@ func NewStore(ctx context.Context, database *sql.DB) (*Store, error) {
 
 // RecordCompleted atomically stores one completed evaluation and its children.
 func (s *Store) RecordCompleted(ctx context.Context, record Record) error {
-	if err := validateRecord(record); err != nil {
-		return err
-	}
 	transaction, err := s.database.BeginTx(ctx, nil)
 	if err != nil {
 		return wrapError("begin evaluation transaction", err)
@@ -41,6 +38,28 @@ func (s *Store) RecordCompleted(ctx context.Context, record Record) error {
 		_ = transaction.Rollback()
 	}()
 
+	if err := s.RecordCompletedInTx(ctx, transaction, record); err != nil {
+		return err
+	}
+	if err := transaction.Commit(); err != nil {
+		return wrapError("commit evaluation transaction", err)
+	}
+	return nil
+}
+
+// RecordCompletedInTx stores one complete evaluation inside a caller-owned
+// transaction. The caller remains responsible for commit or rollback.
+func (s *Store) RecordCompletedInTx(
+	ctx context.Context,
+	transaction *sql.Tx,
+	record Record,
+) error {
+	if transaction == nil {
+		return errors.New("evaluation transaction is required")
+	}
+	if err := validateRecord(record); err != nil {
+		return err
+	}
 	if err := insertEvaluation(
 		ctx,
 		transaction,
@@ -59,9 +78,6 @@ func (s *Store) RecordCompleted(ctx context.Context, record Record) error {
 		if err := insertLabel(ctx, transaction, record.Evaluation.EvaluationID, label); err != nil {
 			return err
 		}
-	}
-	if err := transaction.Commit(); err != nil {
-		return wrapError("commit evaluation transaction", err)
 	}
 	return nil
 }
@@ -164,6 +180,8 @@ var evaluationSchemaStatements = []string{
 			on gate_evaluations(event_id)`,
 	`create index if not exists gate_evaluations_receipt_id_idx
 			on gate_evaluations(receipt_id)`,
+	`create unique index if not exists gate_evaluations_receipt_mode_attempt_idx
+			on gate_evaluations(receipt_id, mode, attempt)`,
 	`create index if not exists gate_evaluations_completed_at_idx
 			on gate_evaluations(completed_at)`,
 	`create index if not exists gate_evaluations_final_verdict_idx

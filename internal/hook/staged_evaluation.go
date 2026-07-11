@@ -60,7 +60,9 @@ func evaluateStagedRules(
 		if len(inferenceRules) > 0 {
 			trace.Layers = append(
 				trace.Layers,
-				skippedStagedInferenceLayers(inferenceRules, len(trace.Layers))...,
+				skippedStagedInferenceLayers(
+					inferenceRules, len(trace.Layers), "prior_condition_nonmatch",
+				)...,
 			)
 		}
 		return stagedRuleEvaluation{violations: violations, trace: trace}
@@ -68,8 +70,10 @@ func evaluateStagedRules(
 
 	inferenceCtx, cancel := context.WithTimeout(ctx, cfg.HookInferencePhaseTimeout())
 	defer cancel()
+	firstUnprocessed := len(inferenceRules)
 	for i := range inferenceRules {
 		if inferenceCtx.Err() != nil {
+			firstUnprocessed = i
 			break
 		}
 		inference := rules.EvaluateAllDetailed(
@@ -85,16 +89,29 @@ func evaluateStagedRules(
 		detailedResults = append(detailedResults, inference)
 		violations = append(violations, inference.Violations...)
 	}
+	trace := mergeStagedDecisionTrace(
+		deterministic.Trace,
+		ruleSet,
+		detailedResults,
+		violations,
+		system,
+		eventName,
+	)
+	if firstUnprocessed < len(inferenceRules) {
+		unprocessed := inferenceRules[firstUnprocessed:]
+		trace.Layers = append(
+			trace.Layers,
+			skippedStagedInferenceLayers(
+				unprocessed, len(trace.Layers), "inference_phase_timeout",
+			)...,
+		)
+		setStagedRuleSkipReason(
+			&trace, unprocessed, "inference_phase_timeout", violations, system, eventName,
+		)
+	}
 	return stagedRuleEvaluation{
 		violations: violations,
-		trace: mergeStagedDecisionTrace(
-			deterministic.Trace,
-			ruleSet,
-			detailedResults,
-			violations,
-			system,
-			eventName,
-		),
+		trace:      trace,
 	}
 }
 
@@ -206,7 +223,11 @@ func stagedDeterministicOutput(
 	return encoded
 }
 
-func skippedStagedInferenceLayers(ruleSet []config.Rule, layerOffset int) []rules.LayerTrace {
+func skippedStagedInferenceLayers(
+	ruleSet []config.Rule,
+	layerOffset int,
+	skipReason string,
+) []rules.LayerTrace {
 	layers := make([]rules.LayerTrace, 0)
 	for ruleIndex := range ruleSet {
 		rule := &ruleSet[ruleIndex]
@@ -224,11 +245,13 @@ func skippedStagedInferenceLayers(ruleSet []config.Rule, layerOffset int) []rule
 					"context",
 					condition.Model,
 					parent,
+					skipReason,
 				))
 				parent = layerOffset + len(layers)
 			}
 			layers = append(layers, skippedStagedLayer(
 				rule.Name, conditionIndex, condition.LayerName, "inference", condition.Model, parent,
+				skipReason,
 			))
 		}
 	}
@@ -242,11 +265,12 @@ func skippedStagedLayer(
 	kind string,
 	model string,
 	parent int,
+	skipReason string,
 ) rules.LayerTrace {
 	emptyJSON := json.RawMessage(`{}`)
 	return rules.LayerTrace{
 		RuleName: ruleName, ConditionIndex: conditionIndex, LayerName: layerName,
-		Kind: kind, Status: "skipped", Outcome: "", SkipReason: "prior_condition_nonmatch",
+		Kind: kind, Status: "skipped", Outcome: "", SkipReason: skipReason,
 		ParentTraceIndex: &parent, StartedAt: time.Time{}, CompletedAt: time.Time{},
 		InputReference: "intake.normalized_json", InputJSON: emptyJSON, OutputJSON: emptyJSON,
 		InputHash: hookTraceHash(emptyJSON), OutputHash: hookTraceHash(emptyJSON),
@@ -264,6 +288,35 @@ func skippedStagedLayer(
 		},
 		ErrorCode: "", ErrorMessage: "", RetryCount: 0,
 	}
+}
+
+func setStagedRuleSkipReason(
+	trace *rules.DecisionTrace,
+	ruleSet []config.Rule,
+	skipReason string,
+	violations []rules.Violation,
+	system string,
+	eventName string,
+) {
+	skippedRules := make(map[string]bool, len(ruleSet))
+	for i := range ruleSet {
+		skippedRules[ruleSet[i].Name] = true
+	}
+	for i := range trace.Deterministic.CheckedRules {
+		decision := &trace.Deterministic.CheckedRules[i]
+		if !skippedRules[decision.RuleName] {
+			continue
+		}
+		decision.Status = "skipped"
+		decision.SkipReason = skipReason
+		decision.Matched = false
+	}
+	trace.Deterministic.OutputJSON = stagedDeterministicOutput(
+		trace.Deterministic.CheckedRules,
+		violations,
+		LookupCapability(SystemFromString(system), eventName).String(),
+	)
+	trace.Deterministic.OutputHash = hookTraceHash(trace.Deterministic.OutputJSON)
 }
 
 func hookTraceHash(value []byte) string {

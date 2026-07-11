@@ -7,7 +7,19 @@ import (
 )
 
 func ensureDeferredReceiptSchema(ctx context.Context, database *sql.DB) error {
-	hasReceiptID, err := tableHasColumn(ctx, database, "intake_deferred", "receipt_id")
+	hasReceiptID, err := deferredTableHasColumn(ctx, database, "receipt_id")
+	if err != nil {
+		return err
+	}
+	hasClaimOwner, err := deferredTableHasColumn(ctx, database, "claim_owner")
+	if err != nil {
+		return err
+	}
+	hasClaimExpiresAt, err := deferredTableHasColumn(ctx, database, "claim_expires_at")
+	if err != nil {
+		return err
+	}
+	hasClaimAttempt, err := deferredTableHasColumn(ctx, database, "claim_attempt")
 	if err != nil {
 		return err
 	}
@@ -41,10 +53,36 @@ func ensureDeferredReceiptSchema(ctx context.Context, database *sql.DB) error {
 		if err := migrateLegacyDeferredRows(ctx, transaction); err != nil {
 			return err
 		}
+		hasClaimOwner = true
+		hasClaimExpiresAt = true
+		hasClaimAttempt = true
+	}
+	if !hasClaimOwner {
+		if _, err := transaction.ExecContext(ctx, `
+			alter table intake_deferred add column claim_owner text
+		`); err != nil {
+			return wrapError("add deferred claim owner", err)
+		}
+	}
+	if !hasClaimExpiresAt {
+		if _, err := transaction.ExecContext(ctx, `
+			alter table intake_deferred add column claim_expires_at text
+		`); err != nil {
+			return wrapError("add deferred claim expiry", err)
+		}
+	}
+	if !hasClaimAttempt {
+		if _, err := transaction.ExecContext(ctx, `
+			alter table intake_deferred add column claim_attempt integer not null default 0
+		`); err != nil {
+			return wrapError("add deferred claim attempt", err)
+		}
 	}
 	if _, err := transaction.ExecContext(ctx, `
 		create index if not exists intake_deferred_state_idx on intake_deferred(state);
 		create index if not exists intake_deferred_event_id_idx on intake_deferred(event_id);
+		create index if not exists intake_deferred_claim_expiry_idx
+		on intake_deferred(state, claim_expires_at);
 	`); err != nil {
 		return wrapError("create deferred receipt indexes", err)
 	}
@@ -65,6 +103,9 @@ func migrateLegacyDeferredRows(ctx context.Context, transaction *sql.Tx) error {
 			completed_at text,
 			last_replay_at text,
 			replay_count integer not null default 0,
+			claim_owner text,
+			claim_expires_at text,
+			claim_attempt integer not null default 0,
 			foreign key(receipt_id, event_id)
 				references intake_receipts(receipt_id, event_id) on delete cascade,
 			check(state in ('none', 'pending', 'complete'))
@@ -103,10 +144,10 @@ func migrateLegacyDeferredRows(ctx context.Context, transaction *sql.Tx) error {
 	return nil
 }
 
-func tableHasColumn(ctx context.Context, database *sql.DB, tableName string, columnName string) (bool, error) {
-	rows, err := database.QueryContext(ctx, "pragma table_info("+tableName+")")
+func deferredTableHasColumn(ctx context.Context, database *sql.DB, columnName string) (bool, error) {
+	rows, err := database.QueryContext(ctx, "pragma table_info(intake_deferred)")
 	if err != nil {
-		return false, wrapError("query "+tableName+" schema", err)
+		return false, wrapError("query intake_deferred schema", err)
 	}
 	defer func() {
 		_ = rows.Close()
@@ -119,14 +160,14 @@ func tableHasColumn(ctx context.Context, database *sql.DB, tableName string, col
 		var defaultValue sql.NullString
 		var primaryKey int
 		if err := rows.Scan(&columnID, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
-			return false, wrapError("scan "+tableName+" schema", err)
+			return false, wrapError("scan intake_deferred schema", err)
 		}
 		if name == columnName {
 			return true, nil
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return false, wrapError("iterate "+tableName+" schema", err)
+		return false, wrapError("iterate intake_deferred schema", err)
 	}
 	return false, nil
 }
