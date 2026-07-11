@@ -101,8 +101,12 @@ Read-only review confirmed transaction atomicity, receipt/event foreign keys, pa
 
 The review also suggested uniqueness on `(receipt_id, attempt, mode)`. Task 6 defines `evaluation_id` as the evaluation identity and does not define that tuple as unique, so this task does not add that constraint.
 
+The final read-only follow-up found no actionable defects through `9787a4e`. It confirmed exact-byte hashing, deterministic structural fallback, private intake ownership, and evaluation transaction integrity.
+
 ## Concerns
 
 The direct intake package test without the repository SQLite build tag cannot create its FTS5 virtual table. The focused verification uses `sqlite_fts5`, matching the repository harness.
 
 Task 6 does not wire evaluation writes into inference or enforcement responses. That integration remains in the later task named by the brief.
+
+`evaluation.NewStore` enables foreign keys on the intake-owned connection. The production pool has one connection; a future multi-connection owner would need per-connection foreign-key setup.
