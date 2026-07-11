@@ -139,7 +139,7 @@ func payloadValidationLayer(input hotEvaluationRecordInput) evaluation.Layer {
 	outputJSON := json.RawMessage(`{"valid":false}`)
 	return evaluation.Layer{
 		LayerIndex: 0, ParentLayerIndex: nil, Kind: "validation", Name: "payload-parse",
-		Status: "error", Outcome: "", InputReference: "intake.raw_payload",
+		Status: "error", Outcome: "", Verdict: "", InputReference: "intake.raw_payload",
 		InputJSON: json.RawMessage(`{}`), InputHash: evaluationHash(input.Intake.RawPayload),
 		OutputHash: evaluationHash(outputJSON), OutputJSON: outputJSON,
 		MetadataJSON: json.RawMessage(`{"schema_version":1}`), StartedAt: input.StartedAt,
@@ -207,6 +207,22 @@ func evaluationHash(value []byte) string {
 	return "sha256:" + hex.EncodeToString(digest[:])
 }
 
+// verdictFromOutcome maps a completed layer's match outcome to its typed
+// allow or block verdict. A skipped or errored layer, or one without a match
+// outcome, has no verdict.
+func verdictFromOutcome(status string, outcome string) string {
+	if status != "complete" {
+		return ""
+	}
+	if outcome == "match" {
+		return "block"
+	}
+	if outcome == "nonmatch" {
+		return "allow"
+	}
+	return ""
+}
+
 func deterministicEvaluationLayer(trace rules.DeterministicTrace) evaluation.Layer {
 	latency := trace.CompletedAt.Sub(trace.StartedAt)
 	latency = max(latency, 0)
@@ -222,8 +238,9 @@ func deterministicEvaluationLayer(trace rules.DeterministicTrace) evaluation.Lay
 	})
 	return evaluation.Layer{
 		LayerIndex: 0, ParentLayerIndex: nil, Kind: "deterministic", Name: "rule-engine",
-		Status: "complete", Outcome: outcome, InputReference: "intake.normalized_json",
-		InputJSON: append(json.RawMessage(nil), trace.InputJSON...), InputHash: trace.InputHash,
+		Status: "complete", Outcome: outcome, Verdict: verdictFromOutcome("complete", outcome),
+		InputReference: "intake.normalized_json",
+		InputJSON:      append(json.RawMessage(nil), trace.InputJSON...), InputHash: trace.InputHash,
 		OutputHash: trace.OutputHash, OutputJSON: append(json.RawMessage(nil), trace.OutputJSON...),
 		MetadataJSON: metadata, StartedAt: trace.StartedAt, CompletedAt: trace.CompletedAt,
 		LatencyUS: latency.Microseconds(), ServiceName: trace.ServiceName,
@@ -246,6 +263,7 @@ func richEvaluationLayer(layerIndex int, trace rules.LayerTrace) evaluation.Laye
 	return evaluation.Layer{
 		LayerIndex: layerIndex, ParentLayerIndex: cloneIntPointer(trace.ParentTraceIndex),
 		Kind: trace.Kind, Name: trace.LayerName, Status: trace.Status, Outcome: trace.Outcome,
+		Verdict:        verdictFromOutcome(trace.Status, trace.Outcome),
 		InputReference: trace.InputReference, InputJSON: append(json.RawMessage(nil), trace.InputJSON...),
 		InputHash: trace.InputHash, OutputHash: trace.OutputHash,
 		OutputJSON:   append(json.RawMessage(nil), trace.OutputJSON...),
@@ -278,8 +296,9 @@ func hotFinalLayer(
 	})
 	return evaluation.Layer{
 		LayerIndex: layerIndex, ParentLayerIndex: &parentIndex, Kind: "final", Name: "hook-response",
-		Status: disposition.status, Outcome: "", InputReference: "evaluation.layers",
-		InputJSON: json.RawMessage(`{}`), InputHash: evaluationHash([]byte(`{}`)),
+		Status: disposition.status, Outcome: "", Verdict: disposition.verdict,
+		InputReference: "evaluation.layers",
+		InputJSON:      json.RawMessage(`{}`), InputHash: evaluationHash([]byte(`{}`)),
 		OutputHash: evaluationHash(outputJSON), OutputJSON: outputJSON,
 		MetadataJSON: json.RawMessage(`{"schema_version":1}`), StartedAt: completedAt,
 		CompletedAt: completedAt, LatencyUS: 0, ServiceName: "agent-gate",
@@ -305,8 +324,9 @@ func deferredFinalLayer(
 	})
 	return evaluation.Layer{
 		LayerIndex: layerIndex, ParentLayerIndex: &parentIndex, Kind: "final", Name: "audit-result",
-		Status: disposition.status, Outcome: "", InputReference: "evaluation.layers",
-		InputJSON: json.RawMessage(`{}`), InputHash: evaluationHash([]byte(`{}`)),
+		Status: disposition.status, Outcome: "", Verdict: disposition.verdict,
+		InputReference: "evaluation.layers",
+		InputJSON:      json.RawMessage(`{}`), InputHash: evaluationHash([]byte(`{}`)),
 		OutputHash: evaluationHash(outputJSON), OutputJSON: outputJSON,
 		MetadataJSON: json.RawMessage(`{"schema_version":1}`), StartedAt: completedAt,
 		CompletedAt: completedAt, LatencyUS: 0, ServiceName: "agent-gate",

@@ -86,6 +86,7 @@ type QueryLayer struct {
 	Name              string          `json:"name"`
 	Status            string          `json:"status"`
 	Outcome           string          `json:"outcome,omitempty"`
+	Verdict           string          `json:"verdict,omitempty"`
 	InputReference    string          `json:"input_reference"`
 	InputHash         string          `json:"input_hash"`
 	OutputHash        string          `json:"output_hash"`
@@ -127,7 +128,7 @@ func (s *Store) List(ctx context.Context, filter QueryFilter) ([]QueryRecord, er
 	if s == nil || s.database == nil {
 		return nil, errors.New("evaluation store is unavailable")
 	}
-	return listQueryRecords(ctx, s.database, filter, true, true)
+	return listQueryRecords(ctx, s.database, filter, true, true, true)
 }
 
 // Query reads evaluations from an existing SQLite path without creating or migrating it.
@@ -174,7 +175,11 @@ func Query(ctx context.Context, path string, filter QueryFilter) (QueryResult, e
 	if err != nil {
 		return QueryResult{}, err
 	}
-	records, err := listQueryRecords(ctx, database, filter, hasOutcome, hasChildCounts)
+	hasVerdict, err := queryLayerVerdictColumnExists(ctx, database)
+	if err != nil {
+		return QueryResult{}, err
+	}
+	records, err := listQueryRecords(ctx, database, filter, hasOutcome, hasChildCounts, hasVerdict)
 	if err != nil {
 		return QueryResult{}, err
 	}
@@ -188,6 +193,7 @@ func listQueryRecords(
 	filter QueryFilter,
 	hasOutcome bool,
 	hasChildCounts bool,
+	hasVerdict bool,
 ) ([]QueryRecord, error) {
 	normalized, err := normalizeQueryFilter(filter)
 	if err != nil {
@@ -233,6 +239,7 @@ func listQueryRecords(
 			records[i].EvaluationID,
 			hasOutcome,
 			outcomeKnown,
+			hasVerdict,
 		)
 		if err != nil {
 			return nil, err
@@ -466,12 +473,17 @@ func querySafeLayers(
 	evaluationID string,
 	hasOutcome bool,
 	outcomeKnown bool,
+	hasVerdict bool,
 ) ([]QueryLayer, error) {
 	outcomeColumn := "''"
 	if hasOutcome {
 		outcomeColumn = "outcome"
 	}
-	query := `select layer_index, parent_layer_index, kind, name, status, ` + outcomeColumn + `,
+	verdictColumn := "''"
+	if hasVerdict {
+		verdictColumn = "verdict"
+	}
+	query := `select layer_index, parent_layer_index, kind, name, status, ` + outcomeColumn + `, ` + verdictColumn + `,
 		input_reference, input_hash, output_hash, output_json, metadata_json,
 		started_at, completed_at, latency_us, service_name, service_version,
 		model_name, model_version, prompt_hash, schema_hash, cache_status,
@@ -518,6 +530,7 @@ func scanQueryLayer(rows *sql.Rows) (QueryLayer, error) {
 		&layer.Name,
 		&layer.Status,
 		&layer.Outcome,
+		&layer.Verdict,
 		&layer.InputReference,
 		&layer.InputHash,
 		&layer.OutputHash,
@@ -721,6 +734,41 @@ func queryLayerOutcomeColumnExists(ctx context.Context, database *sql.DB) (bool,
 	}
 	if err := rows.Err(); err != nil {
 		return false, wrapError("iterate evaluation column metadata", err)
+	}
+	return false, nil
+}
+
+func queryLayerVerdictColumnExists(ctx context.Context, database *sql.DB) (bool, error) {
+	rows, err := database.QueryContext(ctx, `pragma table_info(gate_evaluation_layers)`)
+	if err != nil {
+		return false, wrapError("query evaluation verdict column metadata", err)
+	}
+	defer func() {
+		_ = rows.Close()
+	}()
+	for rows.Next() {
+		var columnID int
+		var name string
+		var columnType string
+		var notNull int
+		var defaultValue sql.NullString
+		var primaryKey int
+		if err := rows.Scan(
+			&columnID,
+			&name,
+			&columnType,
+			&notNull,
+			&defaultValue,
+			&primaryKey,
+		); err != nil {
+			return false, wrapError("scan evaluation verdict column metadata", err)
+		}
+		if name == "verdict" {
+			return true, nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return false, wrapError("iterate evaluation verdict column metadata", err)
 	}
 	return false, nil
 }

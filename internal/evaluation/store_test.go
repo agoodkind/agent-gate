@@ -404,7 +404,106 @@ func TestStoreSchemaHasForeignKeysAndIndices(t *testing.T) {
 	assertIndex(t, database, "gate_evaluations", "gate_evaluations_event_id_idx")
 	assertIndex(t, database, "gate_evaluations", "gate_evaluations_receipt_id_idx")
 	assertIndex(t, database, "gate_evaluation_layers", "gate_evaluation_layers_kind_name_idx")
+	assertIndex(t, database, "gate_evaluation_layers", "gate_evaluation_layers_verdict_idx")
 	assertIndex(t, database, "gate_evaluation_labels", "gate_evaluation_labels_verdict_idx")
+}
+
+func TestStorePersistsLayerVerdict(t *testing.T) {
+	store, receipt := newEvaluationStore(t)
+	record := completeRecord(receipt)
+	record.Layers[0].Verdict = "allow"
+	record.Layers[1].Verdict = "block"
+
+	if err := store.RecordCompleted(context.Background(), record); err != nil {
+		t.Fatalf("RecordCompleted: %v", err)
+	}
+	got, err := store.Get(context.Background(), record.Evaluation.EvaluationID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Layers[0].Verdict != "allow" {
+		t.Fatalf("layer 0 verdict = %q, want %q", got.Layers[0].Verdict, "allow")
+	}
+	if got.Layers[1].Verdict != "block" {
+		t.Fatalf("layer 1 verdict = %q, want %q", got.Layers[1].Verdict, "block")
+	}
+
+	exported, err := store.List(context.Background(), evaluation.QueryFilter{
+		EvaluationID: record.Evaluation.EvaluationID,
+	})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(exported) != 1 {
+		t.Fatalf("exported records = %d, want 1", len(exported))
+	}
+	if exported[0].Layers[0].Verdict != "allow" || exported[0].Layers[1].Verdict != "block" {
+		t.Fatalf("exported layer verdicts = %q, %q; want allow, block",
+			exported[0].Layers[0].Verdict, exported[0].Layers[1].Verdict)
+	}
+	encoded, err := json.Marshal(exported[0])
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if !strings.Contains(string(encoded), `"verdict":"block"`) {
+		t.Fatalf("training export missing layer verdict: %s", encoded)
+	}
+}
+
+func TestStoreMigratesMissingLayerVerdict(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "audit.db")
+	intakeStore, err := intake.OpenSQLite(ctx, path, nil)
+	if err != nil {
+		t.Fatalf("OpenSQLite: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := intakeStore.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	})
+	receipt, err := intakeStore.Append(ctx, intake.Record{
+		EventID:        "evt-verdict-migration",
+		System:         "codex",
+		SessionID:      "session-verdict",
+		EventName:      "PreToolUse",
+		RawPayload:     []byte(`{"command":"make test"}`),
+		NormalizedJSON: json.RawMessage(`{"command":"make test"}`),
+	})
+	if err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	record := completeRecord(receipt)
+	record.Evaluation.EvaluationID = "eval-verdict-legacy"
+	if err := intakeStore.Evaluations().RecordCompleted(ctx, record); err != nil {
+		t.Fatalf("RecordCompleted legacy row: %v", err)
+	}
+	if _, err := intakeStore.Handle().ExecContext(
+		ctx,
+		`drop index if exists gate_evaluation_layers_verdict_idx`,
+	); err != nil {
+		t.Fatalf("drop verdict index: %v", err)
+	}
+	if _, err := intakeStore.Handle().ExecContext(
+		ctx,
+		`alter table gate_evaluation_layers drop column verdict`,
+	); err != nil {
+		t.Fatalf("remove verdict column: %v", err)
+	}
+
+	migratedStore, err := evaluation.NewStore(ctx, intakeStore.Handle())
+	if err != nil {
+		t.Fatalf("NewStore migration: %v", err)
+	}
+	got, err := migratedStore.Get(ctx, record.Evaluation.EvaluationID)
+	if err != nil {
+		t.Fatalf("Get migrated evaluation: %v", err)
+	}
+	for _, layer := range got.Layers {
+		if layer.Verdict != "" {
+			t.Fatalf("layer %d verdict = %q, want empty after migration", layer.LayerIndex, layer.Verdict)
+		}
+	}
 }
 
 func newEvaluationStore(t *testing.T) (*evaluation.Store, intake.AppendResult) {
