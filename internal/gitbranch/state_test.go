@@ -222,6 +222,34 @@ func TestStatePredicates(t *testing.T) {
 	}
 }
 
+func TestReadStateToleratesWorktreeConfigExtension(t *testing.T) {
+	primary, repo := initStateRepository(t)
+	setBranch(t, repo, "main")
+	// git enables extensions.worktreeconfig for repositories that use linked
+	// worktrees, and go-git PlainOpen rejects that extension. ReadState reads
+	// references through a storer instead of opening the repository, so it must
+	// still read a repository that has the extension set.
+	configPath := filepath.Join(primary, ".git", "config")
+	existing, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	updated := string(existing) + "\n[extensions]\n\tworktreeconfig = true\n"
+	if err := os.WriteFile(configPath, []byte(updated), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	state, err := ReadState(primary)
+	if err != nil {
+		t.Fatalf("ReadState with worktreeconfig extension: %v", err)
+	}
+	if state.CurrentBranch != "main" {
+		t.Fatalf("CurrentBranch = %q, want main", state.CurrentBranch)
+	}
+	if !IsPrimaryCheckout(state, primary) {
+		t.Fatal("primary checkout not recognized with worktreeconfig extension set")
+	}
+}
+
 func initStateRepository(t *testing.T) (string, *git.Repository) {
 	t.Helper()
 	primary := filepath.Join(t.TempDir(), "primary")

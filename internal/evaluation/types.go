@@ -37,6 +37,7 @@ type Layer struct {
 	Name              string
 	Status            string
 	Outcome           string
+	Verdict           string
 	InputReference    string
 	InputJSON         json.RawMessage
 	InputHash         string

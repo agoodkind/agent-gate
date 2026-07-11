@@ -135,6 +135,7 @@ var evaluationSchemaStatements = []string{
 			name text not null,
 			status text not null,
 			outcome text not null default '',
+			verdict text not null default '',
 			input_reference text not null,
 			input_json blob,
 			input_hash text not null,
@@ -227,6 +228,9 @@ func (s *Store) initialize(ctx context.Context) error {
 	if err := ensureLayerOutcomeColumn(ctx, transaction); err != nil {
 		return err
 	}
+	if err := ensureLayerVerdictColumn(ctx, transaction); err != nil {
+		return err
+	}
 	if err := ensureEvaluationChildCountColumns(ctx, transaction); err != nil {
 		return err
 	}
@@ -235,6 +239,12 @@ func (s *Store) initialize(ctx context.Context) error {
 		on gate_evaluation_layers(outcome)
 	`); err != nil {
 		return wrapError("initialize evaluation outcome index", err)
+	}
+	if _, err := transaction.ExecContext(ctx, `
+		create index if not exists gate_evaluation_layers_verdict_idx
+		on gate_evaluation_layers(verdict)
+	`); err != nil {
+		return wrapError("initialize evaluation verdict index", err)
 	}
 	if err := transaction.Commit(); err != nil {
 		return wrapError("commit evaluation schema transaction", err)
@@ -338,6 +348,57 @@ func ensureLayerOutcomeColumn(ctx context.Context, transaction *sql.Tx) error {
 	`)
 	if err != nil {
 		return wrapError("add evaluation layer outcome column", err)
+	}
+	return nil
+}
+
+func ensureLayerVerdictColumn(ctx context.Context, transaction *sql.Tx) error {
+	rows, err := transaction.QueryContext(ctx, `pragma table_info(gate_evaluation_layers)`)
+	if err != nil {
+		return wrapError("query evaluation layer verdict schema", err)
+	}
+	defer func() {
+		_ = rows.Close()
+	}()
+	found := false
+	for rows.Next() {
+		var columnID int
+		var name string
+		var columnType string
+		var notNull int
+		var defaultValue sql.NullString
+		var primaryKey int
+		if err := rows.Scan(
+			&columnID,
+			&name,
+			&columnType,
+			&notNull,
+			&defaultValue,
+			&primaryKey,
+		); err != nil {
+			_ = rows.Close()
+			return wrapError("scan evaluation layer verdict schema", err)
+		}
+		if name == "verdict" {
+			found = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return wrapError("iterate evaluation layer verdict schema", err)
+	}
+	if err := rows.Close(); err != nil {
+		return wrapError("close evaluation layer verdict schema", err)
+	}
+	if found {
+		return nil
+	}
+	_, err = transaction.ExecContext(ctx, `
+		alter table gate_evaluation_layers
+		add column verdict text not null default ''
+	`)
+	if err != nil {
+		return wrapError("add evaluation layer verdict column", err)
 	}
 	return nil
 }
@@ -513,13 +574,13 @@ func insertLayer(
 ) error {
 	_, err := transaction.ExecContext(ctx, `
 		insert into gate_evaluation_layers (
-			evaluation_id, layer_index, parent_layer_index, kind, name, status, outcome,
+			evaluation_id, layer_index, parent_layer_index, kind, name, status, outcome, verdict,
 			input_reference, input_json, input_hash, output_hash, output_json,
 			metadata_json, started_at, completed_at, latency_us, service_name, service_version,
 			model_name, model_version, prompt_hash, schema_hash, cache_status,
 			cache_key_hash, cache_entry_version, cache_expires_at, error_code,
 			error_message, retry_count
-		) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		evaluationID,
 		value.LayerIndex,
@@ -528,6 +589,7 @@ func insertLayer(
 		value.Name,
 		value.Status,
 		value.Outcome,
+		value.Verdict,
 		value.InputReference,
 		[]byte(value.InputJSON),
 		value.InputHash,
@@ -639,7 +701,7 @@ func (s *Store) getEvaluation(ctx context.Context, evaluationID string) (Evaluat
 
 func (s *Store) getLayers(ctx context.Context, evaluationID string) ([]Layer, error) {
 	rows, err := s.database.QueryContext(ctx, `
-		select layer_index, parent_layer_index, kind, name, status, outcome,
+		select layer_index, parent_layer_index, kind, name, status, outcome, verdict,
 			input_reference, input_json, input_hash, output_hash, output_json,
 			metadata_json, started_at, completed_at, latency_us, service_name, service_version,
 			model_name, model_version, prompt_hash, schema_hash, cache_status,
@@ -684,6 +746,7 @@ func scanLayer(rows *sql.Rows) (Layer, error) {
 		&value.Name,
 		&value.Status,
 		&value.Outcome,
+		&value.Verdict,
 		&value.InputReference,
 		&value.InputJSON,
 		&value.InputHash,

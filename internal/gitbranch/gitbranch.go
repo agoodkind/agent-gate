@@ -10,8 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	git "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/storage"
 )
 
 // defaultBranchNames are the conventional default branch names used when a repo
@@ -23,8 +23,8 @@ const originHeadRef = plumbing.ReferenceName("refs/remotes/origin/HEAD")
 // resolveDefaultBranch returns the repo's default branch name: the target of
 // origin/HEAD when a remote records one, else the first conventional default
 // that has a local branch ref, else empty.
-func resolveDefaultBranch(repo *git.Repository) string {
-	if ref, err := repo.Reference(originHeadRef, false); err == nil {
+func resolveDefaultBranch(storer storage.Storer) string {
+	if ref, err := storer.Reference(originHeadRef); err == nil {
 		if ref.Type() == plumbing.SymbolicReference {
 			// Only accept the expected refs/remotes/origin/<branch> shape. An
 			// origin/HEAD that targets some other refname is not a usable default
@@ -36,7 +36,7 @@ func resolveDefaultBranch(repo *git.Repository) string {
 		}
 	}
 	for _, name := range defaultBranchNames {
-		if _, err := repo.Reference(plumbing.NewBranchReferenceName(name), false); err == nil {
+		if _, err := storer.Reference(plumbing.NewBranchReferenceName(name)); err == nil {
 			return name
 		}
 	}
