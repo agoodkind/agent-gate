@@ -1,10 +1,12 @@
 package config
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"runtime"
 	"slices"
 	"strconv"
@@ -160,14 +162,38 @@ type Condition struct {
 	StdoutJSONField  string          `toml:"stdout_json_field"`
 	StdoutJSONEquals *toml.Primitive `toml:"stdout_json_equals"`
 
-	compiled         *regex.Regexp
-	compiledNot      *regex.Regexp
-	compiledPath     *regex.Regexp
-	selectors        []FieldSelectorSpec
-	fieldPairs       []FieldPairSpec
-	cacheKeySelector FieldSelectorSpec
-	forEachSelector  FieldSelectorSpec
-	stdoutJSONValue  TOMLScalarValue
+	// Infer condition fields. Inline and file declarations are resolved during
+	// config compilation, so runtime evaluation never reads configuration files.
+	Endpoint               string          `toml:"endpoint"`
+	LayerName              string          `toml:"layer_name"`
+	Prompt                 string          `toml:"prompt"`
+	PromptFile             string          `toml:"prompt_file"`
+	InputField             string          `toml:"input_field"`
+	OutputSchema           string          `toml:"output_schema"`
+	OutputSchemaFile       string          `toml:"output_schema_file"`
+	Model                  string          `toml:"model"`
+	ResponseJSONField      string          `toml:"response_json_field"`
+	ResponseJSONEquals     *toml.Primitive `toml:"response_json_equals"`
+	ContextSource          string          `toml:"context_source"`
+	ContextEndpoint        string          `toml:"context_endpoint"`
+	ContextWorkspaceField  string          `toml:"context_workspace_field"`
+	ContextSessionField    string          `toml:"context_session_field"`
+	ContextTurnBudget      int             `toml:"context_turn_budget"`
+	ContextMaxCharsPerTurn int             `toml:"context_max_chars_per_turn"`
+	ContextOnError         string          `toml:"context_on_error"`
+
+	compiled                 *regex.Regexp
+	compiledNot              *regex.Regexp
+	compiledPath             *regex.Regexp
+	selectors                []FieldSelectorSpec
+	fieldPairs               []FieldPairSpec
+	cacheKeySelector         FieldSelectorSpec
+	forEachSelector          FieldSelectorSpec
+	stdoutJSONValue          TOMLScalarValue
+	inputSelector            FieldSelectorSpec
+	contextWorkspaceSelector FieldSelectorSpec
+	contextSessionSelector   FieldSelectorSpec
+	responseJSONValue        TOMLScalarValue
 }
 
 // CacheKeySelector returns the compiled field selector that keys the exec
@@ -180,6 +206,18 @@ func (c *Condition) ForEachSelector() FieldSelectorSpec { return c.forEachSelect
 
 // StdoutJSONEqualsValue returns the decoded scalar used by stdout_json_field.
 func (c *Condition) StdoutJSONEqualsValue() TOMLScalarValue { return c.stdoutJSONValue }
+
+// InputFieldSelector returns the compiled infer input selector.
+func (c *Condition) InputFieldSelector() FieldSelectorSpec { return c.inputSelector }
+
+// ContextWorkspaceSelector returns the compiled clyde workspace selector.
+func (c *Condition) ContextWorkspaceSelector() FieldSelectorSpec { return c.contextWorkspaceSelector }
+
+// ContextSessionSelector returns the compiled clyde session selector.
+func (c *Condition) ContextSessionSelector() FieldSelectorSpec { return c.contextSessionSelector }
+
+// ResponseJSONEqualsValue returns the decoded infer response predicate scalar.
+func (c *Condition) ResponseJSONEqualsValue() TOMLScalarValue { return c.responseJSONValue }
 
 // ShellReadSpec describes one configurable shell command shape for the
 // shell_read_secret condition kind.
@@ -227,6 +265,7 @@ const (
 	ConditionKindGitDefaultBranch   ConditionKind = "git_default_branch"
 	ConditionKindGitPrimaryCheckout ConditionKind = "git_primary_checkout"
 	ConditionKindGitRefMove         ConditionKind = "git_ref_move"
+	ConditionKindInfer              ConditionKind = "infer"
 )
 
 // Exec condition block_on variants decide which exit codes block.
@@ -253,9 +292,15 @@ const (
 // hook client deadline at internal/daemon/client.go so a slow validator cannot
 // stall the hook past its own timeout.
 const (
-	DefaultExecTimeoutMs = 1500
-	MaxExecTimeoutMs     = 4000
-	DefaultExecCacheKey  = "effective_cwd"
+	DefaultExecTimeoutMs          = 1500
+	MaxExecTimeoutMs              = 4000
+	DefaultExecCacheKey           = "effective_cwd"
+	DefaultInferTimeoutMs         = 1500
+	MaxInferTimeoutMs             = 4000
+	DefaultContextTurnBudget      = 4
+	MaxContextTurnBudget          = 32
+	DefaultContextMaxCharsPerTurn = 280
+	MaxContextMaxCharsPerTurn     = 8000
 )
 
 // CompiledPattern returns the pre-compiled regex for Pattern.
@@ -607,7 +652,7 @@ func loadPath(path string, requireExisting bool) (*Config, error) {
 	}
 
 	for i := range cfg.Rules {
-		if err := compileRule(log, &cfg.Rules[i], meta); err != nil {
+		if err := compileRule(log, &cfg.Rules[i], meta, filepath.Dir(path)); err != nil {
 			return nil, err
 		}
 	}
@@ -620,7 +665,7 @@ func loadPath(path string, requireExisting bool) (*Config, error) {
 
 // compileRule attaches compiled regexes and selectors to rule and its
 // conditions. Errors are returned with rule-context wrapping.
-func compileRule(log *slog.Logger, r *Rule, meta toml.MetaData) error {
+func compileRule(log *slog.Logger, r *Rule, meta toml.MetaData, configDirectory string) error {
 	if err := normalizeRuleAction(r); err != nil {
 		return fmt.Errorf("rule %q: %w", r.Name, err)
 	}
@@ -629,7 +674,7 @@ func compileRule(log *slog.Logger, r *Rule, meta toml.MetaData) error {
 	}
 	if len(r.Conditions) > 0 {
 		for j := range r.Conditions {
-			if err := compileCondition(log, r.Name, j, &r.Conditions[j], meta); err != nil {
+			if err := compileCondition(log, r.Name, j, &r.Conditions[j], meta, configDirectory); err != nil {
 				return err
 			}
 		}
@@ -691,7 +736,7 @@ func normalizeRuleDiagnosticFormat(r *Rule) error {
 
 // compileCondition fills in compiled regex and selector state for one
 // condition, validates the kind, and parses any field_pair value.
-func compileCondition(log *slog.Logger, ruleName string, index int, c *Condition, meta toml.MetaData) error {
+func compileCondition(log *slog.Logger, ruleName string, index int, c *Condition, meta toml.MetaData, configDirectory string) error {
 	c.selectors = CompileFieldSelectorSpecs(c.FieldPaths)
 	if c.Kind == "" {
 		c.Kind = "regex"
@@ -700,7 +745,7 @@ func compileCondition(log *slog.Logger, ruleName string, index int, c *Condition
 	case ConditionKindRegex, ConditionKindCommand, ConditionKindProject, ConditionKindDiff,
 		ConditionKindShellRead, ConditionKindShellWrite, ConditionKindExec,
 		ConditionKindComposer, ConditionKindGitDefaultBranch,
-		ConditionKindGitPrimaryCheckout, ConditionKindGitRefMove:
+		ConditionKindGitPrimaryCheckout, ConditionKindGitRefMove, ConditionKindInfer:
 	default:
 		return fmt.Errorf("rule %q condition %d: unknown kind %q", ruleName, index, c.Kind)
 	}
@@ -747,11 +792,159 @@ func compileCondition(log *slog.Logger, ruleName string, index int, c *Condition
 	if err := compileExecConfig(ruleName, index, c, meta); err != nil {
 		return err
 	}
+	if err := compileInferConfig(log, ruleName, index, c, meta, configDirectory); err != nil {
+		return err
+	}
 	if err := validateShellWriteSpecConfig(ruleName, index, c); err != nil {
 		return err
 	}
 	if ConditionKind(c.Kind) == ConditionKindGitRefMove && len(c.FieldPaths) > 0 {
 		return fmt.Errorf("rule %q condition %d: git_ref_move does not accept field_paths", ruleName, index)
+	}
+	return nil
+}
+
+func compileInferConfig(log *slog.Logger, ruleName string, index int, c *Condition, meta toml.MetaData, configDirectory string) error {
+	if ConditionKind(c.Kind) != ConditionKindInfer {
+		return nil
+	}
+	contextLabel := fmt.Sprintf("rule %q condition %d", ruleName, index)
+	c.Endpoint = strings.TrimSpace(c.Endpoint)
+	c.LayerName = strings.TrimSpace(c.LayerName)
+	if c.Endpoint == "" {
+		return fmt.Errorf("%s: infer requires endpoint", contextLabel)
+	}
+	if c.LayerName == "" {
+		return fmt.Errorf("%s: infer requires layer_name", contextLabel)
+	}
+	prompt, err := compileDeclaration(configDirectory, c.Prompt, c.PromptFile, "prompt", "prompt_file")
+	if err != nil {
+		log.Warn("compile inference prompt declaration failed", "rule", ruleName, "condition_index", index, "err", err)
+		return fmt.Errorf("%s: %w", contextLabel, err)
+	}
+	c.Prompt = prompt
+	schema, err := compileDeclaration(configDirectory, c.OutputSchema, c.OutputSchemaFile, "output_schema", "output_schema_file")
+	if err != nil {
+		log.Warn("compile inference schema declaration failed", "rule", ruleName, "condition_index", index, "err", err)
+		return fmt.Errorf("%s: %w", contextLabel, err)
+	}
+	if !json.Valid([]byte(schema)) {
+		return fmt.Errorf("%s: output_schema must be valid JSON", contextLabel)
+	}
+	c.OutputSchema = schema
+
+	c.InputField = strings.TrimSpace(c.InputField)
+	c.inputSelector, err = compileRequiredSelector(c.InputField, "input_field")
+	if err != nil {
+		return fmt.Errorf("%s: %w", contextLabel, err)
+	}
+	if c.CacheKey == "" {
+		c.CacheKey = c.InputField
+	}
+	c.cacheKeySelector, err = compileRequiredSelector(strings.TrimSpace(c.CacheKey), "cache_key")
+	if err != nil {
+		return fmt.Errorf("%s: %w", contextLabel, err)
+	}
+	if c.TimeoutMs == 0 {
+		c.TimeoutMs = DefaultInferTimeoutMs
+	}
+	if c.TimeoutMs < 0 || c.TimeoutMs > MaxInferTimeoutMs {
+		return fmt.Errorf("%s: timeout_ms %d exceeds max %d", contextLabel, c.TimeoutMs, MaxInferTimeoutMs)
+	}
+	if c.CacheTTLMs < 0 {
+		return fmt.Errorf("%s: cache_ttl_ms must be non-negative", contextLabel)
+	}
+	if c.BlockOn == "" {
+		c.BlockOn = BlockOnMatch
+	}
+	if c.BlockOn != BlockOnMatch && c.BlockOn != "nonmatch" {
+		return fmt.Errorf("%s: block_on %q must be %q or %q", contextLabel, c.BlockOn, BlockOnMatch, "nonmatch")
+	}
+	if c.OnError == "" {
+		c.OnError = OnErrorOpen
+	}
+	if c.OnError != OnErrorOpen && c.OnError != OnErrorClosed {
+		return fmt.Errorf("%s: on_error %q must be %q or %q", contextLabel, c.OnError, OnErrorOpen, OnErrorClosed)
+	}
+	c.ResponseJSONField = strings.TrimSpace(c.ResponseJSONField)
+	if err := validateStdoutJSONFieldPath(c.ResponseJSONField); err != nil {
+		return fmt.Errorf("%s: response_json_field: %w", contextLabel, err)
+	}
+	if c.ResponseJSONEquals == nil {
+		return fmt.Errorf("%s: response_json_equals is required", contextLabel)
+	}
+	c.responseJSONValue, err = decodeTOMLScalar(meta, *c.ResponseJSONEquals)
+	if err != nil {
+		return fmt.Errorf("%s: response_json_equals: %w", contextLabel, err)
+	}
+	return compileInferContextConfig(log, contextLabel, c)
+}
+
+func compileDeclaration(configDirectory string, inline string, file string, inlineName string, fileName string) (string, error) {
+	hasInline := inline != ""
+	hasFile := strings.TrimSpace(file) != ""
+	if hasInline == hasFile {
+		return "", fmt.Errorf("exactly one of %s or %s must be set", inlineName, fileName)
+	}
+	if hasInline {
+		return inline, nil
+	}
+	path := file
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(configDirectory, path)
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		slog.Warn("read inference declaration file failed", "field", fileName, "path", path, "err", err)
+		return "", fmt.Errorf("read %s: %w", fileName, err)
+	}
+	return string(content), nil
+}
+
+func compileRequiredSelector(path string, fieldName string) (FieldSelectorSpec, error) {
+	spec := FieldSelectorSpec{Path: path, Selector: CompileFieldSelector(path)}
+	if path == "" || spec.Selector == FieldSelectorInvalid {
+		return spec, fmt.Errorf("%s %q is not a valid field selector", fieldName, path)
+	}
+	return spec, nil
+}
+
+func compileInferContextConfig(log *slog.Logger, contextLabel string, c *Condition) error {
+	c.ContextSource = strings.TrimSpace(c.ContextSource)
+	if c.ContextSource == "" {
+		return nil
+	}
+	if c.ContextSource != "clyde_recent_turns" {
+		return fmt.Errorf("%s: unknown context_source %q", contextLabel, c.ContextSource)
+	}
+	if strings.TrimSpace(c.ContextEndpoint) == "" {
+		return fmt.Errorf("%s: context_endpoint is required", contextLabel)
+	}
+	var err error
+	c.contextWorkspaceSelector, err = compileRequiredSelector(strings.TrimSpace(c.ContextWorkspaceField), "context_workspace_field")
+	if err != nil {
+		log.Warn("compile inference context workspace selector failed", "context", contextLabel, "err", err)
+		return fmt.Errorf("%s: %w", contextLabel, err)
+	}
+	c.contextSessionSelector, err = compileRequiredSelector(strings.TrimSpace(c.ContextSessionField), "context_session_field")
+	if err != nil {
+		log.Warn("compile inference context session selector failed", "context", contextLabel, "err", err)
+		return fmt.Errorf("%s: %w", contextLabel, err)
+	}
+	if c.ContextTurnBudget == 0 {
+		c.ContextTurnBudget = DefaultContextTurnBudget
+	}
+	if c.ContextTurnBudget < 1 || c.ContextTurnBudget > MaxContextTurnBudget {
+		return fmt.Errorf("%s: context_turn_budget must be between 1 and %d", contextLabel, MaxContextTurnBudget)
+	}
+	if c.ContextMaxCharsPerTurn == 0 {
+		c.ContextMaxCharsPerTurn = DefaultContextMaxCharsPerTurn
+	}
+	if c.ContextMaxCharsPerTurn < 1 || c.ContextMaxCharsPerTurn > MaxContextMaxCharsPerTurn {
+		return fmt.Errorf("%s: context_max_chars_per_turn must be between 1 and %d", contextLabel, MaxContextMaxCharsPerTurn)
+	}
+	if c.ContextOnError != "empty" && c.ContextOnError != "error" {
+		return fmt.Errorf("%s: context_on_error %q must be %q or %q", contextLabel, c.ContextOnError, "empty", "error")
 	}
 	return nil
 }

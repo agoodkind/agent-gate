@@ -59,6 +59,28 @@ func daemonTestConfig(t testing.TB) *config.Config {
 	}
 }
 
+func TestRuntimeSnapshotsShareInferenceRuntime(t *testing.T) {
+	setDaemonTestDirs(t)
+	cfg := daemonTestConfig(t)
+	server, err := New(newDiscardLogger(), cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer server.Close()
+	first := server.runtime.Load()
+	if first == nil || first.inferRuntime != server.inferRuntime {
+		t.Fatal("initial snapshot does not use the server inference runtime")
+	}
+	second, err := newRuntimeSnapshot(context.Background(), cfg, newDiscardLogger(), server.hotKV, server.inferRuntime)
+	if err != nil {
+		t.Fatalf("newRuntimeSnapshot: %v", err)
+	}
+	defer second.close(context.Background(), newDiscardLogger())
+	if second.inferRuntime != first.inferRuntime {
+		t.Fatal("replacement snapshot did not preserve inference channels")
+	}
+}
+
 func emdashDaemonTestConfig(t testing.TB) *config.Config {
 	t.Helper()
 	pattern := `[\x{2010}-\x{2015}]`

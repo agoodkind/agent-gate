@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+package inference.v1;
+
+option go_package = "goodkind.io/agent-gate/api/inferencepb";
+
+service Inference {
+  rpc Infer(InferRequest) returns (InferReply);
+}
+
+message InferRequest {
+  string prompt = 1;
+  string input = 2;
+  string output_schema = 3;
+  string context = 4;
+  string model = 5;
+}
+
+message InferReply {
+  string output_json = 1;
+  InferenceStatus status = 2;
+}
+
+enum InferenceStatus {
+  INFERENCE_STATUS_UNSPECIFIED = 0;
+  INFERENCE_STATUS_COMPLETE = 1;
+}

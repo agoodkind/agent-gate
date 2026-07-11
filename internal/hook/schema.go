@@ -387,7 +387,14 @@ func collectRuleFieldPaths(r *config.Rule) []string {
 	allPaths := make([]string, 0, len(r.FieldPaths))
 	allPaths = append(allPaths, r.FieldPaths...)
 	for j := range r.Conditions {
-		allPaths = append(allPaths, r.Conditions[j].FieldPaths...)
+		condition := &r.Conditions[j]
+		allPaths = append(allPaths, condition.FieldPaths...)
+		if config.ConditionKind(condition.Kind) == config.ConditionKindInfer {
+			allPaths = append(allPaths, condition.InputField, condition.CacheKey)
+			if condition.ContextSource != "" {
+				allPaths = append(allPaths, condition.ContextWorkspaceField, condition.ContextSessionField)
+			}
+		}
 	}
 	return allPaths
 }
@@ -408,7 +415,8 @@ func isKnownConditionKind(kind string) bool {
 	case "", config.ConditionKindRegex, config.ConditionKindCommand, config.ConditionKindProject,
 		config.ConditionKindDiff, config.ConditionKindShellRead, config.ConditionKindShellWrite,
 		config.ConditionKindExec, config.ConditionKindComposer, config.ConditionKindGitDefaultBranch,
-		config.ConditionKindGitPrimaryCheckout, config.ConditionKindGitRefMove:
+		config.ConditionKindGitPrimaryCheckout, config.ConditionKindGitRefMove,
+		config.ConditionKindInfer:
 		return true
 	default:
 		return false

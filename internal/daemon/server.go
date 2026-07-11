@@ -47,7 +47,16 @@ type runtimeSnapshot struct {
 	evaluateQueueWait time.Duration
 	hotEvaluate       func(context.Context, []byte, *config.Config, hook.System, func(string) string, string) hook.HotEvaluation
 	execRuntime       *rules.ExecRuntime
+	inferRuntime      *rules.InferRuntime
 	composerRuntime   *composer.Runtime
+}
+
+type inferenceTraceSink struct {
+	traces []rules.InferenceTrace
+}
+
+func (sink *inferenceTraceSink) CollectInferenceTrace(trace rules.InferenceTrace) {
+	sink.traces = append(sink.traces, trace)
 }
 
 // Server implements the AgentGateD gRPC service.
@@ -60,6 +69,7 @@ type Server struct {
 	configWatcher *fsnotify.Watcher
 	configPath    string
 	hotKV         *hotkv.Store
+	inferRuntime  *rules.InferRuntime
 	closing       bool
 	updateCancel  context.CancelFunc
 	stopDaemon    func()
@@ -117,8 +127,10 @@ func New(log *slog.Logger, cfg *config.Config) (*Server, error) {
 	hook.WarnCapabilityDowngrades(context.Background(), log, cfg)
 
 	hotStore := hotkv.New(hotKVOptions(cfg))
-	snapshot, err := newRuntimeSnapshot(context.Background(), cfg, log, hotStore)
+	inferRuntime := rules.NewInferRuntimeWithCache(log, hotStore)
+	snapshot, err := newRuntimeSnapshot(context.Background(), cfg, log, hotStore, inferRuntime)
 	if err != nil {
+		inferRuntime.Close()
 		hotStore.Close()
 		log.Error("failed to create runtime snapshot", slog.Any("err", err))
 		return nil, err
@@ -132,6 +144,7 @@ func New(log *slog.Logger, cfg *config.Config) (*Server, error) {
 		configWatcher:                 nil,
 		configPath:                    config.Path(),
 		hotKV:                         hotStore,
+		inferRuntime:                  inferRuntime,
 		closing:                       false,
 		updateCancel:                  nil,
 		stopDaemon:                    nil,
@@ -141,6 +154,7 @@ func New(log *slog.Logger, cfg *config.Config) (*Server, error) {
 	s.runtime.Store(snapshot)
 	if err := s.startConfigWatcher(); err != nil {
 		snapshot.close(context.Background(), log)
+		inferRuntime.Close()
 		hotStore.Close()
 		return nil, err
 	}
@@ -155,7 +169,7 @@ func hotKVOptions(cfg *config.Config) hotkv.Options {
 	}
 }
 
-func newRuntimeSnapshot(ctx context.Context, cfg *config.Config, log *slog.Logger, hotStore *hotkv.Store) (*runtimeSnapshot, error) {
+func newRuntimeSnapshot(ctx context.Context, cfg *config.Config, log *slog.Logger, hotStore *hotkv.Store, inferRuntime *rules.InferRuntime) (*runtimeSnapshot, error) {
 	// The intake store is created first so the audit event logger can share its
 	// single SQLite connection pool. One pool serializes intake and audit writes
 	// to audit.db, avoiding the cross-pool SQLITE_BUSY that two pools hit during
@@ -214,6 +228,7 @@ func newRuntimeSnapshot(ctx context.Context, cfg *config.Config, log *slog.Logge
 		evaluateQueueWait: cfg.HookHotQueueWait(),
 		hotEvaluate:       defaultHotEvaluate,
 		execRuntime:       rules.NewExecRuntimeWithCache(nil, log, hotStore),
+		inferRuntime:      inferRuntime,
 		composerRuntime:   composerRuntime,
 	}, nil
 }
@@ -261,6 +276,9 @@ func (s *Server) Close() {
 		s.updateCancel()
 	}
 	snapshot.close(context.Background(), s.log)
+	if s.inferRuntime != nil {
+		s.inferRuntime.Close()
+	}
 	if s.hotKV != nil {
 		s.hotKV.Close()
 	}
@@ -369,7 +387,7 @@ func (s *Server) reloadConfig(ctx context.Context) error {
 
 	hook.WarnCapabilityDowngrades(ctx, s.log, candidate)
 
-	newSnapshot, err := newRuntimeSnapshot(ctx, candidate, s.log, s.hotKV)
+	newSnapshot, err := newRuntimeSnapshot(ctx, candidate, s.log, s.hotKV, s.inferRuntime)
 	if err != nil {
 		s.log.WarnContext(ctx, "create runtime snapshot for reloaded config failed", "path", s.configPath, "err", err)
 		return fmt.Errorf("failed to create runtime snapshot for reloaded config: %w", err)
@@ -417,6 +435,10 @@ func (s *Server) EvaluateHook(ctx context.Context, req *daemonpb.EvaluateHookReq
 	defer s.releaseEvaluateSlot(snapshot)
 
 	ctx = rules.WithExecRuntime(ctx, snapshot.execRuntime)
+	ctx = rules.WithInferRuntime(ctx, snapshot.inferRuntime)
+	if configHasInference(snapshot.cfg) {
+		ctx = rules.WithInferenceTraceCollector(ctx, &inferenceTraceSink{})
+	}
 	ctx = rules.WithComposerDecider(ctx, snapshot.composerRuntime)
 
 	rawJSON := req.GetRawJson()
@@ -460,6 +482,20 @@ func (s *Server) EvaluateHook(ctx context.Context, req *daemonpb.EvaluateHookReq
 		StdoutData: append([]byte(nil), result.Stdout...),
 		StderrData: append([]byte(nil), result.Stderr...),
 	}, nil
+}
+
+func configHasInference(cfg *config.Config) bool {
+	if cfg == nil {
+		return false
+	}
+	for ruleIndex := range cfg.Rules {
+		for conditionIndex := range cfg.Rules[ruleIndex].Conditions {
+			if config.ConditionKind(cfg.Rules[ruleIndex].Conditions[conditionIndex].Kind) == config.ConditionKindInfer {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // recordHotEvalLatency writes the synchronous evaluation latency back to the

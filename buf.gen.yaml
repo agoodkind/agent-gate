@@ -4,7 +4,23 @@ plugins:
     out: api/daemonpb
     opt:
       - paths=source_relative
+    types:
+      - agentgate.**
   - local: protoc-gen-go-grpc
     out: api/daemonpb
     opt:
       - paths=source_relative
+    types:
+      - agentgate.**
+  - local: protoc-gen-go
+    out: api
+    opt:
+      - paths=source_relative
+    types:
+      - inference.v1.**
+  - local: protoc-gen-go-grpc
+    out: api
+    opt:
+      - paths=source_relative
+    types:
+      - inference.v1.**

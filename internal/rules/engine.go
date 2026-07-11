@@ -65,6 +65,7 @@ func EvaluateAll(ctx context.Context, system, eventName string, fields FieldSet,
 	}
 	memo := newExecEventMemo(system, eventName)
 	evalCtx := withExecEventMemo(ctx, memo)
+	evalCtx = withInferEventMemo(evalCtx)
 	orch := &pipeline.Orchestrator{
 		Conditions: conditions,
 		Scheduler:  pipeline.FixedScheduler{SlotCount: 1},
@@ -228,7 +229,8 @@ func isMatchingConditionKind(c *config.Condition) bool {
 		return true
 	case config.ConditionKindCommand, config.ConditionKindProject, config.ConditionKindExec,
 		config.ConditionKindComposer, config.ConditionKindGitDefaultBranch,
-		config.ConditionKindGitPrimaryCheckout, config.ConditionKindGitRefMove:
+		config.ConditionKindGitPrimaryCheckout, config.ConditionKindGitRefMove,
+		config.ConditionKindInfer:
 		// Gate-only kinds. They must pass for the rule to fire but they do
 		// not by themselves emit per-match diagnostics, so they are evaluated
 		// as part of the gate inside [allConditionsMatch] and surfaced via
@@ -415,7 +417,8 @@ func (r *ruleRegexCondition) Execute(ctx context.Context, _ pipeline.Input) (pip
 		}, nil
 	case config.ConditionKindCommand, config.ConditionKindProject, config.ConditionKindExec,
 		config.ConditionKindComposer, config.ConditionKindGitDefaultBranch,
-		config.ConditionKindGitPrimaryCheckout, config.ConditionKindGitRefMove:
+		config.ConditionKindGitPrimaryCheckout, config.ConditionKindGitRefMove,
+		config.ConditionKindInfer:
 		// Gate-only kinds are handled by [allConditionsMatch] above and
 		// produce no per-condition Condition. Reaching this arm means
 		// [buildRuleRegexConditions] mis-routed a condition; emit nothing
@@ -711,6 +714,10 @@ func allConditionsMatch(ctx context.Context, fields FieldSet, rule *config.Rule,
 			// forks a process; placing it after the cheap conditions means the
 			// short-circuit above keeps it from running on non-candidates.
 			if !execConditionGateMatch(ctx, fields, rule, i, c) {
+				return false
+			}
+		case config.ConditionKindInfer:
+			if !inferConditionGateMatch(ctx, fields, rule, i, c) {
 				return false
 			}
 		case config.ConditionKindComposer:
