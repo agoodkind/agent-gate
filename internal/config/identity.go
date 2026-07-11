@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"github.com/BurntSushi/toml"
 )
@@ -21,6 +22,7 @@ func (c *Config) Identity() (string, error) {
 	}
 	var encoded bytes.Buffer
 	if err := toml.NewEncoder(&encoded).Encode(c); err != nil {
+		slog.Warn("encode structural config identity failed", "err", err)
 		return "", fmt.Errorf("encode structural config identity: %w", err)
 	}
 	return hashIdentity(encoded.Bytes()), nil

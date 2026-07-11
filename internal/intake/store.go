@@ -119,8 +119,9 @@ func OpenSQLite(ctx context.Context, path string, log *slog.Logger) (*Store, err
 	}
 	configureSQLite(db)
 	store := &Store{
-		db:  db,
-		log: log,
+		db:          db,
+		log:         log,
+		evaluations: nil,
 	}
 	if err := store.init(ctx); err != nil {
 		_ = db.Close()

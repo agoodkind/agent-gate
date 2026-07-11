@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math"
 	"time"
 )
@@ -34,7 +35,7 @@ func (s *Store) RecordCompleted(ctx context.Context, record Record) error {
 	}
 	transaction, err := s.database.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("begin evaluation transaction: %w", err)
+		return wrapError("begin evaluation transaction", err)
 	}
 	defer func() {
 		_ = transaction.Rollback()
@@ -54,7 +55,7 @@ func (s *Store) RecordCompleted(ctx context.Context, record Record) error {
 		}
 	}
 	if err := transaction.Commit(); err != nil {
-		return fmt.Errorf("commit evaluation transaction: %w", err)
+		return wrapError("commit evaluation transaction", err)
 	}
 	return nil
 }
@@ -76,28 +77,10 @@ func (s *Store) Get(ctx context.Context, evaluationID string) (Record, error) {
 	return Record{Evaluation: evaluation, Layers: layers, Labels: labels}, nil
 }
 
-func (s *Store) initialize(ctx context.Context) error {
-	if _, err := s.database.ExecContext(ctx, `pragma foreign_keys = on`); err != nil {
-		return fmt.Errorf("enable evaluation foreign keys: %w", err)
-	}
-	var foreignKeysEnabled int
-	if err := s.database.QueryRowContext(ctx, `pragma foreign_keys`).Scan(&foreignKeysEnabled); err != nil {
-		return fmt.Errorf("verify evaluation foreign keys: %w", err)
-	}
-	if foreignKeysEnabled != 1 {
-		return errors.New("evaluation foreign keys are disabled")
-	}
-	transaction, err := s.database.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin evaluation schema transaction: %w", err)
-	}
-	defer func() {
-		_ = transaction.Rollback()
-	}()
-	statements := []string{
-		`create unique index if not exists intake_receipts_identity_idx
+var evaluationSchemaStatements = []string{
+	`create unique index if not exists intake_receipts_identity_idx
 			on intake_receipts(receipt_id, event_id)`,
-		`create table if not exists gate_evaluations (
+	`create table if not exists gate_evaluations (
 			evaluation_id text primary key,
 			receipt_id integer not null,
 			event_id text not null,
@@ -120,7 +103,7 @@ func (s *Store) initialize(ctx context.Context) error {
 				references intake_receipts(receipt_id, event_id),
 			foreign key(event_id) references intake_events(event_id)
 		)`,
-		`create table if not exists gate_evaluation_layers (
+	`create table if not exists gate_evaluation_layers (
 			evaluation_id text not null,
 			layer_index integer not null,
 			parent_layer_index integer,
@@ -154,7 +137,7 @@ func (s *Store) initialize(ctx context.Context) error {
 			foreign key(evaluation_id, parent_layer_index)
 				references gate_evaluation_layers(evaluation_id, layer_index)
 		)`,
-		`create table if not exists gate_evaluation_labels (
+	`create table if not exists gate_evaluation_labels (
 			evaluation_id text not null,
 			namespace text not null,
 			label_version integer not null,
@@ -167,32 +150,51 @@ func (s *Store) initialize(ctx context.Context) error {
 			foreign key(evaluation_id) references gate_evaluations(evaluation_id)
 				on delete cascade
 		)`,
-		`create index if not exists gate_evaluations_event_id_idx
+	`create index if not exists gate_evaluations_event_id_idx
 			on gate_evaluations(event_id)`,
-		`create index if not exists gate_evaluations_receipt_id_idx
+	`create index if not exists gate_evaluations_receipt_id_idx
 			on gate_evaluations(receipt_id)`,
-		`create index if not exists gate_evaluations_completed_at_idx
+	`create index if not exists gate_evaluations_completed_at_idx
 			on gate_evaluations(completed_at)`,
-		`create index if not exists gate_evaluations_final_verdict_idx
+	`create index if not exists gate_evaluations_final_verdict_idx
 			on gate_evaluations(final_verdict)`,
-		`create index if not exists gate_evaluation_layers_kind_name_idx
+	`create index if not exists gate_evaluation_layers_kind_name_idx
 			on gate_evaluation_layers(kind, name)`,
-		`create index if not exists gate_evaluation_layers_model_idx
+	`create index if not exists gate_evaluation_layers_model_idx
 			on gate_evaluation_layers(model_name, model_version)`,
-		`create index if not exists gate_evaluation_layers_cache_status_idx
+	`create index if not exists gate_evaluation_layers_cache_status_idx
 			on gate_evaluation_layers(cache_status)`,
-		`create index if not exists gate_evaluation_labels_verdict_idx
+	`create index if not exists gate_evaluation_labels_verdict_idx
 			on gate_evaluation_labels(verdict)`,
-		`create index if not exists gate_evaluation_labels_source_idx
+	`create index if not exists gate_evaluation_labels_source_idx
 			on gate_evaluation_labels(source)`,
+}
+
+func (s *Store) initialize(ctx context.Context) error {
+	if _, err := s.database.ExecContext(ctx, `pragma foreign_keys = on`); err != nil {
+		return wrapError("enable evaluation foreign keys", err)
 	}
-	for _, statement := range statements {
+	var foreignKeysEnabled int
+	if err := s.database.QueryRowContext(ctx, `pragma foreign_keys`).Scan(&foreignKeysEnabled); err != nil {
+		return wrapError("verify evaluation foreign keys", err)
+	}
+	if foreignKeysEnabled != 1 {
+		return errors.New("evaluation foreign keys are disabled")
+	}
+	transaction, err := s.database.BeginTx(ctx, nil)
+	if err != nil {
+		return wrapError("begin evaluation schema transaction", err)
+	}
+	defer func() {
+		_ = transaction.Rollback()
+	}()
+	for _, statement := range evaluationSchemaStatements {
 		if _, err := transaction.ExecContext(ctx, statement); err != nil {
-			return fmt.Errorf("initialize evaluation schema: %w", err)
+			return wrapError("initialize evaluation schema", err)
 		}
 	}
 	if err := transaction.Commit(); err != nil {
-		return fmt.Errorf("commit evaluation schema transaction: %w", err)
+		return wrapError("commit evaluation schema transaction", err)
 	}
 	return nil
 }
@@ -268,7 +270,7 @@ func insertEvaluation(ctx context.Context, transaction *sql.Tx, value Evaluation
 		[]byte(value.ErrorJSON),
 	)
 	if err != nil {
-		return fmt.Errorf("insert evaluation: %w", err)
+		return wrapError("insert evaluation", err)
 	}
 	return nil
 }
@@ -318,7 +320,7 @@ func insertLayer(
 		value.RetryCount,
 	)
 	if err != nil {
-		return fmt.Errorf("insert evaluation layer %d: %w", value.LayerIndex, err)
+		return wrapError(fmt.Sprintf("insert evaluation layer %d", value.LayerIndex), err)
 	}
 	return nil
 }
@@ -345,7 +347,12 @@ func insertLabel(
 		formatTime(value.CreatedAt),
 	)
 	if err != nil {
-		return fmt.Errorf("insert evaluation label %q version %d: %w", value.Namespace, value.LabelVersion, err)
+		message := fmt.Sprintf(
+			"insert evaluation label %q version %d",
+			value.Namespace,
+			value.LabelVersion,
+		)
+		return wrapError(message, err)
 	}
 	return nil
 }
@@ -385,7 +392,7 @@ func (s *Store) getEvaluation(ctx context.Context, evaluationID string) (Evaluat
 		return Evaluation{}, ErrNotFound
 	}
 	if err != nil {
-		return Evaluation{}, fmt.Errorf("read evaluation: %w", err)
+		return Evaluation{}, wrapError("read evaluation", err)
 	}
 	value.StartedAt, err = parseTime(startedAt)
 	if err != nil {
@@ -411,7 +418,7 @@ func (s *Store) getLayers(ctx context.Context, evaluationID string) ([]Layer, er
 		order by layer_index
 	`, evaluationID)
 	if err != nil {
-		return nil, fmt.Errorf("query evaluation layers: %w", err)
+		return nil, wrapError("query evaluation layers", err)
 	}
 	defer func() {
 		_ = rows.Close()
@@ -425,7 +432,7 @@ func (s *Store) getLayers(ctx context.Context, evaluationID string) ([]Layer, er
 		layers = append(layers, layer)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate evaluation layers: %w", err)
+		return nil, wrapError("iterate evaluation layers", err)
 	}
 	return layers, nil
 }
@@ -466,7 +473,7 @@ func scanLayer(rows *sql.Rows) (Layer, error) {
 		&value.RetryCount,
 	)
 	if err != nil {
-		return Layer{}, fmt.Errorf("scan evaluation layer: %w", err)
+		return Layer{}, wrapError("scan evaluation layer", err)
 	}
 	if parentIndex.Valid {
 		converted := int(parentIndex.Int64)
@@ -502,7 +509,7 @@ func (s *Store) getLabels(ctx context.Context, evaluationID string) ([]Label, er
 		order by namespace, label_version
 	`, evaluationID)
 	if err != nil {
-		return nil, fmt.Errorf("query evaluation labels: %w", err)
+		return nil, wrapError("query evaluation labels", err)
 	}
 	defer func() {
 		_ = rows.Close()
@@ -521,7 +528,7 @@ func (s *Store) getLabels(ctx context.Context, evaluationID string) ([]Label, er
 			&label.Rationale,
 			&createdAt,
 		); err != nil {
-			return nil, fmt.Errorf("scan evaluation label: %w", err)
+			return nil, wrapError("scan evaluation label", err)
 		}
 		if confidence.Valid {
 			label.Confidence = &confidence.Float64
@@ -533,7 +540,7 @@ func (s *Store) getLabels(ctx context.Context, evaluationID string) ([]Label, er
 		labels = append(labels, label)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate evaluation labels: %w", err)
+		return nil, wrapError("iterate evaluation labels", err)
 	}
 	return labels, nil
 }
@@ -552,7 +559,12 @@ func formatOptionalTime(value *time.Time) sql.NullString {
 func parseTime(value string) (time.Time, error) {
 	parsed, err := time.Parse(time.RFC3339Nano, value)
 	if err != nil {
-		return time.Time{}, fmt.Errorf("parse evaluation time: %w", err)
+		return time.Time{}, wrapError("parse evaluation time", err)
 	}
 	return parsed, nil
+}
+
+func wrapError(message string, err error) error {
+	slog.Warn(message+" failed", "err", err)
+	return fmt.Errorf("%s: %w", message, err)
 }
