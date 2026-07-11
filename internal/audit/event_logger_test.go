@@ -117,6 +117,64 @@ func TestEventLogger_DurableReplayDoesNotDuplicateViolations(t *testing.T) {
 	}
 }
 
+func TestEventLogger_NormalizedReplayPreservesIdentityAndDoesNotDuplicate(t *testing.T) {
+	cfg := testConfig(t)
+	attrs := audit.Attrs{
+		"system":         audit.NewStringValue("codex"),
+		"session_id":     audit.NewStringValue("session-normalized"),
+		"event":          audit.NewStringValue("PreToolUse"),
+		"decision":       audit.NewStringValue("block"),
+		"blocking_rules": audit.NewStringSliceValue([]string{"normalized-rule"}),
+	}
+	logger, err := audit.NewEventLoggerWithOptions(
+		context.Background(), cfg, nil, audit.LoggerOptions{QueueLimit: 0},
+	)
+	if err != nil {
+		t.Fatalf("NewEventLogger: %v", err)
+	}
+	entry := logger.Normalize(
+		"codex", "session-normalized", "PreToolUse", "info", "hook.blocked", attrs,
+	)
+	if entry.Event.EventID == "" || entry.Event.Time == "" {
+		t.Fatalf("normalized entry identity = %+v", entry.Event)
+	}
+	if err := logger.LogNormalizedDurable(context.Background(), entry); err != nil {
+		t.Fatalf("LogNormalizedDurable: %v", err)
+	}
+	if err := logger.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	replayLogger, err := audit.NewEventLoggerWithOptions(
+		context.Background(), cfg, nil, audit.LoggerOptions{QueueLimit: 0},
+	)
+	if err != nil {
+		t.Fatalf("NewEventLogger replay: %v", err)
+	}
+	if err := replayLogger.LogNormalizedDurable(context.Background(), entry); err != nil {
+		t.Fatalf("LogNormalizedDurable replay: %v", err)
+	}
+	if err := replayLogger.Close(); err != nil {
+		t.Fatalf("Close replay: %v", err)
+	}
+
+	database, err := sql.Open("sqlite3", cfg.AuditSQLitePath())
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	defer func() { _ = database.Close() }()
+	var count int
+	var storedTime string
+	if err := database.QueryRow(
+		"select count(*), min(time) from events where event_id = ?", entry.Event.EventID,
+	).Scan(&count, &storedTime); err != nil {
+		t.Fatalf("query normalized event: %v", err)
+	}
+	if count != 1 || storedTime != entry.Event.Time {
+		t.Fatalf("normalized event count/time = %d/%q, want 1/%q", count, storedTime, entry.Event.Time)
+	}
+}
+
 func TestQuery_SQLite(t *testing.T) {
 	cfg := testConfig(t)
 	logger, err := audit.NewEventLoggerWithOptions(context.Background(), cfg, nil, audit.LoggerOptions{QueueLimit: 0})

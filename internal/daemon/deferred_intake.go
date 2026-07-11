@@ -106,13 +106,36 @@ func (p *deferredProcessor) ReplayPending(ctx context.Context) error {
 		if p.log != nil {
 			p.log.WarnContext(ctx, "replay pending deferred intake failed", "err", err)
 		}
-		return fmt.Errorf("replay pending deferred intake: %w", err)
+		err = fmt.Errorf("replay pending deferred intake: %w", err)
+	} else {
+		var emptyEvent hook.DeferredAuditEvent
+		for _, receiptID := range receiptIDs {
+			p.processEvent(ctx, deferredWork{
+				receiptID: receiptID, eventID: "", hotEvent: emptyEvent,
+			})
+		}
 	}
-	var emptyEvent hook.DeferredAuditEvent
+	auditErr := p.ReplayPendingAudit(ctx)
+	if err != nil || auditErr != nil {
+		return errors.Join(err, auditErr)
+	}
+	return nil
+}
+
+// ReplayPendingAudit delivers committed outbox entries without re-evaluating.
+func (p *deferredProcessor) ReplayPendingAudit(ctx context.Context) error {
+	if p == nil || p.store == nil || p.sink == nil {
+		return nil
+	}
+	receiptIDs, err := p.store.ListPendingDeferredAudit(ctx, 0)
+	if err != nil {
+		if p.log != nil {
+			p.log.WarnContext(ctx, "list pending deferred audit failed", "err", err)
+		}
+		return fmt.Errorf("list pending deferred audit: %w", err)
+	}
 	for _, receiptID := range receiptIDs {
-		p.processEvent(ctx, deferredWork{
-			receiptID: receiptID, eventID: "", hotEvent: emptyEvent,
-		})
+		p.processDeferredAudit(ctx, receiptID)
 	}
 	return nil
 }
@@ -279,8 +302,14 @@ func (p *deferredProcessor) processRecord(
 		p.releaseClaim(ctx, claim)
 		return
 	}
+	auditEntries, err := captureDeferredAudit(ctx, deferredEvent, p.sink)
+	if err != nil {
+		p.logDeferredFailure(ctx, record, "audit_normalization_failed", err)
+		p.releaseClaim(ctx, claim)
+		return
+	}
 	if err := p.evaluationRecorder.CommitDeferredEvaluation(
-		ctx, claim, evaluationRecord,
+		ctx, claim, evaluationRecord, auditEntries,
 	); err != nil {
 		p.logDeferredFailure(ctx, record, "evaluation_persistence_failed", err)
 		p.releaseClaim(ctx, claim)
@@ -289,8 +318,95 @@ func (p *deferredProcessor) processRecord(
 	if afterCommit != nil {
 		afterCommit()
 	}
-	if err := writeDeferredAuditDurable(auditCtx, deferredEvent, p.sink); err != nil {
-		p.logDeferredFailure(ctx, record, "audit_persistence_failed", err)
+	p.processDeferredAudit(auditCtx, record.ReceiptID)
+}
+
+func (p *deferredProcessor) processDeferredAudit(ctx context.Context, receiptID int64) {
+	if p.sink == nil {
+		return
+	}
+	sink, ok := p.sink.(audit.ReplayableDurableSink)
+	if !ok {
+		p.log.WarnContext(ctx, "deferred audit sink is not replayable", "receipt_id", receiptID)
+		return
+	}
+	entries, claim, err := p.store.ClaimDeferredAudit(
+		ctx, receiptID, p.claimOwner, p.claimLease,
+	)
+	if err != nil {
+		if !errors.Is(err, intake.ErrDeferredAuditClaimUnavailable) && p.log != nil {
+			p.log.WarnContext(ctx, "claim deferred audit failed", "receipt_id", receiptID, "err", err)
+		}
+		return
+	}
+	processingCtx, cancel := context.WithCancel(ctx)
+	stopRenewal := make(chan struct{})
+	renewalDone := make(chan struct{})
+	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil && p.log != nil {
+				p.log.ErrorContext(
+					processingCtx, "deferred audit claim renewal panic recovered", "err", recovered,
+				)
+			}
+		}()
+		p.renewAuditClaim(processingCtx, cancel, claim, stopRenewal, renewalDone)
+	}()
+	stopRenewalAndWait := func() {
+		close(stopRenewal)
+		<-renewalDone
+	}
+	defer cancel()
+	defer stopRenewalAndWait()
+	for _, entry := range entries {
+		if err := sink.LogNormalizedDurable(ctx, entry.Entry); err != nil {
+			p.releaseAuditClaim(context.WithoutCancel(ctx), claim)
+			return
+		}
+		if err := p.store.MarkDeferredAuditEntryDelivered(
+			processingCtx, claim, entry.Index,
+		); err != nil {
+			p.releaseAuditClaim(context.WithoutCancel(ctx), claim)
+			return
+		}
+	}
+	if err := p.store.CompleteDeferredAudit(processingCtx, claim); err != nil {
+		p.releaseAuditClaim(context.WithoutCancel(ctx), claim)
+	}
+}
+
+func (p *deferredProcessor) renewAuditClaim(
+	ctx context.Context,
+	cancel context.CancelFunc,
+	claim intake.DeferredAuditClaim,
+	stop <-chan struct{},
+	done chan<- struct{},
+) {
+	defer close(done)
+	ticker := time.NewTicker(p.claimRenewInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			if err := p.store.RenewDeferredAuditClaim(ctx, claim, p.claimLease); err != nil {
+				cancel()
+				return
+			}
+		case <-stop:
+			return
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+func (p *deferredProcessor) releaseAuditClaim(
+	ctx context.Context,
+	claim intake.DeferredAuditClaim,
+) {
+	if err := p.store.ReleaseDeferredAuditClaim(ctx, claim); err != nil &&
+		!errors.Is(err, intake.ErrDeferredAuditClaimLost) && p.log != nil {
+		p.log.WarnContext(ctx, "release deferred audit claim failed", "receipt_id", claim.ReceiptID, "err", err)
 	}
 }
 
@@ -320,13 +436,13 @@ func (p *deferredProcessor) logDeferredFailure(
 	)
 }
 
-type durableAuditForwarder struct {
-	sink audit.DurableSink
-	err  error
+type normalizedAuditCollector struct {
+	sink    audit.ReplayableDurableSink
+	entries []audit.NormalizedEntry
 }
 
-func (forwarder *durableAuditForwarder) Log(
-	ctx context.Context,
+func (collector *normalizedAuditCollector) Log(
+	_ context.Context,
 	system string,
 	sessionID string,
 	eventName string,
@@ -334,33 +450,35 @@ func (forwarder *durableAuditForwarder) Log(
 	msg string,
 	attrs audit.Attrs,
 ) {
-	if forwarder.err != nil {
-		return
-	}
-	forwarder.err = forwarder.sink.LogDurable(
-		ctx, system, sessionID, eventName, level, msg, attrs,
+	entry := collector.sink.Normalize(
+		system, sessionID, eventName, level, msg, attrs,
 	)
+	if entry.Event.EventID != "" {
+		collector.entries = append(collector.entries, entry)
+	}
 }
 
-func (forwarder *durableAuditForwarder) Close() error {
+func (collector *normalizedAuditCollector) Close() error {
 	return nil
 }
 
-func writeDeferredAuditDurable(
+func captureDeferredAudit(
 	ctx context.Context,
 	event hook.DeferredAuditEvent,
 	sink audit.Sink,
-) error {
-	if sink == nil {
-		return nil
+) ([]audit.NormalizedEntry, error) {
+	if sink == nil || !event.Valid {
+		return nil, nil
 	}
-	durableSink, ok := sink.(audit.DurableSink)
+	replayableSink, ok := sink.(audit.ReplayableDurableSink)
 	if !ok {
-		return fmt.Errorf("audit sink does not support durable writes")
+		return nil, fmt.Errorf("audit sink does not support normalized replay")
 	}
-	forwarder := &durableAuditForwarder{sink: durableSink, err: nil}
-	hook.WriteDeferredAudit(ctx, event, forwarder)
-	return forwarder.err
+	collector := &normalizedAuditCollector{
+		sink: replayableSink, entries: make([]audit.NormalizedEntry, 0, 3),
+	}
+	hook.WriteDeferredAudit(ctx, event, collector)
+	return collector.entries, nil
 }
 
 func (p *deferredProcessor) rebuildDeferredAudit(

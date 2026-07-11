@@ -217,6 +217,13 @@ type DurableSink interface {
 	LogDurable(ctx context.Context, system, sessionID, eventName, level, msg string, attrs Attrs) error
 }
 
+// ReplayableDurableSink captures and writes immutable normalized audit entries.
+type ReplayableDurableSink interface {
+	DurableSink
+	Normalize(system, sessionID, eventName, level, msg string, attrs Attrs) NormalizedEntry
+	LogNormalizedDurable(context.Context, NormalizedEntry) error
+}
+
 // LocalSink is a [Sink] backed by a local [EventLogger]. Used by the daemon.
 type LocalSink struct {
 	logger *EventLogger
@@ -241,6 +248,29 @@ func (s *LocalSink) LogDurable(ctx context.Context, system, sessionID, eventName
 		return nil
 	}
 	return s.logger.LogDurable(ctx, system, sessionID, eventName, level, msg, attrs)
+}
+
+// Normalize captures one immutable normalized audit entry.
+func (s *LocalSink) Normalize(
+	system string,
+	sessionID string,
+	eventName string,
+	level string,
+	msg string,
+	attrs Attrs,
+) NormalizedEntry {
+	if s == nil || s.logger == nil {
+		return emptyNormalizedEntry()
+	}
+	return s.logger.Normalize(system, sessionID, eventName, level, msg, attrs)
+}
+
+// LogNormalizedDurable writes one previously normalized entry.
+func (s *LocalSink) LogNormalizedDurable(ctx context.Context, entry NormalizedEntry) error {
+	if s == nil || s.logger == nil {
+		return nil
+	}
+	return s.logger.LogNormalizedDurable(ctx, entry)
 }
 
 // Close closes the underlying [EventLogger].

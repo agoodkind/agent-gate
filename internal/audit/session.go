@@ -105,6 +105,31 @@ type Event struct {
 	RawPayloadHash string      `json:"raw_payload_hash,omitempty"`
 }
 
+// NormalizedEntry is an immutable audit write that can be retried without
+// changing its timestamp, event identity, or normalized fields.
+type NormalizedEntry struct {
+	Event       Event  `json:"event"`
+	RawPayload  string `json:"raw_payload,omitempty"`
+	Fingerprint string `json:"fingerprint"`
+}
+
+func emptyNormalizedEntry() NormalizedEntry {
+	return NormalizedEntry{
+		Event: Event{
+			EventID: "", SchemaVersion: 0, Time: "", Level: "", Message: "",
+			System: "", SessionID: "", TurnID: "", EventName: "", ToolUseID: "",
+			ToolName: "", Operation: Operation{
+				CWD: "", EffectiveCWD: "", Command: "", FilePath: "",
+			},
+			Decision: Decision{
+				Kind: "", CanBlock: false, RulesChecked: nil, RulesMatched: nil,
+			},
+			Violations: nil, RawPayloadHash: "",
+		},
+		RawPayload: "", Fingerprint: "",
+	}
+}
+
 // Operation captures the working-directory and command context of an event.
 type Operation struct {
 	CWD          string `json:"cwd,omitempty"`
@@ -277,7 +302,22 @@ func (el *EventLogger) LogDurable(
 	if el == nil || !el.enabled || !el.shouldLog(level) {
 		return nil
 	}
+	entry := el.Normalize(system, sessionID, eventName, level, msg, attrs)
+	return el.LogNormalizedDurable(ctx, entry)
+}
 
+// Normalize captures the exact normalized audit entry used by durable writes.
+func (el *EventLogger) Normalize(
+	system string,
+	sessionID string,
+	eventName string,
+	level string,
+	msg string,
+	attrs Attrs,
+) NormalizedEntry {
+	if el == nil || !el.enabled || !el.shouldLog(level) {
+		return emptyNormalizedEntry()
+	}
 	event := normalizeEvent(system, sessionID, eventName, level, msg, attrs)
 	fingerprint := dedupFingerprint(event, attrs)
 	rawPayload := ""
@@ -288,29 +328,45 @@ func (el *EventLogger) LogDurable(
 		event.RawPayloadHash = payloadHash(rawPayload)
 	}
 	event.EventID = "evt_" + fingerprint[:32]
+	return NormalizedEntry{
+		Event: event, RawPayload: rawPayload, Fingerprint: fingerprint,
+	}
+}
 
+// LogNormalizedDurable writes a previously normalized entry without changing
+// its identity or timestamp.
+func (el *EventLogger) LogNormalizedDurable(
+	ctx context.Context,
+	entry NormalizedEntry,
+) error {
+	if el == nil || !el.enabled {
+		return nil
+	}
 	el.mu.Lock()
 	defer el.mu.Unlock()
 	if el.stopping {
 		return fmt.Errorf("audit logger is stopping")
 	}
-	if _, seen := el.dedup.Get(fingerprint); seen {
+	if _, seen := el.dedup.Get(entry.Fingerprint); seen {
 		return nil
 	}
 	for _, output := range el.outputs {
-		if err := output.Write(event, rawPayload); err != nil {
+		if err := output.Write(entry.Event, entry.RawPayload); err != nil {
 			el.log.WarnContext(
 				ctx, "durable audit output write failed",
-				slog.String("event_id", event.EventID), slog.Any("err", err),
+				slog.String("event_id", entry.Event.EventID), slog.Any("err", err),
 			)
 			return fmt.Errorf("write durable audit event: %w", err)
 		}
 	}
-	el.dedup.Add(fingerprint, struct{}{})
+	el.dedup.Add(entry.Fingerprint, struct{}{})
 	return nil
 }
 
-var _ DurableSink = (*LocalSink)(nil)
+var (
+	_ DurableSink           = (*LocalSink)(nil)
+	_ ReplayableDurableSink = (*LocalSink)(nil)
+)
 
 func (el *EventLogger) hasQueueCapacity() bool {
 	el.mu.Lock()

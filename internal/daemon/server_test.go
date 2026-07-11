@@ -949,7 +949,7 @@ func setEvaluateAdmissionForTest(t testing.TB, srv *Server, concurrency int, wai
 	return snapshot
 }
 
-type failingIntakeStore struct{}
+type failingIntakeStore struct{ intakeStore }
 
 func (failingIntakeStore) Append(context.Context, intake.Record) (intake.AppendResult, error) {
 	return intake.AppendResult{}, errors.New("append failed")

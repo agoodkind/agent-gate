@@ -21,6 +21,7 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 
+	"goodkind.io/agent-gate/internal/audit"
 	"goodkind.io/agent-gate/internal/config"
 	"goodkind.io/agent-gate/internal/evaluation"
 )
@@ -94,6 +95,21 @@ type DeferredClaim struct {
 	ExpiresAt time.Time
 }
 
+// DeferredAuditClaim fences one outbox delivery attempt to one processor.
+type DeferredAuditClaim struct {
+	ReceiptID int64
+	EventID   string
+	Owner     string
+	Attempt   int
+	ExpiresAt time.Time
+}
+
+// DeferredAuditEntry is one ordered, immutable outbox entry.
+type DeferredAuditEntry struct {
+	Index int
+	Entry audit.NormalizedEntry
+}
+
 // AppendResult reports the durable event id and whether a new row was
 // inserted.
 type AppendResult struct {
@@ -145,6 +161,10 @@ func OpenSQLite(ctx context.Context, path string, log *slog.Logger) (*Store, err
 	if err != nil {
 		_ = db.Close()
 		return nil, wrapLoggedError(ctx, log, "init evaluation store", err)
+	}
+	if err := ensureDeferredAuditOutboxSchema(ctx, db); err != nil {
+		_ = db.Close()
+		return nil, err
 	}
 	return store, nil
 }

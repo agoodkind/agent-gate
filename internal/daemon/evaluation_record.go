@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"time"
 
+	"goodkind.io/agent-gate/internal/audit"
 	"goodkind.io/agent-gate/internal/evaluation"
 	"goodkind.io/agent-gate/internal/hook"
 	"goodkind.io/agent-gate/internal/intake"
@@ -20,7 +21,7 @@ type evaluationRecorder interface {
 		context.Context, string, int64, bool, evaluation.Record,
 	) error
 	CommitDeferredEvaluation(
-		context.Context, intake.DeferredClaim, evaluation.Record,
+		context.Context, intake.DeferredClaim, evaluation.Record, []audit.NormalizedEntry,
 	) error
 }
 

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"goodkind.io/agent-gate/api/daemonpb"
+	"goodkind.io/agent-gate/internal/audit"
 	"goodkind.io/agent-gate/internal/evaluation"
 	"goodkind.io/agent-gate/internal/intake"
 )
@@ -104,6 +105,7 @@ func (recorder *recordingEvaluationRecorder) CommitDeferredEvaluation(
 	ctx context.Context,
 	_ intake.DeferredClaim,
 	record evaluation.Record,
+	_ []audit.NormalizedEntry,
 ) error {
 	return recorder.RecordCompleted(ctx, record)
 }

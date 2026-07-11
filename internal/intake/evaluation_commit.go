@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"goodkind.io/agent-gate/internal/audit"
 	"goodkind.io/agent-gate/internal/evaluation"
 )
 
@@ -175,6 +176,7 @@ func (s *Store) CommitDeferredEvaluation(
 	ctx context.Context,
 	claim DeferredClaim,
 	record evaluation.Record,
+	auditEntries []audit.NormalizedEntry,
 ) error {
 	transaction, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -208,6 +210,11 @@ func (s *Store) CommitDeferredEvaluation(
 	}
 	if err := s.evaluations.RecordCompletedInTx(ctx, transaction, record); err != nil {
 		return wrapLoggedError(ctx, s.log, "record completed deferred evaluation", err)
+	}
+	if err := insertDeferredAuditOutbox(
+		ctx, transaction, claim, record.Evaluation.EvaluationID, auditEntries,
+	); err != nil {
+		return err
 	}
 	if err := transaction.Commit(); err != nil {
 		return wrapLoggedError(ctx, s.log, "commit deferred evaluation transaction", err)

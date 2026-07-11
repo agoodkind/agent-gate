@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"goodkind.io/agent-gate/internal/audit"
 	"goodkind.io/agent-gate/internal/evaluation"
 	"goodkind.io/agent-gate/internal/intake"
 )
@@ -129,7 +130,7 @@ func TestCommitDeferredEvaluationRejectsStaleClaim(t *testing.T) {
 	stale.Owner = "stale-owner"
 	record := atomicEvaluationRecord(receipt, "eval-stale", "deferred", claim.Attempt)
 
-	err = store.CommitDeferredEvaluation(context.Background(), stale, record)
+	err = store.CommitDeferredEvaluation(context.Background(), stale, record, nil)
 	if !errors.Is(err, intake.ErrDeferredClaimLost) {
 		t.Fatalf("CommitDeferredEvaluation error = %v, want ErrDeferredClaimLost", err)
 	}
@@ -154,7 +155,7 @@ func TestCommitDeferredEvaluationStoresLedgerAndCompletionTogether(t *testing.T)
 	}
 	record := atomicEvaluationRecord(receipt, "eval-deferred-commit", "deferred", claim.Attempt)
 
-	if err := store.CommitDeferredEvaluation(context.Background(), claim, record); err != nil {
+	if err := store.CommitDeferredEvaluation(context.Background(), claim, record, nil); err != nil {
 		t.Fatalf("CommitDeferredEvaluation: %v", err)
 	}
 	pending, err := store.ListDeferredPending(context.Background(), 0)
@@ -166,6 +167,192 @@ func TestCommitDeferredEvaluationStoresLedgerAndCompletionTogether(t *testing.T)
 	}
 	if _, err := store.Evaluations().Get(context.Background(), record.Evaluation.EvaluationID); err != nil {
 		t.Fatalf("Get evaluation: %v", err)
+	}
+}
+
+func TestCommitDeferredEvaluationReopensWithExactPendingAudit(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.db")
+	store := openAtomicStore(t, path)
+	receipt := appendAtomicRecord(t, store, "event-deferred-outbox")
+	if err := store.MarkDeferredPending(
+		context.Background(), receipt.EventID, receipt.ReceiptID,
+	); err != nil {
+		t.Fatalf("MarkDeferredPending: %v", err)
+	}
+	_, claim, err := store.ClaimDeferred(
+		context.Background(), receipt.ReceiptID, "evaluation-owner", 30*time.Second,
+	)
+	if err != nil {
+		t.Fatalf("ClaimDeferred: %v", err)
+	}
+	record := atomicEvaluationRecord(
+		receipt, "eval-deferred-outbox", "deferred", claim.Attempt,
+	)
+	entries := atomicAuditEntries(receipt.EventID)
+	if err := store.CommitDeferredEvaluation(
+		context.Background(), claim, record, entries,
+	); err != nil {
+		t.Fatalf("CommitDeferredEvaluation: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close before reopen: %v", err)
+	}
+
+	reopened := openAtomicStore(t, path)
+	pending, err := reopened.ListDeferredPending(context.Background(), 0)
+	if err != nil {
+		t.Fatalf("ListDeferredPending: %v", err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("pending evaluations = %+v, want none", pending)
+	}
+	receiptIDs, err := reopened.ListPendingDeferredAudit(context.Background(), 0)
+	if err != nil {
+		t.Fatalf("ListPendingDeferredAudit: %v", err)
+	}
+	if len(receiptIDs) != 1 || receiptIDs[0] != receipt.ReceiptID {
+		t.Fatalf("pending audit receipts = %+v, want [%d]", receiptIDs, receipt.ReceiptID)
+	}
+	gotEntries, auditClaim, err := reopened.ClaimDeferredAudit(
+		context.Background(), receipt.ReceiptID, "audit-owner", 30*time.Second,
+	)
+	if err != nil {
+		t.Fatalf("ClaimDeferredAudit: %v", err)
+	}
+	if auditClaim.Attempt != 1 {
+		t.Fatalf("audit claim attempt = %d, want 1", auditClaim.Attempt)
+	}
+	if len(gotEntries) != len(entries) {
+		t.Fatalf("audit entries = %d, want %d", len(gotEntries), len(entries))
+	}
+	for i := range entries {
+		if gotEntries[i].Index != i ||
+			gotEntries[i].Entry.Event.EventID != entries[i].Event.EventID ||
+			gotEntries[i].Entry.Event.Time != entries[i].Event.Time ||
+			gotEntries[i].Entry.Fingerprint != entries[i].Fingerprint {
+			t.Fatalf("audit entry %d = %+v, want %+v", i, gotEntries[i], entries[i])
+		}
+	}
+	if _, err := reopened.Evaluations().Get(
+		context.Background(), record.Evaluation.EvaluationID,
+	); err != nil {
+		t.Fatalf("Get evaluation: %v", err)
+	}
+}
+
+func TestCommitDeferredEvaluationRollsBackWhenOutboxInsertFails(t *testing.T) {
+	store := newTestStore(t)
+	receipt := appendAtomicRecord(t, store, "event-outbox-rollback")
+	if err := store.MarkDeferredPending(
+		context.Background(), receipt.EventID, receipt.ReceiptID,
+	); err != nil {
+		t.Fatalf("MarkDeferredPending: %v", err)
+	}
+	_, claim, err := store.ClaimDeferred(
+		context.Background(), receipt.ReceiptID, "owner", 30*time.Second,
+	)
+	if err != nil {
+		t.Fatalf("ClaimDeferred: %v", err)
+	}
+	if _, err := store.Handle().Exec(`
+		create trigger fail_deferred_audit_entry
+		before insert on deferred_audit_outbox_entries
+		begin select raise(abort, 'forced outbox failure'); end
+	`); err != nil {
+		t.Fatalf("create failure trigger: %v", err)
+	}
+	record := atomicEvaluationRecord(receipt, "eval-outbox-rollback", "deferred", claim.Attempt)
+	err = store.CommitDeferredEvaluation(
+		context.Background(), claim, record, atomicAuditEntries(receipt.EventID),
+	)
+	if err == nil {
+		t.Fatal("CommitDeferredEvaluation succeeded with failing outbox trigger")
+	}
+	if _, err := store.Evaluations().Get(
+		context.Background(), record.Evaluation.EvaluationID,
+	); !errors.Is(err, evaluation.ErrNotFound) {
+		t.Fatalf("Get evaluation error = %v, want not found", err)
+	}
+	pending, err := store.ListDeferredPending(context.Background(), 0)
+	if err != nil {
+		t.Fatalf("ListDeferredPending: %v", err)
+	}
+	if len(pending) != 1 || pending[0].ReceiptID != receipt.ReceiptID {
+		t.Fatalf("pending evaluations = %+v, want receipt %d", pending, receipt.ReceiptID)
+	}
+	outbox, err := store.ListPendingDeferredAudit(context.Background(), 0)
+	if err != nil {
+		t.Fatalf("ListPendingDeferredAudit: %v", err)
+	}
+	if len(outbox) != 0 {
+		t.Fatalf("pending outbox = %+v, want rollback", outbox)
+	}
+}
+
+func TestDeferredAuditClaimResumesOnlyUndeliveredEntries(t *testing.T) {
+	store := newTestStore(t)
+	receipt := appendAtomicRecord(t, store, "event-outbox-partial")
+	if err := store.MarkDeferredPending(
+		context.Background(), receipt.EventID, receipt.ReceiptID,
+	); err != nil {
+		t.Fatalf("MarkDeferredPending: %v", err)
+	}
+	_, evaluationClaim, err := store.ClaimDeferred(
+		context.Background(), receipt.ReceiptID, "evaluation-owner", 30*time.Second,
+	)
+	if err != nil {
+		t.Fatalf("ClaimDeferred: %v", err)
+	}
+	record := atomicEvaluationRecord(
+		receipt, "eval-outbox-partial", "deferred", evaluationClaim.Attempt,
+	)
+	if err := store.CommitDeferredEvaluation(
+		context.Background(), evaluationClaim, record, atomicAuditEntries(receipt.EventID),
+	); err != nil {
+		t.Fatalf("CommitDeferredEvaluation: %v", err)
+	}
+	entries, firstClaim, err := store.ClaimDeferredAudit(
+		context.Background(), receipt.ReceiptID, "audit-owner-a", 30*time.Second,
+	)
+	if err != nil {
+		t.Fatalf("ClaimDeferredAudit first: %v", err)
+	}
+	if err := store.MarkDeferredAuditEntryDelivered(
+		context.Background(), firstClaim, entries[0].Index,
+	); err != nil {
+		t.Fatalf("MarkDeferredAuditEntryDelivered: %v", err)
+	}
+	if err := store.ReleaseDeferredAuditClaim(context.Background(), firstClaim); err != nil {
+		t.Fatalf("ReleaseDeferredAuditClaim: %v", err)
+	}
+	remaining, secondClaim, err := store.ClaimDeferredAudit(
+		context.Background(), receipt.ReceiptID, "audit-owner-b", 30*time.Second,
+	)
+	if err != nil {
+		t.Fatalf("ClaimDeferredAudit second: %v", err)
+	}
+	if len(remaining) != 1 || remaining[0].Index != 1 {
+		t.Fatalf("remaining entries = %+v, want index 1", remaining)
+	}
+	if err := store.MarkDeferredAuditEntryDelivered(
+		context.Background(), firstClaim, remaining[0].Index,
+	); !errors.Is(err, intake.ErrDeferredAuditClaimLost) {
+		t.Fatalf("stale claim error = %v, want ErrDeferredAuditClaimLost", err)
+	}
+	if err := store.MarkDeferredAuditEntryDelivered(
+		context.Background(), secondClaim, remaining[0].Index,
+	); err != nil {
+		t.Fatalf("MarkDeferredAuditEntryDelivered second: %v", err)
+	}
+	if err := store.CompleteDeferredAudit(context.Background(), secondClaim); err != nil {
+		t.Fatalf("CompleteDeferredAudit: %v", err)
+	}
+	pending, err := store.ListPendingDeferredAudit(context.Background(), 0)
+	if err != nil {
+		t.Fatalf("ListPendingDeferredAudit: %v", err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("pending outbox = %+v, want complete", pending)
 	}
 }
 
@@ -217,5 +404,26 @@ func atomicEvaluationRecord(
 			EnforcementAction: "allow", ErrorJSON: json.RawMessage(`{}`),
 		},
 		Layers: make([]evaluation.Layer, 0), Labels: make([]evaluation.Label, 0),
+	}
+}
+
+func atomicAuditEntries(eventID string) []audit.NormalizedEntry {
+	return []audit.NormalizedEntry{
+		{
+			Event: audit.Event{
+				EventID: "evt_received", SchemaVersion: 1,
+				Time: "2026-07-11T04:00:00Z", Level: "info", Message: "hook.received",
+				System: "codex", SessionID: "session", EventName: "PreToolUse",
+			},
+			Fingerprint: "fingerprint-received-" + eventID,
+		},
+		{
+			Event: audit.Event{
+				EventID: "evt_blocked", SchemaVersion: 1,
+				Time: "2026-07-11T04:00:01Z", Level: "info", Message: "hook.blocked",
+				System: "codex", SessionID: "session", EventName: "PreToolUse",
+			},
+			Fingerprint: "fingerprint-blocked-" + eventID,
+		},
 	}
 }
