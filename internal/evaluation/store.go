@@ -208,6 +208,9 @@ func ensureLayerMetadataColumn(ctx context.Context, transaction *sql.Tx) error {
 	if err != nil {
 		return wrapError("query evaluation layer schema", err)
 	}
+	defer func() {
+		_ = rows.Close()
+	}()
 	found := false
 	for rows.Next() {
 		var columnID int
@@ -224,7 +227,6 @@ func ensureLayerMetadataColumn(ctx context.Context, transaction *sql.Tx) error {
 			&defaultValue,
 			&primaryKey,
 		); err != nil {
-			_ = rows.Close()
 			return wrapError("scan evaluation layer schema", err)
 		}
 		if name == "metadata_json" {
@@ -232,7 +234,6 @@ func ensureLayerMetadataColumn(ctx context.Context, transaction *sql.Tx) error {
 		}
 	}
 	if err := rows.Err(); err != nil {
-		_ = rows.Close()
 		return wrapError("iterate evaluation layer schema", err)
 	}
 	if err := rows.Close(); err != nil {
