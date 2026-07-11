@@ -104,7 +104,7 @@ func TestStoreListReturnsOrderedSafeTrainingExport(t *testing.T) {
 		}
 	}
 	for _, required := range []string{
-		`"verified_provenance":{"requested_model":"gpt-test"}`,
+		`"verified_provenance":{"requested_model":"gpt-test","reported_prompt_hash_status":"absent","reported_schema_hash_status":"absent"}`,
 		`"upstream_metadata":{"source":"inference_reply","trust":"untrusted","status":"present","raw":{"prompt_tokens":"0"}}`,
 	} {
 		if !strings.Contains(text, required) {
@@ -113,6 +113,32 @@ func TestStoreListReturnsOrderedSafeTrainingExport(t *testing.T) {
 	}
 	if strings.Contains(text, "completion_tokens") {
 		t.Fatalf("absent optional token field was invented: %s", text)
+	}
+}
+
+func TestStoreListCorrelatesLayerScopedFilters(t *testing.T) {
+	store, _, _, first, _ := newEvaluationQueryFixture(t)
+	ctx := context.Background()
+
+	disagreement, err := store.List(ctx, evaluation.QueryFilter{
+		RuleName: "static-rule", ModelName: "gpt-test",
+	})
+	if err != nil {
+		t.Fatalf("List disagreement: %v", err)
+	}
+	if len(disagreement) != 0 {
+		t.Fatalf("cross-layer disagreement returned %+v", disagreement)
+	}
+
+	correlated, err := store.List(ctx, evaluation.QueryFilter{
+		RuleName: "review-rule", LayerName: "review-layer", LayerKind: "inference",
+		LayerOutcome: "match", ModelName: "gpt-test",
+	})
+	if err != nil {
+		t.Fatalf("List correlated: %v", err)
+	}
+	if len(correlated) != 1 || correlated[0].EvaluationID != first.Evaluation.EvaluationID {
+		t.Fatalf("correlated records = %+v, want %q", correlated, first.Evaluation.EvaluationID)
 	}
 }
 
@@ -178,6 +204,24 @@ func TestStoreListRejectsMissingAndCorruptChildRows(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "invalid outcome semantics",
+			mutate: func(t *testing.T, database *sql.DB, evaluationID string) {
+				t.Helper()
+				if _, err := database.Exec(`update gate_evaluation_layers set status = 'error', outcome = 'match' where evaluation_id = ? and layer_index = 1`, evaluationID); err != nil {
+					t.Fatalf("corrupt outcome semantics: %v", err)
+				}
+			},
+		},
+		{
+			name: "mismatched output hash",
+			mutate: func(t *testing.T, database *sql.DB, evaluationID string) {
+				t.Helper()
+				if _, err := database.Exec(`update gate_evaluation_layers set output_json = '{"decision":"allow"}' where evaluation_id = ? and layer_index = 1`, evaluationID); err != nil {
+					t.Fatalf("corrupt output JSON: %v", err)
+				}
+			},
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -190,6 +234,24 @@ func TestStoreListRejectsMissingAndCorruptChildRows(t *testing.T) {
 				t.Fatal("List accepted incomplete or corrupt child rows")
 			}
 		})
+	}
+}
+
+func TestStoreListRejectsUnknownV2MetadataAfterRead(t *testing.T) {
+	store, database, _, first, _ := newEvaluationQueryFixture(t)
+	if _, err := database.Exec(`
+		update gate_evaluation_layers
+		set metadata_json = json_set(metadata_json, '$.prompt', 'prohibited')
+		where evaluation_id = ? and layer_index = 1
+	`, first.Evaluation.EvaluationID); err != nil {
+		t.Fatalf("corrupt v2 metadata: %v", err)
+	}
+
+	_, err := store.List(context.Background(), evaluation.QueryFilter{
+		EvaluationID: first.Evaluation.EvaluationID,
+	})
+	if err == nil {
+		t.Fatal("List accepted unknown v2 metadata field")
 	}
 }
 
@@ -287,8 +349,12 @@ func newEvaluationQueryFixture(
 	first.Layers[1].MetadataJSON = json.RawMessage(`{
 		"schema_version":2,
 		"rule_name":"review-rule",
-		"verified_provenance":{"requested_model":"gpt-test"},
-		"upstream_metadata":{"source":"inference_reply","trust":"untrusted","status":"present","raw":{"prompt_tokens":"0"}}
+		"verified_provenance":{
+			"requested_model":"gpt-test",
+			"reported_prompt_hash_status":"absent",
+			"reported_schema_hash_status":"absent"
+		},
+		"upstream_metadata":{"source":"inference_reply","trust":"untrusted","status":"present","raw":{"promptTokens":"0"}}
 	}`)
 	first.Layers[1].ErrorMessage = "backend secret"
 	first.Labels = []evaluation.Label{

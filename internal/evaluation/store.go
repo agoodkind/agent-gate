@@ -391,30 +391,8 @@ func validateRecord(record Record) error {
 		return errors.New("evaluation error JSON is invalid")
 	}
 	for index, layer := range record.Layers {
-		if layer.LayerIndex != index {
-			return fmt.Errorf("layer index %d is not ordered position %d", layer.LayerIndex, index)
-		}
-		if !json.Valid(layer.InputJSON) {
-			return fmt.Errorf("layer index %d input JSON is invalid", layer.LayerIndex)
-		}
-		if !json.Valid(layer.OutputJSON) {
-			return fmt.Errorf("layer index %d output JSON is invalid", layer.LayerIndex)
-		}
-		if !json.Valid(layer.MetadataJSON) {
-			return fmt.Errorf("layer index %d metadata JSON is invalid", layer.LayerIndex)
-		}
-		if layer.Outcome != "" && layer.Outcome != "match" && layer.Outcome != "nonmatch" {
-			return fmt.Errorf("layer index %d outcome %q is invalid", layer.LayerIndex, layer.Outcome)
-		}
-		if layer.ParentLayerIndex == nil {
-			continue
-		}
-		if *layer.ParentLayerIndex < 0 || *layer.ParentLayerIndex >= index {
-			return fmt.Errorf(
-				"layer index %d has invalid parent index %d",
-				layer.LayerIndex,
-				*layer.ParentLayerIndex,
-			)
+		if err := validateStoredLayer(layer, index); err != nil {
+			return err
 		}
 	}
 	for _, label := range record.Labels {
@@ -427,6 +405,41 @@ func validateRecord(record Record) error {
 		if *label.Confidence < 0 || *label.Confidence > 1 {
 			return fmt.Errorf("label %q confidence must be between 0 and 1", label.Namespace)
 		}
+	}
+	return nil
+}
+
+func validateStoredLayer(layer Layer, index int) error {
+	if layer.LayerIndex != index {
+		return fmt.Errorf("layer index %d is not ordered position %d", layer.LayerIndex, index)
+	}
+	if !json.Valid(layer.InputJSON) {
+		return fmt.Errorf("layer index %d input JSON is invalid", layer.LayerIndex)
+	}
+	if !json.Valid(layer.OutputJSON) {
+		return fmt.Errorf("layer index %d output JSON is invalid", layer.LayerIndex)
+	}
+	if !json.Valid(layer.MetadataJSON) {
+		return fmt.Errorf("layer index %d metadata JSON is invalid", layer.LayerIndex)
+	}
+	if _, err := UnmarshalLayerMetadata(layer.MetadataJSON); err != nil {
+		return fmt.Errorf("layer index %d metadata is invalid: %s", layer.LayerIndex, err.Error())
+	}
+	if err := validateLayerSemantics(layer.Kind, layer.Status, layer.Outcome); err != nil {
+		return fmt.Errorf("layer index %d semantics are invalid: %s", layer.LayerIndex, err.Error())
+	}
+	if err := validateLayerOutputHash(layer.OutputJSON, layer.OutputHash); err != nil {
+		return fmt.Errorf("layer index %d output is invalid: %s", layer.LayerIndex, err.Error())
+	}
+	if layer.ParentLayerIndex == nil {
+		return nil
+	}
+	if *layer.ParentLayerIndex < 0 || *layer.ParentLayerIndex >= index {
+		return fmt.Errorf(
+			"layer index %d has invalid parent index %d",
+			layer.LayerIndex,
+			*layer.ParentLayerIndex,
+		)
 	}
 	return nil
 }

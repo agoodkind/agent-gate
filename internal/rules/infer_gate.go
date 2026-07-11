@@ -28,8 +28,7 @@ import (
 )
 
 const (
-	inferenceCacheNamespace      = "infer-condition"
-	maxUpstreamMetadataJSONBytes = 4096
+	inferenceCacheNamespace = "infer-condition"
 )
 
 // InferenceTrace is the payload-free record of one attempted inference layer.
@@ -505,7 +504,7 @@ func boundedUpstreamMetadata(metadata *inferencepb.InvocationMetadata) UpstreamM
 		bounded.Status = UpstreamMetadataOmittedMalformed
 		return bounded
 	}
-	if len(encoded) > maxUpstreamMetadataJSONBytes {
+	if len(encoded) > MaxUpstreamMetadataJSONBytes {
 		bounded.Status = UpstreamMetadataOmittedOversize
 		return bounded
 	}
@@ -698,15 +697,12 @@ func cachedInvocationMetadata(
 	if cached.SchemaVersion != 2 {
 		return nil, false
 	}
-	metadata := cached.UpstreamMetadata
-	if metadata.Source != "inference_reply" || metadata.Trust != "untrusted" {
+	metadata, err := UnmarshalUpstreamMetadata(cached.UpstreamMetadata)
+	if err != nil {
 		return nil, false
 	}
 	switch metadata.Status {
 	case UpstreamMetadataPresent:
-		if len(metadata.Raw) == 0 || len(metadata.Raw) > maxUpstreamMetadataJSONBytes {
-			return nil, false
-		}
 		parsed := new(inferencepb.InvocationMetadata)
 		if (protojson.UnmarshalOptions{DiscardUnknown: false}).Unmarshal(
 			metadata.Raw, parsed,

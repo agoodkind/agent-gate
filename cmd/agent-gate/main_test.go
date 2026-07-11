@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -348,7 +350,7 @@ func TestRunQueryEvaluationsEmitsSafeNestedJSONLWithFilters(t *testing.T) {
 			t.Fatalf("JSONL exposes prohibited %q: %s", prohibited, stdout)
 		}
 	}
-	if !strings.Contains(stdout, `"verified_provenance":{"requested_model":"gpt-cli"}`) ||
+	if !strings.Contains(stdout, `"verified_provenance":{"requested_model":"gpt-cli","reported_prompt_hash_status":"absent","reported_schema_hash_status":"absent"}`) ||
 		!strings.Contains(stdout, `"upstream_metadata":{"source":"inference_reply","trust":"untrusted","status":"present","raw":{"prompt_tokens":"0"}}`) ||
 		strings.Contains(stdout, "completion_tokens") {
 		t.Fatalf("JSONL provenance envelope = %s", stdout)
@@ -465,13 +467,18 @@ func appendCLIQueryEvaluation(t *testing.T) evaluation.Record {
 			{
 				LayerIndex: 0, Kind: "inference", Name: "cli-layer", Status: "complete",
 				Outcome: "match", InputReference: "intake.normalized_json",
-				InputJSON: json.RawMessage(`{"input":"selected input secret","authorization":"backend secret"}`),
-				InputHash: "sha256:layer-input", OutputHash: "sha256:layer-output",
+				InputJSON:  json.RawMessage(`{"input":"selected input secret","authorization":"backend secret"}`),
+				InputHash:  "sha256:layer-input",
+				OutputHash: cliQueryOutputHash(json.RawMessage(`{"decision":"block"}`)),
 				OutputJSON: json.RawMessage(`{"decision":"block"}`),
 				MetadataJSON: json.RawMessage(`{
 					"schema_version":2,
 					"rule_name":"cli-rule",
-					"verified_provenance":{"requested_model":"gpt-cli"},
+					"verified_provenance":{
+						"requested_model":"gpt-cli",
+						"reported_prompt_hash_status":"absent",
+						"reported_schema_hash_status":"absent"
+					},
 					"upstream_metadata":{"source":"inference_reply","trust":"untrusted","status":"present","raw":{"prompt_tokens":"0"}}
 				}`),
 				StartedAt: startedAt, CompletedAt: startedAt.Add(time.Millisecond), LatencyUS: 1000,
@@ -490,6 +497,11 @@ func appendCLIQueryEvaluation(t *testing.T) evaluation.Record {
 		t.Fatalf("RecordCompleted: %v", err)
 	}
 	return record
+}
+
+func cliQueryOutputHash(value json.RawMessage) string {
+	digest := sha256.Sum256(value)
+	return "sha256:" + hex.EncodeToString(digest[:])
 }
 
 func captureStdoutCall(t *testing.T, call func()) string {

@@ -118,23 +118,6 @@ type QueryLabel struct {
 	CreatedAt    time.Time `json:"created_at"`
 }
 
-type queryMetadataVersion struct {
-	SchemaVersion int `json:"schema_version"`
-}
-
-type queryLayerMetadataV2 struct {
-	SchemaVersion      int                   `json:"schema_version"`
-	VerifiedProvenance json.RawMessage       `json:"verified_provenance"`
-	UpstreamMetadata   queryUpstreamMetadata `json:"upstream_metadata"`
-}
-
-type queryUpstreamMetadata struct {
-	Source string          `json:"source"`
-	Trust  string          `json:"trust"`
-	Status string          `json:"status"`
-	Raw    json.RawMessage `json:"raw,omitempty"`
-}
-
 type queryArgument struct {
 	Value string
 }
@@ -345,53 +328,7 @@ func evaluationQueryWhere(filter QueryFilter, hasOutcome bool) (string, []queryA
 	if filter.ToolName != "" {
 		add("e.tool_name = ?", filter.ToolName)
 	}
-	if filter.RuleName != "" {
-		clauses = append(clauses, `exists (
-			select 1 from gate_evaluation_layers rule_layer
-			where rule_layer.evaluation_id = g.evaluation_id
-			and (
-				json_extract(rule_layer.metadata_json, '$.rule_name') = ?
-				or exists (
-					select 1
-					from json_each(rule_layer.metadata_json, '$.checked_rules') checked_rule
-					where json_extract(checked_rule.value, '$.rule_name') = ?
-				)
-			)
-		)`)
-		arguments = append(
-			arguments,
-			queryArgument{Value: filter.RuleName},
-			queryArgument{Value: filter.RuleName},
-		)
-	}
-	if filter.LayerName != "" {
-		add(`exists (
-			select 1 from gate_evaluation_layers named_layer
-			where named_layer.evaluation_id = g.evaluation_id and named_layer.name = ?
-		)`, filter.LayerName)
-	}
-	if filter.LayerKind != "" {
-		add(`exists (
-			select 1 from gate_evaluation_layers kind_layer
-			where kind_layer.evaluation_id = g.evaluation_id and kind_layer.kind = ?
-		)`, filter.LayerKind)
-	}
-	if filter.LayerOutcome != "" {
-		if hasOutcome {
-			add(`exists (
-				select 1 from gate_evaluation_layers outcome_layer
-				where outcome_layer.evaluation_id = g.evaluation_id and outcome_layer.outcome = ?
-			)`, filter.LayerOutcome)
-		} else {
-			clauses = append(clauses, "1 = 0")
-		}
-	}
-	if filter.ModelName != "" {
-		add(`exists (
-			select 1 from gate_evaluation_layers model_layer
-			where model_layer.evaluation_id = g.evaluation_id and model_layer.model_name = ?
-		)`, filter.ModelName)
-	}
+	addLayerQueryFilters(filter, hasOutcome, &clauses, &arguments)
 	if filter.FinalVerdict != "" {
 		add("g.final_verdict = ?", filter.FinalVerdict)
 	}
@@ -399,6 +336,60 @@ func evaluationQueryWhere(filter QueryFilter, hasOutcome bool) (string, []queryA
 		return "", arguments
 	}
 	return " where " + strings.Join(clauses, " and "), arguments
+}
+
+func addLayerQueryFilters(
+	filter QueryFilter,
+	hasOutcome bool,
+	clauses *[]string,
+	arguments *[]queryArgument,
+) {
+	layerClauses := make([]string, 0)
+	add := func(clause string, value string) {
+		layerClauses = append(layerClauses, clause)
+		*arguments = append(*arguments, queryArgument{Value: value})
+	}
+	if filter.RuleName != "" {
+		layerClauses = append(layerClauses, `(
+			json_extract(filtered_layer.metadata_json, '$.rule_name') = ?
+			or exists (
+				select 1
+				from json_each(filtered_layer.metadata_json, '$.checked_rules') checked_rule
+				where json_extract(checked_rule.value, '$.rule_name') = ?
+			)
+		)`)
+		*arguments = append(
+			*arguments,
+			queryArgument{Value: filter.RuleName},
+			queryArgument{Value: filter.RuleName},
+		)
+	}
+	if filter.LayerName != "" {
+		add("filtered_layer.name = ?", filter.LayerName)
+	}
+	if filter.LayerKind != "" {
+		add("filtered_layer.kind = ?", filter.LayerKind)
+	}
+	if filter.LayerOutcome != "" {
+		if hasOutcome {
+			add("filtered_layer.outcome = ?", filter.LayerOutcome)
+		} else {
+			*clauses = append(*clauses, "1 = 0")
+			return
+		}
+	}
+	if filter.ModelName != "" {
+		add("filtered_layer.model_name = ?", filter.ModelName)
+	}
+	if len(layerClauses) == 0 {
+		return
+	}
+	*clauses = append(*clauses, `exists (
+		select 1
+		from gate_evaluation_layers filtered_layer
+		where filtered_layer.evaluation_id = g.evaluation_id
+		and `+strings.Join(layerClauses, " and ")+`
+	)`)
 }
 
 func queryEvaluationRows(
@@ -490,10 +481,11 @@ func querySafeLayers(
 		if err != nil {
 			return nil, err
 		}
-		if err := validateQueryLayer(layer, len(layers)); err != nil {
+		normalized, err := validateQueryLayer(layer, len(layers))
+		if err != nil {
 			return nil, wrapError(fmt.Sprintf("validate evaluation %q layer", evaluationID), err)
 		}
-		layers = append(layers, layer)
+		layers = append(layers, normalized)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, wrapError("iterate safe evaluation layers", err)
@@ -569,54 +561,45 @@ func scanQueryLayer(rows *sql.Rows) (QueryLayer, error) {
 	return layer, nil
 }
 
-func validateQueryLayer(layer QueryLayer, position int) error {
+func validateQueryLayer(layer QueryLayer, position int) (QueryLayer, error) {
 	if layer.LayerIndex != position {
-		return fmt.Errorf("layer index %d is not ordered position %d", layer.LayerIndex, position)
+		return QueryLayer{}, fmt.Errorf(
+			"layer index %d is not ordered position %d",
+			layer.LayerIndex,
+			position,
+		)
 	}
 	if layer.ParentLayerIndex != nil &&
 		(*layer.ParentLayerIndex < 0 || *layer.ParentLayerIndex >= position) {
-		return fmt.Errorf("layer index %d has invalid parent %d", layer.LayerIndex, *layer.ParentLayerIndex)
+		return QueryLayer{}, fmt.Errorf(
+			"layer index %d has invalid parent %d",
+			layer.LayerIndex,
+			*layer.ParentLayerIndex,
+		)
 	}
-	if layer.Outcome != "" && layer.Outcome != "match" && layer.Outcome != "nonmatch" {
-		return fmt.Errorf("layer index %d has invalid outcome %q", layer.LayerIndex, layer.Outcome)
+	if err := validateLayerSemantics(layer.Kind, layer.Status, layer.Outcome); err != nil {
+		return QueryLayer{}, fmt.Errorf(
+			"layer index %d has invalid semantics: %s",
+			layer.LayerIndex,
+			err.Error(),
+		)
 	}
 	if err := unmarshalJSONObject(layer.Output, "output"); err != nil {
-		return fmt.Errorf("layer index %d: %s", layer.LayerIndex, err.Error())
+		return QueryLayer{}, fmt.Errorf("layer index %d: %s", layer.LayerIndex, err.Error())
 	}
-	if err := unmarshalLayerMetadata(layer.Metadata); err != nil {
-		return fmt.Errorf("layer index %d: %s", layer.LayerIndex, err.Error())
+	if err := validateLayerOutputHash(layer.Output, layer.OutputHash); err != nil {
+		return QueryLayer{}, fmt.Errorf(
+			"layer index %d has invalid output: %s",
+			layer.LayerIndex,
+			err.Error(),
+		)
 	}
-	return nil
-}
-
-func unmarshalLayerMetadata(raw json.RawMessage) error {
-	if err := unmarshalJSONObject(raw, "metadata"); err != nil {
-		return err
+	normalizedMetadata, err := UnmarshalLayerMetadata(layer.Metadata)
+	if err != nil {
+		return QueryLayer{}, fmt.Errorf("layer index %d: %s", layer.LayerIndex, err.Error())
 	}
-	var version queryMetadataVersion
-	if err := json.Unmarshal(raw, &version); err != nil {
-		return fmt.Errorf("decode layer metadata version: %s", err.Error())
-	}
-	if version.SchemaVersion != 2 {
-		return nil
-	}
-	var metadata queryLayerMetadataV2
-	if err := json.Unmarshal(raw, &metadata); err != nil {
-		return fmt.Errorf("decode v2 layer metadata: %s", err.Error())
-	}
-	if err := unmarshalJSONObject(metadata.VerifiedProvenance, "verified provenance"); err != nil {
-		return err
-	}
-	if metadata.UpstreamMetadata.Source != "inference_reply" ||
-		metadata.UpstreamMetadata.Trust != "untrusted" {
-		return errors.New("v2 upstream metadata provenance is invalid")
-	}
-	if len(metadata.UpstreamMetadata.Raw) > 0 {
-		if err := unmarshalJSONObject(metadata.UpstreamMetadata.Raw, "upstream metadata raw"); err != nil {
-			return err
-		}
-	}
-	return nil
+	layer.Metadata = normalizedMetadata
+	return layer, nil
 }
 
 func unmarshalJSONObject(raw json.RawMessage, name string) error {

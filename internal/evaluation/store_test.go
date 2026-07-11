@@ -2,12 +2,15 @@ package evaluation_test
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"math"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -169,6 +172,161 @@ func TestStoreRejectsInvalidLabelConfidence(t *testing.T) {
 	}
 }
 
+func TestStoreRejectsInvalidLayerOutcomeSemantics(t *testing.T) {
+	store, receipt := newEvaluationStore(t)
+	tests := []struct {
+		name   string
+		mutate func(*evaluation.Layer)
+	}{
+		{
+			name: "complete predicate missing outcome",
+			mutate: func(layer *evaluation.Layer) {
+				layer.Kind = "inference"
+				layer.Status = "complete"
+				layer.Outcome = ""
+			},
+		},
+		{
+			name: "error predicate with outcome",
+			mutate: func(layer *evaluation.Layer) {
+				layer.Kind = "inference"
+				layer.Status = "error"
+				layer.Outcome = "match"
+			},
+		},
+		{
+			name: "skipped predicate with outcome",
+			mutate: func(layer *evaluation.Layer) {
+				layer.Kind = "inference"
+				layer.Status = "skipped"
+				layer.Outcome = "nonmatch"
+			},
+		},
+		{
+			name: "context with outcome",
+			mutate: func(layer *evaluation.Layer) {
+				layer.Kind = "context"
+				layer.Status = "complete"
+				layer.Outcome = "match"
+			},
+		},
+		{
+			name: "final with outcome",
+			mutate: func(layer *evaluation.Layer) {
+				layer.Kind = "final"
+				layer.Status = "complete"
+				layer.Outcome = "match"
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			record := completeRecord(receipt)
+			record.Evaluation.EvaluationID = "invalid-outcome-" + test.name
+			test.mutate(&record.Layers[1])
+			if err := store.RecordCompleted(context.Background(), record); err == nil {
+				t.Fatal("RecordCompleted accepted invalid layer outcome semantics")
+			}
+		})
+	}
+}
+
+func TestStoreRejectsInvalidLayerOutputHash(t *testing.T) {
+	store, receipt := newEvaluationStore(t)
+	tests := []struct {
+		name       string
+		outputHash string
+	}{
+		{name: "invalid format", outputHash: "not-a-sha256"},
+		{name: "mismatch", outputHash: testOutputHash(json.RawMessage(`{"other":true}`))},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			record := completeRecord(receipt)
+			record.Evaluation.EvaluationID = "invalid-output-hash-" + test.name
+			record.Layers[1].OutputHash = test.outputHash
+			if err := store.RecordCompleted(context.Background(), record); err == nil {
+				t.Fatal("RecordCompleted accepted invalid output hash")
+			}
+		})
+	}
+}
+
+func TestStoreRejectsUnsafeV2Metadata(t *testing.T) {
+	store, receipt := newEvaluationStore(t)
+	tests := []struct {
+		name     string
+		metadata json.RawMessage
+	}{
+		{
+			name: "unknown envelope field",
+			metadata: json.RawMessage(`{
+				"schema_version":2,
+				"verified_provenance":{"reported_prompt_hash_status":"absent","reported_schema_hash_status":"absent"},
+				"upstream_metadata":{"source":"inference_reply","trust":"untrusted","status":"absent"},
+				"prompt":"prohibited"
+			}`),
+		},
+		{
+			name: "unknown verified provenance field",
+			metadata: json.RawMessage(`{
+				"schema_version":2,
+				"verified_provenance":{"requested_model":"model","reported_prompt_hash_status":"absent","reported_schema_hash_status":"absent","input":"prohibited"},
+				"upstream_metadata":{"source":"inference_reply","trust":"untrusted","status":"absent"}
+			}`),
+		},
+		{
+			name: "unknown upstream claim",
+			metadata: json.RawMessage(`{
+				"schema_version":2,
+				"verified_provenance":{"reported_prompt_hash_status":"absent","reported_schema_hash_status":"absent"},
+				"upstream_metadata":{
+					"source":"inference_reply","trust":"untrusted","status":"present",
+					"raw":{"prompt_tokens":"0","authorization":"prohibited"}
+				}
+			}`),
+		},
+		{
+			name: "present without raw",
+			metadata: json.RawMessage(`{
+				"schema_version":2,
+				"verified_provenance":{"reported_prompt_hash_status":"absent","reported_schema_hash_status":"absent"},
+				"upstream_metadata":{"source":"inference_reply","trust":"untrusted","status":"present"}
+			}`),
+		},
+		{
+			name: "absent with raw",
+			metadata: json.RawMessage(`{
+				"schema_version":2,
+				"verified_provenance":{"reported_prompt_hash_status":"absent","reported_schema_hash_status":"absent"},
+				"upstream_metadata":{
+					"source":"inference_reply","trust":"untrusted","status":"absent",
+					"raw":{"prompt_tokens":"0"}
+				}
+			}`),
+		},
+		{
+			name: "oversized metadata",
+			metadata: json.RawMessage(`{
+				"schema_version":2,
+				"rule_name":"` + strings.Repeat("x", 20_000) + `",
+				"verified_provenance":{"reported_prompt_hash_status":"absent","reported_schema_hash_status":"absent"},
+				"upstream_metadata":{"source":"inference_reply","trust":"untrusted","status":"absent"}
+			}`),
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			record := completeRecord(receipt)
+			record.Evaluation.EvaluationID = "unsafe-v2-" + test.name
+			record.Layers[1].MetadataJSON = test.metadata
+			if err := store.RecordCompleted(context.Background(), record); err == nil {
+				t.Fatal("RecordCompleted accepted unsafe v2 metadata")
+			}
+		})
+	}
+}
+
 func TestNewStoreEnablesForeignKeyEnforcement(t *testing.T) {
 	database, err := sql.Open("sqlite3", filepath.Join(t.TempDir(), "evaluation.db"))
 	if err != nil {
@@ -308,14 +466,14 @@ func completeRecord(receipt intake.AppendResult) evaluation.Record {
 		Layers: []evaluation.Layer{
 			{
 				LayerIndex:     0,
-				Kind:           "oracle",
+				Kind:           "deterministic",
 				Name:           "deterministic",
 				Status:         "complete",
 				Outcome:        "nonmatch",
 				InputReference: "normalized_payload",
 				InputJSON:      json.RawMessage(`{"command":"make check"}`),
 				InputHash:      "sha256:layer-input-0",
-				OutputHash:     "sha256:layer-output-0",
+				OutputHash:     testOutputHash(json.RawMessage(`{"verdict":"allow"}`)),
 				OutputJSON:     json.RawMessage(`{"verdict":"allow"}`),
 				MetadataJSON:   json.RawMessage(`{"schema_version":1,"rule_name":"deterministic"}`),
 				StartedAt:      time.Date(2026, 7, 10, 1, 2, 4, 0, time.UTC),
@@ -328,14 +486,14 @@ func completeRecord(receipt intake.AppendResult) evaluation.Record {
 			{
 				LayerIndex:        1,
 				ParentLayerIndex:  &parentIndex,
-				Kind:              "model",
+				Kind:              "inference",
 				Name:              "lm-review",
-				Status:            "error",
+				Status:            "complete",
 				Outcome:           "match",
 				InputReference:    "layer:0.output",
 				InputJSON:         json.RawMessage(`{"command":"make check","oracle":"allow"}`),
 				InputHash:         "sha256:layer-input-1",
-				OutputHash:        "sha256:layer-output-1",
+				OutputHash:        testOutputHash(json.RawMessage(`{"verdict":"block","confidence":0.875}`)),
 				OutputJSON:        json.RawMessage(`{"verdict":"block","confidence":0.875}`),
 				MetadataJSON:      json.RawMessage(`{"schema_version":1,"request_id":"request-1"}`),
 				StartedAt:         time.Date(2026, 7, 10, 1, 2, 4, 200_000_000, time.UTC),
@@ -351,8 +509,8 @@ func completeRecord(receipt intake.AppendResult) evaluation.Record {
 				CacheKeyHash:      "sha256:cache-key",
 				CacheEntryVersion: &cacheVersion,
 				CacheExpiresAt:    &cacheExpiry,
-				ErrorCode:         "timeout",
-				ErrorMessage:      "upstream deadline exceeded",
+				ErrorCode:         "",
+				ErrorMessage:      "",
 				RetryCount:        3,
 			},
 		},
@@ -368,6 +526,11 @@ func completeRecord(receipt intake.AppendResult) evaluation.Record {
 			},
 		},
 	}
+}
+
+func testOutputHash(value json.RawMessage) string {
+	digest := sha256.Sum256(value)
+	return "sha256:" + hex.EncodeToString(digest[:])
 }
 
 func assertForeignKey(t *testing.T, database *sql.DB, table string, referencedTable string) {
