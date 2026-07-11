@@ -51,6 +51,7 @@ const (
 	pushEffectDelete
 	pushEffectDryRun
 	pushEffectMirror
+	pushEffectTags
 )
 
 const (
@@ -76,7 +77,7 @@ var pushBooleanOptions = []pushBooleanOption{
 	{longName: "prune", shortName: 0, negatable: true, effect: pushEffectNone},
 	{longName: "quiet", shortName: 'q', negatable: true, effect: pushEffectNone},
 	{longName: "set-upstream", shortName: 'u', negatable: true, effect: pushEffectNone},
-	{longName: "tags", shortName: 0, negatable: true, effect: pushEffectNone},
+	{longName: "tags", shortName: 0, negatable: true, effect: pushEffectTags},
 	{longName: "thin", shortName: 0, negatable: true, effect: pushEffectNone},
 	{longName: "verbose", shortName: 'v', negatable: true, effect: pushEffectNone},
 	{longName: "verify", shortName: 0, negatable: true, effect: pushEffectNone},
@@ -253,7 +254,7 @@ func gitInvocation(
 			return "", nil, "", "", false
 		}
 		if word.Value == "-C" {
-			if index+1 >= len(words) || !words[index+1].Resolvable {
+			if index+1 >= len(words) || !words[index+1].Resolvable || words[index+1].Value == "" {
 				return "", nil, "", "", false
 			}
 			cwd = resolvePath(cwd, words[index+1].Value)
@@ -277,14 +278,12 @@ func gitInvocation(
 			index = nextIndex
 			continue
 		}
-		if gitGlobalValueFlags[word.Value] {
-			if index+1 >= len(words) || !words[index+1].Resolvable {
+		nextIndex, recognized, valid := consumeGitGlobalOption(words, index)
+		if recognized {
+			if !valid {
 				return "", nil, "", "", false
 			}
-			index++
-			continue
-		}
-		if word.Kind == shelldecomp.WordKindFlag {
+			index = nextIndex
 			continue
 		}
 		return word.Value, words[index+1:], currentPath, statePath, true
@@ -299,7 +298,7 @@ func gitRepositoryFlag(
 	value := words[index].Value
 	for _, name := range []string{"--git-dir", "--work-tree"} {
 		if value == name {
-			if index+1 >= len(words) || !words[index+1].Resolvable {
+			if index+1 >= len(words) || !words[index+1].Resolvable || words[index+1].Value == "" {
 				return name, "", index, true, false
 			}
 			return name, words[index+1].Value, index + 1, true, true
@@ -521,6 +520,8 @@ func updateRefTargets(args []shelldecomp.Word) []string {
 func resetBranchTarget(args []shelldecomp.Word, flag string) []string {
 	var target []string
 	foundReset := false
+	forceMode := false
+	mergeMode := false
 	targetIndex := -1
 	startPointCount := 0
 	for index, argument := range args {
@@ -551,7 +552,7 @@ func resetBranchTarget(args []shelldecomp.Word, flag string) []string {
 			continue
 		}
 		if strings.HasPrefix(argument.Value, "-") {
-			if !resetBranchOptionAllowed(argument.Value) {
+			if !applyResetBranchOption(argument.Value, flag, &forceMode, &mergeMode) {
 				return nil
 			}
 			continue
@@ -567,15 +568,33 @@ func resetBranchTarget(args []shelldecomp.Word, flag string) []string {
 	return target
 }
 
-func resetBranchOptionAllowed(value string) bool {
-	return slices.Contains([]string{
-		"-f",
+func applyResetBranchOption(value string, flag string, forceMode *bool, mergeMode *bool) bool {
+	valid, forceOption, mergeOption := resetBranchOption(value, flag)
+	if !valid {
+		return false
+	}
+	*forceMode = *forceMode || forceOption
+	*mergeMode = *mergeMode || mergeOption
+	if *forceMode && *mergeMode {
+		return false
+	}
+	return true
+}
+
+func resetBranchOption(value string, flag string) (bool, bool, bool) {
+	if value == "--discard-changes" {
+		return flag == "C", true, false
+	}
+	if value == "-f" || value == "--force" {
+		return true, true, false
+	}
+	if value == "-m" || value == "--merge" {
+		return true, false, true
+	}
+	valid := slices.Contains([]string{
 		"-q",
-		"--discard-changes",
-		"--force",
 		"--guess",
 		"--ignore-other-worktrees",
-		"--merge",
 		"--no-guess",
 		"--no-progress",
 		"--no-recurse-submodules",
@@ -585,6 +604,7 @@ func resetBranchOptionAllowed(value string) bool {
 		"--recurse-submodules",
 		"--track",
 	}, value)
+	return valid, false, false
 }
 
 func localPushTargets(args []shelldecomp.Word, cwd string) ([]string, string) {
@@ -609,6 +629,7 @@ func parseLocalPushArgs(args []shelldecomp.Word) (string, []string, bool, bool, 
 		dryRun:         false,
 		endOptions:     false,
 		mirrorBranches: false,
+		tags:           false,
 	}
 	for index := 0; index < len(args); index++ {
 		if !args[index].Resolvable {
@@ -631,6 +652,7 @@ type localPushParseState struct {
 	dryRun         bool
 	endOptions     bool
 	mirrorBranches bool
+	tags           bool
 }
 
 func consumeLocalPushArgument(
@@ -681,7 +703,8 @@ func finishLocalPushArgs(state localPushParseState) (string, []string, bool, boo
 		refspecs = state.positionals[1:]
 	}
 	bulkMode := state.allBranches || state.mirrorBranches
-	if state.allBranches && state.mirrorBranches || bulkMode && state.deleteRefs || bulkMode && len(refspecs) > 0 {
+	if state.allBranches && state.mirrorBranches || bulkMode && state.deleteRefs ||
+		bulkMode && state.tags || bulkMode && len(refspecs) > 0 {
 		return "", nil, false, false, false
 	}
 	switch {
@@ -690,6 +713,7 @@ func finishLocalPushArgs(state localPushParseState) (string, []string, bool, boo
 		refspecs = []string{gitMirrorBranchesTarget}
 	case state.allBranches:
 		refspecs = []string{gitAllBranchesTarget}
+	case state.tags:
 	default:
 		return "", nil, false, false, false
 	}
@@ -753,6 +777,8 @@ func applyPushBooleanEffect(
 		state.dryRun = enabled
 	case pushEffectMirror:
 		state.mirrorBranches = enabled
+	case pushEffectTags:
+		state.tags = enabled
 	case pushEffectNone:
 	}
 }
@@ -860,11 +886,11 @@ func sourceBranchCheckedOutElsewhere(
 	if err != nil {
 		return false
 	}
-	for _, worktree := range sourceState.Worktrees {
-		if worktree.Branch != "" && gitbranch.BranchCheckedOutElsewhere(
+	for _, branch := range sourceState.LocalBranches {
+		if branch != "" && gitbranch.BranchCheckedOutElsewhere(
 			destinationState,
 			currentPath,
-			worktree.Branch,
+			branch,
 		) {
 			return true
 		}

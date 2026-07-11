@@ -234,3 +234,61 @@ The broader config, gitbranch, and rules suite passed. The final `make check`
 passed all five gates with trace `7670043b236fa082d407cd24665bf966`, and the
 final `make test` passed every package with trace
 `44c86e35bd5997379c5ce5fe674babe2`.
+
+## Checkout and Switch Grammar Review
+
+### RED
+
+The final read-only reviews found that checkout and switch still accepted
+unknown options, mutually exclusive reset modes, a switch-only option on
+checkout, and incompatible force or discard mode combined with merge mode.
+
+Literal tests reproduced matches for unknown options and `--detach` combined
+with `-B` or `-C`. Later tests reproduced checkout accepting
+`--discard-changes`, checkout accepting force with merge, and switch accepting
+discard changes with merge.
+
+### GREEN
+
+The reset parser now accepts a bounded option grammar, distinguishes checkout
+from switch for `--discard-changes`, and tracks force or discard mode separately
+from merge mode. Unknown options, detached reset commands, cross-family
+options, and force-or-discard plus merge combinations fail open.
+
+The focused and broader config, gitbranch, and rules suites passed. Two fresh
+read-only reviews reported no unresolved findings. The final `make check`
+passed all five gates with trace `b1ed1ab7bc7967eea32d0c77afd5875a`, and the
+final `make test` passed every package with trace
+`92b31c61599f0c788dc3c02c717f5601`. The final `git diff --check`
+produced no output.
+
+## Final Follow-up Findings
+
+### RED
+
+The final follow-up review found three remaining fail-open gaps. `push --all`
+derived source branches only from registered worktrees, `--tags` did not
+conflict with bulk push modes, and unknown or malformed Git global options
+were skipped before the subcommand.
+
+Focused tests reproduced the missing un-checked-out source branch, tag
+conflicts in both option orders, and unknown, terminal, or malformed global
+options. A state test also required loose and packed local branches to be
+returned as one sorted, deduplicated set.
+
+### GREEN
+
+Pure go-git state now exposes every local `refs/heads` branch, including packed
+refs. All/branches compares destination worktrees with that complete source
+branch set, while mirror retains destination-only deletion semantics.
+
+Push parsing tracks tags independently and rejects tags combined with all,
+branches, or mirror modes. Git invocation parsing accepts only the supported
+global option grammar, consumes required separate or inline values, preserves
+repository-selector ordering, and fails open on unknown or malformed options.
+
+The final focused gitbranch, oracle, and rules suite passed. The final
+`make test` passed every package with trace
+`1b5a4ab79e3e83c5524ab4fd800e0e42`, and the final `make check` passed all five
+gates with trace `9e0a023aa4a7fb8b3ee30a9a8e0c0d21`. The final
+`git diff --check` produced no output.

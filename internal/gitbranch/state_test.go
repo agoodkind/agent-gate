@@ -3,6 +3,7 @@ package gitbranch
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -153,6 +154,31 @@ func TestReadStateUsesPackedBranchRef(t *testing.T) {
 	}
 	if state.DefaultBranch != "main" || state.CurrentBranch != "main" {
 		t.Fatalf("branches = %q, %q; want packed main for both", state.DefaultBranch, state.CurrentBranch)
+	}
+}
+
+func TestReadStateListsLooseAndPackedLocalBranches(t *testing.T) {
+	primary, repo := initStateRepository(t)
+	setBranch(t, repo, "main")
+	setReference(t, repo, plumbing.NewHashReference(
+		plumbing.NewBranchReferenceName("feature"),
+		plumbing.NewHash(testHash),
+	))
+	writeStateFile(
+		t,
+		filepath.Join(primary, ".git", "packed-refs"),
+		"# pack-refs with: peeled fully-peeled sorted\n"+
+			testHash+" refs/heads/main\n"+
+			testHash+" refs/heads/release\n",
+	)
+
+	state, err := ReadState(primary)
+	if err != nil {
+		t.Fatalf("ReadState: %v", err)
+	}
+	want := []string{"feature", "main", "release"}
+	if !slices.Equal(state.LocalBranches, want) {
+		t.Fatalf("LocalBranches = %v, want %v", state.LocalBranches, want)
 	}
 }
 

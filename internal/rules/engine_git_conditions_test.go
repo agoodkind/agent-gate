@@ -184,6 +184,13 @@ func TestGitRefMoveConditionMatch(t *testing.T) {
 		{name: "delete with all", command: "git push --delete --all /repo/main", cwd: "/repo/feature", want: false},
 		{name: "delete with branches", command: "git push --delete --branches /repo/main", cwd: "/repo/feature", want: false},
 		{name: "delete with mirror", command: "git push --delete --mirror /repo/main", cwd: "/repo/feature", want: false},
+		{name: "tags only", command: "git push --tags /repo/main", cwd: "/repo/feature", want: false},
+		{name: "tags with all", command: "git push --tags --all /repo/main", cwd: "/repo/feature", want: false},
+		{name: "tags with branches", command: "git push --tags --branches /repo/main", cwd: "/repo/feature", want: false},
+		{name: "tags with mirror", command: "git push --tags --mirror /repo/main", cwd: "/repo/feature", want: false},
+		{name: "all with tags", command: "git push --all --tags /repo/main", cwd: "/repo/feature", want: false},
+		{name: "mirror with tags", command: "git push --mirror --tags /repo/main", cwd: "/repo/feature", want: false},
+		{name: "tags with explicit refspec", command: "git push --tags /repo/main HEAD:refs/heads/main", cwd: "/repo/feature", want: true},
 		{name: "local force option push", command: "git push --force /repo/main HEAD:refs/heads/main", cwd: "/repo/feature", want: true},
 		{name: "branches with explicit refspec", command: "git push --branches /repo/main HEAD:refs/heads/main", cwd: "/repo/feature", want: false},
 		{name: "local progress option push", command: "git push --progress /repo/main HEAD:refs/heads/main", cwd: "/repo/feature", want: true},
@@ -230,6 +237,10 @@ func TestGitRefMoveConditionMatch(t *testing.T) {
 		{name: "switch conflicting detach", command: "git switch --detach -C main", cwd: "/repo/feature", want: false},
 		{name: "checkout quiet reset", command: "git checkout --quiet -B main", cwd: "/repo/feature", want: true},
 		{name: "switch progress reset", command: "git switch --progress -C main", cwd: "/repo/feature", want: true},
+		{name: "checkout switch-only discard changes", command: "git checkout --discard-changes -B main", cwd: "/repo/feature", want: false},
+		{name: "switch discard changes reset", command: "git switch --discard-changes -C main", cwd: "/repo/feature", want: true},
+		{name: "checkout force merge conflict", command: "git checkout --force --merge -B main", cwd: "/repo/feature", want: false},
+		{name: "switch discard merge conflict", command: "git switch --discard-changes --merge -C main", cwd: "/repo/feature", want: false},
 		{name: "current worktree branch", command: "git branch -f feature HEAD", cwd: "/repo/feature", want: false},
 		{name: "detached entry", command: "git branch -f detached HEAD", cwd: "/repo/feature", want: false},
 		{name: "normal creation", command: "git branch new-branch HEAD", cwd: "/repo/feature", want: false},
@@ -287,6 +298,36 @@ func TestGitRefMoveRepositorySelectingGlobalFlags(t *testing.T) {
 	}
 }
 
+func TestGitRefMoveGlobalOptionValidation(t *testing.T) {
+	cases := []struct {
+		name    string
+		command string
+		want    bool
+	}{
+		{name: "known boolean", command: "git --no-pager branch -f main HEAD", want: true},
+		{name: "known separate value", command: "git --namespace tenant branch -f main HEAD", want: true},
+		{name: "known inline value", command: "git --namespace=tenant branch -f main HEAD", want: true},
+		{name: "known config", command: "git -c user.name=test branch -f main HEAD", want: true},
+		{name: "known config env", command: "git --config-env user.name=USER branch -f main HEAD", want: true},
+		{name: "known inline exec path", command: "git --exec-path=/tmp branch -f main HEAD", want: true},
+		{name: "unknown option", command: "git --not-a-real-option branch -f main HEAD", want: false},
+		{name: "malformed inline value", command: "git --namespace= branch -f main HEAD", want: false},
+		{name: "malformed attached config", command: "git -cuser.name=test branch -f main HEAD", want: false},
+		{name: "malformed boolean value", command: "git --no-pager=value branch -f main HEAD", want: false},
+		{name: "missing separate value", command: "git --namespace", want: false},
+		{name: "terminal version", command: "git --version branch -f main HEAD", want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture := &gitStateFixture{state: testGitState()}
+			fields := FieldSet{ToolInputCommand: tc.command, CWD: "/repo/feature"}
+			if got := gitRefMoveConditionMatch(fields, fixture.read); got != tc.want {
+				t.Fatalf("gitRefMoveConditionMatch(%q) = %v, want %v", tc.command, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestGitRefMoveSelectedSourceResolvesHeadDestination(t *testing.T) {
 	sourceState := gitbranch.State{
 		PrimaryCheckout: "/repo/source",
@@ -325,6 +366,7 @@ func TestGitRefMoveAllRequiresProvenSourceBranch(t *testing.T) {
 		PrimaryCheckout: "/repo/source",
 		CurrentWorktree: "/repo/source",
 		CurrentBranch:   "topic",
+		LocalBranches:   []string{"topic"},
 		Worktrees:       []gitbranch.Worktree{{Path: "/repo/source", Branch: "topic", IsPrimary: true}},
 	}
 	destinationState := gitbranch.State{
@@ -346,6 +388,11 @@ func TestGitRefMoveAllRequiresProvenSourceBranch(t *testing.T) {
 	mirrorFields := FieldSet{ToolInputCommand: "git push --mirror /repo/main", CWD: "/repo/source"}
 	if !gitRefMoveConditionMatch(mirrorFields, reader) {
 		t.Fatal("push --mirror did not match a destination-only checked-out branch")
+	}
+
+	sourceState.LocalBranches = []string{"main", "topic"}
+	if !gitRefMoveConditionMatch(allFields, reader) {
+		t.Fatal("push --all did not match an un-checked-out source branch checked out at the destination")
 	}
 }
 
@@ -432,6 +479,27 @@ func TestLocalPushRecognizedOptionTables(t *testing.T) {
 	}
 }
 
+func TestLocalPushTagsGrammar(t *testing.T) {
+	repository, refspecs, _, _, valid := parseLocalPushArgs(pushBulkWords("--tags"))
+	if !valid || repository != "/repo/main" || len(refspecs) != 0 {
+		t.Fatalf("tags-only push = %q, %v, valid %v", repository, refspecs, valid)
+	}
+	for _, options := range [][]string{
+		{"--tags", "--all"},
+		{"--all", "--tags"},
+		{"--tags", "--branches"},
+		{"--tags", "--mirror"},
+		{"--mirror", "--tags"},
+	} {
+		if _, _, _, _, valid := parseLocalPushArgs(pushBulkWords(options...)); valid {
+			t.Errorf("parseLocalPushArgs accepted conflicting options %v", options)
+		}
+	}
+	if _, _, _, _, valid := parseLocalPushArgs(pushBulkWords("--tags", "--all", "--no-tags")); !valid {
+		t.Fatal("parseLocalPushArgs rejected tags disabled before final bulk mode")
+	}
+}
+
 func TestLocalPushRecognizedNegatedBooleanOptions(t *testing.T) {
 	negatable := make([]string, 0)
 	for _, option := range pushBooleanOptions {
@@ -502,6 +570,7 @@ func testGitState() gitbranch.State {
 		PrimaryCheckout: "/repo/main",
 		CurrentWorktree: "/repo/feature",
 		CurrentBranch:   "feature",
+		LocalBranches:   []string{"feature", "main", "release/v1"},
 		Worktrees: []gitbranch.Worktree{
 			{Path: "/repo/main", Branch: "main", IsPrimary: true},
 			{Path: "/repo/feature", Branch: "feature"},

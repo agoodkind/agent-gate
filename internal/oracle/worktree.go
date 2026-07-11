@@ -575,6 +575,7 @@ func genericGitState(state State) gitbranch.State {
 		DefaultBranch:   state.DefaultBranch,
 		CurrentWorktree: state.CurrentWorktree,
 		CurrentBranch:   state.CurrentBranch,
+		LocalBranches:   nil,
 		Worktrees:       worktrees,
 	}
 }

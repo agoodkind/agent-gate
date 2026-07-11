@@ -7,9 +7,11 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	git "github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing"
 )
 
 // State describes one repository and its registered worktrees.
@@ -18,6 +20,7 @@ type State struct {
 	DefaultBranch   string
 	CurrentWorktree string
 	CurrentBranch   string
+	LocalBranches   []string
 	Worktrees       []Worktree
 }
 
@@ -63,11 +66,16 @@ func ReadState(path string) (State, error) {
 	if head.Name().IsBranch() {
 		currentBranch = head.Name().Short()
 	}
+	localBranches, err := readLocalBranches(repo)
+	if err != nil {
+		return State{}, err
+	}
 	return State{
 		PrimaryCheckout: primaryCheckout,
 		DefaultBranch:   resolveDefaultBranch(repo),
 		CurrentWorktree: currentWorktree,
 		CurrentBranch:   currentBranch,
+		LocalBranches:   localBranches,
 		Worktrees:       worktrees,
 	}, nil
 }
@@ -246,6 +254,29 @@ func readBranch(repo *git.Repository) (string, error) {
 		return "", nil
 	}
 	return head.Name().Short(), nil
+}
+
+func readLocalBranches(repo *git.Repository) ([]string, error) {
+	branches, err := repo.Branches()
+	if err != nil {
+		slog.Warn("read local git branches failed", "err", err)
+		return nil, fmt.Errorf("read local branches: %w", err)
+	}
+	defer branches.Close()
+	branchNames := make(map[string]struct{})
+	if err := branches.ForEach(func(reference *plumbing.Reference) error {
+		branchNames[reference.Name().Short()] = struct{}{}
+		return nil
+	}); err != nil {
+		slog.Warn("iterate local git branches failed", "err", err)
+		return nil, fmt.Errorf("iterate local branches: %w", err)
+	}
+	result := make([]string, 0, len(branchNames))
+	for branchName := range branchNames {
+		result = append(result, branchName)
+	}
+	slices.Sort(result)
+	return result, nil
 }
 
 func firstLine(path string) (string, error) {
