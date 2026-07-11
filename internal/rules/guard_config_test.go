@@ -30,6 +30,8 @@ type guardInferenceCall struct {
 	reasoningEffort inferencepb.ReasoningEffort
 }
 
+const guardV4Model = "agentgate/agent-gate-judge-v4"
+
 var guardInferenceBlockCommands = map[string]bool{
 	`echo /repo/main/go.mod | xargs grep module`: true,
 	`sh -c 'D=/repo/main; grep -rn foo "$D"'`:    true,
@@ -146,9 +148,7 @@ func TestComposedGuardConfigMatchesTruthSet(t *testing.T) {
 			getenv := func(name string) string {
 				return truthCase.Environment[name]
 			}
-			violations := EvaluateAll(
-				ctx, "codex", "PreToolUse", fields, cfg.Rules, getenv,
-			)
+			violations := evaluateGuardConfigStaged(ctx, fields, cfg.Rules, getenv)
 			got := expectedAllow
 			if len(violations) > 0 {
 				got = expectedBlock
@@ -157,19 +157,17 @@ func TestComposedGuardConfigMatchesTruthSet(t *testing.T) {
 				t.Fatalf("decision = %s, want %s; violations = %+v", got, truthCase.Expected, violations)
 			}
 			models := inferenceServer.models(truthCase.Command)
-			if len(models) == 2 && strings.Join(models, ",") != "v4,gpt-5.4-mini" {
+			if len(models) == 2 && strings.Join(models, ",") != guardV4Model+",gpt-5.4-mini" {
 				t.Fatalf("inference models = %v", models)
 			}
 		})
 	}
 	wantInference := map[string]string{
-		`echo /repo/main/go.mod | xargs grep module`: "v4,gpt-5.4-mini",
-		`sh -c 'D=/repo/main; grep -rn foo "$D"'`:    "v4,gpt-5.4-mini",
-		`eval "$(printf 'grep -rn foo /repo/main')"`: "v4,gpt-5.4-mini",
-		`grep module "$(printf /repo/main/go.mod)"`:  "v4,gpt-5.4-mini",
-		`bash -c 'rg TODO /repo/main'`:               "v4,gpt-5.4-mini",
-		`zsh -c 'git -C /repo/main grep TODO'`:       "v4,gpt-5.4-mini",
-		`bash -c 'rg TODO /tmp/project'`:             "v4",
+		`echo /repo/main/go.mod | xargs grep module`: guardV4Model + ",gpt-5.4-mini",
+		`eval "$(printf 'grep -rn foo /repo/main')"`: guardV4Model + ",gpt-5.4-mini",
+		`grep module "$(printf /repo/main/go.mod)"`:  guardV4Model + ",gpt-5.4-mini",
+		`zsh -c 'git -C /repo/main grep TODO'`:       guardV4Model + ",gpt-5.4-mini",
+		`bash -c 'rg TODO /tmp/project'`:             guardV4Model,
 	}
 	allCalls := inferenceServer.allCalls()
 	if len(allCalls) != len(wantInference) {
@@ -188,6 +186,39 @@ func TestComposedGuardConfigMatchesTruthSet(t *testing.T) {
 			t.Fatalf("inference models for %q = %q, want %q", command, gotModels, wantModels)
 		}
 	}
+}
+
+func evaluateGuardConfigStaged(
+	ctx context.Context,
+	fields FieldSet,
+	ruleSet []config.Rule,
+	getenv func(string) string,
+) []Violation {
+	deterministicRules := make([]config.Rule, 0, len(ruleSet))
+	inferenceRules := make([]config.Rule, 0, len(ruleSet))
+	for _, rule := range ruleSet {
+		if guardRuleUsesInference(rule) {
+			inferenceRules = append(inferenceRules, rule)
+		} else {
+			deterministicRules = append(deterministicRules, rule)
+		}
+	}
+	violations := EvaluateAll(
+		ctx, "codex", "PreToolUse", fields, deterministicRules, getenv,
+	)
+	if len(violations) > 0 {
+		return violations
+	}
+	return EvaluateAll(ctx, "codex", "PreToolUse", fields, inferenceRules, getenv)
+}
+
+func guardRuleUsesInference(rule config.Rule) bool {
+	for _, condition := range rule.Conditions {
+		if config.ConditionKind(condition.Kind) == config.ConditionKindInfer {
+			return true
+		}
+	}
+	return false
 }
 
 func startGuardInferenceServer(t *testing.T, service *guardInferenceServer) string {
