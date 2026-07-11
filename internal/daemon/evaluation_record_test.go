@@ -152,6 +152,24 @@ func TestHotEvaluationIDSeparatesDuplicateReceipts(t *testing.T) {
 	}
 }
 
+func TestHotFinalDispositionRecordsProviderSubstitution(t *testing.T) {
+	disposition := hotFinalDisposition(hook.HotEvaluation{
+		Deferred: hook.DeferredAuditEvent{
+			Valid: true, RawBytes: nil, System: hook.SystemCodex, SystemString: "codex",
+			EventName: "PostToolUse", SessionID: "session", EventID: "event", CWD: "",
+			Fields: rules.FieldSet{}, Rules: nil,
+			BlockingViolations:  []rules.Violation{{RuleName: "post-rule"}},
+			AuditOnlyViolations: nil, InferenceTraces: nil,
+			Decision: hook.ResponseDecisionBlock, DiagnosticText: "substitute result",
+		},
+	}, "")
+
+	if disposition.verdict != "block" || disposition.enforcementAction != "substitute" ||
+		!disposition.enforced {
+		t.Fatalf("substitution disposition = %+v", disposition)
+	}
+}
+
 func int64TestPointer(value int64) *int64 {
 	return &value
 }

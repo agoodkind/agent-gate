@@ -338,8 +338,14 @@ func hotFinalDisposition(result hook.HotEvaluation, systemError string) finalDis
 		if hasAttemptedInference(result.Trace.Layers) {
 			source = "inference"
 		}
+		enforcementAction := "deny"
+		if hook.LookupCapability(
+			result.Deferred.System, result.Deferred.EventName,
+		) == hook.CapabilitySubstitute {
+			enforcementAction = "substitute"
+		}
 		return finalDisposition{
-			verdict: "block", source: source, enforcementAction: "deny",
+			verdict: "block", source: source, enforcementAction: enforcementAction,
 			enforced: hook.CanBlock(result.Deferred.System, result.Deferred.EventName),
 			status:   "complete",
 		}
