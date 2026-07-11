@@ -150,6 +150,80 @@ the evaluation cursor before child queries because the intake store owns one
 SQLite connection. Existing `query seen` and `query decisions` execution and
 serialization paths are unchanged.
 
+## Review follow-up
+
+Review hardening commit:
+`73624ae63e1d8f5c5169bba0ec8a9b69faf19a2d`
+
+All layer-scoped filters now share one correlated `EXISTS` subquery. A query
+cannot combine the rule identity from a deterministic layer with the model or
+outcome from another inference layer.
+
+V2 metadata now passes through a strict typed codec at write and read time. The
+codec rejects unknown envelope, verified-provenance, generation-option, and
+upstream invocation fields. It also rejects oversized metadata, control-bearing
+known strings, invalid provenance source or trust, unknown statuses, and
+inconsistent status/raw combinations. Upstream invocation claims use the shared
+`inferencepb.InvocationMetadata` schema and the rules package's 4096-byte bound.
+The JSONL export marshals a new allowlisted envelope instead of returning stored
+metadata bytes.
+
+Layer validation now requires `match` or `nonmatch` only for complete
+`deterministic` and `inference` layers. Error, skipped, context, final,
+validation, and other nonpredicate layers require an empty outcome. Every layer
+also requires a canonical `sha256:` output hash whose digest exactly matches the
+stored output JSON bytes. Both invariants run before writes and after reads.
+
+Filter-correlation RED:
+
+```text
+$ go test ./internal/evaluation -run TestStoreListCorrelatesLayerScopedFilters
+cross-layer disagreement returned evaluation eval-query-1
+FAIL goodkind.io/agent-gate/internal/evaluation
+```
+
+Strict-metadata RED:
+
+```text
+$ go test ./internal/evaluation -run 'TestStoreRejectsUnsafeV2Metadata|TestStoreListRejectsUnknownV2MetadataAfterRead|TestStoreListReturnsOrderedSafeTrainingExport'
+RecordCompleted accepted unsafe v2 metadata
+List accepted unknown v2 metadata field
+training export retained promptTokens instead of canonical prompt_tokens
+FAIL goodkind.io/agent-gate/internal/evaluation
+```
+
+Layer-invariant RED:
+
+```text
+$ go test ./internal/evaluation -run 'TestStoreRejectsInvalidLayerOutcomeSemantics|TestStoreRejectsInvalidLayerOutputHash|TestStoreListRejectsMissingAndCorruptChildRows/(invalid_outcome_semantics|mismatched_output_hash)'
+RecordCompleted accepted invalid layer outcome semantics
+RecordCompleted accepted invalid output hash
+List accepted incomplete or corrupt child rows
+FAIL goodkind.io/agent-gate/internal/evaluation
+```
+
+Review GREEN:
+
+```text
+$ go test ./internal/evaluation ./internal/rules ./internal/daemon ./internal/hook ./cmd/agent-gate
+ok goodkind.io/agent-gate/internal/evaluation
+ok goodkind.io/agent-gate/internal/rules
+ok goodkind.io/agent-gate/internal/daemon
+ok goodkind.io/agent-gate/internal/hook
+ok goodkind.io/agent-gate/cmd/agent-gate
+
+$ make GO_MK_GENERATE= test
+all repository packages passed
+
+$ make GO_MK_GENERATE= check
+lint-golangci      ok
+lint-format        ok
+lint-gocyclo       ok
+lint-deadcode      ok
+staticcheck-extra  ok
+All checks passed.
+```
+
 ## Concerns
 
 Legacy evaluation rows created before child counts cannot prove the original
