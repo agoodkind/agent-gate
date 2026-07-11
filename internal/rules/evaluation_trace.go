@@ -22,21 +22,38 @@ const (
 	skipPriorConditionNonmatch = "prior_condition_nonmatch"
 )
 
-// InvocationMetadata is the exact inference service provenance returned for a call.
-type InvocationMetadata struct {
-	RequestID          string        `json:"request_id"`
-	ServiceVersion     string        `json:"service_version"`
-	RequestedModel     string        `json:"requested_model"`
-	ActualModel        string        `json:"actual_model"`
-	BackendFingerprint string        `json:"backend_fingerprint"`
-	BackendVersion     string        `json:"backend_version"`
-	PromptSHA256       string        `json:"prompt_sha256"`
-	SchemaSHA256       string        `json:"schema_sha256"`
-	PromptTokens       *int64        `json:"prompt_tokens"`
-	CompletionTokens   *int64        `json:"completion_tokens"`
-	TotalTokens        *int64        `json:"total_tokens"`
-	FinishReason       string        `json:"finish_reason"`
-	UpstreamLatency    time.Duration `json:"upstream_latency"`
+// VerifiedProvenance contains identities derived only from the local request.
+type VerifiedProvenance struct {
+	RequestedModel           string `json:"requested_model,omitempty"`
+	EndpointHash             string `json:"endpoint_hash,omitempty"`
+	CacheKeyHash             string `json:"cache_key_hash,omitempty"`
+	InputHash                string `json:"input_hash,omitempty"`
+	PromptSHA256             string `json:"prompt_sha256,omitempty"`
+	SchemaSHA256             string `json:"schema_sha256,omitempty"`
+	ReportedPromptHashStatus string `json:"reported_prompt_hash_status"`
+	ReportedSchemaHashStatus string `json:"reported_schema_hash_status"`
+}
+
+// UpstreamMetadataStatus describes whether bounded raw metadata is available.
+type UpstreamMetadataStatus string
+
+const (
+	// UpstreamMetadataPresent means bounded raw metadata is available.
+	UpstreamMetadataPresent UpstreamMetadataStatus = "present"
+	// UpstreamMetadataAbsent means the inference reply had no metadata.
+	UpstreamMetadataAbsent UpstreamMetadataStatus = "absent"
+	// UpstreamMetadataOmittedMalformed means protobuf JSON encoding failed.
+	UpstreamMetadataOmittedMalformed UpstreamMetadataStatus = "omitted_malformed"
+	// UpstreamMetadataOmittedOversize means encoded metadata exceeded the limit.
+	UpstreamMetadataOmittedOversize UpstreamMetadataStatus = "omitted_oversize"
+)
+
+// UpstreamMetadata is a bounded, explicitly untrusted inference-reply snapshot.
+type UpstreamMetadata struct {
+	Source string                 `json:"source"`
+	Trust  string                 `json:"trust"`
+	Status UpstreamMetadataStatus `json:"status"`
+	Raw    json.RawMessage        `json:"raw,omitempty"`
 }
 
 // DecisionTrace contains the deterministic rule decision and ordered optional layers.
@@ -84,16 +101,12 @@ type LayerTrace struct {
 	OutputHash         string
 	ServiceName        string
 	ServiceVersion     string
-	RequestedModel     string
-	ActualModel        string
-	ModelVersion       string
-	PromptHash         string
-	SchemaHash         string
+	VerifiedProvenance VerifiedProvenance
 	CacheStatus        string
 	CacheKeyHash       string
 	CacheEntryVersion  *int64
 	CacheExpiresAt     *time.Time
-	InvocationMetadata InvocationMetadata
+	UpstreamMetadata   UpstreamMetadata
 	ErrorCode          string
 	ErrorMessage       string
 	RetryCount         int
@@ -105,20 +118,26 @@ func newLayerTrace(ruleName string, conditionIndex int, layerName string, kind s
 		Kind: kind, Status: "", SkipReason: "", ParentTraceIndex: nil,
 		StartedAt: time.Time{}, CompletedAt: time.Time{}, InputReference: "",
 		InputJSON: nil, OutputJSON: nil, InputHash: "", OutputHash: "",
-		ServiceName: "", ServiceVersion: "", RequestedModel: "", ActualModel: "",
-		ModelVersion: "", PromptHash: "", SchemaHash: "", CacheStatus: "",
+		ServiceName: "", ServiceVersion: "", VerifiedProvenance: emptyVerifiedProvenance(),
+		CacheStatus:  "",
 		CacheKeyHash: "", CacheEntryVersion: nil, CacheExpiresAt: nil,
-		InvocationMetadata: emptyInvocationMetadata(), ErrorCode: "", ErrorMessage: "",
+		UpstreamMetadata: emptyUpstreamMetadata(), ErrorCode: "", ErrorMessage: "",
 		RetryCount: 0,
 	}
 }
 
-func emptyInvocationMetadata() InvocationMetadata {
-	return InvocationMetadata{
-		RequestID: "", ServiceVersion: "", RequestedModel: "", ActualModel: "",
-		BackendFingerprint: "", BackendVersion: "", PromptSHA256: "", SchemaSHA256: "",
-		PromptTokens: nil, CompletionTokens: nil, TotalTokens: nil, FinishReason: "",
-		UpstreamLatency: 0,
+func emptyVerifiedProvenance() VerifiedProvenance {
+	return VerifiedProvenance{
+		RequestedModel: "", EndpointHash: "", CacheKeyHash: "", InputHash: "",
+		PromptSHA256: "", SchemaSHA256: "", ReportedPromptHashStatus: "absent",
+		ReportedSchemaHashStatus: "absent",
+	}
+}
+
+func emptyUpstreamMetadata() UpstreamMetadata {
+	return UpstreamMetadata{
+		Source: "inference_reply", Trust: "untrusted", Status: UpstreamMetadataAbsent,
+		Raw: nil,
 	}
 }
 
@@ -260,7 +279,7 @@ func (collector *richTraceCollector) orderedSnapshot(rulesSlice []config.Rule) [
 func cloneLayerTrace(layer LayerTrace) LayerTrace {
 	layer.InputJSON = append(json.RawMessage(nil), layer.InputJSON...)
 	layer.OutputJSON = append(json.RawMessage(nil), layer.OutputJSON...)
-	layer.InvocationMetadata = cloneRichInvocationMetadata(layer.InvocationMetadata)
+	layer.UpstreamMetadata.Raw = append(json.RawMessage(nil), layer.UpstreamMetadata.Raw...)
 	if layer.ParentTraceIndex != nil {
 		parent := *layer.ParentTraceIndex
 		layer.ParentTraceIndex = &parent
@@ -274,22 +293,6 @@ func cloneLayerTrace(layer LayerTrace) LayerTrace {
 		layer.CacheExpiresAt = &expiresAt
 	}
 	return layer
-}
-
-func cloneRichInvocationMetadata(metadata InvocationMetadata) InvocationMetadata {
-	if metadata.PromptTokens != nil {
-		value := *metadata.PromptTokens
-		metadata.PromptTokens = &value
-	}
-	if metadata.CompletionTokens != nil {
-		value := *metadata.CompletionTokens
-		metadata.CompletionTokens = &value
-	}
-	if metadata.TotalTokens != nil {
-		value := *metadata.TotalTokens
-		metadata.TotalTokens = &value
-	}
-	return metadata
 }
 
 func traceJSONHash(value []byte) string {
@@ -488,7 +491,7 @@ func collectSkippedInferenceCondition(
 	inferenceLayer.OutputJSON = json.RawMessage(`{}`)
 	inferenceLayer.InputHash = traceJSONHash(inferenceLayer.InputJSON)
 	inferenceLayer.OutputHash = traceJSONHash(inferenceLayer.OutputJSON)
-	inferenceLayer.RequestedModel = condition.Model
+	inferenceLayer.VerifiedProvenance.RequestedModel = condition.Model
 	collector.collect(inferenceLayer)
 }
 

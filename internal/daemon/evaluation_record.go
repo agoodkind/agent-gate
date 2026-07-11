@@ -50,12 +50,13 @@ type deferredEvaluationRecordInput struct {
 	Event           hook.DeferredAuditEvent
 }
 
-type layerMetadataV1 struct {
+type layerMetadataV2 struct {
 	SchemaVersion      int                      `json:"schema_version"`
 	RuleName           string                   `json:"rule_name,omitempty"`
 	ConditionIndex     int                      `json:"condition_index,omitempty"`
 	SkipReason         string                   `json:"skip_reason,omitempty"`
-	InvocationMetadata rules.InvocationMetadata `json:"invocation_metadata"`
+	VerifiedProvenance rules.VerifiedProvenance `json:"verified_provenance"`
+	UpstreamMetadata   rules.UpstreamMetadata   `json:"upstream_metadata"`
 	GenerationOptions  json.RawMessage          `json:"generation_options,omitempty"`
 }
 
@@ -222,14 +223,11 @@ func deterministicEvaluationLayer(trace rules.DeterministicTrace) evaluation.Lay
 func richEvaluationLayer(layerIndex int, trace rules.LayerTrace) evaluation.Layer {
 	latency := trace.CompletedAt.Sub(trace.StartedAt)
 	latency = max(latency, 0)
-	metadata := layerMetadataV1{
-		SchemaVersion: 1, RuleName: trace.RuleName, ConditionIndex: trace.ConditionIndex,
-		SkipReason: trace.SkipReason, InvocationMetadata: trace.InvocationMetadata,
+	metadata := layerMetadataV2{
+		SchemaVersion: 2, RuleName: trace.RuleName, ConditionIndex: trace.ConditionIndex,
+		SkipReason: trace.SkipReason, VerifiedProvenance: trace.VerifiedProvenance,
+		UpstreamMetadata:  trace.UpstreamMetadata,
 		GenerationOptions: inferenceGenerationOptions(trace.InputJSON),
-	}
-	modelName := trace.ActualModel
-	if modelName == "" {
-		modelName = trace.RequestedModel
 	}
 	return evaluation.Layer{
 		LayerIndex: layerIndex, ParentLayerIndex: cloneIntPointer(trace.ParentTraceIndex),
@@ -240,8 +238,9 @@ func richEvaluationLayer(layerIndex int, trace rules.LayerTrace) evaluation.Laye
 		MetadataJSON: marshalLayerMetadata(metadata), StartedAt: trace.StartedAt,
 		CompletedAt: trace.CompletedAt, LatencyUS: latency.Microseconds(),
 		ServiceName: trace.ServiceName, ServiceVersion: trace.ServiceVersion,
-		ModelName: modelName, ModelVersion: trace.ModelVersion, PromptHash: trace.PromptHash,
-		SchemaHash: trace.SchemaHash, CacheStatus: trace.CacheStatus,
+		ModelName: trace.VerifiedProvenance.RequestedModel, ModelVersion: "",
+		PromptHash: trace.VerifiedProvenance.PromptSHA256,
+		SchemaHash: trace.VerifiedProvenance.SchemaSHA256, CacheStatus: trace.CacheStatus,
 		CacheKeyHash: trace.CacheKeyHash, CacheEntryVersion: cloneInt64Pointer(trace.CacheEntryVersion),
 		CacheExpiresAt: cloneTimePointer(trace.CacheExpiresAt), ErrorCode: trace.ErrorCode,
 		ErrorMessage: trace.ErrorMessage, RetryCount: trace.RetryCount,
@@ -404,7 +403,7 @@ func inferenceGenerationOptions(inputJSON json.RawMessage) json.RawMessage {
 	return append(json.RawMessage(nil), input.GenerationOptions...)
 }
 
-func marshalLayerMetadata(value layerMetadataV1) json.RawMessage {
+func marshalLayerMetadata(value layerMetadataV2) json.RawMessage {
 	encoded, err := json.Marshal(value)
 	if err != nil {
 		return json.RawMessage(`{}`)

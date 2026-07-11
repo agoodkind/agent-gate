@@ -166,7 +166,6 @@ func collectRichInferenceTrace(
 	if result.errored {
 		statusValue = traceStatusError
 	}
-	metadata := richInvocationMetadata(result.metadata)
 	layer := newLayerTrace(call.rule.Name, call.conditionIndex, condition.LayerName, "inference")
 	layer.Status = statusValue
 	layer.ParentTraceIndex = &parentIndex
@@ -178,17 +177,17 @@ func collectRichInferenceTrace(
 	layer.InputHash = traceJSONHash(inputJSON)
 	layer.OutputHash = traceJSONHash(outputJSON)
 	layer.ServiceName = "inference"
-	layer.ServiceVersion = metadata.ServiceVersion
-	layer.RequestedModel = condition.Model
-	layer.ActualModel = metadata.ActualModel
-	layer.ModelVersion = metadata.BackendVersion
-	layer.PromptHash = result.localPromptHash
-	layer.SchemaHash = result.localSchemaHash
+	layer.VerifiedProvenance = verifiedInferenceProvenance(
+		condition, call.input, call.cacheKey, result,
+	)
 	layer.CacheStatus = result.cacheStatus
-	layer.CacheKeyHash = traceJSONHash([]byte(call.cacheKey))
+	layer.CacheKeyHash = layer.VerifiedProvenance.CacheKeyHash
 	layer.CacheEntryVersion = result.cacheEntryVersion
 	layer.CacheExpiresAt = result.cacheExpiresAt
-	layer.InvocationMetadata = metadata
+	layer.UpstreamMetadata = result.upstreamMetadata
+	layer.UpstreamMetadata.Raw = append(
+		json.RawMessage(nil), result.upstreamMetadata.Raw...,
+	)
 	layer.ErrorCode = result.errorClass
 	layer.ErrorMessage = sanitizedTraceError(result.errorClass)
 	collector.collect(layer)
@@ -208,30 +207,6 @@ func marshalInferenceTraceJSON(value inferenceLayerInput) json.RawMessage {
 		return json.RawMessage(`{}`)
 	}
 	return encoded
-}
-
-func richInvocationMetadata(metadata *inferencepb.InvocationMetadata) InvocationMetadata {
-	if metadata == nil {
-		return emptyInvocationMetadata()
-	}
-	return InvocationMetadata{
-		RequestID: metadata.GetRequestId(), ServiceVersion: metadata.GetServiceVersion(),
-		RequestedModel: metadata.GetRequestedModel(), ActualModel: metadata.GetActualModel(),
-		BackendFingerprint: metadata.GetBackendFingerprint(), BackendVersion: metadata.GetBackendVersion(),
-		PromptSHA256: metadata.GetPromptSha256(), SchemaSHA256: metadata.GetSchemaSha256(),
-		PromptTokens:     cloneOptionalInt64(metadata.PromptTokens),
-		CompletionTokens: cloneOptionalInt64(metadata.CompletionTokens),
-		TotalTokens:      cloneOptionalInt64(metadata.TotalTokens), FinishReason: metadata.GetFinishReason(),
-		UpstreamLatency: time.Duration(metadata.GetLatencyMs()) * time.Millisecond,
-	}
-}
-
-func cloneOptionalInt64(value *int64) *int64 {
-	if value == nil {
-		return nil
-	}
-	cloned := *value
-	return &cloned
 }
 
 func sanitizedTraceError(errorClass string) string {

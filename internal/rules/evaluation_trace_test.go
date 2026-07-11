@@ -97,7 +97,9 @@ func TestInferTraceRecordsAttemptThenSkippedDeclaration(t *testing.T) {
 	}
 	if nonmatch.Trace.Layers[0].LayerName != "v4" || nonmatch.Trace.Layers[0].Status != "complete" ||
 		nonmatch.Trace.Layers[1].LayerName != "mini-high" || nonmatch.Trace.Layers[1].Status != "skipped" ||
-		nonmatch.Trace.Layers[1].SkipReason != "prior_condition_nonmatch" {
+		nonmatch.Trace.Layers[1].SkipReason != "prior_condition_nonmatch" ||
+		nonmatch.Trace.Layers[1].VerifiedProvenance.ReportedPromptHashStatus != "absent" ||
+		nonmatch.Trace.Layers[1].VerifiedProvenance.ReportedSchemaHashStatus != "absent" {
 		t.Fatalf("nonmatch layers = %+v", nonmatch.Trace.Layers)
 	}
 
@@ -165,6 +167,7 @@ func TestInferCacheTracePreservesOutputMetadataVersionAndExpiry(t *testing.T) {
 			Status:     inferencepb.InferenceStatus_INFERENCE_STATUS_COMPLETE,
 			Metadata: &inferencepb.InvocationMetadata{
 				RequestId: "request-cache", ActualModel: "model-cache", BackendVersion: "backend-cache",
+				PromptTokens: int64Pointer(0),
 			},
 		}, nil
 	}}
@@ -181,8 +184,39 @@ func TestInferCacheTracePreservesOutputMetadataVersionAndExpiry(t *testing.T) {
 	if fake.count() != 1 || layer.CacheStatus != "hit" || layer.CacheEntryVersion == nil ||
 		*layer.CacheEntryVersion != 1 || layer.CacheExpiresAt == nil ||
 		string(layer.OutputJSON) != `{"decision":"block","proof":"exact"}` ||
-		layer.InvocationMetadata.RequestID != "request-cache" {
+		layer.VerifiedProvenance.RequestedModel != "" ||
+		layer.UpstreamMetadata.Status != "present" ||
+		!strings.Contains(string(layer.UpstreamMetadata.Raw), `"request_id":"request-cache"`) ||
+		!strings.Contains(string(layer.UpstreamMetadata.Raw), `"prompt_tokens":"0"`) ||
+		strings.Contains(string(layer.UpstreamMetadata.Raw), `"completion_tokens"`) {
 		t.Fatalf("cache layer = %+v", layer)
+	}
+}
+
+func TestInferTraceBoundsRawMetadataAndRetainsHashTruth(t *testing.T) {
+	fake := &inferenceFake{handler: func(context.Context, *inferencepb.InferRequest) (*inferencepb.InferReply, error) {
+		return &inferencepb.InferReply{
+			OutputJson: `{"decision":"block"}`,
+			Status:     inferencepb.InferenceStatus_INFERENCE_STATUS_COMPLETE,
+			Metadata: &inferencepb.InvocationMetadata{
+				RequestId:    strings.Repeat("x", 5000),
+				PromptSha256: traceHash([]byte("Classify")),
+				SchemaSha256: strings.Repeat("spoofed", 1000),
+			},
+		}, nil
+	}}
+	endpoint, _ := startInferenceServer(t, fake)
+	runtime := rules.NewInferRuntimeWithCache(nil, nil)
+	t.Cleanup(runtime.Close)
+	layer := evaluateInferDetailed(t, runtime, loadInferRule(t, endpoint, ""), "input").Trace.Layers[0]
+	if layer.UpstreamMetadata.Status != "omitted_oversize" || len(layer.UpstreamMetadata.Raw) != 0 {
+		t.Fatalf("upstream metadata = %+v", layer.UpstreamMetadata)
+	}
+	if layer.VerifiedProvenance.ReportedPromptHashStatus != "match" ||
+		layer.VerifiedProvenance.ReportedSchemaHashStatus != "mismatch" ||
+		layer.VerifiedProvenance.PromptSHA256 != traceHash([]byte("Classify")) ||
+		layer.VerifiedProvenance.SchemaSHA256 != traceHash([]byte(`{"type":"object"}`)) {
+		t.Fatalf("verified provenance = %+v", layer.VerifiedProvenance)
 	}
 }
 
@@ -222,7 +256,8 @@ func TestInferTraceSanitizesGRPCErrorAndRejectsHashMismatch(t *testing.T) {
 		t.Cleanup(runtime.Close)
 		layer := evaluateInferDetailed(t, runtime, loadInferRule(t, endpoint, ""), "input").Trace.Layers[0]
 		if layer.Status != "error" || layer.ErrorCode != "unavailable" ||
-			strings.Contains(layer.ErrorMessage, "secret backend response") || layer.InvocationMetadata.RequestID != "" {
+			strings.Contains(layer.ErrorMessage, "secret backend response") ||
+			layer.UpstreamMetadata.Status != "absent" {
 			t.Fatalf("grpc layer = %+v", layer)
 		}
 	})
@@ -283,7 +318,8 @@ func TestInferTracePreservesErroredReplyOutput(t *testing.T) {
 			).Trace.Layers[0]
 			if layer.Status != "error" || layer.ErrorCode != test.errorCode ||
 				string(layer.OutputJSON) != test.outputJSON ||
-				layer.InvocationMetadata.RequestID != "errored-request" {
+				layer.UpstreamMetadata.Status != "present" ||
+				!strings.Contains(string(layer.UpstreamMetadata.Raw), `"request_id":"errored-request"`) {
 				t.Fatalf("errored layer = %+v", layer)
 			}
 		})

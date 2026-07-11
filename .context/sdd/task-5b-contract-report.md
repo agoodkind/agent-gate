@@ -2,59 +2,13 @@
 
 ## Status
 
-The agent-gate inference client now matches lm-review commit `3201ae5` on every
-wire-significant field. The only proto difference is the required local
-`go_package = "goodkind.io/agent-gate/api/inferencepb"`.
+The agent-gate inference wire client matches the pinned lm-review contract and
+keeps local verification separate from metadata reported by the inference
+service.
 
-The generic infer condition accepts `reasoning_effort`, optional
-`max_completion_tokens`, and optional `temperature`. Validation follows the
-wire service bounds and adds no guard-specific or model-specific policy.
-
-## RED evidence
-
-`go test ./api/inferencepb -run '^TestInferenceWireContract$' -count=1`
-
-Failed because `ReasoningEffort`, `GenerationOptions`, `InvocationMetadata`,
-request field 6, and reply field 3 did not exist.
-
-`go test ./internal/config -run '^TestInferCondition(CompilesGenericGenerationOptions|ValidatesGenericGenerationOptions)$' -count=1`
-
-Failed because `Condition` had no reasoning effort, completion-token, or
-temperature fields.
-
-`go test ./internal/rules -run '^TestInfer(SendsGenerationOptionsAndPreservesMetadataInCacheTraces|FailedRPCCapturesClientLatency|CacheIdentityIncludesGenerationOptions|ConditionsRunInDeclarationOrder)$' -count=1`
-
-Failed because requests had no generation options, replies and traces had no
-invocation metadata, and ordered mini requests could not carry HIGH reasoning.
-
-## GREEN evidence
-
-`make proto`
-
-Passed with `buf generate` and regenerated the local Go bindings.
-
-`go test ./api/inferencepb ./internal/config ./internal/rules -run 'TestInferenceWireContract|^TestInfer' -count=1`
-
-Passed all three focused packages after syncing to the pinned proto.
-
-`go test -race ./internal/rules -run '^TestInfer' -count=1`
-
-Passed before the final pinned-token-presence correction. The correction only
-changes generated metadata token fields from optional pointers to plain
-`int64`, matching commit `3201ae5`.
-
-`make check`
-
-Passed `lint-golangci`, formatting, cyclomatic complexity, deadcode, and
-extended static analysis after the final proto generation.
-
-`make test`
-
-Passed every package before a concurrent edit appeared in
-`internal/daemon/infer_deferred_test.go`. The final rerun reached all packages
-but could not build `internal/daemon` because that uncommitted out-of-scope test
-references a missing `deferredProcessor.inferRuntime` field. This task did not
-modify daemon or hook code.
+Compact inference traces contain only locally derived provenance. Rich
+evaluation metadata retains a bounded copy of the exact upstream protobuf JSON
+under an explicit untrusted label.
 
 ## Wire contract
 
@@ -66,29 +20,84 @@ tokens at field 2, and optional temperature at field 3. The reasoning enum
 preserves values 0 through 6 for unspecified, none, minimal, low, medium, high,
 and xhigh.
 
-The reply retains `output_json = 1` and `status = 2`, and adds metadata at field
-3. Invocation metadata preserves request and service identity, requested and
-actual model identity, backend identity, prompt and schema hashes, token counts,
-finish reason, and upstream latency.
+The reply retains `output_json = 1` and `status = 2`, and adds invocation
+metadata at field 3. Token fields remain optional, so absent values and explicit
+zero values have different protobuf presence.
 
-## Runtime evidence
+## Provenance boundary
 
-Inference requests map the generic TOML options directly to the proto. Stable
-cache identity includes each generation option and distinguishes unset values
-from explicit values such as `temperature = 0.0`.
+`VerifiedProvenance` is derived from the local condition, request input, and
+cache key. It records the configured requested model, endpoint identity hash,
+cache identity hash, input identity hash, local prompt and schema SHA-256, and
+the match status of any reported prompt and schema hashes.
 
-Successful cache entries preserve the match result and upstream invocation
-metadata. Each payload-free trace records declaration index, layer, configured
-model, endpoint, outcome, status, client-observed latency, cache-hit state,
-sanitized error class, and cloned upstream metadata. Failed RPC traces preserve
-client-observed latency and sanitized error provenance with no upstream
-metadata.
+Payload-free `InferenceTrace` values contain `VerifiedProvenance` and no raw
+invocation metadata. They do not contain prompt, input, context, schema, output,
+or endpoint excerpts.
 
-The ordered-chain test proves these exact outcomes:
+Rich inference layers retain upstream invocation metadata as protobuf JSON with
+`source = "inference_reply"` and `trust = "untrusted"`. The raw JSON is limited
+to 4096 encoded bytes. Absent, malformed, and oversized metadata use explicit
+statuses and omit `raw`.
 
-1. v4 allow performs one call and allows.
-2. v4 block followed by gpt-5.4-mini HIGH allow performs two calls and allows.
-3. Both models blocking performs two calls and blocks.
-4. A mini RPC error with `on_error = "open"` performs two calls and allows.
+Evaluation `MetadataJSON` uses schema version 2 and stores
+`verified_provenance` separately from `upstream_metadata`. Exact bounded raw
+metadata preserves optional token presence, including explicit zero values.
 
-Every mini attempt asserts `REASONING_EFFORT_HIGH` on the wire.
+Evaluation columns use only local values. `ModelName` is the configured model,
+`PromptHash` and `SchemaHash` are local hashes, and upstream service version,
+actual model, backend version, backend fingerprint, request ID, finish reason,
+usage, and latency never populate verified columns.
+
+## Cache behavior
+
+Cache schema version 2 stores the schema-valid inference output, bounded raw
+upstream metadata, and bounded reported hash values. Cache reads reject legacy,
+malformed, oversized, or incorrectly labeled provenance records. Raw cache
+metadata must also decode as `InvocationMetadata` protobuf JSON with no unknown
+fields. Scalar, array, unknown-field, and malformed JSON values are rejected,
+while an explicit-zero optional token remains valid.
+
+Each cache hit recomputes `VerifiedProvenance` from the current local condition,
+input, endpoint, and cache key. The cache does not replay a compact trace from
+the upstream response.
+
+## Output contract
+
+Schema-valid `OutputJSON` and its `OutputHash` remain unchanged for successful
+inference replies. Error and non-complete replies retain their prior rich output
+behavior. The provenance split does not replace training output with an empty
+object.
+
+## Verification evidence
+
+`GOFLAGS=-tags=sqlite_fts5 go test ./internal/rules ./internal/daemon ./internal/hook -count=1`
+
+Passed all affected packages after the provenance migration.
+
+`GOFLAGS=-tags=sqlite_fts5 go test -race -v ./internal/rules ./internal/daemon -run '<focused provenance tests>' -count=1`
+
+Passed compact cold, cache, error, bounded metadata, strict cache protojson, and
+evaluation-record tests under the race detector.
+
+`GOFLAGS=-tags=sqlite_fts5 go test ./internal/... -count=1`
+
+Passed every internal package without the test cache.
+
+`make GO_MK_GENERATE= GO_MK_GENERATE_INPUTS= GO_MK_GENERATE_OUTPUTS= GO_MK_WORKSPACE_USE= test`
+
+Passed every repository package while using the isolated worktree's existing
+ignored `go.work` entry for the pinned generated grammar checkout.
+
+The same isolated-worktree `make check` path could not provide a complete green
+signal. Its golangci-lint configuration reports an empty unsupported version,
+and `staticcheck-extra` reports seven baseline findings in unrelated audit,
+config, gitbranch, hotkv, shellread, and exec-gate files. After the provenance
+GoDoc fix, the check output contains no finding in a file changed by this task.
+The full check must run again after this commit reaches the current shared
+branch and its later tool setup and baseline.
+
+The focused tests cover cold and cache-hit compact traces, error and
+non-complete replies, local hash match status, bounded and malformed raw
+metadata, optional-zero token presence, verified evaluation columns, retained
+output JSON, payload-free compact provenance, and cache-poisoning inputs.

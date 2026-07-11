@@ -250,14 +250,17 @@ func skippedStagedLayer(
 		ParentTraceIndex: &parent, StartedAt: time.Time{}, CompletedAt: time.Time{},
 		InputReference: "intake.normalized_json", InputJSON: emptyJSON, OutputJSON: emptyJSON,
 		InputHash: hookTraceHash(emptyJSON), OutputHash: hookTraceHash(emptyJSON),
-		ServiceName: "", ServiceVersion: "", RequestedModel: model, ActualModel: "",
-		ModelVersion: "", PromptHash: "", SchemaHash: "", CacheStatus: "",
+		ServiceName: "", ServiceVersion: "",
+		VerifiedProvenance: rules.VerifiedProvenance{
+			RequestedModel: model, EndpointHash: "", CacheKeyHash: "", InputHash: "",
+			PromptSHA256: "", SchemaSHA256: "", ReportedPromptHashStatus: "absent",
+			ReportedSchemaHashStatus: "absent",
+		},
+		CacheStatus:  "",
 		CacheKeyHash: "", CacheEntryVersion: nil, CacheExpiresAt: nil,
-		InvocationMetadata: rules.InvocationMetadata{
-			RequestID: "", ServiceVersion: "", RequestedModel: "", ActualModel: "",
-			BackendFingerprint: "", BackendVersion: "", PromptSHA256: "", SchemaSHA256: "",
-			PromptTokens: nil, CompletionTokens: nil, TotalTokens: nil, FinishReason: "",
-			UpstreamLatency: 0,
+		UpstreamMetadata: rules.UpstreamMetadata{
+			Source: "inference_reply", Trust: "untrusted",
+			Status: rules.UpstreamMetadataAbsent, Raw: nil,
 		},
 		ErrorCode: "", ErrorMessage: "", RetryCount: 0,
 	}

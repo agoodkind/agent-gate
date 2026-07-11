@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -34,19 +35,17 @@ func TestBuildHotEvaluationRecordPersistsOrderedExactLayers(t *testing.T) {
 				InputJSON:      json.RawMessage(`{"prompt":"classify","input":"blocked"}`),
 				OutputJSON:     json.RawMessage(`{"decision":"block"}`),
 				InputHash:      "sha256:infer-input", OutputHash: "sha256:infer-output",
-				ServiceName: "inference", ServiceVersion: "service-v1",
-				RequestedModel: "v4", ActualModel: "v4-actual", ModelVersion: "backend-v2",
-				PromptHash: "sha256:prompt", SchemaHash: "sha256:schema",
+				ServiceName: "inference", ServiceVersion: "",
+				VerifiedProvenance: rules.VerifiedProvenance{
+					RequestedModel: "v4", PromptSHA256: "sha256:prompt",
+					SchemaSHA256: "sha256:schema", ReportedPromptHashStatus: "mismatch",
+					ReportedSchemaHashStatus: "mismatch",
+				},
 				CacheStatus: "hit", CacheKeyHash: "sha256:cache",
 				CacheEntryVersion: &cacheVersion, CacheExpiresAt: &cacheExpiry,
-				InvocationMetadata: rules.InvocationMetadata{
-					RequestID: "request-1", ServiceVersion: "service-v1",
-					RequestedModel: "v4", ActualModel: "v4-actual",
-					BackendFingerprint: "fingerprint", BackendVersion: "backend-v2",
-					PromptSHA256: "upstream-prompt", SchemaSHA256: "upstream-schema",
-					PromptTokens: int64TestPointer(12), CompletionTokens: int64TestPointer(3),
-					TotalTokens: int64TestPointer(15), FinishReason: "stop",
-					UpstreamLatency: 11 * time.Millisecond,
+				UpstreamMetadata: rules.UpstreamMetadata{
+					Source: "inference_reply", Trust: "untrusted", Status: "present",
+					Raw: json.RawMessage(`{"request_id":"request-1","service_version":"service-v1","actual_model":"v4-actual","backend_version":"backend-v2","prompt_tokens":"0"}`),
 				},
 				ErrorCode: "", ErrorMessage: "", RetryCount: 0,
 			},
@@ -89,17 +88,24 @@ func TestBuildHotEvaluationRecordPersistsOrderedExactLayers(t *testing.T) {
 	}
 	if string(record.Layers[1].InputJSON) != string(trace.Layers[0].InputJSON) ||
 		string(record.Layers[1].OutputJSON) != string(trace.Layers[0].OutputJSON) ||
-		record.Layers[1].ModelName != "v4-actual" || record.Layers[1].CacheEntryVersion == nil ||
+		record.Layers[1].ModelName != "v4" || record.Layers[1].ServiceVersion != "" ||
+		record.Layers[1].ModelVersion != "" || record.Layers[1].CacheEntryVersion == nil ||
 		*record.Layers[1].CacheEntryVersion != 9 {
 		t.Fatalf("inference layer = %+v", record.Layers[1])
 	}
-	var metadata layerMetadataV1
+	var metadata layerMetadataV2
 	if err := json.Unmarshal(record.Layers[1].MetadataJSON, &metadata); err != nil {
 		t.Fatalf("metadata JSON: %v", err)
 	}
-	if metadata.InvocationMetadata.RequestID != "request-1" || metadata.RuleName != "infer-rule" ||
-		metadata.ConditionIndex != 0 {
+	if metadata.SchemaVersion != 2 || metadata.RuleName != "infer-rule" ||
+		metadata.ConditionIndex != 0 || metadata.UpstreamMetadata.Source != "inference_reply" ||
+		metadata.UpstreamMetadata.Trust != "untrusted" ||
+		!strings.Contains(string(metadata.UpstreamMetadata.Raw), `"prompt_tokens":"0"`) {
 		t.Fatalf("metadata = %+v", metadata)
+	}
+	if metadata.VerifiedProvenance.RequestedModel != "v4" ||
+		metadata.VerifiedProvenance.PromptSHA256 != "sha256:prompt" {
+		t.Fatalf("verified metadata = %+v", metadata.VerifiedProvenance)
 	}
 	if record.Layers[2].ParentLayerIndex == nil || *record.Layers[2].ParentLayerIndex != 1 {
 		t.Fatalf("final parent = %+v", record.Layers[2].ParentLayerIndex)
@@ -168,8 +174,4 @@ func TestHotFinalDispositionRecordsProviderSubstitution(t *testing.T) {
 		!disposition.enforced {
 		t.Fatalf("substitution disposition = %+v", disposition)
 	}
-}
-
-func int64TestPointer(value int64) *int64 {
-	return &value
 }

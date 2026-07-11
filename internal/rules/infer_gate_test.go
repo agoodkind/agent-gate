@@ -18,7 +18,6 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/stats"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/proto"
 
 	"goodkind.io/agent-gate/api/inferencepb"
 	"goodkind.io/agent-gate/internal/config"
@@ -236,14 +235,16 @@ func TestInferNestedPredicateArbitrarySchemaAndTrace(t *testing.T) {
 		t.Fatalf("traces = %+v", collector.traces)
 	}
 	encoded, _ := json.Marshal(collector.traces[0])
-	for _, secret := range []string{"SECRET_INPUT", "Classify", "poodle"} {
+	for _, secret := range []string{
+		"SECRET_INPUT", "Classify", "poodle", `{"type":"object"}`, endpoint,
+	} {
 		if strings.Contains(string(encoded), secret) {
 			t.Fatalf("trace leaked payload %q: %s", secret, encoded)
 		}
 	}
 }
 
-func TestInferSendsGenerationOptionsAndPreservesMetadataInCacheTraces(t *testing.T) {
+func TestInferSendsGenerationOptionsAndRecomputesVerifiedCacheTraces(t *testing.T) {
 	fake := &inferenceFake{handler: func(_ context.Context, request *inferencepb.InferRequest) (*inferencepb.InferReply, error) {
 		options := request.GetGenerationOptions()
 		if options == nil || options.GetReasoningEffort() != inferencepb.ReasoningEffort_REASONING_EFFORT_HIGH {
@@ -284,16 +285,26 @@ func TestInferSendsGenerationOptionsAndPreservesMetadataInCacheTraces(t *testing
 		t.Fatalf("traces = %+v", collector.traces)
 	}
 	for _, trace := range collector.traces {
-		if trace.Metadata == nil || trace.Metadata.GetRequestId() != "request-1" ||
-			trace.Metadata.GetPromptTokens() != 41 || trace.Metadata.GetCompletionTokens() != 7 ||
-			trace.Metadata.GetTotalTokens() != 48 || trace.Metadata.PromptTokens == nil ||
-			trace.Metadata.CompletionTokens == nil || trace.Metadata.TotalTokens == nil {
-			t.Fatalf("trace metadata = %+v", trace.Metadata)
+		verified := trace.VerifiedProvenance
+		if verified.RequestedModel != "gpt-5.4-mini" || verified.EndpointHash == "" ||
+			verified.CacheKeyHash == "" || verified.InputHash != traceHash([]byte("input")) ||
+			verified.PromptSHA256 != traceHash([]byte("Classify")) ||
+			verified.SchemaSHA256 != traceHash([]byte(`{"type":"object"}`)) ||
+			verified.ReportedPromptHashStatus != "match" ||
+			verified.ReportedSchemaHashStatus != "match" {
+			t.Fatalf("verified provenance = %+v", verified)
 		}
-		if trace.Metadata.GetRequestedModel() != "gpt-5.4-mini" ||
-			trace.Metadata.GetPromptSha256() != traceHash([]byte("Classify")) ||
-			trace.Metadata.GetSchemaSha256() != traceHash([]byte(`{"type":"object"}`)) {
-			t.Fatalf("trace provenance = %+v", trace.Metadata)
+		encoded, err := json.Marshal(trace)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, untrusted := range []string{
+			"request-1", "service-1", "gpt-5.4-mini-2026-07-01", "fp-1",
+			"backend-1", "stop",
+		} {
+			if strings.Contains(string(encoded), untrusted) {
+				t.Fatalf("compact trace contains upstream claim %q: %s", untrusted, encoded)
+			}
 		}
 	}
 }
@@ -319,12 +330,13 @@ func TestInferFailedRPCCapturesClientLatency(t *testing.T) {
 	if collector.traces[0].Latency < 10*time.Millisecond {
 		t.Fatalf("client latency = %s, want failed RPC duration", collector.traces[0].Latency)
 	}
-	if collector.traces[0].Metadata != nil {
-		t.Fatalf("failed RPC metadata = %+v, want nil", collector.traces[0].Metadata)
+	if collector.traces[0].VerifiedProvenance.ReportedPromptHashStatus != "absent" ||
+		collector.traces[0].VerifiedProvenance.ReportedSchemaHashStatus != "absent" {
+		t.Fatalf("failed RPC provenance = %+v", collector.traces[0].VerifiedProvenance)
 	}
 }
 
-func TestInferErrorRepliesPreserveMetadataAndClientLatency(t *testing.T) {
+func TestInferErrorRepliesKeepUpstreamClaimsOutOfCompactTrace(t *testing.T) {
 	metadata := &inferencepb.InvocationMetadata{
 		RequestId: "upstream-request", ServiceVersion: "service-version",
 		RequestedModel: "requested-model", ActualModel: "actual-model",
@@ -382,8 +394,22 @@ func TestInferErrorRepliesPreserveMetadataAndClientLatency(t *testing.T) {
 			if trace.Latency < 10*time.Millisecond {
 				t.Fatalf("client latency = %s, want reply duration", trace.Latency)
 			}
-			if !proto.Equal(trace.Metadata, metadata) {
-				t.Fatalf("metadata = %+v, want exact upstream metadata %+v", trace.Metadata, metadata)
+			if trace.VerifiedProvenance.RequestedModel != "" ||
+				trace.VerifiedProvenance.ReportedPromptHashStatus != "match" ||
+				trace.VerifiedProvenance.ReportedSchemaHashStatus != "match" {
+				t.Fatalf("verified provenance = %+v", trace.VerifiedProvenance)
+			}
+			encoded, err := json.Marshal(trace)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, untrusted := range []string{
+				"upstream-request", "service-version", "actual-model",
+				"backend-fingerprint", "backend-version", "upstream-finish",
+			} {
+				if strings.Contains(string(encoded), untrusted) {
+					t.Fatalf("compact error trace contains upstream claim %q: %s", untrusted, encoded)
+				}
 			}
 		})
 	}
