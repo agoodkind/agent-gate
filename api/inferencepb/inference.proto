@@ -43,6 +43,10 @@ message InvocationMetadata {
   optional int64 total_tokens = 11;
   string finish_reason = 12;
   int64 latency_ms = 13;
+  bool output_normalized = 14;
+  string normalization_kind = 15;
+  string raw_output_sha256 = 16;
+  string upstream_response_id = 17;
 }
 
 enum InferenceStatus {

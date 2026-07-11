@@ -83,7 +83,8 @@ func TestInferenceWireContract(t *testing.T) {
 		"actual_model": 4, "backend_fingerprint": 5, "backend_version": 6,
 		"prompt_sha256": 7, "schema_sha256": 8, "prompt_tokens": 9,
 		"completion_tokens": 10, "total_tokens": 11, "finish_reason": 12,
-		"latency_ms": 13,
+		"latency_ms": 13, "output_normalized": 14, "normalization_kind": 15,
+		"raw_output_sha256": 16, "upstream_response_id": 17,
 	}
 	for name, number := range wantMetadata {
 		field := metadata.Fields().ByName(name)
@@ -98,7 +99,10 @@ func TestInferenceWireContract(t *testing.T) {
 		"prompt_sha256": protoreflect.StringKind, "schema_sha256": protoreflect.StringKind,
 		"prompt_tokens": protoreflect.Int64Kind, "completion_tokens": protoreflect.Int64Kind,
 		"total_tokens": protoreflect.Int64Kind, "finish_reason": protoreflect.StringKind,
-		"latency_ms": protoreflect.Int64Kind,
+		"latency_ms": protoreflect.Int64Kind, "output_normalized": protoreflect.BoolKind,
+		"normalization_kind":   protoreflect.StringKind,
+		"raw_output_sha256":    protoreflect.StringKind,
+		"upstream_response_id": protoreflect.StringKind,
 	}
 	for name, kind := range metadataKinds {
 		field := metadata.Fields().ByName(name)
@@ -114,7 +118,8 @@ func TestInferenceWireContract(t *testing.T) {
 	for _, name := range []protoreflect.Name{
 		"request_id", "service_version", "requested_model", "actual_model",
 		"backend_fingerprint", "backend_version", "prompt_sha256", "schema_sha256",
-		"finish_reason", "latency_ms",
+		"finish_reason", "latency_ms", "output_normalized", "normalization_kind",
+		"raw_output_sha256", "upstream_response_id",
 	} {
 		if metadata.Fields().ByName(name).HasPresence() {
 			t.Fatalf("invocation metadata %s unexpectedly has presence", name)
@@ -127,6 +132,41 @@ func TestInferenceWireContract(t *testing.T) {
 		inferencepb.ReasoningEffort_REASONING_EFFORT_HIGH != 5 ||
 		inferencepb.ReasoningEffort_REASONING_EFFORT_XHIGH != 6 {
 		t.Fatal("reasoning effort enum values differ from upstream")
+	}
+}
+
+func TestInvocationOutputNormalizedUsesProto3ScalarPresence(t *testing.T) {
+	tests := []struct {
+		name        string
+		inputJSON   string
+		wantPresent bool
+	}{
+		{name: "explicit false", inputJSON: `{"outputNormalized":false}`, wantPresent: false},
+		{name: "true", inputJSON: `{"outputNormalized":true}`, wantPresent: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			metadata := &inferencepb.InvocationMetadata{}
+			if err := protojson.Unmarshal([]byte(test.inputJSON), metadata); err != nil {
+				t.Fatalf("unmarshal JSON: %v", err)
+			}
+			field := metadata.ProtoReflect().Descriptor().Fields().ByName("output_normalized")
+			if field == nil {
+				t.Fatal("output_normalized field is absent")
+			}
+			if metadata.ProtoReflect().Has(field) != test.wantPresent {
+				t.Fatalf("wire presence = %v, want %v", metadata.ProtoReflect().Has(field), test.wantPresent)
+			}
+			encodedJSON, err := protojson.Marshal(metadata)
+			if err != nil {
+				t.Fatalf("marshal JSON: %v", err)
+			}
+			jsonPresent := strings.Contains(string(encodedJSON), `"outputNormalized":true`)
+			if jsonPresent != test.wantPresent {
+				t.Fatalf("JSON presence = %v, want %v: %s", jsonPresent, test.wantPresent, encodedJSON)
+			}
+		})
 	}
 }
 

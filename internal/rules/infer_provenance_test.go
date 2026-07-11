@@ -1,12 +1,81 @@
 package rules
 
 import (
+	"bytes"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"goodkind.io/agent-gate/api/inferencepb"
 	"goodkind.io/agent-gate/internal/hotkv"
 )
+
+func TestUnmarshalUpstreamMetadataPreservesNormalizationClaimsCanonically(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  json.RawMessage
+		want string
+	}{
+		{
+			name: "normalized output",
+			raw: json.RawMessage(`{
+				"outputNormalized":true,
+				"normalizationKind":"bare_enum_object",
+				"rawOutputSha256":"sha256:raw",
+				"upstreamResponseId":"response-1"
+			}`),
+			want: `{"output_normalized":true,"normalization_kind":"bare_enum_object","raw_output_sha256":"sha256:raw","upstream_response_id":"response-1"}`,
+		},
+		{
+			name: "explicit false follows proto3 canonical form",
+			raw: json.RawMessage(`{
+				"outputNormalized":false,
+				"normalizationKind":"none",
+				"rawOutputSha256":"sha256:raw",
+				"upstreamResponseId":"response-2"
+			}`),
+			want: `{"normalization_kind":"none","raw_output_sha256":"sha256:raw","upstream_response_id":"response-2"}`,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			metadata, err := UnmarshalUpstreamMetadata(UpstreamMetadata{
+				Source: "inference_reply", Trust: "untrusted",
+				Status: UpstreamMetadataPresent, Raw: test.raw,
+			})
+			if err != nil {
+				t.Fatalf("UnmarshalUpstreamMetadata: %v", err)
+			}
+			var compact bytes.Buffer
+			if err := json.Compact(&compact, metadata.Raw); err != nil {
+				t.Fatalf("compact canonical metadata: %v", err)
+			}
+			if compact.String() != test.want {
+				t.Fatalf("canonical raw = %s, want %s", compact.String(), test.want)
+			}
+		})
+	}
+}
+
+func TestUnmarshalUpstreamMetadataBoundsNewIdentifierClaims(t *testing.T) {
+	for _, field := range []string{"raw_output_sha256", "upstream_response_id"} {
+		t.Run(field, func(t *testing.T) {
+			raw, err := json.Marshal(map[string]string{field: strings.Repeat("x", 513)})
+			if err != nil {
+				t.Fatalf("Marshal: %v", err)
+			}
+			_, err = UnmarshalUpstreamMetadata(UpstreamMetadata{
+				Source: "inference_reply", Trust: "untrusted",
+				Status: UpstreamMetadataPresent, Raw: raw,
+			})
+			if err == nil || !strings.Contains(err.Error(), field) ||
+				!strings.Contains(err.Error(), "exceeds byte limit") {
+				t.Fatalf("error = %v, want bounded %s error", err, field)
+			}
+		})
+	}
+}
 
 func TestBoundedUpstreamMetadataOmitsMalformedProtoJSON(t *testing.T) {
 	metadata := &inferencepb.InvocationMetadata{RequestId: string([]byte{0xff})}

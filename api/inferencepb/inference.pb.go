@@ -347,6 +347,10 @@ type InvocationMetadata struct {
 	TotalTokens        *int64                 `protobuf:"varint,11,opt,name=total_tokens,json=totalTokens,proto3,oneof" json:"total_tokens,omitempty"`
 	FinishReason       string                 `protobuf:"bytes,12,opt,name=finish_reason,json=finishReason,proto3" json:"finish_reason,omitempty"`
 	LatencyMs          int64                  `protobuf:"varint,13,opt,name=latency_ms,json=latencyMs,proto3" json:"latency_ms,omitempty"`
+	OutputNormalized   bool                   `protobuf:"varint,14,opt,name=output_normalized,json=outputNormalized,proto3" json:"output_normalized,omitempty"`
+	NormalizationKind  string                 `protobuf:"bytes,15,opt,name=normalization_kind,json=normalizationKind,proto3" json:"normalization_kind,omitempty"`
+	RawOutputSha256    string                 `protobuf:"bytes,16,opt,name=raw_output_sha256,json=rawOutputSha256,proto3" json:"raw_output_sha256,omitempty"`
+	UpstreamResponseId string                 `protobuf:"bytes,17,opt,name=upstream_response_id,json=upstreamResponseId,proto3" json:"upstream_response_id,omitempty"`
 	unknownFields      protoimpl.UnknownFields
 	sizeCache          protoimpl.SizeCache
 }
@@ -472,6 +476,34 @@ func (x *InvocationMetadata) GetLatencyMs() int64 {
 	return 0
 }
 
+func (x *InvocationMetadata) GetOutputNormalized() bool {
+	if x != nil {
+		return x.OutputNormalized
+	}
+	return false
+}
+
+func (x *InvocationMetadata) GetNormalizationKind() string {
+	if x != nil {
+		return x.NormalizationKind
+	}
+	return ""
+}
+
+func (x *InvocationMetadata) GetRawOutputSha256() string {
+	if x != nil {
+		return x.RawOutputSha256
+	}
+	return ""
+}
+
+func (x *InvocationMetadata) GetUpstreamResponseId() string {
+	if x != nil {
+		return x.UpstreamResponseId
+	}
+	return ""
+}
+
 var File_inferencepb_inference_proto protoreflect.FileDescriptor
 
 const file_inferencepb_inference_proto_rawDesc = "" +
@@ -495,7 +527,7 @@ const file_inferencepb_inference_proto_rawDesc = "" +
 	"\x15max_completion_tokens\x18\x02 \x01(\x03H\x00R\x13maxCompletionTokens\x88\x01\x01\x12%\n" +
 	"\vtemperature\x18\x03 \x01(\x01H\x01R\vtemperature\x88\x01\x01B\x18\n" +
 	"\x16_max_completion_tokensB\x0e\n" +
-	"\f_temperature\"\xcd\x04\n" +
+	"\f_temperature\"\x87\x06\n" +
 	"\x12InvocationMetadata\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\tR\trequestId\x12'\n" +
@@ -512,7 +544,11 @@ const file_inferencepb_inference_proto_rawDesc = "" +
 	"\ftotal_tokens\x18\v \x01(\x03H\x02R\vtotalTokens\x88\x01\x01\x12#\n" +
 	"\rfinish_reason\x18\f \x01(\tR\ffinishReason\x12\x1d\n" +
 	"\n" +
-	"latency_ms\x18\r \x01(\x03R\tlatencyMsB\x10\n" +
+	"latency_ms\x18\r \x01(\x03R\tlatencyMs\x12+\n" +
+	"\x11output_normalized\x18\x0e \x01(\bR\x10outputNormalized\x12-\n" +
+	"\x12normalization_kind\x18\x0f \x01(\tR\x11normalizationKind\x12*\n" +
+	"\x11raw_output_sha256\x18\x10 \x01(\tR\x0frawOutputSha256\x120\n" +
+	"\x14upstream_response_id\x18\x11 \x01(\tR\x12upstreamResponseIdB\x10\n" +
 	"\x0e_prompt_tokensB\x14\n" +
 	"\x12_completion_tokensB\x0f\n" +
 	"\r_total_tokens*R\n" +

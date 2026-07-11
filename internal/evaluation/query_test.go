@@ -105,7 +105,7 @@ func TestStoreListReturnsOrderedSafeTrainingExport(t *testing.T) {
 	}
 	for _, required := range []string{
 		`"verified_provenance":{"requested_model":"gpt-test","reported_prompt_hash_status":"absent","reported_schema_hash_status":"absent"}`,
-		`"upstream_metadata":{"source":"inference_reply","trust":"untrusted","status":"present","raw":{"prompt_tokens":"0"}}`,
+		`"upstream_metadata":{"source":"inference_reply","trust":"untrusted","status":"present","raw":{"prompt_tokens":"0","output_normalized":true,"normalization_kind":"bare_enum_object","raw_output_sha256":"sha256:raw","upstream_response_id":"response-1"}}`,
 	} {
 		if !strings.Contains(text, required) {
 			t.Fatalf("training export missing %s: %s", required, text)
@@ -113,6 +113,25 @@ func TestStoreListReturnsOrderedSafeTrainingExport(t *testing.T) {
 	}
 	if strings.Contains(text, "completion_tokens") {
 		t.Fatalf("absent optional token field was invented: %s", text)
+	}
+	var layerMetadata struct {
+		VerifiedProvenance map[string]json.RawMessage `json:"verified_provenance"`
+		UpstreamMetadata   struct {
+			Raw map[string]json.RawMessage `json:"raw"`
+		} `json:"upstream_metadata"`
+	}
+	if err := json.Unmarshal(record.Layers[1].Metadata, &layerMetadata); err != nil {
+		t.Fatalf("Unmarshal layer metadata: %v", err)
+	}
+	for _, claim := range []string{
+		"output_normalized", "normalization_kind", "raw_output_sha256", "upstream_response_id",
+	} {
+		if _, exists := layerMetadata.UpstreamMetadata.Raw[claim]; !exists {
+			t.Fatalf("untrusted upstream envelope is missing %q", claim)
+		}
+		if _, promoted := layerMetadata.VerifiedProvenance[claim]; promoted {
+			t.Fatalf("untrusted claim %q was promoted to verified provenance", claim)
+		}
 	}
 }
 
@@ -408,7 +427,7 @@ func newEvaluationQueryFixture(
 			"reported_prompt_hash_status":"absent",
 			"reported_schema_hash_status":"absent"
 		},
-		"upstream_metadata":{"source":"inference_reply","trust":"untrusted","status":"present","raw":{"promptTokens":"0"}}
+		"upstream_metadata":{"source":"inference_reply","trust":"untrusted","status":"present","raw":{"promptTokens":"0","outputNormalized":true,"normalizationKind":"bare_enum_object","rawOutputSha256":"sha256:raw","upstreamResponseId":"response-1"}}
 	}`)
 	first.Layers[1].ErrorMessage = "backend secret"
 	first.Labels = []evaluation.Label{
