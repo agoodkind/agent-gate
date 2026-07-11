@@ -216,15 +216,17 @@ type ConditionKind string
 
 // ConditionKind variants.
 const (
-	ConditionKindCommand          ConditionKind = "command"
-	ConditionKindDiff             ConditionKind = "diff"
-	ConditionKindExec             ConditionKind = "exec"
-	ConditionKindProject          ConditionKind = "project"
-	ConditionKindRegex            ConditionKind = "regex"
-	ConditionKindShellRead        ConditionKind = "shell_read_secret"
-	ConditionKindShellWrite       ConditionKind = "shell_write"
-	ConditionKindComposer         ConditionKind = "composer"
-	ConditionKindGitDefaultBranch ConditionKind = "git_default_branch"
+	ConditionKindCommand            ConditionKind = "command"
+	ConditionKindDiff               ConditionKind = "diff"
+	ConditionKindExec               ConditionKind = "exec"
+	ConditionKindProject            ConditionKind = "project"
+	ConditionKindRegex              ConditionKind = "regex"
+	ConditionKindShellRead          ConditionKind = "shell_read_secret"
+	ConditionKindShellWrite         ConditionKind = "shell_write"
+	ConditionKindComposer           ConditionKind = "composer"
+	ConditionKindGitDefaultBranch   ConditionKind = "git_default_branch"
+	ConditionKindGitPrimaryCheckout ConditionKind = "git_primary_checkout"
+	ConditionKindGitRefMove         ConditionKind = "git_ref_move"
 )
 
 // Exec condition block_on variants decide which exit codes block.
@@ -695,7 +697,10 @@ func compileCondition(log *slog.Logger, ruleName string, index int, c *Condition
 		c.Kind = "regex"
 	}
 	switch ConditionKind(c.Kind) {
-	case ConditionKindRegex, ConditionKindCommand, ConditionKindProject, ConditionKindDiff, ConditionKindShellRead, ConditionKindShellWrite, ConditionKindExec, ConditionKindComposer, ConditionKindGitDefaultBranch:
+	case ConditionKindRegex, ConditionKindCommand, ConditionKindProject, ConditionKindDiff,
+		ConditionKindShellRead, ConditionKindShellWrite, ConditionKindExec,
+		ConditionKindComposer, ConditionKindGitDefaultBranch,
+		ConditionKindGitPrimaryCheckout, ConditionKindGitRefMove:
 	default:
 		return fmt.Errorf("rule %q condition %d: unknown kind %q", ruleName, index, c.Kind)
 	}
@@ -744,6 +749,9 @@ func compileCondition(log *slog.Logger, ruleName string, index int, c *Condition
 	}
 	if err := validateShellWriteSpecConfig(ruleName, index, c); err != nil {
 		return err
+	}
+	if ConditionKind(c.Kind) == ConditionKindGitRefMove && len(c.FieldPaths) > 0 {
+		return fmt.Errorf("rule %q condition %d: git_ref_move does not accept field_paths", ruleName, index)
 	}
 	return nil
 }

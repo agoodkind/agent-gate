@@ -67,13 +67,15 @@ func validateShellWriteSpecConfig(ruleName string, index int, condition *Conditi
 
 func conditionConsumesCmdWriteTargets(condition *Condition) bool {
 	switch ConditionKind(condition.Kind) {
-	case ConditionKindRegex, ConditionKindExec, ConditionKindGitDefaultBranch:
+	case ConditionKindRegex, ConditionKindExec, ConditionKindGitDefaultBranch,
+		ConditionKindGitPrimaryCheckout:
 	case ConditionKindCommand,
 		ConditionKindDiff,
 		ConditionKindProject,
 		ConditionKindShellRead,
 		ConditionKindShellWrite,
-		ConditionKindComposer:
+		ConditionKindComposer,
+		ConditionKindGitRefMove:
 		return false
 	}
 	for _, selector := range condition.selectors {
