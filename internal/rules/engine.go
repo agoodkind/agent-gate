@@ -59,6 +59,12 @@ func Evaluate(ctx context.Context, system, eventName string, fields FieldSet, ru
 // getenv is consulted by the [config.Rule.DisableIfEnv] guard. Pass nil to
 // disable env-based rule skipping.
 func EvaluateAll(ctx context.Context, system, eventName string, fields FieldSet, rulesSlice []config.Rule, getenv func(string) string) []Violation {
+	return EvaluateAllDetailed(
+		ctx, system, eventName, fields, rulesSlice, getenv, nil, "",
+	).Violations
+}
+
+func evaluateAll(ctx context.Context, system, eventName string, fields FieldSet, rulesSlice []config.Rule, getenv func(string) string) []Violation {
 	conditions := buildRuleRegexConditions(&fields, rulesSlice, system, eventName, getenv)
 	if len(conditions) == 0 {
 		return nil
@@ -675,16 +681,38 @@ func conditionFallbackViolation(fields FieldSet, rule *config.Rule) Violation {
 func allConditionsMatch(ctx context.Context, fields FieldSet, rule *config.Rule, conditions []config.Condition) bool {
 	condCtx := conditionContext{commandCwds: nil}
 	if !collectCommandConditionContext(fields, conditions, &condCtx) {
+		collectRemainingInferenceSkips(ctx, rule, conditions, 0)
 		return false
 	}
 
 	for i := range conditions {
 		c := &conditions[i]
 		if !conditionGateMatches(ctx, fields, rule, i, c, condCtx) {
+			collectRemainingInferenceSkips(ctx, rule, conditions, i+1)
 			return false
 		}
 	}
 	return true
+}
+
+func collectRemainingInferenceSkips(
+	ctx context.Context,
+	rule *config.Rule,
+	conditions []config.Condition,
+	startIndex int,
+) {
+	for conditionIndex := startIndex; conditionIndex < len(conditions); conditionIndex++ {
+		condition := &conditions[conditionIndex]
+		if conditionKind(condition) == config.ConditionKindInfer {
+			collectSkippedInferenceCondition(
+				ctx,
+				rule,
+				conditionIndex,
+				condition,
+				skipPriorConditionNonmatch,
+			)
+		}
+	}
 }
 
 func conditionGateMatches(

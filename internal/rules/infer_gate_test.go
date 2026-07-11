@@ -262,7 +262,8 @@ func TestInferSendsGenerationOptionsAndPreservesMetadataInCacheTraces(t *testing
 				RequestId: "request-1", ServiceVersion: "service-1",
 				RequestedModel: "gpt-5.4-mini", ActualModel: "gpt-5.4-mini-2026-07-01",
 				BackendFingerprint: "fp-1", BackendVersion: "backend-1",
-				PromptSha256: "prompt-hash", SchemaSha256: "schema-hash",
+				PromptSha256: traceHash([]byte("Classify")),
+				SchemaSha256: traceHash([]byte(`{"type":"object"}`)),
 				PromptTokens: int64Pointer(41), CompletionTokens: int64Pointer(7),
 				TotalTokens: int64Pointer(48), FinishReason: "stop", LatencyMs: 12,
 			},
@@ -290,8 +291,8 @@ func TestInferSendsGenerationOptionsAndPreservesMetadataInCacheTraces(t *testing
 			t.Fatalf("trace metadata = %+v", trace.Metadata)
 		}
 		if trace.Metadata.GetRequestedModel() != "gpt-5.4-mini" ||
-			trace.Metadata.GetPromptSha256() != "prompt-hash" ||
-			trace.Metadata.GetSchemaSha256() != "schema-hash" {
+			trace.Metadata.GetPromptSha256() != traceHash([]byte("Classify")) ||
+			trace.Metadata.GetSchemaSha256() != traceHash([]byte(`{"type":"object"}`)) {
 			t.Fatalf("trace provenance = %+v", trace.Metadata)
 		}
 	}
@@ -328,7 +329,8 @@ func TestInferErrorRepliesPreserveMetadataAndClientLatency(t *testing.T) {
 		RequestId: "upstream-request", ServiceVersion: "service-version",
 		RequestedModel: "requested-model", ActualModel: "actual-model",
 		BackendFingerprint: "backend-fingerprint", BackendVersion: "backend-version",
-		PromptSha256: "prompt-sha256", SchemaSha256: "schema-sha256",
+		PromptSha256: traceHash([]byte("Classify")),
+		SchemaSha256: traceHash([]byte(`{"type":"object"}`)),
 		PromptTokens: int64Pointer(11), CompletionTokens: int64Pointer(4),
 		TotalTokens: int64Pointer(15), FinishReason: "upstream-finish", LatencyMs: 7,
 	}

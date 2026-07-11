@@ -61,16 +61,30 @@ type inferFlight struct {
 }
 
 type inferResult struct {
-	matched    bool
-	errored    bool
-	errorClass string
-	cacheHit   bool
-	metadata   *inferencepb.InvocationMetadata
+	matched            bool
+	errored            bool
+	errorClass         string
+	cacheHit           bool
+	cacheStatus        string
+	cacheEntryVersion  *int64
+	cacheExpiresAt     *time.Time
+	outputJSON         json.RawMessage
+	metadata           *inferencepb.InvocationMetadata
+	contextJSON        json.RawMessage
+	contextStartedAt   time.Time
+	contextCompletedAt time.Time
+	contextErrorClass  string
+	localPromptHash    string
+	localSchemaHash    string
 }
 
 type cachedInferResult struct {
-	Matched  bool                            `json:"matched"`
-	Metadata *inferencepb.InvocationMetadata `json:"metadata,omitempty"`
+	SchemaVersion   int                             `json:"schema_version"`
+	Matched         bool                            `json:"matched"`
+	OutputJSON      json.RawMessage                 `json:"output_json"`
+	Metadata        *inferencepb.InvocationMetadata `json:"metadata,omitempty"`
+	LocalPromptHash string                          `json:"local_prompt_hash"`
+	LocalSchemaHash string                          `json:"local_schema_hash"`
 }
 
 // InferRuntime owns reusable inference and context channels plus call state.
@@ -209,7 +223,9 @@ func (runtime *InferRuntime) evaluate(ctx context.Context, fields FieldSet, rule
 		contextSession,
 	)
 	blocked := inferResultBlocks(condition, result)
-	runtime.collectTrace(ctx, condition, conditionIndex, result, runtime.now().Sub(started))
+	completed := runtime.now()
+	runtime.collectTrace(ctx, condition, conditionIndex, result, completed.Sub(started))
+	runtime.collectRichTrace(ctx, rule, condition, conditionIndex, input, contextWorkspace, contextSession, cacheKey, started, completed, result)
 	if result.errored {
 		runtime.log.WarnContext(ctx, "inference condition failed",
 			"endpoint", condition.Endpoint, "rule", rule.Name,
@@ -228,18 +244,23 @@ func (runtime *InferRuntime) resolve(
 ) inferResult {
 	if result, found := runtime.cacheLookup(cacheKey); found {
 		result.cacheHit = true
+		result.cacheStatus = "hit"
 		return result
 	}
 	return runtime.singleflight(ctx, cacheKey, func() inferResult {
 		if condition.CacheTTLMs > 0 {
 			if cached, found := runtime.cacheLookup(cacheKey); found {
 				cached.cacheHit = true
+				cached.cacheStatus = "hit"
 				return cached
 			}
 		}
 		result := runtime.call(ctx, condition, input, contextWorkspace, contextSession)
 		if !result.errored && condition.CacheTTLMs > 0 {
 			runtime.cacheStore(cacheKey, condition.CacheTTLMs, result)
+		}
+		if result.cacheStatus == "" {
+			result.cacheStatus = "miss"
 		}
 		return result
 	})
@@ -274,18 +295,33 @@ func (runtime *InferRuntime) call(
 ) inferResult {
 	callCtx, cancel := context.WithTimeout(ctx, time.Duration(condition.TimeoutMs)*time.Millisecond)
 	defer cancel()
+	localPromptHash := traceJSONHash([]byte(condition.Prompt))
+	localSchemaHash := traceJSONHash([]byte(condition.OutputSchema))
+	contextStartedAt := runtime.now()
 	contextJSON, errClass := runtime.contextJSON(
 		callCtx,
 		condition,
 		contextWorkspace,
 		contextSession,
 	)
+	contextCompletedAt := runtime.now()
+	base := emptyInferResult()
+	base.cacheStatus = "miss"
+	base.contextJSON = json.RawMessage(contextJSON)
+	base.contextStartedAt = contextStartedAt
+	base.contextCompletedAt = contextCompletedAt
+	base.contextErrorClass = errClass
+	base.localPromptHash = localPromptHash
+	base.localSchemaHash = localSchemaHash
+	if len(base.contextJSON) == 0 {
+		base.contextJSON = json.RawMessage(`{}`)
+	}
 	if errClass != "" && condition.ContextOnError == "error" {
-		return inferError(errClass)
+		return mergeInferResult(base, inferError(errClass))
 	}
 	client, err := runtime.inferenceClient(condition.Endpoint)
 	if err != nil {
-		return inferError("invalid_endpoint")
+		return mergeInferResult(base, inferError("invalid_endpoint"))
 	}
 	reply, err := client.Infer(callCtx, &inferencepb.InferRequest{
 		Prompt: condition.Prompt, Input: input,
@@ -293,19 +329,22 @@ func (runtime *InferRuntime) call(
 		GenerationOptions: generationOptions(condition),
 	})
 	if err != nil {
-		return inferError(grpcErrorClass(err))
+		return mergeInferResult(base, inferError(grpcErrorClass(err)))
 	}
 	if reply == nil {
-		return inferError("non_complete")
+		return mergeInferResult(base, inferError("non_complete"))
 	}
 	if reply.GetStatus() != inferencepb.InferenceStatus_INFERENCE_STATUS_COMPLETE {
-		return inferErrorWithMetadata("non_complete", reply.GetMetadata())
+		return mergeInferResult(base, inferErrorWithMetadata("non_complete", reply.GetMetadata()))
 	}
 	matched, err := inferenceJSONMatches(condition, reply.GetOutputJson())
 	if err != nil {
-		return inferErrorWithMetadata("invalid_response", reply.GetMetadata())
+		return mergeInferResult(base, inferErrorWithMetadata("invalid_response", reply.GetMetadata()))
 	}
-	return inferSuccess(matched, reply.GetMetadata())
+	if invocationHashMismatch(reply.GetMetadata(), localPromptHash, localSchemaHash) {
+		return mergeInferResult(base, inferErrorWithMetadata("hash_mismatch", reply.GetMetadata()))
+	}
+	return mergeInferResult(base, inferSuccess(matched, json.RawMessage(reply.GetOutputJson()), reply.GetMetadata()))
 }
 
 func generationOptions(condition *config.Condition) *inferencepb.GenerationOptions {
@@ -341,7 +380,10 @@ func reasoningEffortValue(value config.ReasoningEffort) inferencepb.ReasoningEff
 }
 
 func inferError(errorClass string) inferResult {
-	return inferResult{matched: false, errored: true, errorClass: errorClass, cacheHit: false, metadata: nil}
+	result := emptyInferResult()
+	result.errored = true
+	result.errorClass = errorClass
+	return result
 }
 
 func inferErrorWithMetadata(
@@ -353,15 +395,58 @@ func inferErrorWithMetadata(
 	return result
 }
 
-func inferSuccess(matched bool, metadata *inferencepb.InvocationMetadata) inferResult {
-	return inferResult{
-		matched: matched, errored: false, errorClass: "", cacheHit: false,
-		metadata: cloneInvocationMetadata(metadata),
-	}
+func inferSuccess(
+	matched bool,
+	outputJSON json.RawMessage,
+	metadata *inferencepb.InvocationMetadata,
+) inferResult {
+	result := emptyInferResult()
+	result.matched = matched
+	result.outputJSON = append(json.RawMessage(nil), outputJSON...)
+	result.metadata = cloneInvocationMetadata(metadata)
+	return result
 }
 
 func emptyInferResult() inferResult {
-	return inferResult{matched: false, errored: false, errorClass: "", cacheHit: false, metadata: nil}
+	return inferResult{
+		matched: false, errored: false, errorClass: "", cacheHit: false,
+		cacheStatus: "", cacheEntryVersion: nil, cacheExpiresAt: nil,
+		outputJSON: json.RawMessage(`{}`), metadata: nil, contextJSON: nil,
+		contextStartedAt: time.Time{}, contextCompletedAt: time.Time{},
+		contextErrorClass: "", localPromptHash: "", localSchemaHash: "",
+	}
+}
+
+func mergeInferResult(base inferResult, result inferResult) inferResult {
+	result.contextJSON = append(json.RawMessage(nil), base.contextJSON...)
+	result.contextStartedAt = base.contextStartedAt
+	result.contextCompletedAt = base.contextCompletedAt
+	result.contextErrorClass = base.contextErrorClass
+	result.localPromptHash = base.localPromptHash
+	result.localSchemaHash = base.localSchemaHash
+	if result.cacheStatus == "" {
+		result.cacheStatus = base.cacheStatus
+	}
+	return result
+}
+
+func invocationHashMismatch(
+	metadata *inferencepb.InvocationMetadata,
+	localPromptHash string,
+	localSchemaHash string,
+) bool {
+	if metadata == nil {
+		return false
+	}
+	return hashValueMismatch(metadata.GetPromptSha256(), localPromptHash) ||
+		hashValueMismatch(metadata.GetSchemaSha256(), localSchemaHash)
+}
+
+func hashValueMismatch(upstream string, local string) bool {
+	if upstream == "" {
+		return false
+	}
+	return strings.TrimPrefix(upstream, "sha256:") != strings.TrimPrefix(local, "sha256:")
 }
 
 func cloneInvocationMetadata(metadata *inferencepb.InvocationMetadata) *inferencepb.InvocationMetadata {
@@ -479,7 +564,9 @@ func (runtime *InferRuntime) singleflight(ctx context.Context, key string, funct
 		runtime.mu.Unlock()
 		select {
 		case <-flight.done:
-			return flight.result
+			result := flight.result
+			result.cacheStatus = "coalesced"
+			return result
 		case <-ctx.Done():
 			return inferError(grpcErrorClass(ctx.Err()))
 		}
@@ -508,12 +595,26 @@ func (runtime *InferRuntime) cacheLookup(key string) (inferResult, bool) {
 		_, _ = runtime.cache.Delete(inferenceCacheNamespace, key)
 		return emptyInferResult(), false
 	}
-	return inferSuccess(cached.Matched, cached.Metadata), true
+	result := inferSuccess(cached.Matched, cached.OutputJSON, cached.Metadata)
+	result.localPromptHash = cached.LocalPromptHash
+	result.localSchemaHash = cached.LocalSchemaHash
+	if entry.Version <= math.MaxInt64 {
+		version := int64(entry.Version)
+		result.cacheEntryVersion = &version
+	}
+	if !entry.ExpiresAt.IsZero() {
+		expiresAt := entry.ExpiresAt
+		result.cacheExpiresAt = &expiresAt
+	}
+	return result, true
 }
 
 func (runtime *InferRuntime) cacheStore(key string, ttlMilliseconds int, result inferResult) {
 	encoded, err := json.Marshal(cachedInferResult{
-		Matched: result.matched, Metadata: cloneInvocationMetadata(result.metadata),
+		SchemaVersion: 1, Matched: result.matched,
+		OutputJSON:      append(json.RawMessage(nil), result.outputJSON...),
+		Metadata:        cloneInvocationMetadata(result.metadata),
+		LocalPromptHash: result.localPromptHash, LocalSchemaHash: result.localSchemaHash,
 	})
 	if err != nil {
 		return
