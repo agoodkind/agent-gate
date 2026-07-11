@@ -363,7 +363,14 @@ func ValidPaths(system, eventName string) EventSchema {
 // applicable events. Returns a (possibly empty) slice of validation errors.
 func ValidateConfig(cfg *config.Config) []error {
 	var errs []error
+	seenRuleNames := make(map[string]bool, len(cfg.Rules))
 	for i := range cfg.Rules {
+		ruleName := cfg.Rules[i].Name
+		if seenRuleNames[ruleName] {
+			errs = append(errs, fmt.Errorf("duplicate rule name %q", ruleName))
+		} else {
+			seenRuleNames[ruleName] = true
+		}
 		errs = append(errs, validateRuleConfig(&cfg.Rules[i])...)
 	}
 	return errs
