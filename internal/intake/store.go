@@ -443,28 +443,6 @@ func (s *Store) GetReceipt(ctx context.Context, receiptID int64) (Record, error)
 	return s.receiptRecord(ctx, receiptID, "")
 }
 
-// ReplayDeferredPending walks pending records in order and records replay
-// metadata before invoking replay.
-func (s *Store) ReplayDeferredPending(ctx context.Context, limit int, replay func(Record) error) error {
-	records, err := s.ListDeferredPending(ctx, limit)
-	if err != nil {
-		return err
-	}
-	for _, record := range records {
-		if err := s.noteReplay(ctx, record.ReceiptID); err != nil {
-			return err
-		}
-		refreshed, err := s.pendingRecord(ctx, record.ReceiptID)
-		if err != nil {
-			return err
-		}
-		if err := replay(refreshed); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func (s *Store) init(ctx context.Context) error {
 	stmts := []string{
 		fmt.Sprintf(`pragma busy_timeout = %d`, sqliteBusyTimeoutMS),

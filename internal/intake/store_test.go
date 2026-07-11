@@ -149,6 +149,27 @@ func TestSQLiteStoreReplayPendingUpdatesReplayMetadataInSequenceOrder(t *testing
 	}
 }
 
+func TestSQLiteStoreReplayPendingSkipsReceiptCompletedAfterListing(t *testing.T) {
+	store := newTestStore(t)
+	first := appendPendingRecord(t, store, "evt_1", time.Date(2026, 5, 9, 12, 0, 0, 0, time.UTC))
+	second := appendPendingRecord(t, store, "evt_2", time.Date(2026, 5, 9, 12, 0, 1, 0, time.UTC))
+
+	var replayed []int64
+	err := store.ReplayDeferredPending(context.Background(), 0, func(record intake.Record) error {
+		replayed = append(replayed, record.ReceiptID)
+		if record.ReceiptID == first.ReceiptID {
+			return store.MarkDeferredComplete(context.Background(), second.ReceiptID)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("ReplayDeferredPending: %v", err)
+	}
+	if len(replayed) != 1 || replayed[0] != first.ReceiptID {
+		t.Fatalf("replayed receipts = %v, want [%d]", replayed, first.ReceiptID)
+	}
+}
+
 func TestSQLiteStoreRejectsDeferredStateForUnknownEvent(t *testing.T) {
 	store := newTestStore(t)
 	err := store.MarkDeferredPending(context.Background(), "missing", 0)
