@@ -26,32 +26,20 @@ const originHeadRef = plumbing.ReferenceName("refs/remotes/origin/HEAD")
 // Callers that block should treat resolved==false and detached as "do not
 // block" (fail open).
 func OnDefaultBranch(path string) (match bool, resolved bool) {
-	start := nearestExistingDir(path)
-	if start == "" {
-		return false, false
-	}
-	repo, err := git.PlainOpenWithOptions(start, &git.PlainOpenOptions{
-		DetectDotGit:          true,
-		EnableDotGitCommonDir: true,
-	})
+	state, err := ReadState(path)
 	if err != nil {
 		return false, false
 	}
-	head, err := repo.Head()
-	if err != nil {
-		return false, false
-	}
-	if !head.Name().IsBranch() {
+	if state.CurrentBranch == "" {
 		return false, true
 	}
-	defaultBranch := resolveDefaultBranch(repo)
-	if defaultBranch == "" {
+	if state.DefaultBranch == "" {
 		// The default branch could not be determined, so the branch state is
 		// unresolved. Report resolved=false to preserve the fail-open contract
 		// rather than claiming a resolved non-match.
 		return false, false
 	}
-	return head.Name().Short() == defaultBranch, true
+	return state.CurrentBranch == state.DefaultBranch, true
 }
 
 // resolveDefaultBranch returns the repo's default branch name: the target of

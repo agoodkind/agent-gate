@@ -12,6 +12,7 @@ import (
 	"os"
 	"strings"
 
+	"goodkind.io/agent-gate/internal/rules/concerns/shellparse"
 	"goodkind.io/gksyntax/shelldecomp"
 )
 
@@ -73,6 +74,7 @@ func ExtractWriteTargets(cmd, cwd string) []WriteTarget {
 	if strings.TrimSpace(cmd) == "" {
 		return nil
 	}
+	cmd = shellparse.ExpandLiteralAssignments(cmd)
 	home := homeDir()
 	decomposition := shelldecomp.Parse(cmd, cwd, home)
 	if decomposition.IsOpaque() {

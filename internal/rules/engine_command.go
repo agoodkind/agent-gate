@@ -9,6 +9,7 @@ import (
 
 	"goodkind.io/agent-gate/internal/config"
 	"goodkind.io/agent-gate/internal/regex"
+	"goodkind.io/agent-gate/internal/rules/concerns/shellparse"
 	"goodkind.io/gksyntax/shelldecomp"
 )
 
@@ -30,7 +31,7 @@ func commandConditionCwds(fields FieldSet, c *config.Condition) ([]string, bool)
 	}
 	// Parse the raw command: shelldecomp handles heredocs natively (the body is an
 	// embedded region, not split on), so no pre-stripping is needed.
-	decomposition := shelldecomp.Parse(command, base, home)
+	decomposition := shelldecomp.Parse(shellparse.ExpandLiteralAssignments(command), base, home)
 
 	var matches []string
 	for _, parsed := range decomposition.Commands() {

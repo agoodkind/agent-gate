@@ -3,6 +3,7 @@ package shellread
 import (
 	"os"
 
+	"goodkind.io/agent-gate/internal/rules/concerns/shellparse"
 	"goodkind.io/gksyntax/shelldecomp"
 )
 
@@ -66,6 +67,7 @@ func extractCodeSearchInto(command, cwd, home string, tools map[string]bool, add
 	if depth <= 0 || command == "" {
 		return
 	}
+	command = shellparse.ExpandLiteralAssignments(command)
 	decomposition := parseCommand(command, cwd, home, resolver)
 
 	written := make(map[string]struct{})

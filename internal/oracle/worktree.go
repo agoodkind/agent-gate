@@ -1,15 +1,16 @@
 package oracle
 
 import (
-	"path/filepath"
 	"strings"
 
+	"goodkind.io/agent-gate/internal/gitbranch"
+	"goodkind.io/agent-gate/internal/rules/concerns/shellparse"
 	"goodkind.io/gksyntax/shelldecomp"
 )
 
 // Worktree classifies whether command violates primary/default worktree rules.
 func Worktree(command, cwd string, st State) Verdict {
-	expandedCommand := expandLiteralAssignments(command)
+	expandedCommand := shellparse.ExpandLiteralAssignments(command)
 	if containsDynamicCommand(expandedCommand) {
 		return Unknown
 	}
@@ -232,11 +233,9 @@ func sedFileOperands(args []shelldecomp.Word) []shelldecomp.Word {
 }
 
 func writeVerdictForPath(candidate string, state State) Verdict {
-	if isUnderPath(candidate, state.PrimaryCheckout) {
-		return Block
-	}
-	worktree, found := worktreeForPath(candidate, state)
-	if found && worktree.Branch == state.DefaultBranch {
+	gitState := genericGitState(state)
+	if gitbranch.IsPrimaryCheckout(gitState, candidate) ||
+		gitbranch.IsDefaultBranchWorktree(gitState, candidate) {
 		return Block
 	}
 	return Allow
@@ -542,8 +541,10 @@ func branchFromRef(ref string) string {
 
 func otherWorktreeBranches(currentWorktree string, state State) map[string]struct{} {
 	branches := make(map[string]struct{})
+	gitState := genericGitState(state)
 	for _, worktree := range state.Worktrees {
-		if worktree.Path == "" || worktree.Branch == "" || samePath(worktree.Path, currentWorktree) {
+		if worktree.Path == "" || worktree.Branch == "" ||
+			!gitbranch.BranchCheckedOutElsewhere(gitState, currentWorktree, worktree.Branch) {
 			continue
 		}
 		branches[worktree.Branch] = struct{}{}
@@ -552,25 +553,30 @@ func otherWorktreeBranches(currentWorktree string, state State) map[string]struc
 }
 
 func worktreeForPath(candidate string, state State) (WorktreeEntry, bool) {
-	cleanCandidate := cleanPath(candidate)
-	var best WorktreeEntry
-	found := false
-	for _, worktree := range state.Worktrees {
-		if worktree.Path == "" || !isUnderPath(cleanCandidate, worktree.Path) {
-			continue
-		}
-		if !found || len(worktree.Path) > len(best.Path) {
-			best = worktree
-			found = true
-		}
-	}
-	return best, found
+	worktree, found := gitbranch.WorktreeForPath(genericGitState(state), candidate)
+	return WorktreeEntry{
+		Path:      worktree.Path,
+		Branch:    worktree.Branch,
+		IsPrimary: worktree.IsPrimary,
+	}, found
 }
 
-func isUnderPath(candidate, root string) bool {
-	cleanCandidate := cleanPath(candidate)
-	cleanRoot := cleanPath(root)
-	return cleanCandidate == cleanRoot || strings.HasPrefix(cleanCandidate, cleanRoot+string(filepath.Separator))
+func genericGitState(state State) gitbranch.State {
+	worktrees := make([]gitbranch.Worktree, 0, len(state.Worktrees))
+	for _, worktree := range state.Worktrees {
+		worktrees = append(worktrees, gitbranch.Worktree{
+			Path:      worktree.Path,
+			Branch:    worktree.Branch,
+			IsPrimary: worktree.IsPrimary,
+		})
+	}
+	return gitbranch.State{
+		PrimaryCheckout: state.PrimaryCheckout,
+		DefaultBranch:   state.DefaultBranch,
+		CurrentWorktree: state.CurrentWorktree,
+		CurrentBranch:   state.CurrentBranch,
+		Worktrees:       worktrees,
+	}
 }
 
 func samePath(left, right string) bool {

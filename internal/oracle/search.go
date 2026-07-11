@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strings"
 
+	"goodkind.io/agent-gate/internal/rules/concerns/shellparse"
 	"goodkind.io/gksyntax/shelldecomp"
 )
 
@@ -37,7 +38,7 @@ func (verdict Verdict) String() string {
 // Search classifies whether command searches indexed file contents.
 func Search(command, cwd string, roots []string) Verdict {
 	normalizedRoots := normalizeRoots(roots)
-	expandedCommand := expandLiteralAssignments(command)
+	expandedCommand := shellparse.ExpandLiteralAssignments(command)
 	if containsDynamicCommand(expandedCommand) {
 		return Unknown
 	}
