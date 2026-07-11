@@ -226,7 +226,14 @@ func listQueryRecords(
 		return nil, wrapError("close evaluation rows", err)
 	}
 	for i := range records {
-		layers, err := querySafeLayers(ctx, database, records[i].EvaluationID, hasOutcome)
+		outcomeKnown := hasOutcome && records[i].expectedLayerCount >= 0
+		layers, err := querySafeLayers(
+			ctx,
+			database,
+			records[i].EvaluationID,
+			hasOutcome,
+			outcomeKnown,
+		)
 		if err != nil {
 			return nil, err
 		}
@@ -344,10 +351,15 @@ func addLayerQueryFilters(
 	clauses *[]string,
 	arguments *[]queryArgument,
 ) {
+	if filter.LayerOutcome != "" && !hasOutcome {
+		*clauses = append(*clauses, "1 = 0")
+		return
+	}
 	layerClauses := make([]string, 0)
+	layerArguments := make([]queryArgument, 0)
 	add := func(clause string, value string) {
 		layerClauses = append(layerClauses, clause)
-		*arguments = append(*arguments, queryArgument{Value: value})
+		layerArguments = append(layerArguments, queryArgument{Value: value})
 	}
 	if filter.RuleName != "" {
 		layerClauses = append(layerClauses, `(
@@ -358,8 +370,8 @@ func addLayerQueryFilters(
 				where json_extract(checked_rule.value, '$.rule_name') = ?
 			)
 		)`)
-		*arguments = append(
-			*arguments,
+		layerArguments = append(
+			layerArguments,
 			queryArgument{Value: filter.RuleName},
 			queryArgument{Value: filter.RuleName},
 		)
@@ -371,12 +383,7 @@ func addLayerQueryFilters(
 		add("filtered_layer.kind = ?", filter.LayerKind)
 	}
 	if filter.LayerOutcome != "" {
-		if hasOutcome {
-			add("filtered_layer.outcome = ?", filter.LayerOutcome)
-		} else {
-			*clauses = append(*clauses, "1 = 0")
-			return
-		}
+		add("filtered_layer.outcome = ?", filter.LayerOutcome)
 	}
 	if filter.ModelName != "" {
 		add("filtered_layer.model_name = ?", filter.ModelName)
@@ -384,6 +391,7 @@ func addLayerQueryFilters(
 	if len(layerClauses) == 0 {
 		return
 	}
+	*arguments = append(*arguments, layerArguments...)
 	*clauses = append(*clauses, `exists (
 		select 1
 		from gate_evaluation_layers filtered_layer
@@ -457,6 +465,7 @@ func querySafeLayers(
 	database *sql.DB,
 	evaluationID string,
 	hasOutcome bool,
+	outcomeKnown bool,
 ) ([]QueryLayer, error) {
 	outcomeColumn := "''"
 	if hasOutcome {
@@ -481,7 +490,7 @@ func querySafeLayers(
 		if err != nil {
 			return nil, err
 		}
-		normalized, err := validateQueryLayer(layer, len(layers))
+		normalized, err := validateQueryLayer(layer, len(layers), outcomeKnown)
 		if err != nil {
 			return nil, wrapError(fmt.Sprintf("validate evaluation %q layer", evaluationID), err)
 		}
@@ -561,7 +570,11 @@ func scanQueryLayer(rows *sql.Rows) (QueryLayer, error) {
 	return layer, nil
 }
 
-func validateQueryLayer(layer QueryLayer, position int) (QueryLayer, error) {
+func validateQueryLayer(
+	layer QueryLayer,
+	position int,
+	outcomeKnown bool,
+) (QueryLayer, error) {
 	if layer.LayerIndex != position {
 		return QueryLayer{}, fmt.Errorf(
 			"layer index %d is not ordered position %d",
@@ -577,7 +590,12 @@ func validateQueryLayer(layer QueryLayer, position int) (QueryLayer, error) {
 			*layer.ParentLayerIndex,
 		)
 	}
-	if err := validateLayerSemantics(layer.Kind, layer.Status, layer.Outcome); err != nil {
+	if err := validateReadLayerSemantics(
+		layer.Kind,
+		layer.Status,
+		layer.Outcome,
+		outcomeKnown,
+	); err != nil {
 		return QueryLayer{}, fmt.Errorf(
 			"layer index %d has invalid semantics: %s",
 			layer.LayerIndex,

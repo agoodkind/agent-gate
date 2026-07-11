@@ -13,7 +13,7 @@ func validateLayerSemantics(kind string, status string, outcome string) error {
 	if status != "complete" && status != "error" && status != "skipped" {
 		return fmt.Errorf("layer status %q is invalid", status)
 	}
-	predicate := kind == "deterministic" || kind == "inference"
+	predicate := isPredicateLayerKind(kind)
 	if status == "complete" && predicate {
 		if outcome != "match" && outcome != "nonmatch" {
 			return errors.New("complete predicate layer requires match or nonmatch outcome")
@@ -24,6 +24,22 @@ func validateLayerSemantics(kind string, status string, outcome string) error {
 		return errors.New("nonpredicate, error, or skipped layer must not have an outcome")
 	}
 	return nil
+}
+
+func validateReadLayerSemantics(
+	kind string,
+	status string,
+	outcome string,
+	outcomeKnown bool,
+) error {
+	if !outcomeKnown && outcome == "" && status == "complete" && isPredicateLayerKind(kind) {
+		return nil
+	}
+	return validateLayerSemantics(kind, status, outcome)
+}
+
+func isPredicateLayerKind(kind string) bool {
+	return kind == "deterministic" || kind == "inference"
 }
 
 func validateLayerOutputHash(output []byte, outputHash string) error {

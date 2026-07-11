@@ -257,18 +257,7 @@ func TestStoreListRejectsUnknownV2MetadataAfterRead(t *testing.T) {
 
 func TestStoreMigratesEvaluationQueryColumns(t *testing.T) {
 	_, database, _, first, _ := newEvaluationQueryFixture(t)
-	if _, err := database.Exec(`drop index gate_evaluation_layers_outcome_idx`); err != nil {
-		t.Fatalf("drop outcome index: %v", err)
-	}
-	if _, err := database.Exec(`alter table gate_evaluation_layers drop column outcome`); err != nil {
-		t.Fatalf("drop outcome column: %v", err)
-	}
-	if _, err := database.Exec(`alter table gate_evaluations drop column layer_count`); err != nil {
-		t.Fatalf("drop layer count column: %v", err)
-	}
-	if _, err := database.Exec(`alter table gate_evaluations drop column label_count`); err != nil {
-		t.Fatalf("drop label count column: %v", err)
-	}
+	dropEvaluationQueryColumns(t, database)
 
 	migrated, err := evaluation.NewStore(context.Background(), database)
 	if err != nil {
@@ -294,6 +283,71 @@ func TestStoreMigratesEvaluationQueryColumns(t *testing.T) {
 	}
 	if layerCount != -1 || labelCount != -1 {
 		t.Fatalf("migrated child counts = %d, %d; want -1, -1", layerCount, labelCount)
+	}
+}
+
+func TestQueryReadsPopulatedLegacyEvaluationsBeforeAndAfterMigration(t *testing.T) {
+	_, database, path, first, _ := newEvaluationQueryFixture(t)
+	dropEvaluationQueryColumns(t, database)
+	ctx := context.Background()
+
+	before, err := evaluation.Query(ctx, path, evaluation.QueryFilter{
+		EvaluationID: first.Evaluation.EvaluationID,
+	})
+	if err != nil {
+		t.Fatalf("Query before migration: %v", err)
+	}
+	assertLegacyQueryRecord(t, before.Records, first.Evaluation.EvaluationID)
+
+	combined, err := evaluation.Query(ctx, path, evaluation.QueryFilter{
+		RuleName: "review-rule", LayerName: "review-layer", LayerKind: "inference",
+		LayerOutcome: "match", ModelName: "gpt-test",
+	})
+	if err != nil {
+		t.Fatalf("Query combined legacy filter: %v", err)
+	}
+	if len(combined.Records) != 0 {
+		t.Fatalf("combined legacy filter records = %+v, want empty", combined.Records)
+	}
+
+	migrated, err := evaluation.NewStore(ctx, database)
+	if err != nil {
+		t.Fatalf("NewStore migration: %v", err)
+	}
+	after, err := migrated.List(ctx, evaluation.QueryFilter{
+		EvaluationID: first.Evaluation.EvaluationID,
+	})
+	if err != nil {
+		t.Fatalf("List after migration: %v", err)
+	}
+	assertLegacyQueryRecord(t, after, first.Evaluation.EvaluationID)
+}
+
+func dropEvaluationQueryColumns(t *testing.T, database *sql.DB) {
+	t.Helper()
+	if _, err := database.Exec(`drop index gate_evaluation_layers_outcome_idx`); err != nil {
+		t.Fatalf("drop outcome index: %v", err)
+	}
+	if _, err := database.Exec(`alter table gate_evaluation_layers drop column outcome`); err != nil {
+		t.Fatalf("drop outcome column: %v", err)
+	}
+	if _, err := database.Exec(`alter table gate_evaluations drop column layer_count`); err != nil {
+		t.Fatalf("drop layer count column: %v", err)
+	}
+	if _, err := database.Exec(`alter table gate_evaluations drop column label_count`); err != nil {
+		t.Fatalf("drop label count column: %v", err)
+	}
+}
+
+func assertLegacyQueryRecord(t *testing.T, records []evaluation.QueryRecord, evaluationID string) {
+	t.Helper()
+	if len(records) != 1 || records[0].EvaluationID != evaluationID {
+		t.Fatalf("legacy records = %+v, want only %q", records, evaluationID)
+	}
+	for _, layer := range records[0].Layers {
+		if layer.Outcome != "" {
+			t.Fatalf("legacy layer outcome = %q, want empty", layer.Outcome)
+		}
 	}
 }
 
