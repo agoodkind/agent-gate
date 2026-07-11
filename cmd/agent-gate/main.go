@@ -21,6 +21,7 @@ import (
 	"goodkind.io/agent-gate/internal/daemon"
 	"goodkind.io/agent-gate/internal/hook"
 	"goodkind.io/agent-gate/internal/intake"
+	"goodkind.io/agent-gate/internal/rules/concerns/shellparse"
 	"goodkind.io/agent-gate/internal/telemetry"
 	"goodkind.io/agent-gate/internal/updateopts"
 	"goodkind.io/agent-gate/internal/version"
@@ -203,6 +204,7 @@ type hookRuntime struct {
 	connect func(context.Context) (hookClient, error)
 	getwd   func() (string, error)
 	env     func() map[string]string
+	getenv  func(string) string
 }
 
 func runDaemonStatus() int {
@@ -1063,6 +1065,7 @@ func runHook(systemHint hook.System) int {
 		connect: defaultHookConnector,
 		getwd:   os.Getwd,
 		env:     envFingerprint,
+		getenv:  os.Getenv,
 	}
 	return runHookWithRuntime(systemHint, runtime)
 }
@@ -1099,7 +1102,10 @@ func runHookWithRuntime(systemHint hook.System, runtime hookRuntime) (exitCode i
 	defer func() { _ = client.Close() }()
 
 	cwd, _ := runtime.getwd()
-	resp, err := client.EvaluateHook(data, systemHint.String(), cwd, runtime.args, runtime.env())
+	environment := hookEnvironmentFingerprint(
+		data, systemHint, runtime.env(), runtime.getenv,
+	)
+	resp, err := client.EvaluateHook(data, systemHint.String(), cwd, runtime.args, environment)
 	if err != nil {
 		diagnostic := fmt.Sprintf("agent-gate: daemon EvaluateHook failed: %v", err)
 		response := hook.FailOpenResponse(systemHint, "", diagnostic, hook.FailOpenReasonRPCFailed)
@@ -1157,4 +1163,39 @@ func envFingerprint() map[string]string {
 		}
 	}
 	return out
+}
+
+func hookEnvironmentFingerprint(
+	rawJSON []byte,
+	systemHint hook.System,
+	base map[string]string,
+	getenv func(string) string,
+) map[string]string {
+	environment := make(map[string]string, len(base))
+	for key, value := range base {
+		environment[key] = value
+	}
+	if getenv == nil {
+		return environment
+	}
+	detectionPayload, err := hook.ParseDetectionPayload(rawJSON)
+	if err != nil {
+		return environment
+	}
+	system := hook.DetectWithEnv(detectionPayload, systemHint, func(key string) string {
+		return environment[key]
+	})
+	payload, err := hook.ParseHookPayload(system, rawJSON)
+	if err != nil {
+		return environment
+	}
+	for _, name := range shellparse.ReferencedEnvironmentVariables(
+		payload.Fields().CommandValue(),
+	) {
+		value := getenv(name)
+		if filepath.IsAbs(value) {
+			environment[name] = value
+		}
+	}
+	return environment
 }

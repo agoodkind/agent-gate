@@ -154,6 +154,57 @@ field_paths = ["tool_input.file_path"]
 	}
 }
 
+func TestEvaluateAllExpandsCommandEnvironmentForWriteTargets(t *testing.T) {
+	fixture := &gitStateFixture{state: testGitState()}
+	rule := loadGitRule(t, `
+[[rules.conditions]]
+kind = "git_primary_checkout"
+field_paths = ["cmd_write_targets"]
+`)
+	fields := FieldSet{
+		ToolInputCommand: `echo x > "$TARGET"`,
+		ToolName:         "Shell",
+		CWD:              "/repo/feature",
+	}
+	ctx := WithGitStateReader(context.Background(), fixture.read)
+	getenv := func(name string) string {
+		if name == "TARGET" {
+			return "/repo/main/file.txt"
+		}
+		return ""
+	}
+
+	violations := EvaluateAll(ctx, "codex", "AnyEvent", fields, []config.Rule{*rule}, getenv)
+
+	if len(violations) != 1 {
+		t.Fatalf("violations = %+v, want one", violations)
+	}
+}
+
+func TestEvaluateAllPreservesRawCommandForRegex(t *testing.T) {
+	rule := loadGitRule(t, `
+[[rules.conditions]]
+kind = "regex"
+field_paths = ["tool_input.command"]
+pattern = '''\$TARGET'''
+`)
+	fields := FieldSet{ToolInputCommand: `echo x > "$TARGET"`, ToolName: "Shell"}
+	getenv := func(name string) string {
+		if name == "TARGET" {
+			return "/repo/main/file.txt"
+		}
+		return ""
+	}
+
+	violations := EvaluateAll(
+		context.Background(), "codex", "AnyEvent", fields, []config.Rule{*rule}, getenv,
+	)
+
+	if len(violations) != 1 {
+		t.Fatalf("violations = %+v, want raw command regex match", violations)
+	}
+}
+
 func TestGitRefMoveConditionMatch(t *testing.T) {
 	cases := []struct {
 		name    string

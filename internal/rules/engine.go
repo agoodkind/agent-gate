@@ -742,6 +742,7 @@ func conditionGateMatches(
 		return shellReadConditionGateMatch(fields, condition)
 	case config.ConditionKindGitDefaultBranch, config.ConditionKindGitPrimaryCheckout,
 		config.ConditionKindGitRefMove:
+		fields = structuralCommandFields(ctx, fields)
 		return gitConditionMatch(
 			fields, condition, conditionContextValue, gitStateReaderFromContext(ctx),
 		)

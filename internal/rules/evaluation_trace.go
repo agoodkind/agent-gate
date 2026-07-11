@@ -146,7 +146,8 @@ func EvaluateAllDetailed(
 		mu: sync.Mutex{}, layers: make([]LayerTrace, 0),
 		seen: make(map[traceIdentity]struct{}),
 	}
-	evalCtx := withRichTraceCollector(ctx, collector)
+	evalCtx := withCommandEnvironment(ctx, getenv)
+	evalCtx = withRichTraceCollector(evalCtx, collector)
 	collectPreSkippedInferenceLayers(evalCtx, rulesSlice, system, eventName, getenv)
 	violations := evaluateAll(evalCtx, system, eventName, fields, rulesSlice, getenv)
 	decisions := deterministicRuleDecisions(rulesSlice, system, eventName, getenv, violations)

@@ -27,6 +27,25 @@ type fakeHookClient struct {
 	err      error
 }
 
+type environmentRecordingHookClient struct {
+	environment map[string]string
+}
+
+func (client *environmentRecordingHookClient) EvaluateHook(
+	_ []byte,
+	_ string,
+	_ string,
+	_ []string,
+	environment map[string]string,
+) (*daemonpb.EvaluateHookResponse, error) {
+	client.environment = environment
+	return &daemonpb.EvaluateHookResponse{}, nil
+}
+
+func (client *environmentRecordingHookClient) Close() error {
+	return nil
+}
+
 func (client fakeHookClient) EvaluateHook(_ []byte, _ string, _ string, _ []string, _ map[string]string) (*daemonpb.EvaluateHookResponse, error) {
 	if client.err != nil {
 		return nil, client.err
@@ -133,6 +152,31 @@ func TestRunHookMirrorsDaemonBlockResponse(t *testing.T) {
 	}
 	if got := stderr.String(); got != "blocked\n" {
 		t.Fatalf("stderr = %q, want daemon stderr", got)
+	}
+}
+
+func TestRunHookForwardsReferencedCommandEnvironment(t *testing.T) {
+	client := &environmentRecordingHookClient{environment: nil}
+	connect := func(context.Context) (hookClient, error) {
+		return client, nil
+	}
+	payload := `{"session_id":"s1","hook_event_name":"PreToolUse","tool_name":"Shell","tool_input":{"command":"echo x > \"` + "$" + `TARGET\""}}`
+	runtime, _, _ := testHookRuntime(strings.NewReader(payload), connect)
+	runtime.getenv = func(name string) string {
+		values := map[string]string{
+			"TARGET":  "/repo/main/file.txt",
+			"PRIVATE": "do-not-forward",
+		}
+		return values[name]
+	}
+
+	exitCode := runHookWithRuntime(hook.SystemCodex, runtime)
+
+	if exitCode != 0 {
+		t.Fatalf("exitCode = %d, want 0", exitCode)
+	}
+	if len(client.environment) != 1 || client.environment["TARGET"] != "/repo/main/file.txt" {
+		t.Fatalf("forwarded environment = %v", client.environment)
 	}
 }
 
@@ -271,6 +315,7 @@ func testHookRuntime(stdin io.Reader, connect func(context.Context) (hookClient,
 		env: func() map[string]string {
 			return map[string]string{}
 		},
+		getenv: func(string) string { return "" },
 	}
 	return runtime, stdout, stderr
 }
