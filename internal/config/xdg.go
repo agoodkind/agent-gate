@@ -104,11 +104,6 @@ func DefaultAuditSQLitePath() string {
 	return filepath.Join(DefaultStateDir(), "sqlite", "audit.db")
 }
 
-// DefaultJudgeDisagreementLogPath returns the JSONL retraining-data log path.
-func DefaultJudgeDisagreementLogPath() string {
-	return filepath.Join(DefaultStateDir(), "judge-disagreements.jsonl")
-}
-
 // ProfilesConfigPath returns the path to profiles.toml in the XDG config dir.
 func ProfilesConfigPath() string {
 	return filepath.Join(DefaultConfigDir(), "profiles.toml")

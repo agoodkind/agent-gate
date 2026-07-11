@@ -9,7 +9,6 @@ import (
 	"slices"
 	"sync/atomic"
 
-	"goodkind.io/agent-gate/internal/composer"
 	"goodkind.io/agent-gate/internal/config"
 	"goodkind.io/agent-gate/internal/regex"
 	diffconcern "goodkind.io/agent-gate/internal/rules/concerns/diff"
@@ -233,7 +232,7 @@ func isMatchingConditionKind(c *config.Condition) bool {
 	case config.ConditionKindRegex, config.ConditionKindDiff, config.ConditionKindShellRead, config.ConditionKindShellWrite:
 		return true
 	case config.ConditionKindCommand, config.ConditionKindProject, config.ConditionKindExec,
-		config.ConditionKindComposer, config.ConditionKindGitDefaultBranch,
+		config.ConditionKindGitDefaultBranch,
 		config.ConditionKindGitPrimaryCheckout, config.ConditionKindGitRefMove,
 		config.ConditionKindInfer:
 		// Gate-only kinds. They must pass for the rule to fire but they do
@@ -421,7 +420,7 @@ func (r *ruleRegexCondition) Execute(ctx context.Context, _ pipeline.Input) (pip
 			gateMatched:      true,
 		}, nil
 	case config.ConditionKindCommand, config.ConditionKindProject, config.ConditionKindExec,
-		config.ConditionKindComposer, config.ConditionKindGitDefaultBranch,
+		config.ConditionKindGitDefaultBranch,
 		config.ConditionKindGitPrimaryCheckout, config.ConditionKindGitRefMove,
 		config.ConditionKindInfer:
 		// Gate-only kinds are handled by [allConditionsMatch] above and
@@ -750,8 +749,6 @@ func conditionGateMatches(
 		return execConditionGateMatch(ctx, fields, rule, conditionIndex, condition)
 	case config.ConditionKindInfer:
 		return inferConditionGateMatch(ctx, fields, rule, conditionIndex, condition)
-	case config.ConditionKindComposer:
-		return composerConditionGateMatch(ctx, fields, condition)
 	default:
 		return false
 	}
@@ -770,43 +767,6 @@ func collectCommandConditionContext(fields FieldSet, conditions []config.Conditi
 		condCtx.commandCwds = append(condCtx.commandCwds, cwds...)
 	}
 	return true
-}
-
-type composerDecider interface {
-	Decide(ruleSetID string, command string, cwd string) composer.Verdict
-}
-
-type composerDeciderKey struct{}
-
-type defaultComposerDecider struct{}
-
-func (defaultComposerDecider) Decide(ruleSetID string, command string, cwd string) composer.Verdict {
-	return composer.Decide(ruleSetID, command, cwd)
-}
-
-// WithComposerDecider returns a context carrying decider for composer conditions.
-func WithComposerDecider(ctx context.Context, decider composerDecider) context.Context {
-	return context.WithValue(ctx, composerDeciderKey{}, decider)
-}
-
-func composerDeciderFromContext(ctx context.Context) composerDecider {
-	if ctx != nil {
-		decider, _ := ctx.Value(composerDeciderKey{}).(composerDecider)
-		if decider != nil {
-			return decider
-		}
-	}
-	return defaultComposerDecider{}
-}
-
-func composerConditionGateMatch(ctx context.Context, fields FieldSet, c *config.Condition) bool {
-	command := fields.CommandValue()
-	cwd := fields.BaseCWD()
-	if command == "" {
-		return false
-	}
-	verdict := composerDeciderFromContext(ctx).Decide(c.RuleSetID, command, cwd)
-	return verdict == composer.Block || verdict == composer.Unknown
 }
 
 // diffConditionGateMatch reports whether the diff condition would emit any

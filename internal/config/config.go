@@ -129,10 +129,6 @@ type Condition struct {
 	ReadSpecs    []ShellReadSpec  `toml:"read_specs"`
 	WriteSpecs   []ShellWriteSpec `toml:"write_specs"`
 
-	// Composer condition fields. RuleSetID selects the lm-review rule set and
-	// deterministic oracle pair that decides this gate after cheap prefilters.
-	RuleSetID string `toml:"rule_set_id"`
-
 	// Exec condition fields. Command is the argv executed synchronously as an
 	// external validator (no shell). TimeoutMs bounds the run. CacheKey is a
 	// field selector whose canonicalized value keys the cross-event result
@@ -465,7 +461,6 @@ type Config struct {
 	Audit       Audit           `toml:"audit"`
 	Paths       Paths           `toml:"paths"`
 	Performance Performance     `toml:"performance"`
-	Judge       Judge           `toml:"judge"`
 	Telemetry   TelemetryConfig `toml:"telemetry"`
 	Update      Update          `toml:"update"`
 	Rules       []Rule          `toml:"rules"`
@@ -642,7 +637,7 @@ func compileCondition(log *slog.Logger, ruleName string, index int, c *Condition
 	switch ConditionKind(c.Kind) {
 	case ConditionKindRegex, ConditionKindCommand, ConditionKindProject, ConditionKindDiff,
 		ConditionKindShellRead, ConditionKindShellWrite, ConditionKindExec,
-		ConditionKindComposer, ConditionKindGitDefaultBranch,
+		ConditionKindGitDefaultBranch,
 		ConditionKindGitPrimaryCheckout, ConditionKindGitRefMove, ConditionKindInfer:
 	default:
 		return fmt.Errorf("rule %q condition %d: unknown kind %q", ruleName, index, c.Kind)
@@ -684,9 +679,6 @@ func compileCondition(log *slog.Logger, ruleName string, index int, c *Condition
 	if err := validateShellReadSpecConfig(ruleName, index, c); err != nil {
 		return err
 	}
-	if err := validateComposerConfig(ruleName, index, c); err != nil {
-		return err
-	}
 	if err := compileExecConfig(ruleName, index, c, meta); err != nil {
 		return err
 	}
@@ -699,17 +691,6 @@ func compileCondition(log *slog.Logger, ruleName string, index int, c *Condition
 	if ConditionKind(c.Kind) == ConditionKindGitRefMove && len(c.FieldPaths) > 0 {
 		return fmt.Errorf("rule %q condition %d: git_ref_move does not accept field_paths", ruleName, index)
 	}
-	return nil
-}
-
-func validateComposerConfig(ruleName string, index int, c *Condition) error {
-	if ConditionKind(c.Kind) != ConditionKindComposer {
-		return nil
-	}
-	if strings.TrimSpace(c.RuleSetID) == "" {
-		return fmt.Errorf("rule %q condition %d: composer requires rule_set_id", ruleName, index)
-	}
-	c.RuleSetID = strings.TrimSpace(c.RuleSetID)
 	return nil
 }
 

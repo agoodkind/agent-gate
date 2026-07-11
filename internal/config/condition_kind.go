@@ -12,7 +12,6 @@ const (
 	ConditionKindRegex              ConditionKind = "regex"
 	ConditionKindShellRead          ConditionKind = "shell_read_secret"
 	ConditionKindShellWrite         ConditionKind = "shell_write"
-	ConditionKindComposer           ConditionKind = "composer"
 	ConditionKindGitDefaultBranch   ConditionKind = "git_default_branch"
 	ConditionKindGitPrimaryCheckout ConditionKind = "git_primary_checkout"
 	ConditionKindGitRefMove         ConditionKind = "git_ref_move"

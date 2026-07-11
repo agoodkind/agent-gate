@@ -74,7 +74,6 @@ func conditionConsumesCmdWriteTargets(condition *Condition) bool {
 		ConditionKindProject,
 		ConditionKindShellRead,
 		ConditionKindShellWrite,
-		ConditionKindComposer,
 		ConditionKindGitRefMove:
 		return false
 	}
