@@ -27,8 +27,9 @@ type deferredProcessor struct {
 }
 
 type deferredWork struct {
-	eventID  string
-	hotEvent hook.DeferredAuditEvent
+	receiptID int64
+	eventID   string
+	hotEvent  hook.DeferredAuditEvent
 }
 
 func newDeferredProcessor(
@@ -90,13 +91,13 @@ func (p *deferredProcessor) ReplayPending(ctx context.Context) error {
 	return nil
 }
 
-func (p *deferredProcessor) Enqueue(eventID string, hotEvent hook.DeferredAuditEvent) bool {
-	if p == nil || p.store == nil || eventID == "" || p.stopping.Load() {
+func (p *deferredProcessor) Enqueue(receiptID int64, eventID string, hotEvent hook.DeferredAuditEvent) bool {
+	if p == nil || p.store == nil || receiptID <= 0 || eventID == "" || p.stopping.Load() {
 		return false
 	}
 
 	select {
-	case p.events <- deferredWork{eventID: eventID, hotEvent: hotEvent}:
+	case p.events <- deferredWork{receiptID: receiptID, eventID: eventID, hotEvent: hotEvent}:
 		return true
 	default:
 		if p.log != nil {
@@ -133,7 +134,7 @@ func (p *deferredProcessor) worker(ctx context.Context) {
 }
 
 func (p *deferredProcessor) processEvent(ctx context.Context, work deferredWork) {
-	record, err := p.store.Get(ctx, work.eventID)
+	record, err := p.store.GetReceipt(ctx, work.receiptID)
 	if err != nil {
 		if p.log != nil {
 			p.log.WarnContext(ctx, "load deferred intake failed", "event_id", work.eventID, "err", err)
@@ -158,8 +159,8 @@ func (p *deferredProcessor) processRecord(
 	if p.sink != nil {
 		hook.WriteDeferredAudit(ctx, deferredEvent, p.sink)
 	}
-	if err := p.store.MarkDeferredComplete(ctx, record.EventID); err != nil && p.log != nil {
-		p.log.WarnContext(ctx, "mark deferred intake complete failed", "event_id", record.EventID, "err", err)
+	if err := p.store.MarkDeferredComplete(ctx, record.ReceiptID); err != nil && p.log != nil {
+		p.log.WarnContext(ctx, "mark deferred intake complete failed", "receipt_id", record.ReceiptID, "event_id", record.EventID, "err", err)
 	}
 }
 

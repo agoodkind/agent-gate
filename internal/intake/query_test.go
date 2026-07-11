@@ -111,13 +111,21 @@ func TestQueryFiltersSeenEventsAndRendersDeferredStates(t *testing.T) {
 	noneID := appendQueryRecord(t, store, "evt_none", baseTime, "claude", "session-1", "PreToolUse", "Bash")
 	pendingID := appendQueryRecord(t, store, "evt_pending", baseTime.Add(time.Minute), "codex", "session-2", "PostToolUse", "Shell")
 	completeID := appendQueryRecord(t, store, "evt_complete", baseTime.Add(2*time.Minute), "gemini", "session-3", "BeforeTool", "WriteFile")
-	if err := store.MarkDeferredPending(context.Background(), pendingID); err != nil {
+	pendingRecord, err := store.Get(context.Background(), pendingID)
+	if err != nil {
+		t.Fatalf("Get pending receipt: %v", err)
+	}
+	completeRecord, err := store.Get(context.Background(), completeID)
+	if err != nil {
+		t.Fatalf("Get complete receipt: %v", err)
+	}
+	if err := store.MarkDeferredPending(context.Background(), pendingID, pendingRecord.ReceiptID); err != nil {
 		t.Fatalf("MarkDeferredPending: %v", err)
 	}
-	if err := store.MarkDeferredPending(context.Background(), completeID); err != nil {
+	if err := store.MarkDeferredPending(context.Background(), completeID, completeRecord.ReceiptID); err != nil {
 		t.Fatalf("MarkDeferredPending complete row: %v", err)
 	}
-	if err := store.MarkDeferredComplete(context.Background(), completeID); err != nil {
+	if err := store.MarkDeferredComplete(context.Background(), completeRecord.ReceiptID); err != nil {
 		t.Fatalf("MarkDeferredComplete: %v", err)
 	}
 

@@ -73,10 +73,10 @@ func TestSQLiteStoreDeferredStateTransitions(t *testing.T) {
 		t.Fatalf("Append: %v", err)
 	}
 
-	if err := store.MarkDeferredPending(context.Background(), appendResult.EventID); err != nil {
+	if err := store.MarkDeferredPending(context.Background(), appendResult.EventID, appendResult.ReceiptID); err != nil {
 		t.Fatalf("MarkDeferredPending first: %v", err)
 	}
-	if err := store.MarkDeferredPending(context.Background(), appendResult.EventID); err != nil {
+	if err := store.MarkDeferredPending(context.Background(), appendResult.EventID, appendResult.ReceiptID); err != nil {
 		t.Fatalf("MarkDeferredPending second: %v", err)
 	}
 
@@ -97,10 +97,10 @@ func TestSQLiteStoreDeferredStateTransitions(t *testing.T) {
 		t.Fatalf("completed_at = %v, want nil", pending[0].CompletedAt)
 	}
 
-	if err := store.MarkDeferredComplete(context.Background(), appendResult.EventID); err != nil {
+	if err := store.MarkDeferredComplete(context.Background(), appendResult.ReceiptID); err != nil {
 		t.Fatalf("MarkDeferredComplete first: %v", err)
 	}
-	if err := store.MarkDeferredComplete(context.Background(), appendResult.EventID); err != nil {
+	if err := store.MarkDeferredComplete(context.Background(), appendResult.ReceiptID); err != nil {
 		t.Fatalf("MarkDeferredComplete second: %v", err)
 	}
 
@@ -115,8 +115,8 @@ func TestSQLiteStoreDeferredStateTransitions(t *testing.T) {
 
 func TestSQLiteStoreReplayPendingUpdatesReplayMetadataInSequenceOrder(t *testing.T) {
 	store := newTestStore(t)
-	firstEventID := appendPendingRecord(t, store, "evt_1", time.Date(2026, 5, 9, 12, 0, 0, 0, time.UTC))
-	secondEventID := appendPendingRecord(t, store, "evt_2", time.Date(2026, 5, 9, 12, 0, 1, 0, time.UTC))
+	first := appendPendingRecord(t, store, "evt_1", time.Date(2026, 5, 9, 12, 0, 0, 0, time.UTC))
+	second := appendPendingRecord(t, store, "evt_2", time.Date(2026, 5, 9, 12, 0, 1, 0, time.UTC))
 
 	var replayed []intake.Record
 	err := store.ReplayDeferredPending(context.Background(), 0, func(record intake.Record) error {
@@ -130,11 +130,11 @@ func TestSQLiteStoreReplayPendingUpdatesReplayMetadataInSequenceOrder(t *testing
 	if len(replayed) != 2 {
 		t.Fatalf("replayed records = %d, want 2", len(replayed))
 	}
-	if replayed[0].EventID != firstEventID {
-		t.Fatalf("first replayed event = %q, want %q", replayed[0].EventID, firstEventID)
+	if replayed[0].ReceiptID != first.ReceiptID {
+		t.Fatalf("first replayed receipt = %d, want %d", replayed[0].ReceiptID, first.ReceiptID)
 	}
-	if replayed[1].EventID != secondEventID {
-		t.Fatalf("second replayed event = %q, want %q", replayed[1].EventID, secondEventID)
+	if replayed[1].ReceiptID != second.ReceiptID {
+		t.Fatalf("second replayed receipt = %d, want %d", replayed[1].ReceiptID, second.ReceiptID)
 	}
 	for _, record := range replayed {
 		if record.DeferredReplays != 1 {
@@ -151,7 +151,7 @@ func TestSQLiteStoreReplayPendingUpdatesReplayMetadataInSequenceOrder(t *testing
 
 func TestSQLiteStoreRejectsDeferredStateForUnknownEvent(t *testing.T) {
 	store := newTestStore(t)
-	err := store.MarkDeferredPending(context.Background(), "missing")
+	err := store.MarkDeferredPending(context.Background(), "missing", 0)
 	if !errors.Is(err, intake.ErrEventNotFound) {
 		t.Fatalf("MarkDeferredPending error = %v, want ErrEventNotFound", err)
 	}
@@ -172,7 +172,7 @@ func newTestStore(t *testing.T) *intake.Store {
 	return store
 }
 
-func appendPendingRecord(t *testing.T, store *intake.Store, eventID string, recordedAt time.Time) string {
+func appendPendingRecord(t *testing.T, store *intake.Store, eventID string, recordedAt time.Time) intake.AppendResult {
 	t.Helper()
 	appendResult, err := store.Append(context.Background(), intake.Record{
 		EventID:    eventID,
@@ -188,8 +188,8 @@ func appendPendingRecord(t *testing.T, store *intake.Store, eventID string, reco
 	if err != nil {
 		t.Fatalf("Append %s: %v", eventID, err)
 	}
-	if err := store.MarkDeferredPending(context.Background(), appendResult.EventID); err != nil {
+	if err := store.MarkDeferredPending(context.Background(), appendResult.EventID, appendResult.ReceiptID); err != nil {
 		t.Fatalf("MarkDeferredPending %s: %v", eventID, err)
 	}
-	return appendResult.EventID
+	return appendResult
 }

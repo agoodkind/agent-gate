@@ -13,12 +13,27 @@ import (
 type intakeStore interface {
 	Append(context.Context, intake.Record) (intake.AppendResult, error)
 	Get(context.Context, string) (intake.Record, error)
-	MarkDeferredPending(context.Context, string) error
-	MarkDeferredComplete(context.Context, string) error
+	GetReceipt(context.Context, int64) (intake.Record, error)
+	MarkDeferredPending(context.Context, string, int64) error
+	MarkDeferredComplete(context.Context, int64) error
 	ReplayPending(context.Context, func(intake.Record) error) error
-	ListPending(context.Context) ([]string, error)
+	ListPending(context.Context) ([]int64, error)
 	UpdateHotEvalLatency(context.Context, string, int64) error
 	Close() error
+}
+
+func (s *sqliteIntakeStore) GetReceipt(ctx context.Context, receiptID int64) (intake.Record, error) {
+	if s == nil || s.store == nil {
+		return intake.Record{}, fmt.Errorf("intake store is nil")
+	}
+	record, err := s.store.GetReceipt(ctx, receiptID)
+	if err != nil {
+		if s.log != nil {
+			s.log.WarnContext(ctx, "get intake receipt failed", "receipt_id", receiptID, "err", err)
+		}
+		return intake.Record{}, fmt.Errorf("get intake receipt %d: %w", receiptID, err)
+	}
+	return record, nil
 }
 
 type sqliteIntakeStore struct {
@@ -69,11 +84,11 @@ func (s *sqliteIntakeStore) Get(ctx context.Context, eventID string) (intake.Rec
 	return record, nil
 }
 
-func (s *sqliteIntakeStore) MarkDeferredPending(ctx context.Context, eventID string) error {
+func (s *sqliteIntakeStore) MarkDeferredPending(ctx context.Context, eventID string, receiptID int64) error {
 	if s == nil || s.store == nil {
 		return fmt.Errorf("intake store is nil")
 	}
-	if err := s.store.MarkDeferredPending(ctx, eventID); err != nil {
+	if err := s.store.MarkDeferredPending(ctx, eventID, receiptID); err != nil {
 		if s.log != nil {
 			s.log.WarnContext(ctx, "mark intake record pending failed", "event_id", eventID, "err", err)
 		}
@@ -82,15 +97,15 @@ func (s *sqliteIntakeStore) MarkDeferredPending(ctx context.Context, eventID str
 	return nil
 }
 
-func (s *sqliteIntakeStore) MarkDeferredComplete(ctx context.Context, eventID string) error {
+func (s *sqliteIntakeStore) MarkDeferredComplete(ctx context.Context, receiptID int64) error {
 	if s == nil || s.store == nil {
 		return fmt.Errorf("intake store is nil")
 	}
-	if err := s.store.MarkDeferredComplete(ctx, eventID); err != nil {
+	if err := s.store.MarkDeferredComplete(ctx, receiptID); err != nil {
 		if s.log != nil {
-			s.log.WarnContext(ctx, "mark intake record complete failed", "event_id", eventID, "err", err)
+			s.log.WarnContext(ctx, "mark intake record complete failed", "receipt_id", receiptID, "err", err)
 		}
-		return fmt.Errorf("mark intake record %q complete: %w", eventID, err)
+		return fmt.Errorf("mark intake receipt %d complete: %w", receiptID, err)
 	}
 	return nil
 }
@@ -108,7 +123,7 @@ func (s *sqliteIntakeStore) ReplayPending(ctx context.Context, replay func(intak
 	return nil
 }
 
-func (s *sqliteIntakeStore) ListPending(ctx context.Context) ([]string, error) {
+func (s *sqliteIntakeStore) ListPending(ctx context.Context) ([]int64, error) {
 	if s == nil || s.store == nil {
 		return nil, fmt.Errorf("intake store is nil")
 	}
@@ -119,11 +134,11 @@ func (s *sqliteIntakeStore) ListPending(ctx context.Context) ([]string, error) {
 		}
 		return nil, fmt.Errorf("list pending intake records: %w", err)
 	}
-	eventIDs := make([]string, 0, len(records))
+	receiptIDs := make([]int64, 0, len(records))
 	for _, record := range records {
-		eventIDs = append(eventIDs, record.EventID)
+		receiptIDs = append(receiptIDs, record.ReceiptID)
 	}
-	return eventIDs, nil
+	return receiptIDs, nil
 }
 
 func (s *sqliteIntakeStore) UpdateHotEvalLatency(ctx context.Context, eventID string, latencyMicros int64) error {

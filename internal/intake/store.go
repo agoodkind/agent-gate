@@ -47,6 +47,9 @@ const (
 // exist.
 var ErrEventNotFound = errors.New("intake event not found")
 
+// ErrReceiptEventMismatch reports that a receipt belongs to another event.
+var ErrReceiptEventMismatch = errors.New("intake receipt event mismatch")
+
 // Operation captures the filesystem or shell context extracted from a hook
 // payload at append time.
 type Operation struct {
@@ -58,6 +61,8 @@ type Operation struct {
 
 // Record is one durable hook intake event plus its deferred replay metadata.
 type Record struct {
+	ReceiptID       int64
+	ReceivedAt      time.Time
 	EventID         string
 	SchemaVersion   int
 	RecordedAt      time.Time
@@ -257,26 +262,27 @@ func (s *Store) Append(ctx context.Context, record Record) (AppendResult, error)
 }
 
 // MarkDeferredPending marks an intake record ready for deferred replay.
-func (s *Store) MarkDeferredPending(ctx context.Context, eventID string) error {
+func (s *Store) MarkDeferredPending(ctx context.Context, eventID string, receiptID int64) error {
 	now := intakeNow().UTC().Format(time.RFC3339Nano)
-	return s.withExistingEvent(ctx, eventID, func(tx *sql.Tx) error {
+	return s.withExistingReceipt(ctx, eventID, receiptID, func(tx *sql.Tx, canonicalEventID string) error {
 		_, err := tx.ExecContext(ctx, `
 			insert into intake_deferred (
+				receipt_id,
 				event_id,
 				state,
 				pending_at,
 				completed_at,
 				last_replay_at,
 				replay_count
-			) values (?, ?, ?,
+			) values (?, ?, ?, ?,
 				null,
 				cast(null as text),
 				0)
-			on conflict(event_id) do update set
+			on conflict(receipt_id) do update set
 				state = excluded.state,
 				pending_at = coalesce(intake_deferred.pending_at, excluded.pending_at),
 				completed_at = null
-		`, eventID, DeferredStatePending, now)
+		`, receiptID, canonicalEventID, DeferredStatePending, now)
 		if err != nil {
 			return wrapLoggedError(ctx, s.log, "mark intake deferred pending", err)
 		}
@@ -285,26 +291,27 @@ func (s *Store) MarkDeferredPending(ctx context.Context, eventID string) error {
 }
 
 // MarkDeferredComplete marks an intake record as fully replayed.
-func (s *Store) MarkDeferredComplete(ctx context.Context, eventID string) error {
+func (s *Store) MarkDeferredComplete(ctx context.Context, receiptID int64) error {
 	now := intakeNow().UTC().Format(time.RFC3339Nano)
-	return s.withExistingEvent(ctx, eventID, func(tx *sql.Tx) error {
+	return s.withExistingReceipt(ctx, "", receiptID, func(tx *sql.Tx, eventID string) error {
 		_, err := tx.ExecContext(ctx, `
 			insert into intake_deferred (
+				receipt_id,
 				event_id,
 				state,
 				pending_at,
 				completed_at,
 				last_replay_at,
 				replay_count
-			) values (?, ?,
+			) values (?, ?, ?,
 				null,
 				?,
 				null,
 				0)
-			on conflict(event_id) do update set
+			on conflict(receipt_id) do update set
 				state = excluded.state,
 				completed_at = excluded.completed_at
-		`, eventID, DeferredStateComplete, now)
+		`, receiptID, eventID, DeferredStateComplete, now)
 		if err != nil {
 			return wrapLoggedError(ctx, s.log, "mark intake deferred complete", err)
 		}
@@ -334,15 +341,18 @@ func (s *Store) ListDeferredPending(ctx context.Context, limit int) ([]Record, e
 			e.raw_payload_hash,
 			e.normalized_json,
 			e.env_fingerprint_json,
+			r.receipt_id,
+			r.received_at,
 			d.state,
 			d.pending_at,
 			d.completed_at,
 			d.last_replay_at,
-			d.replay_count
+			coalesce(d.replay_count, 0)
 		from intake_events e
 		join intake_deferred d on d.event_id = e.event_id
+		join intake_receipts r on r.receipt_id = d.receipt_id
 		where d.state = ?
-		order by e.seq asc
+		order by r.receipt_id asc
 	`
 	var rows *sql.Rows
 	var err error
@@ -395,13 +405,18 @@ func (s *Store) Get(ctx context.Context, eventID string) (Record, error) {
 			e.raw_payload_hash,
 			e.normalized_json,
 			e.env_fingerprint_json,
+			coalesce(r.receipt_id, 0),
+			coalesce(r.received_at, e.recorded_at),
 			coalesce(d.state, ?),
 			d.pending_at,
 			d.completed_at,
 			d.last_replay_at,
 			coalesce(d.replay_count, 0)
 		from intake_events e
-		left join intake_deferred d on d.event_id = e.event_id
+		left join intake_receipts r on r.receipt_id = (
+			select max(receipt_id) from intake_receipts where event_id = e.event_id
+		)
+		left join intake_deferred d on d.receipt_id = r.receipt_id
 		where e.event_id = ?
 	`, DeferredStateNone, eventID)
 	if err != nil {
@@ -423,6 +438,11 @@ func (s *Store) Get(ctx context.Context, eventID string) (Record, error) {
 	return record, nil
 }
 
+// GetReceipt loads one durable intake record by receipt id.
+func (s *Store) GetReceipt(ctx context.Context, receiptID int64) (Record, error) {
+	return s.receiptRecord(ctx, receiptID, "")
+}
+
 // ReplayDeferredPending walks pending records in order and records replay
 // metadata before invoking replay.
 func (s *Store) ReplayDeferredPending(ctx context.Context, limit int, replay func(Record) error) error {
@@ -431,10 +451,10 @@ func (s *Store) ReplayDeferredPending(ctx context.Context, limit int, replay fun
 		return err
 	}
 	for _, record := range records {
-		if err := s.noteReplay(ctx, record.EventID); err != nil {
+		if err := s.noteReplay(ctx, record.ReceiptID); err != nil {
 			return err
 		}
-		refreshed, err := s.pendingRecord(ctx, record.EventID)
+		refreshed, err := s.pendingRecord(ctx, record.ReceiptID)
 		if err != nil {
 			return err
 		}
@@ -471,20 +491,23 @@ func (s *Store) init(ctx context.Context) error {
 			env_fingerprint_json text not null default '{}'
 		)`,
 		`create table if not exists intake_deferred (
-			event_id text primary key,
+			receipt_id integer primary key,
+			event_id text not null,
 			state text not null,
 			pending_at text,
 			completed_at text,
 			last_replay_at text,
 			replay_count integer not null default 0,
-			foreign key(event_id) references intake_events(event_id) on delete cascade,
+			foreign key(receipt_id, event_id)
+				references intake_receipts(receipt_id, event_id) on delete cascade,
 			check(state in ('none', 'pending', 'complete'))
 		)`,
 		`create table if not exists intake_receipts (
 			receipt_id integer primary key autoincrement,
 			event_id text not null,
 			received_at text not null,
-			foreign key(event_id) references intake_events(event_id) on delete cascade
+			foreign key(event_id) references intake_events(event_id) on delete cascade,
+			unique(receipt_id, event_id)
 		)`,
 		`create index if not exists intake_events_recorded_at_idx on intake_events(recorded_at)`,
 		`create index if not exists intake_events_session_recorded_at_idx on intake_events(session_id, recorded_at)`,
@@ -515,6 +538,10 @@ func (s *Store) init(ctx context.Context) error {
 			return wrapLoggedError(ctx, s.log, "init intake sqlite schema", err)
 		}
 	}
+	if err := ensureDeferredReceiptSchema(ctx, s.db); err != nil {
+		return err
+	}
+	logDeferredReceiptRepairs(ctx, s.db, s.log)
 	if err := ensureIntakeSchemaMigrations(ctx, s.db); err != nil {
 		return err
 	}
@@ -522,10 +549,12 @@ func (s *Store) init(ctx context.Context) error {
 	return nil
 }
 
-func (s *Store) withExistingEvent(ctx context.Context, eventID string, run func(tx *sql.Tx) error) error {
-	if strings.TrimSpace(eventID) == "" {
-		return ErrEventNotFound
-	}
+func (s *Store) withExistingReceipt(
+	ctx context.Context,
+	expectedEventID string,
+	receiptID int64,
+	run func(*sql.Tx, string) error,
+) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return wrapLoggedError(ctx, s.log, "begin intake state tx", err)
@@ -534,15 +563,20 @@ func (s *Store) withExistingEvent(ctx context.Context, eventID string, run func(
 		_ = tx.Rollback()
 	}()
 
-	var exists int
-	err = tx.QueryRowContext(ctx, `select 1 from intake_events where event_id = ?`, eventID).Scan(&exists)
+	var eventID string
+	err = tx.QueryRowContext(ctx, `
+		select event_id from intake_receipts where receipt_id = ?
+	`, receiptID).Scan(&eventID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrEventNotFound
 	}
 	if err != nil {
-		return wrapLoggedError(ctx, s.log, "lookup intake event", err)
+		return wrapLoggedError(ctx, s.log, "lookup intake receipt", err)
 	}
-	if err := run(tx); err != nil {
+	if expectedEventID != "" && expectedEventID != eventID {
+		return ErrReceiptEventMismatch
+	}
+	if err := run(tx, eventID); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
@@ -551,14 +585,14 @@ func (s *Store) withExistingEvent(ctx context.Context, eventID string, run func(
 	return nil
 }
 
-func (s *Store) noteReplay(ctx context.Context, eventID string) error {
+func (s *Store) noteReplay(ctx context.Context, receiptID int64) error {
 	now := intakeNow().UTC().Format(time.RFC3339Nano)
-	return s.withExistingEvent(ctx, eventID, func(tx *sql.Tx) error {
+	return s.withExistingReceipt(ctx, "", receiptID, func(tx *sql.Tx, _ string) error {
 		result, err := tx.ExecContext(ctx, `
 			update intake_deferred
 			set last_replay_at = ?, replay_count = replay_count + 1
-			where event_id = ? and state = ?
-		`, now, eventID, DeferredStatePending)
+			where receipt_id = ? and state = ?
+		`, now, receiptID, DeferredStatePending)
 		if err != nil {
 			return wrapLoggedError(ctx, s.log, "update intake replay metadata", err)
 		}
@@ -573,8 +607,12 @@ func (s *Store) noteReplay(ctx context.Context, eventID string) error {
 	})
 }
 
-func (s *Store) pendingRecord(ctx context.Context, eventID string) (Record, error) {
-	rows, err := s.db.QueryContext(ctx, `
+func (s *Store) pendingRecord(ctx context.Context, receiptID int64) (Record, error) {
+	return s.receiptRecord(ctx, receiptID, string(DeferredStatePending))
+}
+
+func (s *Store) receiptRecord(ctx context.Context, receiptID int64, requiredState string) (Record, error) {
+	query := `
 		select
 			e.seq,
 			e.event_id,
@@ -594,15 +632,25 @@ func (s *Store) pendingRecord(ctx context.Context, eventID string) (Record, erro
 			e.raw_payload_hash,
 			e.normalized_json,
 			e.env_fingerprint_json,
-			d.state,
+			r.receipt_id,
+			r.received_at,
+			coalesce(d.state, 'none'),
 			d.pending_at,
 			d.completed_at,
 			d.last_replay_at,
-			d.replay_count
+			coalesce(d.replay_count, 0)
 		from intake_events e
-		join intake_deferred d on d.event_id = e.event_id
-		where e.event_id = ? and d.state = ?
-	`, eventID, DeferredStatePending)
+		join intake_receipts r on r.event_id = e.event_id
+		left join intake_deferred d on d.receipt_id = r.receipt_id
+		where r.receipt_id = ?`
+	var rows *sql.Rows
+	var err error
+	if requiredState != "" {
+		query += ` and d.state = ?`
+		rows, err = s.db.QueryContext(ctx, query, receiptID, requiredState)
+	} else {
+		rows, err = s.db.QueryContext(ctx, query, receiptID)
+	}
 	if err != nil {
 		return Record{}, wrapLoggedError(ctx, s.log, "query refreshed intake record", err)
 	}
@@ -625,6 +673,7 @@ func (s *Store) pendingRecord(ctx context.Context, eventID string) (Record, erro
 func scanRecord(rows *sql.Rows) (Record, error) {
 	var (
 		recordedAt     string
+		receivedAt     string
 		normalized     string
 		envFingerprint string
 		state          string
@@ -654,6 +703,8 @@ func scanRecord(rows *sql.Rows) (Record, error) {
 		&rawPayloadHash,
 		&normalized,
 		&envFingerprint,
+		&record.ReceiptID,
+		&receivedAt,
 		&state,
 		&pendingAt,
 		&completedAt,
@@ -666,6 +717,10 @@ func scanRecord(rows *sql.Rows) (Record, error) {
 	record.RecordedAt, err = time.Parse(time.RFC3339Nano, recordedAt)
 	if err != nil {
 		return Record{}, wrapError("parse intake recorded_at", err)
+	}
+	record.ReceivedAt, err = time.Parse(time.RFC3339Nano, receivedAt)
+	if err != nil {
+		return Record{}, wrapError("parse intake received_at", err)
 	}
 	record.NormalizedJSON = json.RawMessage(normalized)
 	record.RawPayload = append([]byte(nil), rawPayload...)

@@ -597,25 +597,12 @@ func enqueueDeferredReplay(
 		return nil
 	}
 
-	shouldEnqueue := appendResult.Inserted
-	if !appendResult.Inserted {
-		record, err := snapshot.intakeStore.Get(ctx, appendResult.EventID)
-		if err != nil {
-			log.WarnContext(ctx, "load duplicate hook intake failed; failing open", "event_id", appendResult.EventID, "err", err)
-			return fmt.Errorf("load duplicate hook intake %q: %w", appendResult.EventID, err)
-		}
-		shouldEnqueue = record.DeferredState != intake.DeferredStateComplete
-	}
-	if !shouldEnqueue {
-		return nil
-	}
-
-	if err := snapshot.intakeStore.MarkDeferredPending(ctx, appendResult.EventID); err != nil {
+	if err := snapshot.intakeStore.MarkDeferredPending(ctx, appendResult.EventID, appendResult.ReceiptID); err != nil {
 		log.WarnContext(ctx, "mark deferred intake pending failed; failing open", "event_id", appendResult.EventID, "err", err)
 		return fmt.Errorf("mark deferred intake pending %q: %w", appendResult.EventID, err)
 	}
 	if snapshot.deferredProcessor != nil {
-		snapshot.deferredProcessor.Enqueue(appendResult.EventID, deferredEvent)
+		snapshot.deferredProcessor.Enqueue(appendResult.ReceiptID, appendResult.EventID, deferredEvent)
 	}
 	return nil
 }

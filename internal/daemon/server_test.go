@@ -902,11 +902,15 @@ func (failingIntakeStore) Get(context.Context, string) (intake.Record, error) {
 	return intake.Record{}, errors.New("get failed")
 }
 
-func (failingIntakeStore) MarkDeferredPending(context.Context, string) error {
+func (failingIntakeStore) GetReceipt(context.Context, int64) (intake.Record, error) {
+	return intake.Record{}, errors.New("get receipt failed")
+}
+
+func (failingIntakeStore) MarkDeferredPending(context.Context, string, int64) error {
 	return errors.New("mark pending failed")
 }
 
-func (failingIntakeStore) MarkDeferredComplete(context.Context, string) error {
+func (failingIntakeStore) MarkDeferredComplete(context.Context, int64) error {
 	return errors.New("mark complete failed")
 }
 
@@ -914,7 +918,7 @@ func (failingIntakeStore) ReplayPending(context.Context, func(intake.Record) err
 	return errors.New("replay failed")
 }
 
-func (failingIntakeStore) ListPending(context.Context) ([]string, error) {
+func (failingIntakeStore) ListPending(context.Context) ([]int64, error) {
 	return nil, errors.New("list failed")
 }
 
@@ -963,8 +967,9 @@ func fillDeferredProcessorQueue(t testing.TB, srv *Server) {
 		t.Fatal("deferred processor is nil")
 	}
 	snapshot.deferredProcessor.events <- deferredWork{
-		eventID:  "occupied",
-		hotEvent: hook.DeferredAuditEvent{},
+		receiptID: 1,
+		eventID:   "occupied",
+		hotEvent:  hook.DeferredAuditEvent{},
 	}
 }
 
