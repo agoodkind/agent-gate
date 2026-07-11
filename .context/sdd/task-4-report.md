@@ -292,3 +292,24 @@ The final focused gitbranch, oracle, and rules suite passed. The final
 `1b5a4ab79e3e83c5524ab4fd800e0e42`, and the final `make check` passed all five
 gates with trace `9e0a023aa4a7fb8b3ee30a9a8e0c0d21`. The final
 `git diff --check` produced no output.
+
+## Delete and Tags Conflict Review
+
+### RED
+
+The read-only review found that Git rejects delete combined with tags, while
+the parser accepted both option orders when an explicit branch refspec
+followed. Focused tests reproduced four failures across the condition and
+parser surfaces.
+
+### GREEN
+
+Push parsing now rejects delete combined with tags in either order and still
+accepts delete after a later `--no-tags`. The focused suite passed in `0.567s`.
+
+The current-HEAD read-only review reported no unresolved findings. Its targeted
+gitbranch and rules tests passed. The final `make check` passed all five gates
+with trace `7f268ad2d8e1b92523439abe14baeb2d`, and the final `make test` passed every
+package with trace `c6be231aa114c16ec4e677051a60decb`. The remaining test risk is that
+all-branch push coverage uses injected source and destination state rather than
+real linked worktrees.
