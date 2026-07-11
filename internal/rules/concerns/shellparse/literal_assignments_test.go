@@ -16,7 +16,8 @@ func TestExpandLiteralAssignments(t *testing.T) {
 		{name: "later assignment", command: `echo > "$R/file"; R=/repo`, want: `echo > "$R/file"; R=/repo`},
 		{name: "escaped reference", command: `R=/repo; echo "\$R/file"`, want: `R=/repo; echo "\$R/file"`},
 		{name: "single quoted reference", command: `R=/repo; cat '$R/x'`, want: `R=/repo; cat '$R/x'`},
-		{name: "malformed quote", command: `R=/repo; cat '$R/x`, want: `R=/repo; cat '$R/x`},
+		{name: "malformed single quote", command: `R=/repo; cat '$R/x`, want: `R=/repo; cat '$R/x`},
+		{name: "malformed double quote", command: `R=/repo; cat "$R/x`, want: `R=/repo; cat "$R/x`},
 		{name: "parameter default", command: `R=/repo; cat "${R:-/tmp}/x"`, want: `R=/repo; cat "${R:-/tmp}/x"`},
 		{name: "escaped unquoted reference", command: `R=/repo; printf '%s' \$R`, want: `R=/repo; printf '%s' \$R`},
 	}

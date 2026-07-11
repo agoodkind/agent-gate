@@ -3,6 +3,7 @@ package gitbranch
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	git "github.com/go-git/go-git/v5"
@@ -152,6 +153,16 @@ func TestReadStateUsesPackedBranchRef(t *testing.T) {
 	}
 	if state.DefaultBranch != "main" || state.CurrentBranch != "main" {
 		t.Fatalf("branches = %q, %q; want packed main for both", state.DefaultBranch, state.CurrentBranch)
+	}
+}
+
+func TestFirstLineRejectsEmptyMetadataFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "HEAD")
+	writeStateFile(t, path, "")
+
+	_, err := firstLine(path)
+	if err == nil || !strings.Contains(err.Error(), "empty") {
+		t.Fatalf("firstLine() error = %v, want clear empty-file error", err)
 	}
 }
 

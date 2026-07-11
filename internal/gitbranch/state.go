@@ -257,7 +257,11 @@ func firstLine(path string) (string, error) {
 	defer file.Close()
 	scanner := bufio.NewScanner(file)
 	if !scanner.Scan() {
-		return "", fmt.Errorf("read %s: %w", path, scanner.Err())
+		if scanErr := scanner.Err(); scanErr != nil {
+			slog.Warn("read git metadata file failed", "path", path, "err", scanErr)
+			return "", fmt.Errorf("read %s: %w", path, scanErr)
+		}
+		return "", fmt.Errorf("read %s: metadata file is empty", path)
 	}
 	return strings.TrimSpace(scanner.Text()), nil
 }

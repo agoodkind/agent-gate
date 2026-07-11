@@ -19,6 +19,9 @@ type literalAssignment struct {
 // value in command. Reassigned, dynamic, and single-quoted references remain
 // unresolved for the structural parser to handle conservatively.
 func ExpandLiteralAssignments(command string) string {
+	if !literalAssignmentQuotesBalanced(command) {
+		return command
+	}
 	values := literalAssignmentValues(command)
 	if len(values) == 0 {
 		return command
@@ -44,6 +47,36 @@ func ExpandLiteralAssignments(command string) string {
 	}
 	builder.WriteString(substituteLiteralAssignmentRefs(command[segmentStart:], segmentStart, values))
 	return builder.String()
+}
+
+func literalAssignmentQuotesBalanced(command string) bool {
+	var quote byte
+	escaped := false
+	for index := 0; index < len(command); index++ {
+		char := command[index]
+		if quote == '\'' {
+			if char == quote {
+				quote = 0
+			}
+			continue
+		}
+		if escaped {
+			escaped = false
+			continue
+		}
+		if char == '\\' {
+			escaped = true
+			continue
+		}
+		if quote == 0 && (char == '\'' || char == '"') {
+			quote = char
+			continue
+		}
+		if char == quote {
+			quote = 0
+		}
+	}
+	return quote == 0
 }
 
 func substituteLiteralAssignmentRefs(
