@@ -704,6 +704,7 @@ func finishLocalPushArgs(state localPushParseState) (string, []string, bool, boo
 	}
 	bulkMode := state.allBranches || state.mirrorBranches
 	if state.allBranches && state.mirrorBranches || bulkMode && state.deleteRefs ||
+		state.tags && state.deleteRefs ||
 		bulkMode && state.tags || bulkMode && len(refspecs) > 0 {
 		return "", nil, false, false, false
 	}

@@ -191,6 +191,8 @@ func TestGitRefMoveConditionMatch(t *testing.T) {
 		{name: "all with tags", command: "git push --all --tags /repo/main", cwd: "/repo/feature", want: false},
 		{name: "mirror with tags", command: "git push --mirror --tags /repo/main", cwd: "/repo/feature", want: false},
 		{name: "tags with explicit refspec", command: "git push --tags /repo/main HEAD:refs/heads/main", cwd: "/repo/feature", want: true},
+		{name: "delete with tags", command: "git push --delete --tags /repo/main main", cwd: "/repo/feature", want: false},
+		{name: "tags with delete", command: "git push --tags --delete /repo/main main", cwd: "/repo/feature", want: false},
 		{name: "local force option push", command: "git push --force /repo/main HEAD:refs/heads/main", cwd: "/repo/feature", want: true},
 		{name: "branches with explicit refspec", command: "git push --branches /repo/main HEAD:refs/heads/main", cwd: "/repo/feature", want: false},
 		{name: "local progress option push", command: "git push --progress /repo/main HEAD:refs/heads/main", cwd: "/repo/feature", want: true},
@@ -490,6 +492,8 @@ func TestLocalPushTagsGrammar(t *testing.T) {
 		{"--tags", "--branches"},
 		{"--tags", "--mirror"},
 		{"--mirror", "--tags"},
+		{"--delete", "--tags"},
+		{"--tags", "--delete"},
 	} {
 		if _, _, _, _, valid := parseLocalPushArgs(pushBulkWords(options...)); valid {
 			t.Errorf("parseLocalPushArgs accepted conflicting options %v", options)
@@ -497,6 +501,9 @@ func TestLocalPushTagsGrammar(t *testing.T) {
 	}
 	if _, _, _, _, valid := parseLocalPushArgs(pushBulkWords("--tags", "--all", "--no-tags")); !valid {
 		t.Fatal("parseLocalPushArgs rejected tags disabled before final bulk mode")
+	}
+	if _, _, _, _, valid := parseLocalPushArgs(pushWords("--delete", "--tags", "--no-tags")); !valid {
+		t.Fatal("parseLocalPushArgs rejected delete after tags was disabled")
 	}
 }
 
