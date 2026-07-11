@@ -58,6 +58,55 @@ output_schema = '` + validOutputSchema + `'
 	if condition.ResponseJSONEqualsValue().StringValue() != "block" {
 		t.Fatalf("response scalar = %q, want block", condition.ResponseJSONEqualsValue().StringValue())
 	}
+	if condition.ReasoningEffort != "" || condition.MaxCompletionTokens != nil || condition.Temperature != nil {
+		t.Fatalf("generation defaults = (%q, %v, %v), want unset", condition.ReasoningEffort, condition.MaxCompletionTokens, condition.Temperature)
+	}
+}
+
+func TestInferConditionCompilesGenericGenerationOptions(t *testing.T) {
+	body := inferRulePrefix + `
+prompt = "Classify the input"
+output_schema = '` + validOutputSchema + `'
+reasoning_effort = "high"
+max_completion_tokens = 2048
+temperature = 0.25
+`
+	cfg, err := writeExecConfig(t, body)
+	if err != nil {
+		t.Fatalf("LoadExisting: %v", err)
+	}
+	condition := cfg.Rules[0].Conditions[0]
+	if condition.ReasoningEffort != "high" {
+		t.Fatalf("reasoning_effort = %q, want high", condition.ReasoningEffort)
+	}
+	if condition.MaxCompletionTokens == nil || *condition.MaxCompletionTokens != 2048 {
+		t.Fatalf("max_completion_tokens = %v, want 2048", condition.MaxCompletionTokens)
+	}
+	if condition.Temperature == nil || *condition.Temperature != 0.25 {
+		t.Fatalf("temperature = %v, want 0.25", condition.Temperature)
+	}
+}
+
+func TestInferConditionValidatesGenericGenerationOptions(t *testing.T) {
+	tests := []struct {
+		name  string
+		field string
+		want  string
+	}{
+		{name: "reasoning effort", field: `reasoning_effort = "extreme"`, want: "reasoning_effort"},
+		{name: "completion tokens", field: `max_completion_tokens = 0`, want: "max_completion_tokens"},
+		{name: "temperature low", field: `temperature = -0.1`, want: "temperature"},
+		{name: "temperature high", field: `temperature = 2.1`, want: "temperature"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			body := inferRulePrefix + test.field + "\nprompt = \"inline\"\noutput_schema = '" + validOutputSchema + "'\n"
+			_, err := writeExecConfig(t, body)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %v", err)
+			}
+		})
+	}
 }
 
 func TestInferConditionReadsDeclarationFilesRelativeToConfig(t *testing.T) {

@@ -19,6 +19,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 
 	"goodkind.io/agent-gate/api/inferencepb"
 	"goodkind.io/agent-gate/internal/config"
@@ -30,15 +31,16 @@ const inferenceCacheNamespace = "infer-condition"
 
 // InferenceTrace is the payload-free record of one attempted inference layer.
 type InferenceTrace struct {
-	LayerName      string        `json:"layer_name"`
-	ConditionIndex int           `json:"condition_index"`
-	Model          string        `json:"model,omitempty"`
-	Endpoint       string        `json:"endpoint"`
-	Outcome        string        `json:"outcome"`
-	Status         string        `json:"status"`
-	Latency        time.Duration `json:"latency"`
-	CacheHit       bool          `json:"cache_hit"`
-	ErrorClass     string        `json:"error_class,omitempty"`
+	LayerName      string                          `json:"layer_name"`
+	ConditionIndex int                             `json:"condition_index"`
+	Model          string                          `json:"model,omitempty"`
+	Endpoint       string                          `json:"endpoint"`
+	Outcome        string                          `json:"outcome"`
+	Status         string                          `json:"status"`
+	Latency        time.Duration                   `json:"latency"`
+	CacheHit       bool                            `json:"cache_hit"`
+	ErrorClass     string                          `json:"error_class,omitempty"`
+	Metadata       *inferencepb.InvocationMetadata `json:"metadata,omitempty"`
 }
 
 // InferenceTraceCollector receives sanitized in-memory layer traces.
@@ -63,10 +65,12 @@ type inferResult struct {
 	errored    bool
 	errorClass string
 	cacheHit   bool
+	metadata   *inferencepb.InvocationMetadata
 }
 
 type cachedInferResult struct {
-	Matched bool `json:"matched"`
+	Matched  bool                            `json:"matched"`
+	Metadata *inferencepb.InvocationMetadata `json:"metadata,omitempty"`
 }
 
 // InferRuntime owns reusable inference and context channels plus call state.
@@ -286,6 +290,7 @@ func (runtime *InferRuntime) call(
 	reply, err := client.Infer(callCtx, &inferencepb.InferRequest{
 		Prompt: condition.Prompt, Input: input,
 		OutputSchema: condition.OutputSchema, Context: contextJSON, Model: condition.Model,
+		GenerationOptions: generationOptions(condition),
 	})
 	if err != nil {
 		return inferError(grpcErrorClass(err))
@@ -297,19 +302,65 @@ func (runtime *InferRuntime) call(
 	if err != nil {
 		return inferError("invalid_response")
 	}
-	return inferSuccess(matched)
+	return inferSuccess(matched, reply.GetMetadata())
+}
+
+func generationOptions(condition *config.Condition) *inferencepb.GenerationOptions {
+	if condition.ReasoningEffort == "" && condition.MaxCompletionTokens == nil && condition.Temperature == nil {
+		return nil
+	}
+	return &inferencepb.GenerationOptions{
+		ReasoningEffort:     reasoningEffortValue(condition.ReasoningEffort),
+		MaxCompletionTokens: condition.MaxCompletionTokens,
+		Temperature:         condition.Temperature,
+	}
+}
+
+func reasoningEffortValue(value config.ReasoningEffort) inferencepb.ReasoningEffort {
+	switch value {
+	case config.ReasoningEffortUnspecified:
+		return inferencepb.ReasoningEffort_REASONING_EFFORT_UNSPECIFIED
+	case config.ReasoningEffortNone:
+		return inferencepb.ReasoningEffort_REASONING_EFFORT_NONE
+	case config.ReasoningEffortMinimal:
+		return inferencepb.ReasoningEffort_REASONING_EFFORT_MINIMAL
+	case config.ReasoningEffortLow:
+		return inferencepb.ReasoningEffort_REASONING_EFFORT_LOW
+	case config.ReasoningEffortMedium:
+		return inferencepb.ReasoningEffort_REASONING_EFFORT_MEDIUM
+	case config.ReasoningEffortHigh:
+		return inferencepb.ReasoningEffort_REASONING_EFFORT_HIGH
+	case config.ReasoningEffortXHigh:
+		return inferencepb.ReasoningEffort_REASONING_EFFORT_XHIGH
+	default:
+		return inferencepb.ReasoningEffort_REASONING_EFFORT_UNSPECIFIED
+	}
 }
 
 func inferError(errorClass string) inferResult {
-	return inferResult{matched: false, errored: true, errorClass: errorClass, cacheHit: false}
+	return inferResult{matched: false, errored: true, errorClass: errorClass, cacheHit: false, metadata: nil}
 }
 
-func inferSuccess(matched bool) inferResult {
-	return inferResult{matched: matched, errored: false, errorClass: "", cacheHit: false}
+func inferSuccess(matched bool, metadata *inferencepb.InvocationMetadata) inferResult {
+	return inferResult{
+		matched: matched, errored: false, errorClass: "", cacheHit: false,
+		metadata: cloneInvocationMetadata(metadata),
+	}
 }
 
 func emptyInferResult() inferResult {
-	return inferResult{matched: false, errored: false, errorClass: "", cacheHit: false}
+	return inferResult{matched: false, errored: false, errorClass: "", cacheHit: false, metadata: nil}
+}
+
+func cloneInvocationMetadata(metadata *inferencepb.InvocationMetadata) *inferencepb.InvocationMetadata {
+	if metadata == nil {
+		return nil
+	}
+	cloned, ok := proto.Clone(metadata).(*inferencepb.InvocationMetadata)
+	if !ok {
+		return nil
+	}
+	return cloned
 }
 
 func (runtime *InferRuntime) contextJSON(
@@ -445,11 +496,13 @@ func (runtime *InferRuntime) cacheLookup(key string) (inferResult, bool) {
 		_, _ = runtime.cache.Delete(inferenceCacheNamespace, key)
 		return emptyInferResult(), false
 	}
-	return inferSuccess(cached.Matched), true
+	return inferSuccess(cached.Matched, cached.Metadata), true
 }
 
 func (runtime *InferRuntime) cacheStore(key string, ttlMilliseconds int, result inferResult) {
-	encoded, err := json.Marshal(cachedInferResult{Matched: result.matched})
+	encoded, err := json.Marshal(cachedInferResult{
+		Matched: result.matched, Metadata: cloneInvocationMetadata(result.metadata),
+	})
 	if err != nil {
 		return
 	}
@@ -471,7 +524,10 @@ func stableInferenceKey(
 	hash := sha256.New()
 	parts := []string{
 		condition.Endpoint, condition.LayerName, condition.Prompt, condition.OutputSchema,
-		condition.Model, condition.InputField, input, condition.CacheKey, selectedKey,
+		condition.Model, string(condition.ReasoningEffort),
+		optionalInt64Identity(condition.MaxCompletionTokens),
+		optionalFloat64Identity(condition.Temperature),
+		condition.InputField, input, condition.CacheKey, selectedKey,
 		condition.ResponseJSONField, string(condition.ResponseJSONEqualsValue().Kind()),
 		condition.ResponseJSONEqualsValue().CanonicalString(), condition.BlockOn, condition.OnError,
 		strconv.Itoa(condition.TimeoutMs), strconv.Itoa(condition.CacheTTLMs), condition.ContextSource,
@@ -484,6 +540,20 @@ func stableInferenceKey(
 		_, _ = hash.Write([]byte(part))
 	}
 	return hex.EncodeToString(hash.Sum(nil))
+}
+
+func optionalInt64Identity(value *int64) string {
+	if value == nil {
+		return "unset"
+	}
+	return "set:" + strconv.FormatInt(*value, 10)
+}
+
+func optionalFloat64Identity(value *float64) string {
+	if value == nil {
+		return "unset"
+	}
+	return "set:" + strconv.FormatFloat(*value, 'g', -1, 64)
 }
 
 func inferenceJSONMatches(condition *config.Condition, document string) (bool, error) {
@@ -595,5 +665,6 @@ func (runtime *InferRuntime) collectTrace(ctx context.Context, condition *config
 		LayerName: condition.LayerName, ConditionIndex: conditionIndex, Model: condition.Model,
 		Endpoint: condition.Endpoint, Outcome: outcome, Status: statusValue, Latency: latency,
 		CacheHit: result.cacheHit, ErrorClass: result.errorClass,
+		Metadata: cloneInvocationMetadata(result.metadata),
 	})
 }

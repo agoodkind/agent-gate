@@ -14,14 +14,48 @@ message InferRequest {
   string output_schema = 3;
   string context = 4;
   string model = 5;
+  GenerationOptions generation_options = 6;
 }
 
 message InferReply {
   string output_json = 1;
   InferenceStatus status = 2;
+  InvocationMetadata metadata = 3;
+}
+
+message GenerationOptions {
+  ReasoningEffort reasoning_effort = 1;
+  optional int64 max_completion_tokens = 2;
+  optional double temperature = 3;
+}
+
+message InvocationMetadata {
+  string request_id = 1;
+  string service_version = 2;
+  string requested_model = 3;
+  string actual_model = 4;
+  string backend_fingerprint = 5;
+  string backend_version = 6;
+  string prompt_sha256 = 7;
+  string schema_sha256 = 8;
+  int64 prompt_tokens = 9;
+  int64 completion_tokens = 10;
+  int64 total_tokens = 11;
+  string finish_reason = 12;
+  int64 latency_ms = 13;
 }
 
 enum InferenceStatus {
   INFERENCE_STATUS_UNSPECIFIED = 0;
   INFERENCE_STATUS_COMPLETE = 1;
+}
+
+enum ReasoningEffort {
+  REASONING_EFFORT_UNSPECIFIED = 0;
+  REASONING_EFFORT_NONE = 1;
+  REASONING_EFFORT_MINIMAL = 2;
+  REASONING_EFFORT_LOW = 3;
+  REASONING_EFFORT_MEDIUM = 4;
+  REASONING_EFFORT_HIGH = 5;
+  REASONING_EFFORT_XHIGH = 6;
 }

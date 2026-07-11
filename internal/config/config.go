@@ -171,6 +171,9 @@ type Condition struct {
 	OutputSchema           string          `toml:"output_schema"`
 	OutputSchemaFile       string          `toml:"output_schema_file"`
 	Model                  string          `toml:"model"`
+	ReasoningEffort        ReasoningEffort `toml:"reasoning_effort"`
+	MaxCompletionTokens    *int64          `toml:"max_completion_tokens"`
+	Temperature            *float64        `toml:"temperature"`
 	ResponseJSONField      string          `toml:"response_json_field"`
 	ResponseJSONEquals     *toml.Primitive `toml:"response_json_equals"`
 	ContextSource          string          `toml:"context_source"`
@@ -194,14 +197,6 @@ type Condition struct {
 	contextSessionSelector   FieldSelectorSpec
 	responseJSONValue        TOMLScalarValue
 }
-
-// CacheKeySelector returns the compiled field selector that keys the exec
-// condition's cross-event result cache.
-func (c *Condition) CacheKeySelector() FieldSelectorSpec { return c.cacheKeySelector }
-
-// ForEachSelector returns the compiled field selector that expands the exec
-// command across many target values.
-func (c *Condition) ForEachSelector() FieldSelectorSpec { return c.forEachSelector }
 
 // ShellReadSpec describes one configurable shell command shape for the
 // shell_read_secret condition kind.

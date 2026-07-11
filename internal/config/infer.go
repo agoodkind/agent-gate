@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,6 +25,20 @@ const (
 	DefaultContextMaxCharsPerTurn = 280
 	// MaxContextMaxCharsPerTurn is the maximum character limit per context turn.
 	MaxContextMaxCharsPerTurn = 8000
+)
+
+// ReasoningEffort selects the generic model reasoning budget.
+type ReasoningEffort string
+
+// Reasoning effort values accepted by the inference wire contract.
+const (
+	ReasoningEffortUnspecified ReasoningEffort = ""
+	ReasoningEffortNone        ReasoningEffort = "none"
+	ReasoningEffortMinimal     ReasoningEffort = "minimal"
+	ReasoningEffortLow         ReasoningEffort = "low"
+	ReasoningEffortMedium      ReasoningEffort = "medium"
+	ReasoningEffortHigh        ReasoningEffort = "high"
+	ReasoningEffortXHigh       ReasoningEffort = "xhigh"
 )
 
 // InputFieldSelector returns the compiled infer input selector.
@@ -66,6 +81,9 @@ func compileInferConfig(log *slog.Logger, ruleName string, index int, condition 
 		return fmt.Errorf("%s: output_schema must be valid JSON", contextLabel)
 	}
 	condition.OutputSchema = schema
+	if err := compileInferGenerationOptions(contextLabel, condition); err != nil {
+		return err
+	}
 
 	condition.InputField = strings.TrimSpace(condition.InputField)
 	condition.inputSelector, err = compileRequiredSelector(condition.InputField, "input_field")
@@ -112,6 +130,31 @@ func compileInferConfig(log *slog.Logger, ruleName string, index int, condition 
 		return fmt.Errorf("%s: response_json_equals: %w", contextLabel, err)
 	}
 	return compileInferContextConfig(log, contextLabel, condition)
+}
+
+func compileInferGenerationOptions(contextLabel string, condition *Condition) error {
+	condition.ReasoningEffort = ReasoningEffort(strings.TrimSpace(string(condition.ReasoningEffort)))
+	switch condition.ReasoningEffort {
+	case ReasoningEffortUnspecified, ReasoningEffortNone, ReasoningEffortMinimal,
+		ReasoningEffortLow, ReasoningEffortMedium, ReasoningEffortHigh,
+		ReasoningEffortXHigh:
+	default:
+		return fmt.Errorf(
+			"%s: reasoning_effort %q must be none, minimal, low, medium, high, or xhigh",
+			contextLabel,
+			condition.ReasoningEffort,
+		)
+	}
+	if condition.MaxCompletionTokens != nil && *condition.MaxCompletionTokens <= 0 {
+		return fmt.Errorf("%s: max_completion_tokens must be greater than zero", contextLabel)
+	}
+	if condition.Temperature != nil {
+		temperature := *condition.Temperature
+		if math.IsNaN(temperature) || math.IsInf(temperature, 0) || temperature < 0 || temperature > 2 {
+			return fmt.Errorf("%s: temperature must be between zero and two", contextLabel)
+		}
+	}
+	return nil
 }
 
 func compileDeclaration(configDirectory string, inline string, file string, inlineName string, fileName string) (string, error) {

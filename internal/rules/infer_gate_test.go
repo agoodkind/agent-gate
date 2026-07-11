@@ -200,6 +200,75 @@ func TestInferNestedPredicateArbitrarySchemaAndTrace(t *testing.T) {
 	}
 }
 
+func TestInferSendsGenerationOptionsAndPreservesMetadataInCacheTraces(t *testing.T) {
+	fake := &inferenceFake{handler: func(_ context.Context, request *inferencepb.InferRequest) (*inferencepb.InferReply, error) {
+		options := request.GetGenerationOptions()
+		if options == nil || options.GetReasoningEffort() != inferencepb.ReasoningEffort_REASONING_EFFORT_HIGH {
+			t.Fatalf("generation options = %+v, want HIGH", options)
+		}
+		if options.MaxCompletionTokens == nil || options.GetMaxCompletionTokens() != 2048 {
+			t.Fatalf("max completion tokens = %+v", options.MaxCompletionTokens)
+		}
+		if options.Temperature == nil || options.GetTemperature() != 0.25 {
+			t.Fatalf("temperature = %+v", options.Temperature)
+		}
+		return &inferencepb.InferReply{
+			OutputJson: `{"decision":"block"}`,
+			Status:     inferencepb.InferenceStatus_INFERENCE_STATUS_COMPLETE,
+			Metadata: &inferencepb.InvocationMetadata{
+				RequestId: "request-1", ServiceVersion: "service-1",
+				RequestedModel: "gpt-5.4-mini", ActualModel: "gpt-5.4-mini-2026-07-01",
+				BackendFingerprint: "fp-1", BackendVersion: "backend-1",
+				PromptSha256: "prompt-hash", SchemaSha256: "schema-hash",
+				PromptTokens: 41, CompletionTokens: 7,
+				TotalTokens: 48, FinishReason: "stop", LatencyMs: 12,
+			},
+		}, nil
+	}}
+	endpoint, _ := startInferenceServer(t, fake)
+	rule := loadInferRule(t, endpoint, "model = \"gpt-5.4-mini\"\nreasoning_effort = \"high\"\nmax_completion_tokens = 2048\ntemperature = 0.25\ncache_ttl_ms = 1000")
+	runtime := rules.NewInferRuntimeWithCache(nil, nil)
+	t.Cleanup(runtime.Close)
+	collector := &traceCollector{}
+	ctx := rules.WithInferenceTraceCollector(rules.WithInferRuntime(context.Background(), runtime), collector)
+	evaluateInfer(t, ctx, rule, "input")
+	evaluateInfer(t, ctx, rule, "input")
+	if fake.count() != 1 {
+		t.Fatalf("calls = %d, want 1", fake.count())
+	}
+	if len(collector.traces) != 2 || !collector.traces[1].CacheHit {
+		t.Fatalf("traces = %+v", collector.traces)
+	}
+	for _, trace := range collector.traces {
+		if trace.Metadata == nil || trace.Metadata.GetRequestId() != "request-1" ||
+			trace.Metadata.GetPromptTokens() != 41 {
+			t.Fatalf("trace metadata = %+v", trace.Metadata)
+		}
+	}
+}
+
+func TestInferFailedRPCCapturesClientLatency(t *testing.T) {
+	fake := &inferenceFake{handler: func(context.Context, *inferencepb.InferRequest) (*inferencepb.InferReply, error) {
+		time.Sleep(15 * time.Millisecond)
+		return nil, status.Error(codes.Unavailable, "backend unavailable")
+	}}
+	endpoint, _ := startInferenceServer(t, fake)
+	runtime := rules.NewInferRuntimeWithCache(nil, nil)
+	t.Cleanup(runtime.Close)
+	collector := &traceCollector{}
+	ctx := rules.WithInferenceTraceCollector(rules.WithInferRuntime(context.Background(), runtime), collector)
+	evaluateInfer(t, ctx, loadInferRule(t, endpoint, "on_error = \"open\""), "input")
+	if len(collector.traces) != 1 || collector.traces[0].ErrorClass != "unavailable" {
+		t.Fatalf("traces = %+v", collector.traces)
+	}
+	if collector.traces[0].Latency < 10*time.Millisecond {
+		t.Fatalf("client latency = %s, want failed RPC duration", collector.traces[0].Latency)
+	}
+	if collector.traces[0].Metadata != nil {
+		t.Fatalf("failed RPC metadata = %+v, want nil", collector.traces[0].Metadata)
+	}
+}
+
 func TestInferBooleanScalarPredicate(t *testing.T) {
 	fake := &inferenceFake{handler: func(context.Context, *inferencepb.InferRequest) (*inferencepb.InferReply, error) {
 		return &inferencepb.InferReply{OutputJson: `{"decision":true}`, Status: 1}, nil
@@ -333,6 +402,30 @@ func TestInferPersistentChannelsEndpointSeparationCacheTTLAndIdentity(t *testing
 	evaluateInfer(t, ctx, firstRule, "same")
 	if firstFake.count() != 3 {
 		t.Fatal("expired TTL must call backend again")
+	}
+}
+
+func TestInferCacheIdentityIncludesGenerationOptions(t *testing.T) {
+	fake := &inferenceFake{handler: func(context.Context, *inferencepb.InferRequest) (*inferencepb.InferReply, error) {
+		return &inferencepb.InferReply{OutputJson: `{"decision":"block"}`, Status: 1}, nil
+	}}
+	endpoint, _ := startInferenceServer(t, fake)
+	runtime := rules.NewInferRuntimeWithCache(nil, nil)
+	t.Cleanup(runtime.Close)
+	ctx := rules.WithInferRuntime(context.Background(), runtime)
+	declarations := []string{
+		"reasoning_effort = \"high\"",
+		"reasoning_effort = \"low\"",
+		"reasoning_effort = \"high\"\nmax_completion_tokens = 100",
+		"reasoning_effort = \"high\"\nmax_completion_tokens = 101",
+		"reasoning_effort = \"high\"\ntemperature = 0.0",
+		"reasoning_effort = \"high\"\ntemperature = 0.5",
+	}
+	for _, declaration := range declarations {
+		evaluateInfer(t, ctx, loadInferRule(t, endpoint, declaration+"\ncache_ttl_ms = 1000"), "same")
+	}
+	if fake.count() != len(declarations) {
+		t.Fatalf("calls = %d, want %d distinct generation identities", fake.count(), len(declarations))
 	}
 }
 
@@ -497,23 +590,54 @@ func TestInferRejectsOutOfRangeContextBoundsBeforeClydeCall(t *testing.T) {
 }
 
 func TestInferConditionsRunInDeclarationOrder(t *testing.T) {
-	var modelsMu sync.Mutex
-	var models []string
-	fake := &inferenceFake{handler: func(_ context.Context, request *inferencepb.InferRequest) (*inferencepb.InferReply, error) {
-		modelsMu.Lock()
-		models = append(models, request.GetModel())
-		modelsMu.Unlock()
-		return &inferencepb.InferReply{OutputJson: `{"decision":"allow"}`, Status: 1}, nil
-	}}
-	endpoint, _ := startInferenceServer(t, fake)
-	rule := loadInferRule(t, endpoint, "model = \"v4\"")
-	second := rule.Conditions[0]
-	second.Model = "gpt-5.4-mini"
-	rule.Conditions = append(rule.Conditions, second)
-	runtime := rules.NewInferRuntimeWithCache(nil, nil)
-	t.Cleanup(runtime.Close)
-	evaluateInfer(t, rules.WithInferRuntime(context.Background(), runtime), rule, "input")
-	if len(models) != 1 || models[0] != "v4" {
-		t.Fatalf("models = %v", models)
+	tests := []struct {
+		name           string
+		firstDecision  string
+		secondDecision string
+		secondError    error
+		wantModels     []string
+		wantBlocked    bool
+	}{
+		{name: "v4 allow", firstDecision: "allow", wantModels: []string{"v4"}},
+		{name: "v4 block then mini high allow", firstDecision: "block", secondDecision: "allow", wantModels: []string{"v4", "gpt-5.4-mini"}},
+		{name: "both block", firstDecision: "block", secondDecision: "block", wantModels: []string{"v4", "gpt-5.4-mini"}, wantBlocked: true},
+		{name: "mini error fail open", firstDecision: "block", secondError: status.Error(codes.Unavailable, "mini unavailable"), wantModels: []string{"v4", "gpt-5.4-mini"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var modelsMu sync.Mutex
+			var models []string
+			fake := &inferenceFake{handler: func(_ context.Context, request *inferencepb.InferRequest) (*inferencepb.InferReply, error) {
+				modelsMu.Lock()
+				models = append(models, request.GetModel())
+				modelsMu.Unlock()
+				if request.GetModel() == "gpt-5.4-mini" {
+					options := request.GetGenerationOptions()
+					if options == nil || options.GetReasoningEffort() != inferencepb.ReasoningEffort_REASONING_EFFORT_HIGH {
+						t.Fatalf("mini generation options = %+v, want HIGH", options)
+					}
+					if test.secondError != nil {
+						return nil, test.secondError
+					}
+					return &inferencepb.InferReply{OutputJson: `{"decision":"` + test.secondDecision + `"}`, Status: 1}, nil
+				}
+				return &inferencepb.InferReply{OutputJson: `{"decision":"` + test.firstDecision + `"}`, Status: 1}, nil
+			}}
+			endpoint, _ := startInferenceServer(t, fake)
+			rule := loadInferRule(t, endpoint, "model = \"v4\"")
+			second := rule.Conditions[0]
+			second.Model = "gpt-5.4-mini"
+			second.ReasoningEffort = "high"
+			rule.Conditions = append(rule.Conditions, second)
+			runtime := rules.NewInferRuntimeWithCache(nil, nil)
+			t.Cleanup(runtime.Close)
+			blocked := len(evaluateInfer(t, rules.WithInferRuntime(context.Background(), runtime), rule, "input")) > 0
+			if blocked != test.wantBlocked {
+				t.Fatalf("blocked = %v, want %v", blocked, test.wantBlocked)
+			}
+			if strings.Join(models, ",") != strings.Join(test.wantModels, ",") {
+				t.Fatalf("models = %v, want %v", models, test.wantModels)
+			}
+		})
 	}
 }

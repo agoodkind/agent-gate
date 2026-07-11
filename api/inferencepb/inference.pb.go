@@ -67,15 +67,77 @@ func (InferenceStatus) EnumDescriptor() ([]byte, []int) {
 	return file_inferencepb_inference_proto_rawDescGZIP(), []int{0}
 }
 
+type ReasoningEffort int32
+
+const (
+	ReasoningEffort_REASONING_EFFORT_UNSPECIFIED ReasoningEffort = 0
+	ReasoningEffort_REASONING_EFFORT_NONE        ReasoningEffort = 1
+	ReasoningEffort_REASONING_EFFORT_MINIMAL     ReasoningEffort = 2
+	ReasoningEffort_REASONING_EFFORT_LOW         ReasoningEffort = 3
+	ReasoningEffort_REASONING_EFFORT_MEDIUM      ReasoningEffort = 4
+	ReasoningEffort_REASONING_EFFORT_HIGH        ReasoningEffort = 5
+	ReasoningEffort_REASONING_EFFORT_XHIGH       ReasoningEffort = 6
+)
+
+// Enum value maps for ReasoningEffort.
+var (
+	ReasoningEffort_name = map[int32]string{
+		0: "REASONING_EFFORT_UNSPECIFIED",
+		1: "REASONING_EFFORT_NONE",
+		2: "REASONING_EFFORT_MINIMAL",
+		3: "REASONING_EFFORT_LOW",
+		4: "REASONING_EFFORT_MEDIUM",
+		5: "REASONING_EFFORT_HIGH",
+		6: "REASONING_EFFORT_XHIGH",
+	}
+	ReasoningEffort_value = map[string]int32{
+		"REASONING_EFFORT_UNSPECIFIED": 0,
+		"REASONING_EFFORT_NONE":        1,
+		"REASONING_EFFORT_MINIMAL":     2,
+		"REASONING_EFFORT_LOW":         3,
+		"REASONING_EFFORT_MEDIUM":      4,
+		"REASONING_EFFORT_HIGH":        5,
+		"REASONING_EFFORT_XHIGH":       6,
+	}
+)
+
+func (x ReasoningEffort) Enum() *ReasoningEffort {
+	p := new(ReasoningEffort)
+	*p = x
+	return p
+}
+
+func (x ReasoningEffort) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (ReasoningEffort) Descriptor() protoreflect.EnumDescriptor {
+	return file_inferencepb_inference_proto_enumTypes[1].Descriptor()
+}
+
+func (ReasoningEffort) Type() protoreflect.EnumType {
+	return &file_inferencepb_inference_proto_enumTypes[1]
+}
+
+func (x ReasoningEffort) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use ReasoningEffort.Descriptor instead.
+func (ReasoningEffort) EnumDescriptor() ([]byte, []int) {
+	return file_inferencepb_inference_proto_rawDescGZIP(), []int{1}
+}
+
 type InferRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Prompt        string                 `protobuf:"bytes,1,opt,name=prompt,proto3" json:"prompt,omitempty"`
-	Input         string                 `protobuf:"bytes,2,opt,name=input,proto3" json:"input,omitempty"`
-	OutputSchema  string                 `protobuf:"bytes,3,opt,name=output_schema,json=outputSchema,proto3" json:"output_schema,omitempty"`
-	Context       string                 `protobuf:"bytes,4,opt,name=context,proto3" json:"context,omitempty"`
-	Model         string                 `protobuf:"bytes,5,opt,name=model,proto3" json:"model,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	Prompt            string                 `protobuf:"bytes,1,opt,name=prompt,proto3" json:"prompt,omitempty"`
+	Input             string                 `protobuf:"bytes,2,opt,name=input,proto3" json:"input,omitempty"`
+	OutputSchema      string                 `protobuf:"bytes,3,opt,name=output_schema,json=outputSchema,proto3" json:"output_schema,omitempty"`
+	Context           string                 `protobuf:"bytes,4,opt,name=context,proto3" json:"context,omitempty"`
+	Model             string                 `protobuf:"bytes,5,opt,name=model,proto3" json:"model,omitempty"`
+	GenerationOptions *GenerationOptions     `protobuf:"bytes,6,opt,name=generation_options,json=generationOptions,proto3" json:"generation_options,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *InferRequest) Reset() {
@@ -143,10 +205,18 @@ func (x *InferRequest) GetModel() string {
 	return ""
 }
 
+func (x *InferRequest) GetGenerationOptions() *GenerationOptions {
+	if x != nil {
+		return x.GenerationOptions
+	}
+	return nil
+}
+
 type InferReply struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	OutputJson    string                 `protobuf:"bytes,1,opt,name=output_json,json=outputJson,proto3" json:"output_json,omitempty"`
 	Status        InferenceStatus        `protobuf:"varint,2,opt,name=status,proto3,enum=inference.v1.InferenceStatus" json:"status,omitempty"`
+	Metadata      *InvocationMetadata    `protobuf:"bytes,3,opt,name=metadata,proto3" json:"metadata,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -195,25 +265,265 @@ func (x *InferReply) GetStatus() InferenceStatus {
 	return InferenceStatus_INFERENCE_STATUS_UNSPECIFIED
 }
 
+func (x *InferReply) GetMetadata() *InvocationMetadata {
+	if x != nil {
+		return x.Metadata
+	}
+	return nil
+}
+
+type GenerationOptions struct {
+	state               protoimpl.MessageState `protogen:"open.v1"`
+	ReasoningEffort     ReasoningEffort        `protobuf:"varint,1,opt,name=reasoning_effort,json=reasoningEffort,proto3,enum=inference.v1.ReasoningEffort" json:"reasoning_effort,omitempty"`
+	MaxCompletionTokens *int64                 `protobuf:"varint,2,opt,name=max_completion_tokens,json=maxCompletionTokens,proto3,oneof" json:"max_completion_tokens,omitempty"`
+	Temperature         *float64               `protobuf:"fixed64,3,opt,name=temperature,proto3,oneof" json:"temperature,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
+}
+
+func (x *GenerationOptions) Reset() {
+	*x = GenerationOptions{}
+	mi := &file_inferencepb_inference_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GenerationOptions) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GenerationOptions) ProtoMessage() {}
+
+func (x *GenerationOptions) ProtoReflect() protoreflect.Message {
+	mi := &file_inferencepb_inference_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GenerationOptions.ProtoReflect.Descriptor instead.
+func (*GenerationOptions) Descriptor() ([]byte, []int) {
+	return file_inferencepb_inference_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *GenerationOptions) GetReasoningEffort() ReasoningEffort {
+	if x != nil {
+		return x.ReasoningEffort
+	}
+	return ReasoningEffort_REASONING_EFFORT_UNSPECIFIED
+}
+
+func (x *GenerationOptions) GetMaxCompletionTokens() int64 {
+	if x != nil && x.MaxCompletionTokens != nil {
+		return *x.MaxCompletionTokens
+	}
+	return 0
+}
+
+func (x *GenerationOptions) GetTemperature() float64 {
+	if x != nil && x.Temperature != nil {
+		return *x.Temperature
+	}
+	return 0
+}
+
+type InvocationMetadata struct {
+	state              protoimpl.MessageState `protogen:"open.v1"`
+	RequestId          string                 `protobuf:"bytes,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	ServiceVersion     string                 `protobuf:"bytes,2,opt,name=service_version,json=serviceVersion,proto3" json:"service_version,omitempty"`
+	RequestedModel     string                 `protobuf:"bytes,3,opt,name=requested_model,json=requestedModel,proto3" json:"requested_model,omitempty"`
+	ActualModel        string                 `protobuf:"bytes,4,opt,name=actual_model,json=actualModel,proto3" json:"actual_model,omitempty"`
+	BackendFingerprint string                 `protobuf:"bytes,5,opt,name=backend_fingerprint,json=backendFingerprint,proto3" json:"backend_fingerprint,omitempty"`
+	BackendVersion     string                 `protobuf:"bytes,6,opt,name=backend_version,json=backendVersion,proto3" json:"backend_version,omitempty"`
+	PromptSha256       string                 `protobuf:"bytes,7,opt,name=prompt_sha256,json=promptSha256,proto3" json:"prompt_sha256,omitempty"`
+	SchemaSha256       string                 `protobuf:"bytes,8,opt,name=schema_sha256,json=schemaSha256,proto3" json:"schema_sha256,omitempty"`
+	PromptTokens       int64                  `protobuf:"varint,9,opt,name=prompt_tokens,json=promptTokens,proto3" json:"prompt_tokens,omitempty"`
+	CompletionTokens   int64                  `protobuf:"varint,10,opt,name=completion_tokens,json=completionTokens,proto3" json:"completion_tokens,omitempty"`
+	TotalTokens        int64                  `protobuf:"varint,11,opt,name=total_tokens,json=totalTokens,proto3" json:"total_tokens,omitempty"`
+	FinishReason       string                 `protobuf:"bytes,12,opt,name=finish_reason,json=finishReason,proto3" json:"finish_reason,omitempty"`
+	LatencyMs          int64                  `protobuf:"varint,13,opt,name=latency_ms,json=latencyMs,proto3" json:"latency_ms,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
+}
+
+func (x *InvocationMetadata) Reset() {
+	*x = InvocationMetadata{}
+	mi := &file_inferencepb_inference_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *InvocationMetadata) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*InvocationMetadata) ProtoMessage() {}
+
+func (x *InvocationMetadata) ProtoReflect() protoreflect.Message {
+	mi := &file_inferencepb_inference_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use InvocationMetadata.ProtoReflect.Descriptor instead.
+func (*InvocationMetadata) Descriptor() ([]byte, []int) {
+	return file_inferencepb_inference_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *InvocationMetadata) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
+func (x *InvocationMetadata) GetServiceVersion() string {
+	if x != nil {
+		return x.ServiceVersion
+	}
+	return ""
+}
+
+func (x *InvocationMetadata) GetRequestedModel() string {
+	if x != nil {
+		return x.RequestedModel
+	}
+	return ""
+}
+
+func (x *InvocationMetadata) GetActualModel() string {
+	if x != nil {
+		return x.ActualModel
+	}
+	return ""
+}
+
+func (x *InvocationMetadata) GetBackendFingerprint() string {
+	if x != nil {
+		return x.BackendFingerprint
+	}
+	return ""
+}
+
+func (x *InvocationMetadata) GetBackendVersion() string {
+	if x != nil {
+		return x.BackendVersion
+	}
+	return ""
+}
+
+func (x *InvocationMetadata) GetPromptSha256() string {
+	if x != nil {
+		return x.PromptSha256
+	}
+	return ""
+}
+
+func (x *InvocationMetadata) GetSchemaSha256() string {
+	if x != nil {
+		return x.SchemaSha256
+	}
+	return ""
+}
+
+func (x *InvocationMetadata) GetPromptTokens() int64 {
+	if x != nil {
+		return x.PromptTokens
+	}
+	return 0
+}
+
+func (x *InvocationMetadata) GetCompletionTokens() int64 {
+	if x != nil {
+		return x.CompletionTokens
+	}
+	return 0
+}
+
+func (x *InvocationMetadata) GetTotalTokens() int64 {
+	if x != nil {
+		return x.TotalTokens
+	}
+	return 0
+}
+
+func (x *InvocationMetadata) GetFinishReason() string {
+	if x != nil {
+		return x.FinishReason
+	}
+	return ""
+}
+
+func (x *InvocationMetadata) GetLatencyMs() int64 {
+	if x != nil {
+		return x.LatencyMs
+	}
+	return 0
+}
+
 var File_inferencepb_inference_proto protoreflect.FileDescriptor
 
 const file_inferencepb_inference_proto_rawDesc = "" +
 	"\n" +
-	"\x1binferencepb/inference.proto\x12\finference.v1\"\x91\x01\n" +
+	"\x1binferencepb/inference.proto\x12\finference.v1\"\xe1\x01\n" +
 	"\fInferRequest\x12\x16\n" +
 	"\x06prompt\x18\x01 \x01(\tR\x06prompt\x12\x14\n" +
 	"\x05input\x18\x02 \x01(\tR\x05input\x12#\n" +
 	"\routput_schema\x18\x03 \x01(\tR\foutputSchema\x12\x18\n" +
 	"\acontext\x18\x04 \x01(\tR\acontext\x12\x14\n" +
-	"\x05model\x18\x05 \x01(\tR\x05model\"d\n" +
+	"\x05model\x18\x05 \x01(\tR\x05model\x12N\n" +
+	"\x12generation_options\x18\x06 \x01(\v2\x1f.inference.v1.GenerationOptionsR\x11generationOptions\"\xa2\x01\n" +
 	"\n" +
 	"InferReply\x12\x1f\n" +
 	"\voutput_json\x18\x01 \x01(\tR\n" +
 	"outputJson\x125\n" +
-	"\x06status\x18\x02 \x01(\x0e2\x1d.inference.v1.InferenceStatusR\x06status*R\n" +
+	"\x06status\x18\x02 \x01(\x0e2\x1d.inference.v1.InferenceStatusR\x06status\x12<\n" +
+	"\bmetadata\x18\x03 \x01(\v2 .inference.v1.InvocationMetadataR\bmetadata\"\xe7\x01\n" +
+	"\x11GenerationOptions\x12H\n" +
+	"\x10reasoning_effort\x18\x01 \x01(\x0e2\x1d.inference.v1.ReasoningEffortR\x0freasoningEffort\x127\n" +
+	"\x15max_completion_tokens\x18\x02 \x01(\x03H\x00R\x13maxCompletionTokens\x88\x01\x01\x12%\n" +
+	"\vtemperature\x18\x03 \x01(\x01H\x01R\vtemperature\x88\x01\x01B\x18\n" +
+	"\x16_max_completion_tokensB\x0e\n" +
+	"\f_temperature\"\x85\x04\n" +
+	"\x12InvocationMetadata\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x01 \x01(\tR\trequestId\x12'\n" +
+	"\x0fservice_version\x18\x02 \x01(\tR\x0eserviceVersion\x12'\n" +
+	"\x0frequested_model\x18\x03 \x01(\tR\x0erequestedModel\x12!\n" +
+	"\factual_model\x18\x04 \x01(\tR\vactualModel\x12/\n" +
+	"\x13backend_fingerprint\x18\x05 \x01(\tR\x12backendFingerprint\x12'\n" +
+	"\x0fbackend_version\x18\x06 \x01(\tR\x0ebackendVersion\x12#\n" +
+	"\rprompt_sha256\x18\a \x01(\tR\fpromptSha256\x12#\n" +
+	"\rschema_sha256\x18\b \x01(\tR\fschemaSha256\x12#\n" +
+	"\rprompt_tokens\x18\t \x01(\x03R\fpromptTokens\x12+\n" +
+	"\x11completion_tokens\x18\n" +
+	" \x01(\x03R\x10completionTokens\x12!\n" +
+	"\ftotal_tokens\x18\v \x01(\x03R\vtotalTokens\x12#\n" +
+	"\rfinish_reason\x18\f \x01(\tR\ffinishReason\x12\x1d\n" +
+	"\n" +
+	"latency_ms\x18\r \x01(\x03R\tlatencyMs*R\n" +
 	"\x0fInferenceStatus\x12 \n" +
 	"\x1cINFERENCE_STATUS_UNSPECIFIED\x10\x00\x12\x1d\n" +
-	"\x19INFERENCE_STATUS_COMPLETE\x10\x012J\n" +
+	"\x19INFERENCE_STATUS_COMPLETE\x10\x01*\xda\x01\n" +
+	"\x0fReasoningEffort\x12 \n" +
+	"\x1cREASONING_EFFORT_UNSPECIFIED\x10\x00\x12\x19\n" +
+	"\x15REASONING_EFFORT_NONE\x10\x01\x12\x1c\n" +
+	"\x18REASONING_EFFORT_MINIMAL\x10\x02\x12\x18\n" +
+	"\x14REASONING_EFFORT_LOW\x10\x03\x12\x1b\n" +
+	"\x17REASONING_EFFORT_MEDIUM\x10\x04\x12\x19\n" +
+	"\x15REASONING_EFFORT_HIGH\x10\x05\x12\x1a\n" +
+	"\x16REASONING_EFFORT_XHIGH\x10\x062J\n" +
 	"\tInference\x12=\n" +
 	"\x05Infer\x12\x1a.inference.v1.InferRequest\x1a\x18.inference.v1.InferReplyB(Z&goodkind.io/agent-gate/api/inferencepbb\x06proto3"
 
@@ -229,22 +539,28 @@ func file_inferencepb_inference_proto_rawDescGZIP() []byte {
 	return file_inferencepb_inference_proto_rawDescData
 }
 
-var file_inferencepb_inference_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_inferencepb_inference_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
+var file_inferencepb_inference_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
+var file_inferencepb_inference_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
 var file_inferencepb_inference_proto_goTypes = []any{
-	(InferenceStatus)(0), // 0: inference.v1.InferenceStatus
-	(*InferRequest)(nil), // 1: inference.v1.InferRequest
-	(*InferReply)(nil),   // 2: inference.v1.InferReply
+	(InferenceStatus)(0),       // 0: inference.v1.InferenceStatus
+	(ReasoningEffort)(0),       // 1: inference.v1.ReasoningEffort
+	(*InferRequest)(nil),       // 2: inference.v1.InferRequest
+	(*InferReply)(nil),         // 3: inference.v1.InferReply
+	(*GenerationOptions)(nil),  // 4: inference.v1.GenerationOptions
+	(*InvocationMetadata)(nil), // 5: inference.v1.InvocationMetadata
 }
 var file_inferencepb_inference_proto_depIdxs = []int32{
-	0, // 0: inference.v1.InferReply.status:type_name -> inference.v1.InferenceStatus
-	1, // 1: inference.v1.Inference.Infer:input_type -> inference.v1.InferRequest
-	2, // 2: inference.v1.Inference.Infer:output_type -> inference.v1.InferReply
-	2, // [2:3] is the sub-list for method output_type
-	1, // [1:2] is the sub-list for method input_type
-	1, // [1:1] is the sub-list for extension type_name
-	1, // [1:1] is the sub-list for extension extendee
-	0, // [0:1] is the sub-list for field type_name
+	4, // 0: inference.v1.InferRequest.generation_options:type_name -> inference.v1.GenerationOptions
+	0, // 1: inference.v1.InferReply.status:type_name -> inference.v1.InferenceStatus
+	5, // 2: inference.v1.InferReply.metadata:type_name -> inference.v1.InvocationMetadata
+	1, // 3: inference.v1.GenerationOptions.reasoning_effort:type_name -> inference.v1.ReasoningEffort
+	2, // 4: inference.v1.Inference.Infer:input_type -> inference.v1.InferRequest
+	3, // 5: inference.v1.Inference.Infer:output_type -> inference.v1.InferReply
+	5, // [5:6] is the sub-list for method output_type
+	4, // [4:5] is the sub-list for method input_type
+	4, // [4:4] is the sub-list for extension type_name
+	4, // [4:4] is the sub-list for extension extendee
+	0, // [0:4] is the sub-list for field type_name
 }
 
 func init() { file_inferencepb_inference_proto_init() }
@@ -252,13 +568,14 @@ func file_inferencepb_inference_proto_init() {
 	if File_inferencepb_inference_proto != nil {
 		return
 	}
+	file_inferencepb_inference_proto_msgTypes[2].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_inferencepb_inference_proto_rawDesc), len(file_inferencepb_inference_proto_rawDesc)),
-			NumEnums:      1,
-			NumMessages:   2,
+			NumEnums:      2,
+			NumMessages:   4,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
