@@ -36,7 +36,18 @@ type fakeHookClient struct {
 }
 
 type environmentRecordingHookClient struct {
-	environment map[string]string
+	environment        map[string]string
+	referencedNames    []string
+	referenceRequest   []byte
+}
+
+func (client *environmentRecordingHookClient) ResolveHookEnvironment(
+	rawJSON []byte,
+	_ string,
+	_ map[string]string,
+) ([]string, error) {
+	client.referenceRequest = append([]byte(nil), rawJSON...)
+	return client.referencedNames, nil
 }
 
 func (client *environmentRecordingHookClient) EvaluateHook(
@@ -59,6 +70,14 @@ func (client fakeHookClient) EvaluateHook(_ []byte, _ string, _ string, _ []stri
 		return nil, client.err
 	}
 	return client.response, nil
+}
+
+func (client fakeHookClient) ResolveHookEnvironment(
+	_ []byte,
+	_ string,
+	_ map[string]string,
+) ([]string, error) {
+	return nil, nil
 }
 
 func (client fakeHookClient) Close() error {
@@ -164,7 +183,10 @@ func TestRunHookMirrorsDaemonBlockResponse(t *testing.T) {
 }
 
 func TestRunHookForwardsReferencedCommandEnvironment(t *testing.T) {
-	client := &environmentRecordingHookClient{environment: nil}
+	client := &environmentRecordingHookClient{
+		environment:     nil,
+		referencedNames: []string{"TARGET", "PRIVATE"},
+	}
 	connect := func(context.Context) (hookClient, error) {
 		return client, nil
 	}
@@ -185,6 +207,9 @@ func TestRunHookForwardsReferencedCommandEnvironment(t *testing.T) {
 	}
 	if len(client.environment) != 1 || client.environment["TARGET"] != "/repo/main/file.txt" {
 		t.Fatalf("forwarded environment = %v", client.environment)
+	}
+	if string(client.referenceRequest) != payload {
+		t.Fatalf("reference request = %q, want raw payload", client.referenceRequest)
 	}
 }
 

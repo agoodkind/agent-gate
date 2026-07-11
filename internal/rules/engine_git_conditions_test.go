@@ -244,6 +244,8 @@ func TestGitRefMoveConditionMatch(t *testing.T) {
 		{name: "invalid update ref delete flag", command: "git update-ref -D refs/heads/main", cwd: "/repo/feature", want: false},
 		{name: "checkout reset", command: "git checkout -B main HEAD", cwd: "/repo/feature", want: true},
 		{name: "switch reset", command: "git switch -C main", cwd: "/repo/feature", want: true},
+		{name: "switch long reset", command: "git switch --force-create main", cwd: "/repo/feature", want: true},
+		{name: "switch inline long reset", command: "git switch --force-create=main", cwd: "/repo/feature", want: true},
 		{name: "local push", command: "git push /repo/main HEAD:refs/heads/main", cwd: "/repo/feature", want: true},
 		{name: "local forced push", command: "git push /repo/main +HEAD:refs/heads/main", cwd: "/repo/feature", want: true},
 		{name: "local delete push", command: "git push /repo/main :refs/heads/main", cwd: "/repo/feature", want: true},

@@ -5,6 +5,7 @@ package audit
 import (
 	"context"
 	"encoding/json"
+	"errors"
 )
 
 // AttrValueKind discriminates the variant carried in [AttrValue].
@@ -245,7 +246,7 @@ func (s *LocalSink) Log(_ context.Context, system, sessionID, eventName, level, 
 // LogDurable writes through the underlying logger before returning.
 func (s *LocalSink) LogDurable(ctx context.Context, system, sessionID, eventName, level, msg string, attrs Attrs) error {
 	if s == nil || s.logger == nil {
-		return nil
+		return errors.New("audit sink logger is unavailable")
 	}
 	return s.logger.LogDurable(ctx, system, sessionID, eventName, level, msg, attrs)
 }
@@ -268,7 +269,7 @@ func (s *LocalSink) Normalize(
 // LogNormalizedDurable writes one previously normalized entry.
 func (s *LocalSink) LogNormalizedDurable(ctx context.Context, entry NormalizedEntry) error {
 	if s == nil || s.logger == nil {
-		return nil
+		return errors.New("audit sink logger is unavailable")
 	}
 	return s.logger.LogNormalizedDurable(ctx, entry)
 }

@@ -31,20 +31,31 @@ func ExpandLiteralAssignments(command string) string {
 	var builder strings.Builder
 	segmentStart := 0
 	index := 0
+	var quote byte
+	escaped := false
 	for index < len(command) {
-		if command[index] != '\'' {
-			index++
-			continue
+		char := command[index]
+		switch {
+		case quote == '\'':
+			if char == '\'' {
+				builder.WriteString(command[segmentStart : index+1])
+				quote = 0
+				segmentStart = index + 1
+			}
+		case escaped:
+			escaped = false
+		case char == '\\':
+			escaped = true
+		case quote == 0 && char == '\'':
+			builder.WriteString(substituteLiteralAssignmentRefs(command[segmentStart:index], segmentStart, values))
+			quote = '\''
+			segmentStart = index
+		case quote == '"' && char == '"':
+			quote = 0
+		case quote == 0 && char == '"':
+			quote = '"'
 		}
-		builder.WriteString(substituteLiteralAssignmentRefs(command[segmentStart:index], segmentStart, values))
-		nextIndex, ok := skipLiteralAssignmentQuote(command, index)
-		if !ok {
-			builder.WriteString(command[index:])
-			return builder.String()
-		}
-		builder.WriteString(command[index:nextIndex])
-		index = nextIndex
-		segmentStart = index
+		index++
 	}
 	builder.WriteString(substituteLiteralAssignmentRefs(command[segmentStart:], segmentStart, values))
 	return builder.String()
@@ -248,7 +259,7 @@ func readLiteralAssignmentValue(command string, index int) (string, int, bool) {
 }
 
 func literalAssignmentValueIsSafe(value string) bool {
-	return !strings.ContainsAny(stripOuterQuotes(value), "$`) \t\n*?[{\\}")
+	return !strings.ContainsAny(stripOuterQuotes(value), "$`) \t\n*?[{\\}'\"")
 }
 
 func stripOuterQuotes(value string) string {

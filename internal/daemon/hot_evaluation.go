@@ -68,7 +68,14 @@ func (s *Server) commitHotEvaluation(
 			CompletedAt: hotEvalNow(), Result: result,
 			SystemError: "hot_evaluation_commit_failed", ErrorMessage: err.Error(),
 		})
-		_ = input.Snapshot.evaluationRecorder.RecordCompleted(ctx, failureRecord)
+		if fallbackErr := input.Snapshot.evaluationRecorder.RecordCompleted(
+			ctx, failureRecord,
+		); fallbackErr != nil {
+			s.logHotEvaluationFailure(
+				ctx, input, failureRecord.Evaluation.EvaluationID,
+				"fallback_evaluation_persistence_failed",
+			)
+		}
 		s.logHotEvaluationFailure(
 			ctx, input, record.Evaluation.EvaluationID, "hot_evaluation_commit_failed",
 		)

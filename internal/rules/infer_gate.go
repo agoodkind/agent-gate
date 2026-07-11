@@ -852,7 +852,14 @@ func grpcErrorClass(err error) string {
 	if err == nil {
 		return ""
 	}
-	switch status.Code(err) {
+	code := status.Code(err)
+	if errors.Is(err, context.Canceled) {
+		code = codes.Canceled
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		code = codes.DeadlineExceeded
+	}
+	switch code {
 	case codes.Canceled:
 		return "canceled"
 	case codes.DeadlineExceeded:

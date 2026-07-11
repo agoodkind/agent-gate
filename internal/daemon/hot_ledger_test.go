@@ -1,9 +1,11 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"strings"
 	"sync"
 	"testing"
@@ -195,6 +197,33 @@ func TestEvaluateHookAtomicHotCommitFailureRecordsAndReturnsFailOpen(t *testing.
 	if len(records) != 1 || records[0].Evaluation.FinalVerdict != "error" ||
 		records[0].Evaluation.EnforcementAction != "fail_open" {
 		t.Fatalf("records = %+v", records)
+	}
+}
+
+func TestEvaluateHookFallbackLedgerFailureLogsDistinctStatus(t *testing.T) {
+	setDaemonTestDirs(t)
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+	server, err := New(logger, daemonTestConfig(t))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer server.Close()
+	server.runtime.Load().evaluationRecorder = &recordingEvaluationRecorder{
+		mu: sync.Mutex{}, records: nil,
+		err:    errors.New("fallback ledger unavailable"),
+		hotErr: errors.New("atomic hot commit unavailable"), started: nil, release: nil,
+	}
+
+	response, err := server.EvaluateHook(context.Background(), blockingLedgerRequest(t))
+	if err != nil {
+		t.Fatalf("EvaluateHook: %v", err)
+	}
+	if response.ExitCode != 0 || len(response.StdoutData) != 0 || len(response.StderrData) != 0 {
+		t.Fatalf("fallback failure response = %+v", response)
+	}
+	if !strings.Contains(logs.String(), "status_class=fallback_evaluation_persistence_failed") {
+		t.Fatalf("logs missing fallback persistence status: %s", logs.String())
 	}
 }
 

@@ -117,6 +117,20 @@ func TestEventLogger_DurableReplayDoesNotDuplicateViolations(t *testing.T) {
 	}
 }
 
+func TestLocalSinkDurableWritesRejectNilLogger(t *testing.T) {
+	sink := audit.NewLocalSink(nil)
+	if err := sink.LogDurable(
+		context.Background(), "codex", "session", "PreToolUse", "info", "hook.allowed", nil,
+	); err == nil {
+		t.Fatal("LogDurable error = nil, want unavailable logger error")
+	}
+	if err := sink.LogNormalizedDurable(
+		context.Background(), audit.NormalizedEntry{},
+	); err == nil {
+		t.Fatal("LogNormalizedDurable error = nil, want unavailable logger error")
+	}
+}
+
 func TestEventLogger_NormalizedReplayPreservesIdentityAndDoesNotDuplicate(t *testing.T) {
 	cfg := testConfig(t)
 	attrs := audit.Attrs{

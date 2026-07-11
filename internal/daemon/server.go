@@ -175,6 +175,8 @@ func hotKVOptions(cfg *config.Config) hotkv.Options {
 	}
 }
 
+var replayRuntimeSnapshotPending = (*deferredProcessor).ReplayPending
+
 func newRuntimeSnapshot(ctx context.Context, cfg *config.Config, log *slog.Logger, hotStore *hotkv.Store, inferRuntime *rules.InferRuntime) (*runtimeSnapshot, error) {
 	// The intake store is created first so the audit event logger can share its
 	// single SQLite connection pool. One pool serializes intake and audit writes
@@ -211,11 +213,12 @@ func newRuntimeSnapshot(ctx context.Context, cfg *config.Config, log *slog.Logge
 		log,
 	)
 	deferredProcessor.evaluationRecorder = intakeStore.Evaluations()
-	if err := deferredProcessor.ReplayPending(ctx); err != nil {
+	if err := replayRuntimeSnapshotPending(deferredProcessor, ctx); err != nil {
 		deferredProcessor.Close()
 		if eventLogger != nil {
 			_ = eventLogger.Close()
 		}
+		_ = closeIntakeStore(intakeStore, log)
 		return nil, fmt.Errorf("replay pending intake: %w", err)
 	}
 	return &runtimeSnapshot{

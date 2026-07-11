@@ -27,6 +27,16 @@ type intakeStore interface {
 	Close() error
 }
 
+func closeIntakeStore(store intakeStore, log *slog.Logger) error {
+	if err := store.Close(); err != nil {
+		if log != nil {
+			log.Warn("intake store close failed", "err", err)
+		}
+		return fmt.Errorf("close intake store: %w", err)
+	}
+	return nil
+}
+
 type deferredAuditStore interface {
 	ListPendingDeferredAudit(context.Context, int) ([]int64, error)
 	ClaimDeferredAudit(
@@ -48,7 +58,9 @@ func (recorder sqliteEvaluationRecorder) RecordCompleted(
 	record evaluation.Record,
 ) error {
 	if err := recorder.store.Evaluations().RecordCompleted(ctx, record); err != nil {
-		recorder.log.WarnContext(ctx, "record completed evaluation failed", "err", err)
+		if recorder.log != nil {
+			recorder.log.WarnContext(ctx, "record completed evaluation failed", "err", err)
+		}
 		return fmt.Errorf("record completed evaluation: %w", err)
 	}
 	return nil
@@ -64,7 +76,9 @@ func (recorder sqliteEvaluationRecorder) CommitHotEvaluation(
 	if err := recorder.store.CommitHotEvaluation(
 		ctx, eventID, receiptID, deferredPending, record,
 	); err != nil {
-		recorder.log.WarnContext(ctx, "commit hot evaluation failed", "err", err)
+		if recorder.log != nil {
+			recorder.log.WarnContext(ctx, "commit hot evaluation failed", "err", err)
+		}
 		return fmt.Errorf("commit hot evaluation: %w", err)
 	}
 	return nil
@@ -77,7 +91,9 @@ func (recorder sqliteEvaluationRecorder) CommitDeferredEvaluation(
 	auditEntries []audit.NormalizedEntry,
 ) error {
 	if err := recorder.store.CommitDeferredEvaluation(ctx, claim, record, auditEntries); err != nil {
-		recorder.log.WarnContext(ctx, "commit deferred evaluation failed", "err", err)
+		if recorder.log != nil {
+			recorder.log.WarnContext(ctx, "commit deferred evaluation failed", "err", err)
+		}
 		return fmt.Errorf("commit deferred evaluation: %w", err)
 	}
 	return nil

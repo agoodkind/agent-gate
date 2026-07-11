@@ -427,6 +427,9 @@ func branchTargetsForMode(
 		}
 		return targets
 	case branchMoveRename:
+		if len(positionals) == 1 {
+			return []string{gitCurrentBranchTarget}
+		}
 		if len(positionals) != 2 {
 			return nil
 		}
@@ -522,6 +525,7 @@ func updateRefTargets(args []shelldecomp.Word) []string {
 }
 
 func resetBranchTarget(args []shelldecomp.Word, flag string) []string {
+	args = normalizeResetBranchArgs(args, flag)
 	var target []string
 	foundReset := false
 	forceMode := false

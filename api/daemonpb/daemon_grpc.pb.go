@@ -19,17 +19,18 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	AgentGateD_EvaluateHook_FullMethodName = "/agentgate.AgentGateD/EvaluateHook"
-	AgentGateD_Status_FullMethodName       = "/agentgate.AgentGateD/Status"
-	AgentGateD_KVGet_FullMethodName        = "/agentgate.AgentGateD/KVGet"
-	AgentGateD_KVSet_FullMethodName        = "/agentgate.AgentGateD/KVSet"
-	AgentGateD_KVDelete_FullMethodName     = "/agentgate.AgentGateD/KVDelete"
-	AgentGateD_KVExists_FullMethodName     = "/agentgate.AgentGateD/KVExists"
-	AgentGateD_KVTTL_FullMethodName        = "/agentgate.AgentGateD/KVTTL"
-	AgentGateD_KVPTTL_FullMethodName       = "/agentgate.AgentGateD/KVPTTL"
-	AgentGateD_KVExpire_FullMethodName     = "/agentgate.AgentGateD/KVExpire"
-	AgentGateD_KVGetDelete_FullMethodName  = "/agentgate.AgentGateD/KVGetDelete"
-	AgentGateD_KVList_FullMethodName       = "/agentgate.AgentGateD/KVList"
+	AgentGateD_ResolveHookEnvironment_FullMethodName = "/agentgate.AgentGateD/ResolveHookEnvironment"
+	AgentGateD_EvaluateHook_FullMethodName           = "/agentgate.AgentGateD/EvaluateHook"
+	AgentGateD_Status_FullMethodName                 = "/agentgate.AgentGateD/Status"
+	AgentGateD_KVGet_FullMethodName                  = "/agentgate.AgentGateD/KVGet"
+	AgentGateD_KVSet_FullMethodName                  = "/agentgate.AgentGateD/KVSet"
+	AgentGateD_KVDelete_FullMethodName               = "/agentgate.AgentGateD/KVDelete"
+	AgentGateD_KVExists_FullMethodName               = "/agentgate.AgentGateD/KVExists"
+	AgentGateD_KVTTL_FullMethodName                  = "/agentgate.AgentGateD/KVTTL"
+	AgentGateD_KVPTTL_FullMethodName                 = "/agentgate.AgentGateD/KVPTTL"
+	AgentGateD_KVExpire_FullMethodName               = "/agentgate.AgentGateD/KVExpire"
+	AgentGateD_KVGetDelete_FullMethodName            = "/agentgate.AgentGateD/KVGetDelete"
+	AgentGateD_KVList_FullMethodName                 = "/agentgate.AgentGateD/KVList"
 )
 
 // AgentGateDClient is the client API for AgentGateD service.
@@ -39,6 +40,8 @@ const (
 // AgentGateD is the agent-gate daemon service.
 // Hook processes connect here for daemon-owned enforcement.
 type AgentGateDClient interface {
+	// ResolveHookEnvironment returns command environment names needed by evaluation.
+	ResolveHookEnvironment(ctx context.Context, in *ResolveHookEnvironmentRequest, opts ...grpc.CallOption) (*ResolveHookEnvironmentResponse, error)
 	// EvaluateHook forwards raw hook input to the daemon-owned enforcement engine.
 	EvaluateHook(ctx context.Context, in *EvaluateHookRequest, opts ...grpc.CallOption) (*EvaluateHookResponse, error)
 	// Status returns process and build metadata for the connected daemon.
@@ -60,6 +63,16 @@ type agentGateDClient struct {
 
 func NewAgentGateDClient(cc grpc.ClientConnInterface) AgentGateDClient {
 	return &agentGateDClient{cc}
+}
+
+func (c *agentGateDClient) ResolveHookEnvironment(ctx context.Context, in *ResolveHookEnvironmentRequest, opts ...grpc.CallOption) (*ResolveHookEnvironmentResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ResolveHookEnvironmentResponse)
+	err := c.cc.Invoke(ctx, AgentGateD_ResolveHookEnvironment_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c *agentGateDClient) EvaluateHook(ctx context.Context, in *EvaluateHookRequest, opts ...grpc.CallOption) (*EvaluateHookResponse, error) {
@@ -179,6 +192,8 @@ func (c *agentGateDClient) KVList(ctx context.Context, in *KVListRequest, opts .
 // AgentGateD is the agent-gate daemon service.
 // Hook processes connect here for daemon-owned enforcement.
 type AgentGateDServer interface {
+	// ResolveHookEnvironment returns command environment names needed by evaluation.
+	ResolveHookEnvironment(context.Context, *ResolveHookEnvironmentRequest) (*ResolveHookEnvironmentResponse, error)
 	// EvaluateHook forwards raw hook input to the daemon-owned enforcement engine.
 	EvaluateHook(context.Context, *EvaluateHookRequest) (*EvaluateHookResponse, error)
 	// Status returns process and build metadata for the connected daemon.
@@ -202,6 +217,9 @@ type AgentGateDServer interface {
 // pointer dereference when methods are called.
 type UnimplementedAgentGateDServer struct{}
 
+func (UnimplementedAgentGateDServer) ResolveHookEnvironment(context.Context, *ResolveHookEnvironmentRequest) (*ResolveHookEnvironmentResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ResolveHookEnvironment not implemented")
+}
 func (UnimplementedAgentGateDServer) EvaluateHook(context.Context, *EvaluateHookRequest) (*EvaluateHookResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method EvaluateHook not implemented")
 }
@@ -254,6 +272,24 @@ func RegisterAgentGateDServer(s grpc.ServiceRegistrar, srv AgentGateDServer) {
 		t.testEmbeddedByValue()
 	}
 	s.RegisterService(&AgentGateD_ServiceDesc, srv)
+}
+
+func _AgentGateD_ResolveHookEnvironment_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ResolveHookEnvironmentRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentGateDServer).ResolveHookEnvironment(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentGateD_ResolveHookEnvironment_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentGateDServer).ResolveHookEnvironment(ctx, req.(*ResolveHookEnvironmentRequest))
+	}
+	return interceptor(ctx, in, info, handler)
 }
 
 func _AgentGateD_EvaluateHook_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -461,6 +497,10 @@ var AgentGateD_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "agentgate.AgentGateD",
 	HandlerType: (*AgentGateDServer)(nil),
 	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "ResolveHookEnvironment",
+			Handler:    _AgentGateD_ResolveHookEnvironment_Handler,
+		},
 		{
 			MethodName: "EvaluateHook",
 			Handler:    _AgentGateD_EvaluateHook_Handler,
