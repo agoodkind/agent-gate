@@ -77,6 +77,11 @@ func ensureDeferredReceiptSchema(ctx context.Context, database *sql.DB) error {
 		`); err != nil {
 			return wrapError("add deferred claim attempt", err)
 		}
+		if _, err := transaction.ExecContext(ctx, `
+			update intake_deferred set claim_attempt = replay_count
+		`); err != nil {
+			return wrapError("seed deferred claim attempt", err)
+		}
 	}
 	if _, err := transaction.ExecContext(ctx, `
 		create index if not exists intake_deferred_state_idx on intake_deferred(state);
@@ -112,10 +117,11 @@ func migrateLegacyDeferredRows(ctx context.Context, transaction *sql.Tx) error {
 		)`,
 		`insert into intake_deferred (
 			receipt_id, event_id, state, pending_at, completed_at,
-			last_replay_at, replay_count
+			last_replay_at, replay_count, claim_attempt
 		)
 		select r.receipt_id, legacy.event_id, legacy.state, legacy.pending_at,
-			legacy.completed_at, legacy.last_replay_at, legacy.replay_count
+			legacy.completed_at, legacy.last_replay_at, legacy.replay_count,
+			legacy.replay_count
 		from intake_deferred_legacy legacy
 		join intake_receipts r on r.receipt_id = (
 			select max(candidate.receipt_id)

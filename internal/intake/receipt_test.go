@@ -142,6 +142,15 @@ func TestOpenSQLiteMigratesLegacyDeferredRowsByNewestReceipt(t *testing.T) {
 	if len(pending) != 1 || pending[0].ReceiptID != 2 || pending[0].EventID != "legacy-event" {
 		t.Fatalf("migrated pending = %+v, want newest receipt 2", pending)
 	}
+	var claimAttempt int
+	if err := store.Handle().QueryRow(`
+		select claim_attempt from intake_deferred where receipt_id = 2
+	`).Scan(&claimAttempt); err != nil {
+		t.Fatalf("read migrated claim attempt: %v", err)
+	}
+	if claimAttempt != 1 {
+		t.Fatalf("migrated claim attempt = %d, want replay count 1", claimAttempt)
+	}
 	var repairState string
 	var repairError string
 	err = store.Handle().QueryRow(`
@@ -235,6 +244,27 @@ func TestOpenSQLiteMigratesPopulatedCurrentDatabase(t *testing.T) {
 			'PreToolUse', 'Shell', '', '/repo', '/repo', 'echo ok', '', x'7b7d',
 			'sha256:legacy', '{}', '{}', null
 		);
+		create table intake_receipts (
+			receipt_id integer primary key autoincrement,
+			event_id text not null,
+			received_at text not null
+		);
+		insert into intake_receipts values (
+			1, 'legacy-event', '2026-05-09T00:00:00Z'
+		);
+		create table intake_deferred (
+			receipt_id integer primary key,
+			event_id text not null,
+			state text not null,
+			pending_at text,
+			completed_at text,
+			last_replay_at text,
+			replay_count integer not null default 0
+		);
+		insert into intake_deferred values (
+			1, 'legacy-event', 'pending', '2026-05-09T00:00:00Z', null,
+			'2026-05-09T00:00:01Z', 3
+		);
 	`)
 	if err != nil {
 		t.Fatalf("create populated current database: %v", err)
@@ -254,7 +284,16 @@ func TestOpenSQLiteMigratesPopulatedCurrentDatabase(t *testing.T) {
 	}()
 
 	assertTableCount(t, path, "intake_events", 1)
-	assertTableCount(t, path, "intake_receipts", 0)
+	assertTableCount(t, path, "intake_receipts", 1)
+	var claimAttempt int
+	if err := store.Handle().QueryRow(`
+		select claim_attempt from intake_deferred where receipt_id = 1
+	`).Scan(&claimAttempt); err != nil {
+		t.Fatalf("read current-schema claim attempt: %v", err)
+	}
+	if claimAttempt != 3 {
+		t.Fatalf("current-schema claim attempt = %d, want replay count 3", claimAttempt)
+	}
 }
 
 func TestAppendRollsBackEventWhenReceiptInsertFails(t *testing.T) {
