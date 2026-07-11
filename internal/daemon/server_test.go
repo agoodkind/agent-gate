@@ -266,6 +266,63 @@ func TestEvaluateHook_ConcurrentBurstCompletes(t *testing.T) {
 	}
 }
 
+func TestServerCloseWaitsForAdmittedEvaluation(t *testing.T) {
+	setDaemonTestDirs(t)
+	server, err := New(newDiscardLogger(), daemonTestConfig(t))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	evaluationEntered := make(chan struct{})
+	releaseEvaluation := make(chan struct{})
+	setHotEvaluatorForTest(
+		t,
+		server,
+		func(
+			ctx context.Context,
+			rawJSON []byte,
+			cfg *config.Config,
+			hint hook.System,
+			getenv func(string) string,
+			eventID string,
+		) hook.HotEvaluation {
+			close(evaluationEntered)
+			<-releaseEvaluation
+			return defaultHotEvaluate(ctx, rawJSON, cfg, hint, getenv, eventID)
+		},
+	)
+
+	evaluationDone := make(chan struct{})
+	go func() {
+		defer close(evaluationDone)
+		_, _ = server.EvaluateHook(context.Background(), &daemonpb.EvaluateHookRequest{
+			RawJson:      []byte(`{"session_id":"s1","hook_event_name":"PreToolUse","tool_name":"Shell","tool_input":{"command":"echo ok"}}`),
+			ProviderHint: "codex",
+		})
+	}()
+	<-evaluationEntered
+
+	closeDone := make(chan struct{})
+	go func() {
+		server.Close()
+		close(closeDone)
+	}()
+
+	closedBeforeRelease := false
+	select {
+	case <-closeDone:
+		closedBeforeRelease = true
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(releaseEvaluation)
+	<-evaluationDone
+	<-closeDone
+
+	if closedBeforeRelease {
+		t.Fatal("Server.Close returned while an admitted evaluation still used its snapshot")
+	}
+}
+
 func TestKVHotStoreRPCs(t *testing.T) {
 	setDaemonTestDirs(t)
 	cfg := daemonTestConfig(t)

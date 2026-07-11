@@ -73,6 +73,7 @@ type Server struct {
 
 	log           *slog.Logger
 	cfgMu         sync.RWMutex
+	runtimeMu     sync.RWMutex
 	runtime       atomic.Pointer[runtimeSnapshot]
 	configWatcher *fsnotify.Watcher
 	configPath    string
@@ -149,6 +150,7 @@ func New(log *slog.Logger, cfg *config.Config) (*Server, error) {
 		UnimplementedAgentGateDServer: daemonpb.UnimplementedAgentGateDServer{},
 		log:                           log,
 		cfgMu:                         sync.RWMutex{},
+		runtimeMu:                     sync.RWMutex{},
 		runtime:                       atomic.Pointer[runtimeSnapshot]{},
 		configWatcher:                 nil,
 		configPath:                    config.Path(),
@@ -278,7 +280,9 @@ func (s *runtimeSnapshot) close(ctx context.Context, log *slog.Logger) {
 func (s *Server) Close() {
 	s.cfgMu.Lock()
 	s.closing = true
+	s.runtimeMu.Lock()
 	snapshot := s.runtime.Swap(nil)
+	s.runtimeMu.Unlock()
 	s.cfgMu.Unlock()
 
 	if s.configWatcher != nil {
@@ -414,7 +418,9 @@ func (s *Server) reloadConfig(ctx context.Context) error {
 	if s.hotKV != nil {
 		s.hotKV.Configure(hotKVOptions(candidate))
 	}
+	s.runtimeMu.Lock()
 	oldSnapshot := s.runtime.Swap(newSnapshot)
+	s.runtimeMu.Unlock()
 	updateCancel := s.updateCancel
 	stopDaemon := s.stopDaemon
 	s.cfgMu.Unlock()
@@ -432,6 +438,8 @@ func (s *Server) reloadConfig(ctx context.Context) error {
 
 // EvaluateHook processes a hook event through daemon-owned enforcement.
 func (s *Server) EvaluateHook(ctx context.Context, req *daemonpb.EvaluateHookRequest) (*daemonpb.EvaluateHookResponse, error) {
+	s.runtimeMu.RLock()
+	defer s.runtimeMu.RUnlock()
 	snapshot := s.runtime.Load()
 	if snapshot == nil {
 		return failOpenEvaluateHookResponse(), nil
