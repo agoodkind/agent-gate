@@ -18,7 +18,7 @@ func TestExpandLiteralAssignments(t *testing.T) {
 		{name: "single quoted reference", command: `R=/repo; cat '$R/x'`, want: `R=/repo; cat '$R/x'`},
 		{name: "malformed quote", command: `R=/repo; cat '$R/x`, want: `R=/repo; cat '$R/x`},
 		{name: "parameter default", command: `R=/repo; cat "${R:-/tmp}/x"`, want: `R=/repo; cat "${R:-/tmp}/x"`},
-		{name: "escaped reference", command: `R=/repo; printf '%s' \$R`, want: `R=/repo; printf '%s' \$R`},
+		{name: "escaped unquoted reference", command: `R=/repo; printf '%s' \$R`, want: `R=/repo; printf '%s' \$R`},
 	}
 
 	for _, test := range tests {

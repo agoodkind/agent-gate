@@ -22,3 +22,20 @@ func TestCommandConditionCwdsExpandsLiteralAssignment(t *testing.T) {
 		t.Fatalf("commandConditionCwds() = %v, %v; want [/repo/main], true", cwds, matched)
 	}
 }
+
+func TestCommandConditionCwdsLeavesParameterExpansionUnresolved(t *testing.T) {
+	condition := &config.Condition{
+		Argv0:       "git",
+		Subcommands: []string{"status"},
+		CwdFlags:    []string{"-C"},
+	}
+	fields := FieldSet{
+		CWD:              "/tmp",
+		ToolInputCommand: `R=/repo/main; git -C "${R:-/tmp}" status`,
+	}
+
+	cwds, matched := commandConditionCwds(fields, condition)
+	if matched || len(cwds) != 0 {
+		t.Fatalf("commandConditionCwds() = %v, %v; want nil, false", cwds, matched)
+	}
+}

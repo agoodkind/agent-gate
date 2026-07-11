@@ -19,6 +19,19 @@ func TestCmdReadTargetsExpandsLiteralAssignments(t *testing.T) {
 	}
 }
 
+func TestCmdReadTargetsLeavesUnsafeAssignmentsUnresolved(t *testing.T) {
+	tests := []string{
+		`R=/tmp; R=/repo/main; grep -rn todo "$R/internal"`,
+		`R=/repo/main; grep -rn todo "${R:-/tmp}/internal"`,
+	}
+	for _, command := range tests {
+		fields := rules.FieldSet{CWD: "/tmp", ToolName: "Bash", ToolInputCommand: command}
+		if got := fields.CmdReadTargets([]string{"grep"}, nil); got != "" {
+			t.Fatalf("CmdReadTargets(%q) = %q, want empty", command, got)
+		}
+	}
+}
+
 func TestCmdWriteTargetsExpandsOnlySafeLiteralAssignments(t *testing.T) {
 	tests := []struct {
 		name    string
