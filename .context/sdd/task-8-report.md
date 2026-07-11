@@ -224,6 +224,52 @@ staticcheck-extra  ok
 All checks passed.
 ```
 
+## Legacy compatibility follow-up
+
+Legacy compatibility commit:
+`794eba378ae746b4c9244e60b07037690184dfb0`
+
+Populated rows remain queryable when the outcome column is absent and after the
+additive migration creates default-empty outcomes. The reader treats outcome
+provenance as unknown only when the outcome column is absent or the row carries
+the legacy `layer_count = -1` marker. It does not synthesize an outcome. New rows
+and all legacy rows with known outcome provenance retain strict semantic checks.
+
+Layer-scoped query arguments now stay local until the correlated `EXISTS` clause
+is emitted. A legacy query that includes `outcome` and other layer filters emits
+`1 = 0` with no unused SQLite bindings, so it returns an empty page instead of a
+binding error.
+
+Legacy RED:
+
+```text
+$ go test ./internal/evaluation -run 'TestQueryReadsPopulatedLegacyEvaluationsBeforeAndAfterMigration|TestStoreMigratesEvaluationQueryColumns'
+Query before migration: complete predicate layer requires match or nonmatch outcome
+FAIL goodkind.io/agent-gate/internal/evaluation
+```
+
+Legacy GREEN:
+
+```text
+$ go test ./internal/evaluation -run 'TestQueryReadsPopulatedLegacyEvaluationsBeforeAndAfterMigration|TestStoreMigratesEvaluationQueryColumns|TestStoreListRejectsMissingAndCorruptChildRows|TestStoreListCorrelatesLayerScopedFilters'
+ok goodkind.io/agent-gate/internal/evaluation
+
+$ make GO_MK_GENERATE= test
+all repository packages passed
+
+$ make GO_MK_GENERATE= check
+lint-golangci      ok
+lint-format        ok
+lint-gocyclo       ok
+lint-deadcode      ok
+staticcheck-extra  ok
+All checks passed.
+```
+
+The first full test run hit a transient `database is locked` result in
+`TestReloadConfigValidSwap`. The exact daemon test passed 10 consecutive runs,
+and the next full `make test` run passed every package.
+
 ## Concerns
 
 Legacy evaluation rows created before child counts cannot prove the original
