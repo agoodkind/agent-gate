@@ -1,0 +1,207 @@
+package intake_test
+
+import (
+	"context"
+	"database/sql"
+	"path/filepath"
+	"sync"
+	"testing"
+
+	_ "github.com/mattn/go-sqlite3"
+
+	"goodkind.io/agent-gate/internal/intake"
+)
+
+func TestAppendRecordsEveryReceiptForCanonicalEvent(t *testing.T) {
+	store, path := newReceiptTestStore(t)
+	record := receiptTestRecord()
+
+	first, err := store.Append(context.Background(), record)
+	if err != nil {
+		t.Fatalf("Append first: %v", err)
+	}
+	second, err := store.Append(context.Background(), record)
+	if err != nil {
+		t.Fatalf("Append second: %v", err)
+	}
+
+	if first.ReceiptID <= 0 || second.ReceiptID <= first.ReceiptID {
+		t.Fatalf("receipt ids = %d, %d, want positive increasing ids", first.ReceiptID, second.ReceiptID)
+	}
+	if first.EventID != second.EventID || !first.Inserted || second.Inserted {
+		t.Fatalf("append results = %#v, %#v", first, second)
+	}
+	assertTableCount(t, path, "intake_events", 1)
+	assertTableCount(t, path, "intake_receipts", 2)
+}
+
+func TestOpenSQLiteMigratesPopulatedCurrentDatabase(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.db")
+	database, err := sql.Open("sqlite3", path)
+	if err != nil {
+		t.Fatalf("open legacy database: %v", err)
+	}
+	_, err = database.Exec(`
+		create table intake_events (
+			seq integer primary key autoincrement,
+			event_id text not null unique,
+			schema_version integer not null,
+			recorded_at text not null,
+			system text not null,
+			session_id text not null,
+			turn_id text not null,
+			event_name text not null,
+			tool_name text not null,
+			tool_use_id text not null,
+			cwd text not null,
+			effective_cwd text not null,
+			command text not null,
+			file_path text not null,
+			raw_payload blob not null,
+			raw_payload_hash text not null,
+			normalized_json text not null,
+			env_fingerprint_json text not null default '{}',
+			hot_eval_latency_us integer
+		);
+		insert into intake_events values (
+			1, 'legacy-event', 1, '2026-05-09T00:00:00Z', 'codex', 'session', '',
+			'PreToolUse', 'Shell', '', '/repo', '/repo', 'echo ok', '', x'7b7d',
+			'sha256:legacy', '{}', '{}', null
+		);
+	`)
+	if err != nil {
+		t.Fatalf("create populated current database: %v", err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatalf("close legacy database: %v", err)
+	}
+
+	store, err := intake.OpenSQLite(context.Background(), path, nil)
+	if err != nil {
+		t.Fatalf("OpenSQLite migration: %v", err)
+	}
+	defer func() {
+		if err := store.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	}()
+
+	assertTableCount(t, path, "intake_events", 1)
+	assertTableCount(t, path, "intake_receipts", 0)
+}
+
+func TestAppendRollsBackEventWhenReceiptInsertFails(t *testing.T) {
+	store, path := newReceiptTestStore(t)
+	_, err := store.Handle().Exec(`
+		create trigger fail_intake_receipt
+		before insert on intake_receipts
+		begin
+			select raise(abort, 'receipt failure');
+		end
+	`)
+	if err != nil {
+		t.Fatalf("create failure trigger: %v", err)
+	}
+
+	_, err = store.Append(context.Background(), receiptTestRecord())
+	if err == nil {
+		t.Fatal("Append error = nil, want receipt failure")
+	}
+	assertTableCount(t, path, "intake_events", 0)
+	assertTableCount(t, path, "intake_receipts", 0)
+}
+
+func TestConcurrentAppendsKeepReceiptsOnCanonicalEvent(t *testing.T) {
+	store, path := newReceiptTestStore(t)
+	const appendCount = 16
+	results := make(chan intake.AppendResult, appendCount)
+	errors := make(chan error, appendCount)
+	var waitGroup sync.WaitGroup
+	for range appendCount {
+		waitGroup.Add(1)
+		go func() {
+			defer waitGroup.Done()
+			result, err := store.Append(context.Background(), receiptTestRecord())
+			if err != nil {
+				errors <- err
+				return
+			}
+			results <- result
+		}()
+	}
+	waitGroup.Wait()
+	close(results)
+	close(errors)
+	for err := range errors {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	receiptIDs := make(map[int64]bool, appendCount)
+	eventID := ""
+	insertedCount := 0
+	for result := range results {
+		receiptIDs[result.ReceiptID] = true
+		if eventID == "" {
+			eventID = result.EventID
+		}
+		if result.EventID != eventID {
+			t.Fatalf("event id = %q, want %q", result.EventID, eventID)
+		}
+		if result.Inserted {
+			insertedCount++
+		}
+	}
+	if len(receiptIDs) != appendCount || insertedCount != 1 {
+		t.Fatalf("receipt ids = %d, inserted = %d", len(receiptIDs), insertedCount)
+	}
+	assertTableCount(t, path, "intake_events", 1)
+	assertTableCount(t, path, "intake_receipts", appendCount)
+}
+
+func newReceiptTestStore(t *testing.T) (*intake.Store, string) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "audit.db")
+	store, err := intake.OpenSQLite(context.Background(), path, nil)
+	if err != nil {
+		t.Fatalf("OpenSQLite: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	})
+	return store, path
+}
+
+func receiptTestRecord() intake.Record {
+	return intake.Record{
+		System:         "codex",
+		SessionID:      "session-1",
+		EventName:      "PreToolUse",
+		ToolName:       "Shell",
+		RawPayload:     []byte(`{"event":"pre"}`),
+		NormalizedJSON: []byte(`{"event":"pre"}`),
+	}
+}
+
+func assertTableCount(t *testing.T, path string, table string, want int) {
+	t.Helper()
+	database, err := sql.Open("sqlite3", path)
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer func() {
+		if err := database.Close(); err != nil {
+			t.Fatalf("close database: %v", err)
+		}
+	}()
+	var count int
+	if err := database.QueryRow("select count(*) from " + table).Scan(&count); err != nil {
+		t.Fatalf("count %s: %v", table, err)
+	}
+	if count != want {
+		t.Fatalf("%s count = %d, want %d", table, count, want)
+	}
+}

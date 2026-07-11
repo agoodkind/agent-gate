@@ -82,8 +82,9 @@ type Record struct {
 // AppendResult reports the durable event id and whether a new row was
 // inserted.
 type AppendResult struct {
-	EventID  string
-	Inserted bool
+	ReceiptID int64
+	EventID   string
+	Inserted  bool
 }
 
 // Store owns the SQLite-backed durable intake tables.
@@ -218,12 +219,24 @@ func (s *Store) Append(ctx context.Context, record Record) (AppendResult, error)
 	if err != nil {
 		return AppendResult{}, wrapLoggedError(ctx, s.log, "read intake append rows", err)
 	}
+	receiptResult, err := tx.ExecContext(ctx, `
+		insert into intake_receipts (event_id, received_at)
+		values (?, ?)
+	`, record.EventID, intakeNow().UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		return AppendResult{}, wrapLoggedError(ctx, s.log, "insert intake receipt", err)
+	}
+	receiptID, err := receiptResult.LastInsertId()
+	if err != nil {
+		return AppendResult{}, wrapLoggedError(ctx, s.log, "read intake receipt id", err)
+	}
 	if err := tx.Commit(); err != nil {
 		return AppendResult{}, wrapLoggedError(ctx, s.log, "commit intake append tx", err)
 	}
 	return AppendResult{
-		EventID:  record.EventID,
-		Inserted: rowsAffected == 1,
+		ReceiptID: receiptID,
+		EventID:   record.EventID,
+		Inserted:  rowsAffected == 1,
 	}, nil
 }
 
@@ -451,10 +464,18 @@ func (s *Store) init(ctx context.Context) error {
 			foreign key(event_id) references intake_events(event_id) on delete cascade,
 			check(state in ('none', 'pending', 'complete'))
 		)`,
+		`create table if not exists intake_receipts (
+			receipt_id integer primary key autoincrement,
+			event_id text not null,
+			received_at text not null,
+			foreign key(event_id) references intake_events(event_id) on delete cascade
+		)`,
 		`create index if not exists intake_events_recorded_at_idx on intake_events(recorded_at)`,
 		`create index if not exists intake_events_session_recorded_at_idx on intake_events(session_id, recorded_at)`,
 		`create index if not exists intake_events_system_recorded_at_idx on intake_events(system, recorded_at)`,
 		`create index if not exists intake_deferred_state_idx on intake_deferred(state)`,
+		`create index if not exists intake_receipts_event_id_idx on intake_receipts(event_id)`,
+		`create index if not exists intake_receipts_received_at_idx on intake_receipts(received_at)`,
 		// Per-slice indices so common group-by/filter queries use an index
 		// instead of scanning the table. command, raw_payload, normalized_json,
 		// and env_fingerprint_json are intentionally excluded: they are free
