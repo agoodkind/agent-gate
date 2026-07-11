@@ -21,7 +21,7 @@ func TestCmdReadTargetsExpandsLiteralAssignments(t *testing.T) {
 
 func TestCmdReadTargetsLeavesUnsafeAssignmentsUnresolved(t *testing.T) {
 	tests := []string{
-		`R=/tmp; R=/repo/main; grep -rn todo "$R/internal"`,
+		`R=/tmp; R=$(pwd); grep -rn todo "$R/internal"`,
 		`R=/repo/main; grep -rn todo "${R:-/tmp}/internal"`,
 	}
 	for _, command := range tests {
@@ -32,6 +32,26 @@ func TestCmdReadTargetsLeavesUnsafeAssignmentsUnresolved(t *testing.T) {
 	}
 }
 
+func TestCmdReadTargetsUsesFinalSafeLiteralAssignment(t *testing.T) {
+	fields := rules.FieldSet{
+		CWD: "/tmp", ToolName: "Bash",
+		ToolInputCommand: `R=/tmp; R=/repo/main; grep -rn todo "$R/internal"`,
+	}
+	if got, want := fields.CmdReadTargets([]string{"grep"}, nil), "/repo/main/internal"; got != want {
+		t.Fatalf("CmdReadTargets() = %q, want %q", got, want)
+	}
+}
+
+func TestCmdReadTargetsPreservesEarlierSafeLiteralAssignment(t *testing.T) {
+	fields := rules.FieldSet{
+		CWD: "/tmp", ToolName: "Bash",
+		ToolInputCommand: `R=/repo/main; grep todo "$R/a"; R=/tmp; grep todo "$R/b"`,
+	}
+	if got, want := fields.CmdReadTargets([]string{"grep"}, nil), "/repo/main/a\n/tmp/b"; got != want {
+		t.Fatalf("CmdReadTargets() = %q, want %q", got, want)
+	}
+}
+
 func TestCmdWriteTargetsExpandsOnlySafeLiteralAssignments(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -39,7 +59,9 @@ func TestCmdWriteTargetsExpandsOnlySafeLiteralAssignments(t *testing.T) {
 		want    string
 	}{
 		{name: "literal", command: `R=/repo/main; echo x > "$R/main.go"`, want: "/repo/main/main.go"},
-		{name: "reassigned", command: `R=/tmp; R=/repo/main; echo x > "$R/main.go"`, want: ""},
+		{name: "reassigned", command: `R=/tmp; R=/repo/main; echo x > "$R/main.go"`, want: "/repo/main/main.go"},
+		{name: "used before reassigned", command: `R=/repo/main; echo x > "$R/a"; R=/tmp; echo x > "$R/b"`, want: "/repo/main/a\n/tmp/b"},
+		{name: "conditional reassignment", command: `R=/repo/main; false && R=/tmp; echo x > "$R/x"`, want: ""},
 		{name: "command substitution", command: `R=$(pwd); echo x > "$R/main.go"`, want: ""},
 	}
 

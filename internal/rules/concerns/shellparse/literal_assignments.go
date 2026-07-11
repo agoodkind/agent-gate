@@ -13,16 +13,17 @@ var literalAssignmentRefPattern = regexp.MustCompile(
 type literalAssignment struct {
 	value       string
 	availableAt int
+	safe        bool
 }
 
-// ExpandLiteralAssignments substitutes variables assigned one safe literal
-// value in command. Reassigned, dynamic, and single-quoted references remain
+// ExpandLiteralAssignments substitutes the safe literal value active at each
+// reference. Dynamic or conditional assignments leave later references
 // unresolved for the structural parser to handle conservatively.
 func ExpandLiteralAssignments(command string) string {
 	if !literalAssignmentQuotesBalanced(command) {
 		return command
 	}
-	values := literalAssignmentValues(command)
+	values := literalAssignmentHistory(command)
 	if len(values) == 0 {
 		return command
 	}
@@ -82,7 +83,7 @@ func literalAssignmentQuotesBalanced(command string) bool {
 func substituteLiteralAssignmentRefs(
 	segment string,
 	segmentStart int,
-	values map[string]literalAssignment,
+	values map[string][]literalAssignment,
 ) string {
 	matches := literalAssignmentRefPattern.FindAllStringSubmatchIndex(segment, -1)
 	if len(matches) == 0 {
@@ -96,8 +97,10 @@ func substituteLiteralAssignmentRefs(
 		if nameStart == -1 {
 			nameStart, nameEnd = match[4], match[5]
 		}
-		assignment, found := values[segment[nameStart:nameEnd]]
-		if !found || segmentStart+matchStart < assignment.availableAt || escapedLiteralAssignmentRef(segment, matchStart) {
+		assignment, found := literalAssignmentAt(
+			values[segment[nameStart:nameEnd]], segmentStart+matchStart,
+		)
+		if !found || !assignment.safe || escapedLiteralAssignmentRef(segment, matchStart) {
 			continue
 		}
 		builder.WriteString(segment[previousEnd:matchStart])
@@ -111,6 +114,18 @@ func substituteLiteralAssignmentRefs(
 	return builder.String()
 }
 
+func literalAssignmentAt(
+	history []literalAssignment,
+	referenceAt int,
+) (literalAssignment, bool) {
+	for index := len(history) - 1; 0 <= index; index-- {
+		if history[index].availableAt <= referenceAt {
+			return history[index], true
+		}
+	}
+	return literalAssignment{value: "", availableAt: 0, safe: false}, false
+}
+
 func escapedLiteralAssignmentRef(segment string, matchStart int) bool {
 	backslashCount := 0
 	for index := matchStart - 1; 0 <= index && segment[index] == '\\'; index-- {
@@ -119,46 +134,46 @@ func escapedLiteralAssignmentRef(segment string, matchStart int) bool {
 	return backslashCount%2 == 1
 }
 
-func literalAssignmentValues(command string) map[string]literalAssignment {
-	values := make(map[string]literalAssignment)
-	counts := make(map[string]int)
+func literalAssignmentHistory(command string) map[string][]literalAssignment {
+	history := make(map[string][]literalAssignment)
 	index := 0
+	conditional := false
 	for index < len(command) {
 		commandValues := make(map[string]string)
 		commandCounts := make(map[string]int)
+		commandUnsafeNames := make(map[string]bool)
 		for {
 			index = skipLiteralAssignmentSpace(command, index)
-			nextIndex, found := readLiteralAssignment(command, index, commandValues, commandCounts)
+			nextIndex, found := readLiteralAssignment(
+				command, index, commandValues, commandCounts, commandUnsafeNames,
+			)
 			if !found {
 				break
 			}
 			index = nextIndex
 		}
 		assignmentOnly := literalAssignmentCommandEndsAt(command, skipLiteralAssignmentSpace(command, index))
-		nextIndex, found := nextLiteralAssignmentCommandStart(command, index)
+		nextIndex, found, nextConditional := nextLiteralAssignmentCommandStart(command, index)
 		if assignmentOnly {
 			availableAt := len(command)
 			if found {
 				availableAt = nextIndex
 			}
-			for name, count := range commandCounts {
-				counts[name] += count
-				if value, found := commandValues[name]; found {
-					values[name] = literalAssignment{value: value, availableAt: availableAt}
-				}
+			for name := range commandCounts {
+				value, safe := commandValues[name]
+				safe = safe && !commandUnsafeNames[name] && !conditional
+				history[name] = append(history[name], literalAssignment{
+					value: value, availableAt: availableAt, safe: safe,
+				})
 			}
 		}
 		if !found {
 			break
 		}
 		index = nextIndex
+		conditional = nextConditional
 	}
-	for name, count := range counts {
-		if 1 < count {
-			delete(values, name)
-		}
-	}
-	return values
+	return history
 }
 
 func literalAssignmentCommandEndsAt(command string, index int) bool {
@@ -168,7 +183,13 @@ func literalAssignmentCommandEndsAt(command string, index int) bool {
 	return index+1 < len(command) && (command[index] == '&' || command[index] == '|') && command[index+1] == command[index]
 }
 
-func readLiteralAssignment(command string, index int, values map[string]string, counts map[string]int) (int, bool) {
+func readLiteralAssignment(
+	command string,
+	index int,
+	values map[string]string,
+	counts map[string]int,
+	unsafeNames map[string]bool,
+) (int, bool) {
 	name, valueStart, ok := readLiteralAssignmentName(command, index)
 	if !ok {
 		return index, false
@@ -180,6 +201,9 @@ func readLiteralAssignment(command string, index int, values map[string]string, 
 	counts[name]++
 	if literalAssignmentValueIsSafe(value) {
 		values[name] = stripOuterQuotes(value)
+	} else {
+		unsafeNames[name] = true
+		delete(values, name)
 	}
 	return nextIndex, true
 }
@@ -242,27 +266,27 @@ func skipLiteralAssignmentSpace(command string, index int) int {
 	return index
 }
 
-func nextLiteralAssignmentCommandStart(command string, index int) (int, bool) {
+func nextLiteralAssignmentCommandStart(command string, index int) (int, bool, bool) {
 	for index < len(command) {
 		switch command[index] {
 		case '\'', '"':
 			nextIndex, ok := skipLiteralAssignmentQuote(command, index)
 			if !ok {
-				return len(command), false
+				return len(command), false, false
 			}
 			index = nextIndex
 		case ';', '\n':
-			return index + 1, true
+			return index + 1, true, false
 		case '&', '|':
 			if index+1 < len(command) && command[index+1] == command[index] {
-				return index + 2, true
+				return index + 2, true, true
 			}
 			index++
 		default:
 			index++
 		}
 	}
-	return len(command), false
+	return len(command), false, false
 }
 
 func skipLiteralAssignmentQuote(command string, index int) (int, bool) {

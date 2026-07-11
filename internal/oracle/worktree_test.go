@@ -191,10 +191,10 @@ func TestWorktreeLiteralAssignmentExpansion(t *testing.T) {
 			want:    Block,
 		},
 		{
-			name: "keeps reassigned literal assignment unknown",
+			name: "blocks final literal reassignment into checkout",
 			command: `X=/tmp/a; X=` + appCheckout + `; echo y ` +
 				string(rune(62)) + ` "$X/f"`,
-			want: Unknown,
+			want: Block,
 		},
 		{
 			name:    "keeps command substitution assignment unknown",

@@ -1,4 +1,4 @@
-package rules_test
+package rules
 
 import (
 	"bufio"
@@ -27,20 +27,20 @@ const (
 )
 
 type guardTruthCase struct {
-	ID           string            `json:"id"`
-	Guard        guardArea         `json:"guard"`
-	Category     string            `json:"category"`
-	Command      string            `json:"command"`
-	CWD          string            `json:"cwd"`
-	Environment  map[string]string `json:"environment,omitempty"`
-	IndexedRoots []string          `json:"indexed_roots,omitempty"`
-	GitState     *gitStateFixture  `json:"git_state,omitempty"`
-	Expected     expectedDecision  `json:"expected"`
-	Rationale    string            `json:"rationale"`
-	LegacyCase   string            `json:"legacy_case,omitempty"`
+	ID           string                `json:"id"`
+	Guard        guardArea             `json:"guard"`
+	Category     string                `json:"category"`
+	Command      string                `json:"command"`
+	CWD          string                `json:"cwd"`
+	Environment  map[string]string     `json:"environment,omitempty"`
+	IndexedRoots []string              `json:"indexed_roots,omitempty"`
+	GitState     *guardGitStateFixture `json:"git_state,omitempty"`
+	Expected     expectedDecision      `json:"expected"`
+	Rationale    string                `json:"rationale"`
+	LegacyCase   string                `json:"legacy_case,omitempty"`
 }
 
-type gitStateFixture struct {
+type guardGitStateFixture struct {
 	PrimaryCheckout string            `json:"primary_checkout"`
 	DefaultBranch   string            `json:"default_branch"`
 	CurrentWorktree string            `json:"current_worktree"`
@@ -319,7 +319,7 @@ func validateSecondaryDefaultWorktreeTarget(truthCase guardTruthCase) error {
 	return fmt.Errorf("category %q requires a non-primary default-branch worktree target", truthCase.Category)
 }
 
-func validateGitState(state gitStateFixture) error {
+func validateGitState(state guardGitStateFixture) error {
 	if !portableAbsolutePath(state.PrimaryCheckout) || !portableAbsolutePath(state.CurrentWorktree) {
 		return fmt.Errorf("git state checkout paths must be portable absolute paths")
 	}

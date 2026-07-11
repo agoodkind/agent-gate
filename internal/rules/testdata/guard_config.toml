@@ -1,0 +1,159 @@
+[performance.hook]
+inference_phase_timeout_ms = 4000
+
+[[rules]]
+name = "guard-search-indexed-target"
+events = ["PreToolUse"]
+action = "block"
+violation_message = "Use semantic search for indexed code."
+
+[[rules.conditions]]
+kind = "regex"
+field_paths = ["tool_input.command"]
+pattern = '''\b(?:grep|egrep|fgrep|rgrep|rg|ripgrep|ag|ack)\b'''
+not_pattern = '''^\s*(?:grep|egrep|fgrep|rgrep|rg|ripgrep|ag|ack)\s+--(?:help|version)\s*$'''
+
+[[rules.conditions]]
+kind = "exec"
+command = ["lm-semantic-search", "--json", "codebase", "status", "{{item}}"]
+for_each = "cmd_read_targets"
+match_mode = "any"
+search_tools = ["grep", "egrep", "fgrep", "rgrep", "rg", "ripgrep", "ag", "ack", "git grep"]
+cache_ttl_ms = 0
+timeout_ms = 1500
+block_on = "match"
+on_error = "open"
+stdout_json_field = "searchable"
+stdout_json_equals = true
+
+[[rules]]
+name = "guard-worktree-primary-write"
+events = ["PreToolUse"]
+action = "block"
+violation_message = "Do not write into the primary checkout."
+
+[[rules.conditions]]
+kind = "git_primary_checkout"
+field_paths = ["cmd_write_targets"]
+
+[[rules.conditions.write_specs]]
+argv0 = ["mkdir", "rm", "touch"]
+target_mode = "all_operands"
+skip_flags_with_values = ["-d", "--date", "-m", "--mode", "-r", "--reference", "-t"]
+end_of_options = true
+
+[[rules.conditions.write_specs]]
+argv0 = ["cp", "install", "mv"]
+target_mode = "last_operand"
+skip_flags_with_values = ["-S", "--suffix", "-t", "--target-directory"]
+end_of_options = true
+
+[[rules]]
+name = "guard-worktree-default-write"
+events = ["PreToolUse"]
+action = "block"
+violation_message = "Do not write into a default-branch worktree."
+
+[[rules.conditions]]
+kind = "git_default_branch"
+field_paths = ["cmd_write_targets"]
+
+[[rules.conditions.write_specs]]
+argv0 = ["mkdir", "rm", "touch"]
+target_mode = "all_operands"
+skip_flags_with_values = ["-d", "--date", "-m", "--mode", "-r", "--reference", "-t"]
+end_of_options = true
+
+[[rules.conditions.write_specs]]
+argv0 = ["cp", "install", "mv"]
+target_mode = "last_operand"
+skip_flags_with_values = ["-S", "--suffix", "-t", "--target-directory"]
+end_of_options = true
+
+[[rules]]
+name = "guard-worktree-primary-git-mutation"
+events = ["PreToolUse"]
+action = "block"
+violation_message = "Do not mutate Git state from the primary checkout."
+
+[[rules.conditions]]
+kind = "command"
+argv0 = "git"
+subcommands = ["add", "am", "apply", "checkout", "cherry-pick", "clean", "commit", "mv", "rebase", "reset", "restore", "revert", "rm", "stash", "switch"]
+strip_env = true
+strip_args = ["sudo", "doas", "env", "time", "command"]
+cwd_flags = ["-C"]
+
+[[rules.conditions]]
+kind = "git_primary_checkout"
+
+[[rules]]
+name = "guard-worktree-default-git-mutation"
+events = ["PreToolUse"]
+action = "block"
+violation_message = "Do not mutate Git state from a default-branch worktree."
+
+[[rules.conditions]]
+kind = "command"
+argv0 = "git"
+subcommands = ["add", "am", "apply", "checkout", "cherry-pick", "clean", "commit", "mv", "rebase", "reset", "restore", "revert", "rm", "stash", "switch"]
+strip_env = true
+strip_args = ["sudo", "doas", "env", "time", "command"]
+cwd_flags = ["-C"]
+
+[[rules.conditions]]
+kind = "git_default_branch"
+
+[[rules]]
+name = "guard-worktree-checked-out-ref-move"
+events = ["PreToolUse"]
+action = "block"
+violation_message = "Do not move a branch checked out in another worktree."
+
+[[rules.conditions]]
+kind = "git_ref_move"
+
+[[rules]]
+name = "guard-search-parser-gap-consensus"
+events = ["PreToolUse"]
+action = "block"
+violation_message = "The opaque command performs an indexed content search."
+
+[[rules.conditions]]
+kind = "regex"
+field_paths = ["tool_input.command"]
+pattern = '''\b(?:grep|egrep|fgrep|rgrep|rg|ripgrep|ag|ack)\b'''
+
+[[rules.conditions]]
+kind = "regex"
+field_paths = ["tool_input.command"]
+pattern = '''(?s)(?:\beval\s|\b(?:sh|bash|zsh)\s+-c\b|\bxargs\b|\$\(|`)'''
+
+[[rules.conditions]]
+kind = "infer"
+endpoint = "127.0.0.1:5401"
+layer_name = "parser-gap-v4"
+prompt = "Classify whether this opaque command performs a content search against indexed source. Return block only when the command establishes that search; return allow when evidence is insufficient."
+input_field = "tool_input.command"
+output_schema = '''{"type":"object","properties":{"decision":{"type":"string","enum":["allow","block"]}},"required":["decision"],"additionalProperties":false}'''
+response_json_field = "decision"
+response_json_equals = "block"
+model = "v4"
+timeout_ms = 1500
+cache_ttl_ms = 0
+on_error = "open"
+
+[[rules.conditions]]
+kind = "infer"
+endpoint = "127.0.0.1:5401"
+layer_name = "parser-gap-mini-high"
+prompt = "Independently confirm that the opaque command must be blocked as an indexed source search. Return allow when context is insufficient."
+input_field = "tool_input.command"
+output_schema = '''{"type":"object","properties":{"decision":{"type":"string","enum":["allow","block"]}},"required":["decision"],"additionalProperties":false}'''
+response_json_field = "decision"
+response_json_equals = "block"
+model = "gpt-5.4-mini"
+reasoning_effort = "high"
+timeout_ms = 1500
+cache_ttl_ms = 0
+on_error = "open"
