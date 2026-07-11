@@ -52,7 +52,7 @@ func ExpandLiteralAssignments(command string) string {
 func literalAssignmentQuotesBalanced(command string) bool {
 	var quote byte
 	escaped := false
-	for index := 0; index < len(command); index++ {
+	for index := range len(command) {
 		char := command[index]
 		if quote == '\'' {
 			if char == quote {
