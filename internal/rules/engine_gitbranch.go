@@ -40,7 +40,7 @@ func gitBranchTargets(fields FieldSet, c *config.Condition, ctx conditionContext
 	targets := make([]string, 0, len(ctx.commandCwds))
 	targets = append(targets, ctx.commandCwds...)
 	for _, spec := range c.Selectors() {
-		value := fields.String(spec.Selector)
+		value := fields.StringForCondition(spec.Selector, c)
 		if value == "" {
 			continue
 		}

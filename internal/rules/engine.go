@@ -377,7 +377,8 @@ func (r *ruleRegexCondition) Execute(ctx context.Context, _ pipeline.Input) (pip
 	}
 	switch conditionKind(c) {
 	case config.ConditionKindRegex:
-		matches := regexconcern.EvalFieldMatches(r.fields, c.Selectors(), c.CompiledPattern(), c.DiagnosticGroup, matchLimit)
+		accessor := conditionFieldAccessor{fields: r.fields, condition: c}
+		matches := regexconcern.EvalFieldMatches(accessor, c.Selectors(), c.CompiledPattern(), c.DiagnosticGroup, matchLimit)
 		r.budget.Consume(len(matches))
 		return ruleOutcome{
 			violations:       matchesToViolations(matches, r.rule),
@@ -636,7 +637,8 @@ func conditionFallbackViolation(fields FieldSet, rule *config.Rule) Violation {
 	fieldPath := "payload"
 	value := rule.Name
 	for i := range rule.Conditions {
-		if path, extracted := extractField(fields, rule.Conditions[i].Selectors()); extracted != "" {
+		condition := &rule.Conditions[i]
+		if path, extracted := fields.FirstStringForCondition(condition.Selectors(), condition); extracted != "" {
 			fieldPath = path
 			value = extracted
 			break
@@ -674,7 +676,8 @@ func allConditionsMatch(ctx context.Context, fields FieldSet, rule *config.Rule,
 		c := &conditions[i]
 		switch conditionKind(c) {
 		case config.ConditionKindRegex:
-			if !regexconcern.ConditionMatch(fields, c) {
+			accessor := conditionFieldAccessor{fields: &fields, condition: c}
+			if !regexconcern.ConditionMatch(accessor, c) {
 				return false
 			}
 		case config.ConditionKindCommand:
@@ -911,11 +914,6 @@ func systemSpecificEvents(rule *config.Rule, system string) []string {
 	default:
 		return nil
 	}
-}
-
-// extractField returns the first non-empty value selected by a compiled field selector.
-func extractField(fields FieldSet, selectors []config.FieldSelectorSpec) (string, string) {
-	return fields.FirstString(selectors)
 }
 
 // cmdChainRe splits a shell command on common chain and sequence operators.

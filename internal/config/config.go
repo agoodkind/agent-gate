@@ -128,10 +128,11 @@ type Condition struct {
 	// Shell-read-secret condition fields. Pattern matches file contents,
 	// PathPattern matches risky paths when content probing is not possible,
 	// and ReadSpecs describes how command argv shapes expose paths.
-	PathPattern  string          `toml:"path_pattern"`
-	MaxBytes     int             `toml:"max_bytes"`
-	RemotePolicy string          `toml:"remote_policy"`
-	ReadSpecs    []ShellReadSpec `toml:"read_specs"`
+	PathPattern  string           `toml:"path_pattern"`
+	MaxBytes     int              `toml:"max_bytes"`
+	RemotePolicy string           `toml:"remote_policy"`
+	ReadSpecs    []ShellReadSpec  `toml:"read_specs"`
+	WriteSpecs   []ShellWriteSpec `toml:"write_specs"`
 
 	// Composer condition fields. RuleSetID selects the lm-review rule set and
 	// deterministic oracle pair that decides this gate after cheap prefilters.
@@ -739,6 +740,9 @@ func compileCondition(log *slog.Logger, ruleName string, index int, c *Condition
 		return err
 	}
 	if err := compileExecConfig(ruleName, index, c, meta); err != nil {
+		return err
+	}
+	if err := validateShellWriteSpecConfig(ruleName, index, c); err != nil {
 		return err
 	}
 	return nil

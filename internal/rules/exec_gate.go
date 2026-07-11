@@ -238,17 +238,17 @@ func execConditionGateMatch(ctx context.Context, fields FieldSet, rule *config.R
 
 func execCacheKeyValue(fields FieldSet, c *config.Condition) string {
 	selector := c.CacheKeySelector().Selector
-	return execSelectorValue(fields, selector, c.SearchTools)
+	return execSelectorValue(fields, selector, c)
 }
 
-func execSelectorValue(fields FieldSet, selector config.FieldSelector, searchTools []string) string {
+func execSelectorValue(fields FieldSet, selector config.FieldSelector, c *config.Condition) string {
 	if selector == config.FieldCmdReadTargets {
-		return fields.CmdReadTargets(searchTools, diskFileResolver())
+		return fields.CmdReadTargets(c.SearchTools, diskFileResolver())
 	}
 	if selector == config.FieldExecTargets {
-		return fields.ExecTargets(searchTools, diskFileResolver())
+		return fields.ExecTargets(c.SearchTools, diskFileResolver())
 	}
-	return fields.String(selector)
+	return fields.StringForCondition(selector, c)
 }
 
 func (r *ExecRuntime) expandExecCommands(fields FieldSet, c *config.Condition) [][]string {
@@ -275,7 +275,7 @@ func (r *ExecRuntime) expandExecCommands(fields FieldSet, c *config.Condition) [
 }
 
 func (r *ExecRuntime) forEachItems(fields FieldSet, c *config.Condition) []string {
-	raw := execSelectorValue(fields, c.ForEachSelector().Selector, c.SearchTools)
+	raw := execSelectorValue(fields, c.ForEachSelector().Selector, c)
 	if raw == "" {
 		return nil
 	}
@@ -557,7 +557,7 @@ func (r *ExecRuntime) buildInput(
 	}
 	matched := make([]execconcern.FieldValue, 0, len(c.Selectors()))
 	for _, sel := range c.Selectors() {
-		value := fields.String(sel.Selector)
+		value := fields.StringForCondition(sel.Selector, c)
 		if value == "" {
 			continue
 		}
@@ -699,6 +699,13 @@ func stableExecCacheEntryKey(rule *config.Rule, conditionIndex int, c *config.Co
 	writeHashPart(strconv.Itoa(c.CacheTTLMs))
 	writeHashPart(strconv.Itoa(c.TimeoutMs))
 	writeHashPart(strings.Join(c.SearchTools, "\x1f"))
+	for _, spec := range c.WriteSpecs {
+		writeHashPart(strings.Join(spec.Argv0, "\x1f"))
+		writeHashPart(spec.TargetMode)
+		writeHashPart(strings.Join(spec.SkipFlagsWithValues, "\x1f"))
+		writeHashPart(strconv.FormatBool(spec.EndOfOptions))
+		writeHashPart(strings.Join(spec.CwdFlags, "\x1f"))
+	}
 	writeHashPart(keyView.Canonical)
 	return "sha256:" + hex.EncodeToString(hash.Sum(nil))
 }

@@ -626,6 +626,91 @@ search_tools = ["grep"]
 	}
 }
 
+func TestExecForEachCmdWriteTargetsUsesConditionSpecs(t *testing.T) {
+	rule := loadExecRule(t, `
+[[rules]]
+name = "exec-write-targets"
+events = ["PreToolUse"]
+action = "block"
+violation_message = "static message"
+
+[[rules.conditions]]
+kind = "exec"
+command = ["/bin/check-target", "{{item}}"]
+for_each = "cmd_write_targets"
+match_mode = "any"
+cache_key = "cmd_write_targets"
+cache_ttl_ms = 0
+
+[[rules.conditions.write_specs]]
+argv0 = ["writer-all"]
+target_mode = "all_operands"
+`)
+	runner := &recordingCommandRunner{
+		run: func(command []string) (execconcern.RunResult, error) {
+			if filepath.Base(command[1]) == "second.txt" {
+				return execconcern.RunResult{ExitCode: 1}, nil
+			}
+			return execconcern.RunResult{ExitCode: 0}, nil
+		},
+	}
+	cwd := t.TempDir()
+	violations := evalRule(runner, rule, map[string]any{
+		"cwd":        cwd,
+		"tool_input": map[string]any{"command": "writer-all first.txt second.txt"},
+	})
+	if len(violations) == 0 {
+		t.Fatal("declared write targets did not reach exec for_each")
+	}
+	commands := runner.Commands()
+	if len(commands) != 2 {
+		t.Fatalf("expanded validator commands = %v, want two", commands)
+	}
+	wantFirst := filepath.Join(cwd, "first.txt")
+	wantSecond := filepath.Join(cwd, "second.txt")
+	if commands[0][1] != wantFirst || commands[1][1] != wantSecond {
+		t.Fatalf("expanded validator commands = %v, want targets %q and %q", commands, wantFirst, wantSecond)
+	}
+}
+
+func TestExecCmdWriteTargetsCacheKeyUsesConditionSpecs(t *testing.T) {
+	rule := loadExecRule(t, `
+[[rules]]
+name = "exec-write-target-cache"
+events = ["PreToolUse"]
+action = "block"
+violation_message = "static message"
+
+[[rules.conditions]]
+kind = "exec"
+command = ["/bin/true"]
+cache_key = "cmd_write_targets"
+cache_ttl_ms = 60000
+
+[[rules.conditions.write_specs]]
+argv0 = ["writer-all"]
+target_mode = "all_operands"
+`)
+	runner := newCountingRunner(execconcern.RunResult{ExitCode: 1}, nil)
+	runtime := rules.NewExecRuntime(runner, nil)
+	ctx := rules.WithExecRuntime(context.Background(), runtime)
+	cwd := t.TempDir()
+
+	for _, target := range []string{"first.txt", "second.txt"} {
+		payload := testFields(map[string]any{
+			"cwd":        cwd,
+			"tool_input": map[string]any{"command": "writer-all " + target},
+		})
+		violations := rules.EvaluateAll(ctx, "claude", "PreToolUse", payload, []config.Rule{rule}, nil)
+		if len(violations) == 0 {
+			t.Fatalf("target %q did not block", target)
+		}
+	}
+	if runner.Calls() != 2 {
+		t.Fatalf("distinct declared write targets shared a cache entry, got %d calls", runner.Calls())
+	}
+}
+
 func TestExecForEachExecTargetsFallsBackToFilePath(t *testing.T) {
 	target := filepath.Join(t.TempDir(), "repo")
 	if err := os.MkdirAll(target, 0o755); err != nil {
