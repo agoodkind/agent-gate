@@ -206,6 +206,7 @@ func newRuntimeSnapshot(ctx context.Context, cfg *config.Config, log *slog.Logge
 		intakeStore,
 		sink,
 		cfg,
+		inferRuntime,
 		cfg.HookDeferredQueueLimit(),
 		cfg.HookDeferredWorkers(),
 		log,

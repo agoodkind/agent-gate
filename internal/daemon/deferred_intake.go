@@ -15,14 +15,15 @@ import (
 )
 
 type deferredProcessor struct {
-	events   chan deferredWork
-	store    intakeStore
-	sink     audit.Sink
-	cfg      *config.Config
-	log      *slog.Logger
-	done     chan struct{}
-	wg       sync.WaitGroup
-	stopping atomic.Bool
+	events       chan deferredWork
+	store        intakeStore
+	sink         audit.Sink
+	cfg          *config.Config
+	inferRuntime *rules.InferRuntime
+	log          *slog.Logger
+	done         chan struct{}
+	wg           sync.WaitGroup
+	stopping     atomic.Bool
 }
 
 type deferredWork struct {
@@ -30,7 +31,16 @@ type deferredWork struct {
 	hotEvent hook.DeferredAuditEvent
 }
 
-func newDeferredProcessor(ctx context.Context, store intakeStore, sink audit.Sink, cfg *config.Config, queueLimit int, workers int, log *slog.Logger) *deferredProcessor {
+func newDeferredProcessor(
+	ctx context.Context,
+	store intakeStore,
+	sink audit.Sink,
+	cfg *config.Config,
+	inferRuntime *rules.InferRuntime,
+	queueLimit int,
+	workers int,
+	log *slog.Logger,
+) *deferredProcessor {
 	if queueLimit <= 0 {
 		queueLimit = 1
 	}
@@ -39,14 +49,15 @@ func newDeferredProcessor(ctx context.Context, store intakeStore, sink audit.Sin
 	}
 
 	processor := &deferredProcessor{
-		events:   make(chan deferredWork, queueLimit),
-		store:    store,
-		sink:     sink,
-		cfg:      cfg,
-		log:      log,
-		done:     make(chan struct{}),
-		wg:       sync.WaitGroup{},
-		stopping: atomic.Bool{},
+		events:       make(chan deferredWork, queueLimit),
+		store:        store,
+		sink:         sink,
+		cfg:          cfg,
+		inferRuntime: inferRuntime,
+		log:          log,
+		done:         make(chan struct{}),
+		wg:           sync.WaitGroup{},
+		stopping:     atomic.Bool{},
 	}
 
 	for range workers {
@@ -189,12 +200,25 @@ func (p *deferredProcessor) rebuildDeferredAudit(
 
 	if len(deferredRules) > 0 {
 		deferredCfg := hook.DeferredConfig(p.cfg)
-		deferredEval := hook.EvaluateHotWithEventID(ctx, record.RawPayload, deferredCfg, hint, getenv, record.EventID)
+		collector := &inferenceTraceSink{traces: nil}
+		deferredCtx := rules.WithInferenceTraceCollector(ctx, collector)
+		if p.inferRuntime != nil {
+			deferredCtx = rules.WithInferRuntime(deferredCtx, p.inferRuntime)
+		}
+		deferredEval := hook.EvaluateHotWithEventID(
+			deferredCtx,
+			record.RawPayload,
+			deferredCfg,
+			hint,
+			getenv,
+			record.EventID,
+		)
 		if deferredEval.Deferred.Valid {
 			merged.AuditOnlyViolations = append(
 				append([]rules.Violation(nil), merged.AuditOnlyViolations...),
 				deferredEval.Deferred.AuditOnlyViolations...,
 			)
+			merged.InferenceTraces = append(merged.InferenceTraces, collector.snapshot()...)
 		} else if p.log != nil {
 			p.log.WarnContext(ctx, "replay deferred evaluation produced invalid deferred event", "event_id", record.EventID)
 		}

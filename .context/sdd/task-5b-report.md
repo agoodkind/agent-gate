@@ -4,7 +4,7 @@
 
 The generic `infer` condition is implemented in the commit that contains this report. The exact commit SHA is recorded in the task handoff because a commit cannot contain its own hash.
 
-The initial implementation is `1d7a2dd82589576f261cb397c159a253854951a6`. Integrated lint and review fixes begin at `acb0207`, with deferred outcome reuse in the follow-up commit containing this report update.
+The initial implementation is `1d7a2dd82589576f261cb397c159a253854951a6`. Integrated lint and review fixes begin at `acb0207`, deferred outcome reuse is `b266a3f`, and the additive lm-review contract sync is `625a9a2`.
 
 ## RED evidence
 
@@ -56,6 +56,18 @@ The initial implementation is `1d7a2dd82589576f261cb397c159a253854951a6`. Integr
 
    Failed because deferred audit events had no inference trace field and reconstruction accepted no hot evaluation outcome.
 
+9. Embedded-NUL cache identity:
+
+   `go test ./internal/rules -run '^TestInfer(CacheIdentitySeparatesEmbeddedNUL|SingleflightIdentitySeparatesEmbeddedNUL)' -count=1`
+
+   Failed because NUL-delimited hashing collapsed two different workspace and session pairs into one cache and singleflight key.
+
+10. Deferred audit-only inference runtime:
+
+   `go test ./internal/daemon -run '^TestDeferredAuditOnlyInferenceUsesDaemonRuntimeAndAppendsTraces$' -count=1`
+
+   Failed because the deferred processor did not own the daemon inference runtime or collect audit-only inference traces.
+
 ## GREEN evidence
 
 - `go test ./internal/config -run 'TestInferCondition' -count=1`: pass before unrelated `identity_test.go` appeared.
@@ -70,6 +82,8 @@ The initial implementation is `1d7a2dd82589576f261cb397c159a253854951a6`. Integr
 - `git diff --check`: pass.
 - Resolved clyde cache and singleflight identity tests: pass with separate RPCs for different workspace or session values.
 - Deferred inference reuse tests: pass with one inference RPC, preserved trace continuity, audit-only evaluation, and no inference during durable reconstruction.
+- Embedded-NUL cache and singleflight collision tests: pass with length-prefixed component hashing.
+- Deferred audit-only inference tests: pass with one persistent daemon connection and hot-then-audit trace order.
 
 ## Full verification
 
@@ -82,13 +96,14 @@ The initial implementation is `1d7a2dd82589576f261cb397c159a253854951a6`. Integr
 
 ## Wire compatibility proof
 
-The local `api/inferencepb/inference.proto` matches lm-review commit `54e8c88e922eeeb52b826e49c9e27e3bb989a453` on every wire-significant element:
+The local `api/inferencepb/inference.proto` retains every wire-significant element from lm-review commit `54e8c88e922eeeb52b826e49c9e27e3bb989a453` and synchronizes the additive contract through `625a9a2`:
 
 - protobuf package `inference.v1`;
 - service `Inference`, method `Infer`, and full identity `/inference.v1.Inference/Infer`;
 - request strings `prompt = 1`, `input = 2`, `output_schema = 3`, `context = 4`, and `model = 5`;
 - reply `output_json = 1` and `status = 2`;
 - status values `UNSPECIFIED = 0` and `COMPLETE = 1`.
+- additive request generation options at field 6 and reply invocation metadata at field 3.
 
 Only `go_package` differs, as allowed by the brief, so agent-gate builds without an unpublished lm-review version or local path replacement. The contract test verifies method identity, field numbers and types, and enum values.
 
@@ -96,7 +111,7 @@ Only `go_package` differs, as allowed by the brief, so agent-gate builds without
 
 `InferRuntime` keeps separate endpoint-keyed inference and clyde `grpc.ClientConn` maps. In-process servers count physical `ConnBegin` events. Repeated calls use one connection, different endpoints use separate connections, and repeated clyde requests use one clyde connection.
 
-The daemon owns one `InferRuntime` outside `runtimeSnapshot`, passes it to replacement snapshots, and closes it only when `Server.Close` runs. `TestRuntimeSnapshotsShareInferenceRuntime` verifies snapshot reuse. The daemon hot cache is shared with the runtime, and tests cover hit traces, TTL expiry, declaration identity separation, concurrent identical-call coalescing, and resolved clyde workspace and session separation.
+The daemon owns one `InferRuntime` outside `runtimeSnapshot`, passes it to replacement snapshots and deferred audit evaluation, and closes it only when `Server.Close` runs. `TestRuntimeSnapshotsShareInferenceRuntime` verifies snapshot reuse. The daemon hot cache is shared with the runtime, and tests cover hit traces, TTL expiry, declaration identity separation, concurrent identical-call coalescing, resolved clyde workspace and session separation, embedded-NUL collision resistance, and one persistent connection for audit-only inference.
 
 ## Standalone failure proof
 
@@ -113,7 +128,6 @@ The daemon owns one `InferRuntime` outside `runtimeSnapshot`, passes it to repla
 
 ## Concerns
 
-1. The daemon carries inference traces from hot evaluation into immediate deferred audit reconstruction, but durable restart replay cannot recover those in-memory traces. The later persistence task must store them before the response boundary.
+1. The daemon carries inference traces from hot and audit-only evaluation into immediate deferred audit reconstruction, but durable restart replay cannot recover the actual hot decision or its in-memory traces. The immediately following evaluation-ledger integration owns that persistence boundary.
 2. The brief does not prescribe public names or numeric maxima for clyde context bounds. This implementation uses `context_turn_budget` with a maximum of 32 and `context_max_chars_per_turn` with a maximum of 8000, defaulting to the published clyde values 4 and 280.
-3. The current lm-review checkout has additive fields beyond pinned commit `54e8c88`, including generation options and reply metadata. This task intentionally preserves the pinned wire contract; a later integration task should reconcile those additions explicitly.
-4. One infer condition now shares its timeout across clyde and inference. A shared deadline across several ordered inference conditions remains a later orchestration concern.
+3. One infer condition now shares its timeout across clyde and inference. A shared deadline across several ordered inference conditions remains a later orchestration concern.

@@ -451,6 +451,74 @@ func TestInferCacheIdentityIncludesResolvedClydeFields(t *testing.T) {
 	}
 }
 
+func TestInferCacheIdentitySeparatesEmbeddedNULContextValues(t *testing.T) {
+	clyde := &clydeFake{}
+	clydeEndpoint, _ := startClydeServer(t, clyde)
+	inference := &inferenceFake{handler: func(context.Context, *inferencepb.InferRequest) (*inferencepb.InferReply, error) {
+		return &inferencepb.InferReply{OutputJson: `{"decision":"block"}`, Status: 1}, nil
+	}}
+	endpoint, _ := startInferenceServer(t, inference)
+	extra := "cache_ttl_ms = 1000\ncontext_source = \"clyde_recent_turns\"\ncontext_endpoint = \"" + clydeEndpoint + "\"\ncontext_workspace_field = \"cwd\"\ncontext_session_field = \"session_id\"\ncontext_on_error = \"error\""
+	rule := loadInferRule(t, endpoint, extra)
+	runtime := rules.NewInferRuntimeWithCache(nil, nil)
+	t.Cleanup(runtime.Close)
+	ctx := rules.WithInferRuntime(context.Background(), runtime)
+
+	evaluateInferFields(t, ctx, rule, rules.FieldSet{
+		ToolInputCommand: "same",
+		CWD:              "a\x00b",
+		SessionID:        "c",
+	})
+	evaluateInferFields(t, ctx, rule, rules.FieldSet{
+		ToolInputCommand: "same",
+		CWD:              "a",
+		SessionID:        "b\x00c",
+	})
+
+	if inference.count() != 2 {
+		t.Fatalf("inference calls = %d, want 2", inference.count())
+	}
+}
+
+func TestInferSingleflightIdentitySeparatesEmbeddedNULContextValues(t *testing.T) {
+	clyde := &clydeFake{delay: 20 * time.Millisecond}
+	clydeEndpoint, _ := startClydeServer(t, clyde)
+	inference := &inferenceFake{handler: func(context.Context, *inferencepb.InferRequest) (*inferencepb.InferReply, error) {
+		time.Sleep(30 * time.Millisecond)
+		return &inferencepb.InferReply{OutputJson: `{"decision":"block"}`, Status: 1}, nil
+	}}
+	endpoint, _ := startInferenceServer(t, inference)
+	extra := "context_source = \"clyde_recent_turns\"\ncontext_endpoint = \"" + clydeEndpoint + "\"\ncontext_workspace_field = \"cwd\"\ncontext_session_field = \"session_id\"\ncontext_on_error = \"error\""
+	rule := loadInferRule(t, endpoint, extra)
+	runtime := rules.NewInferRuntimeWithCache(nil, nil)
+	t.Cleanup(runtime.Close)
+	ctx := rules.WithInferRuntime(context.Background(), runtime)
+	fieldSets := []rules.FieldSet{
+		{ToolInputCommand: "same", CWD: "a\x00b", SessionID: "c"},
+		{ToolInputCommand: "same", CWD: "a", SessionID: "b\x00c"},
+	}
+	var waitGroup sync.WaitGroup
+	for _, fields := range fieldSets {
+		waitGroup.Add(1)
+		go func() {
+			defer waitGroup.Done()
+			_ = rules.EvaluateAll(
+				ctx,
+				"claude",
+				"PreToolUse",
+				fields,
+				[]config.Rule{rule},
+				nil,
+			)
+		}()
+	}
+	waitGroup.Wait()
+
+	if inference.count() != 2 {
+		t.Fatalf("inference calls = %d, want 2", inference.count())
+	}
+}
+
 func TestInferSingleflightIdentityIncludesResolvedClydeFields(t *testing.T) {
 	clyde := &clydeFake{delay: 20 * time.Millisecond}
 	clydeEndpoint, _ := startClydeServer(t, clyde)

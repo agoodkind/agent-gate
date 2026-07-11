@@ -536,7 +536,8 @@ func stableInferenceKey(
 		strconv.Itoa(condition.ContextTurnBudget), strconv.Itoa(condition.ContextMaxCharsPerTurn), condition.ContextOnError,
 	}
 	for _, part := range parts {
-		_, _ = hash.Write([]byte{0})
+		_, _ = hash.Write([]byte(strconv.Itoa(len(part))))
+		_, _ = hash.Write([]byte{':'})
 		_, _ = hash.Write([]byte(part))
 	}
 	return hex.EncodeToString(hash.Sum(nil))
