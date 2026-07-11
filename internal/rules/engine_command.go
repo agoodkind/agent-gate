@@ -45,7 +45,11 @@ func commandConditionCwds(fields FieldSet, c *config.Condition) ([]string, bool)
 		if cwd == "" {
 			cwd = base
 		}
-		cwd, words = applyCwdFlagWords(cwd, words, c.CwdFlags)
+		var cwdResolved bool
+		cwd, words, cwdResolved = applyCwdFlagWords(cwd, words, c.CwdFlags)
+		if !cwdResolved {
+			continue
+		}
 		if len(c.Subcommands) == 0 {
 			if conditionTextMatch(wordsTail(words), c) {
 				matches = append(matches, cwd)
@@ -123,9 +127,9 @@ func stripCommandWrappers(argv0 string, words []shelldecomp.Word, stripArgs []st
 // applyCwdFlagWords resolves a cwd-redirecting flag (for example git/make -C, or
 // swift --package-path) from the command's words, returning the redirected cwd
 // and the words with the flag (and its separate value) removed.
-func applyCwdFlagWords(cwd string, words []shelldecomp.Word, flags []string) (string, []shelldecomp.Word) {
+func applyCwdFlagWords(cwd string, words []shelldecomp.Word, flags []string) (string, []shelldecomp.Word, bool) {
 	if len(flags) == 0 {
-		return cwd, words
+		return cwd, words, true
 	}
 	out := make([]shelldecomp.Word, 0, len(words))
 	for i := 0; i < len(words); i++ {
@@ -140,7 +144,13 @@ func applyCwdFlagWords(cwd string, words []shelldecomp.Word, flags []string) (st
 			out = append(out, word)
 			continue
 		}
+		if !word.Resolvable {
+			return "", nil, false
+		}
 		if value == "" && i+1 < len(words) {
+			if !words[i+1].Resolvable {
+				return "", nil, false
+			}
 			value = words[i+1].Value
 			i++
 		}
@@ -148,7 +158,7 @@ func applyCwdFlagWords(cwd string, words []shelldecomp.Word, flags []string) (st
 			cwd = resolvePath(cwd, value)
 		}
 	}
-	return cwd, out
+	return cwd, out, true
 }
 
 // wordsTail joins the resolved values of a command's words for pattern matching,
