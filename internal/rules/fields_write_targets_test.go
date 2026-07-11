@@ -34,3 +34,32 @@ func TestCmdWriteTargetsField(t *testing.T) {
 		})
 	}
 }
+
+func TestCmdWriteTargetsWithSpecsRequiresDeclaration(t *testing.T) {
+	fields := FieldSet{ToolInputCommand: "writer-all generated.txt", CWD: "/repo"}
+	if got := fields.CmdWriteTargets(); got != "" {
+		t.Fatalf("CmdWriteTargets() = %q, want empty without declarations", got)
+	}
+	specs := []config.ShellWriteSpec{{
+		Argv0:      []string{"writer-all"},
+		TargetMode: config.WriteTargetAllOperands,
+	}}
+	if got := fields.CmdWriteTargetsWithSpecs(specs); got != "/repo/generated.txt" {
+		t.Fatalf("CmdWriteTargetsWithSpecs() = %q, want /repo/generated.txt", got)
+	}
+	condition := &config.Condition{WriteSpecs: specs}
+	if got := fields.StringForCondition(config.FieldCmdWriteTargets, condition); got != "/repo/generated.txt" {
+		t.Fatalf("StringForCondition() = %q, want /repo/generated.txt", got)
+	}
+}
+
+func TestCmdWriteTargetsWithSpecsDropsUnresolvedOperand(t *testing.T) {
+	fields := FieldSet{ToolInputCommand: `writer-all "$TARGET"`, CWD: "/repo"}
+	specs := []config.ShellWriteSpec{{
+		Argv0:      []string{"writer-all"},
+		TargetMode: config.WriteTargetAllOperands,
+	}}
+	if got := fields.CmdWriteTargetsWithSpecs(specs); got != "" {
+		t.Fatalf("CmdWriteTargetsWithSpecs() = %q, want unresolved target dropped", got)
+	}
+}

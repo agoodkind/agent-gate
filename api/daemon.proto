@@ -7,6 +7,9 @@ option go_package = "goodkind.io/agent-gate/api/daemonpb";
 // AgentGateD is the agent-gate daemon service.
 // Hook processes connect here for daemon-owned enforcement.
 service AgentGateD {
+  // ResolveHookEnvironment returns command environment names needed by evaluation.
+  rpc ResolveHookEnvironment(ResolveHookEnvironmentRequest) returns (ResolveHookEnvironmentResponse);
+
   // EvaluateHook forwards raw hook input to the daemon-owned enforcement engine.
   rpc EvaluateHook(EvaluateHookRequest) returns (EvaluateHookResponse);
 
@@ -22,6 +25,16 @@ service AgentGateD {
   rpc KVExpire(KVExpireRequest) returns (KVExpireResponse);
   rpc KVGetDelete(KVGetDeleteRequest) returns (KVGetDeleteResponse);
   rpc KVList(KVListRequest) returns (KVListResponse);
+}
+
+message ResolveHookEnvironmentRequest {
+  bytes raw_json = 1;
+  string provider_hint = 2;
+  map<string, string> env_fingerprint = 3;
+}
+
+message ResolveHookEnvironmentResponse {
+  repeated string referenced_names = 1;
 }
 
 message EvaluateHookRequest {

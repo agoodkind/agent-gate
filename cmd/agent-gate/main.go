@@ -19,6 +19,7 @@ import (
 	"goodkind.io/agent-gate/internal/audit"
 	"goodkind.io/agent-gate/internal/config"
 	"goodkind.io/agent-gate/internal/daemon"
+	"goodkind.io/agent-gate/internal/evaluation"
 	"goodkind.io/agent-gate/internal/hook"
 	"goodkind.io/agent-gate/internal/intake"
 	"goodkind.io/agent-gate/internal/telemetry"
@@ -56,8 +57,9 @@ const (
 type queryCommandName string
 
 const (
-	queryCommandDecisions queryCommandName = "decisions"
-	queryCommandSeen      queryCommandName = "seen"
+	queryCommandDecisions   queryCommandName = "decisions"
+	queryCommandEvaluations queryCommandName = "evaluations"
+	queryCommandSeen        queryCommandName = "seen"
 )
 
 type updateCommandName string
@@ -191,6 +193,7 @@ func connectDaemon(ctx context.Context) (*daemon.Client, error) {
 }
 
 type hookClient interface {
+	ResolveHookEnvironment(rawJSON []byte, providerHint string, env map[string]string) ([]string, error)
 	EvaluateHook(rawJSON []byte, providerHint, cwd string, argv []string, env map[string]string) (*daemonpb.EvaluateHookResponse, error)
 	Close() error
 }
@@ -203,6 +206,7 @@ type hookRuntime struct {
 	connect func(context.Context) (hookClient, error)
 	getwd   func() (string, error)
 	env     func() map[string]string
+	getenv  func(string) string
 }
 
 func runDaemonStatus() int {
@@ -837,7 +841,7 @@ func openLog(component string) (*slog.Logger, func()) {
 
 func runQuery(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: agent-gate query seen|decisions [flags]")
+		fmt.Fprintln(os.Stderr, "usage: agent-gate query seen|decisions|evaluations [flags]")
 		return 2
 	}
 	switch queryCommandName(args[0]) {
@@ -845,6 +849,8 @@ func runQuery(args []string) int {
 		return runSeenQuery(args[1:])
 	case queryCommandDecisions:
 		return runDecisionQuery(args[1:])
+	case queryCommandEvaluations:
+		return runEvaluationQuery(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "agent-gate query: unknown subcommand %q\n", args[0])
 		return 2
@@ -881,6 +887,20 @@ func applySharedAuditQueryFlags(shared sharedQueryFlags, filter *audit.QueryFilt
 }
 
 func applySharedSeenQueryFlags(shared sharedQueryFlags, filter *intake.QueryFilter, command string) bool {
+	since, until, ok := parseSharedQueryRange(shared, command)
+	if !ok {
+		return false
+	}
+	filter.Since = since
+	filter.Until = until
+	return true
+}
+
+func applySharedEvaluationQueryFlags(
+	shared sharedQueryFlags,
+	filter *evaluation.QueryFilter,
+	command string,
+) bool {
 	since, until, ok := parseSharedQueryRange(shared, command)
 	if !ok {
 		return false
@@ -999,6 +1019,65 @@ func runSeenQuery(args []string) int {
 	return 0
 }
 
+func runEvaluationQuery(args []string) int {
+	fs := flag.NewFlagSet("agent-gate query evaluations", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	var filter evaluation.QueryFilter
+	var shared sharedQueryFlags
+	registerSharedQueryFlags(
+		fs,
+		&shared,
+		&filter.System,
+		&filter.SessionID,
+		&filter.EventName,
+		&filter.ToolName,
+		&filter.Limit,
+	)
+	fs.StringVar(&filter.EvaluationID, "evaluation-id", "", "filter by evaluation id")
+	fs.StringVar(&filter.EventID, "event-id", "", "filter by durable event id")
+	fs.Int64Var(&filter.ReceiptID, "receipt-id", 0, "filter by receipt id")
+	fs.StringVar(&filter.Mode, "mode", "", "filter by evaluation mode")
+	fs.StringVar(&filter.RuleName, "rule", "", "filter by rule name")
+	fs.StringVar(&filter.LayerName, "layer", "", "filter by layer name")
+	fs.StringVar(&filter.LayerKind, "kind", "", "filter by layer kind")
+	fs.StringVar(&filter.LayerOutcome, "outcome", "", "filter by layer outcome")
+	fs.StringVar(&filter.ModelName, "model", "", "filter by model")
+	fs.StringVar(&filter.FinalVerdict, "verdict", "", "filter by final verdict")
+	fs.IntVar(&filter.Offset, "offset", 0, "rows to skip")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if !applySharedEvaluationQueryFlags(shared, &filter, "query evaluations") {
+		return 2
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-gate query evaluations: config load failed: %v\n", err)
+		return 2
+	}
+	result, err := evaluation.Query(context.Background(), cfg.AuditSQLitePath(), filter)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-gate query evaluations: %v\n", err)
+		return 1
+	}
+	if shared.jsonOut {
+		if result.Note != "" {
+			fmt.Fprintf(os.Stderr, "agent-gate query evaluations: %s\n", result.Note)
+		}
+		encoder := json.NewEncoder(os.Stdout)
+		for _, record := range result.Records {
+			if err := encoder.Encode(record); err != nil {
+				fmt.Fprintf(os.Stderr, "agent-gate query evaluations: encode: %v\n", err)
+				return 1
+			}
+		}
+		return 0
+	}
+	printEvaluationTable(result)
+	return 0
+}
+
 func parseQueryTime(s string) (time.Time, error) {
 	if d, err := time.ParseDuration(s); err == nil {
 		return time.Now().Add(-d), nil
@@ -1053,6 +1132,41 @@ func printSeenTable(result intake.QueryResult) {
 	}
 }
 
+func printEvaluationTable(result evaluation.QueryResult) {
+	_, _ = fmt.Fprintf(os.Stdout, "source=%s rows=%d\n", result.Source, len(result.Records))
+	if result.Note != "" {
+		_, _ = fmt.Fprintf(os.Stdout, "note=%s\n", result.Note)
+	}
+	_, _ = fmt.Fprintf(
+		os.Stdout,
+		"%-25s  %-8s  %-9s  %-12s  %-12s  %-12s  %-8s  %-7s  %s\n",
+		"completed_at",
+		"system",
+		"mode",
+		"verdict",
+		"event",
+		"tool",
+		"receipt",
+		"layers",
+		"evaluation_id",
+	)
+	for _, record := range result.Records {
+		_, _ = fmt.Fprintf(
+			os.Stdout,
+			"%-25s  %-8s  %-9s  %-12s  %-12s  %-12s  %-8d  %-7d  %s\n",
+			record.CompletedAt.Format(time.RFC3339Nano),
+			record.System,
+			record.Mode,
+			record.FinalVerdict,
+			record.EventName,
+			record.ToolName,
+			record.ReceiptID,
+			len(record.Layers),
+			record.EvaluationID,
+		)
+	}
+}
+
 // runHook handles hook mode: read stdin, forward to daemon, mirror response.
 func runHook(systemHint hook.System) int {
 	runtime := hookRuntime{
@@ -1063,6 +1177,7 @@ func runHook(systemHint hook.System) int {
 		connect: defaultHookConnector,
 		getwd:   os.Getwd,
 		env:     envFingerprint,
+		getenv:  os.Getenv,
 	}
 	return runHookWithRuntime(systemHint, runtime)
 }
@@ -1099,7 +1214,20 @@ func runHookWithRuntime(systemHint hook.System, runtime hookRuntime) (exitCode i
 	defer func() { _ = client.Close() }()
 
 	cwd, _ := runtime.getwd()
-	resp, err := client.EvaluateHook(data, systemHint.String(), cwd, runtime.args, runtime.env())
+	baseEnvironment := runtime.env()
+	referencedNames, err := client.ResolveHookEnvironment(
+		data, systemHint.String(), baseEnvironment,
+	)
+	if err != nil {
+		diagnostic := fmt.Sprintf("agent-gate: daemon ResolveHookEnvironment failed: %v", err)
+		response := hook.FailOpenResponse(systemHint, "", diagnostic, hook.FailOpenReasonRPCFailed)
+		writeResponse(runtime.stdout, runtime.stderr, response)
+		return response.ExitCode
+	}
+	environment := hookEnvironmentFingerprint(
+		baseEnvironment, referencedNames, runtime.getenv,
+	)
+	resp, err := client.EvaluateHook(data, systemHint.String(), cwd, runtime.args, environment)
 	if err != nil {
 		diagnostic := fmt.Sprintf("agent-gate: daemon EvaluateHook failed: %v", err)
 		response := hook.FailOpenResponse(systemHint, "", diagnostic, hook.FailOpenReasonRPCFailed)
@@ -1157,4 +1285,25 @@ func envFingerprint() map[string]string {
 		}
 	}
 	return out
+}
+
+func hookEnvironmentFingerprint(
+	base map[string]string,
+	referencedNames []string,
+	getenv func(string) string,
+) map[string]string {
+	environment := make(map[string]string, len(base))
+	for key, value := range base {
+		environment[key] = value
+	}
+	if getenv == nil {
+		return environment
+	}
+	for _, name := range referencedNames {
+		value := getenv(name)
+		if filepath.IsAbs(value) {
+			environment[name] = value
+		}
+	}
+	return environment
 }

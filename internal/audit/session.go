@@ -105,6 +105,31 @@ type Event struct {
 	RawPayloadHash string      `json:"raw_payload_hash,omitempty"`
 }
 
+// NormalizedEntry is an immutable audit write that can be retried without
+// changing its timestamp, event identity, or normalized fields.
+type NormalizedEntry struct {
+	Event       Event  `json:"event"`
+	RawPayload  string `json:"raw_payload,omitempty"`
+	Fingerprint string `json:"fingerprint"`
+}
+
+func emptyNormalizedEntry() NormalizedEntry {
+	return NormalizedEntry{
+		Event: Event{
+			EventID: "", SchemaVersion: 0, Time: "", Level: "", Message: "",
+			System: "", SessionID: "", TurnID: "", EventName: "", ToolUseID: "",
+			ToolName: "", Operation: Operation{
+				CWD: "", EffectiveCWD: "", Command: "", FilePath: "",
+			},
+			Decision: Decision{
+				Kind: "", CanBlock: false, RulesChecked: nil, RulesMatched: nil,
+			},
+			Violations: nil, RawPayloadHash: "",
+		},
+		RawPayload: "", Fingerprint: "",
+	}
+}
+
 // Operation captures the working-directory and command context of an event.
 type Operation struct {
 	CWD          string `json:"cwd,omitempty"`
@@ -262,6 +287,86 @@ func (el *EventLogger) Log(system, sessionID, eventName, level, msg string, attr
 	el.cond.Signal()
 	el.mu.Unlock()
 }
+
+// LogDurable writes a normalized audit event to every configured output before
+// returning. Failed writes remain eligible for a later retry.
+func (el *EventLogger) LogDurable(
+	ctx context.Context,
+	system string,
+	sessionID string,
+	eventName string,
+	level string,
+	msg string,
+	attrs Attrs,
+) error {
+	if el == nil || !el.enabled || !el.shouldLog(level) {
+		return nil
+	}
+	entry := el.Normalize(system, sessionID, eventName, level, msg, attrs)
+	return el.LogNormalizedDurable(ctx, entry)
+}
+
+// Normalize captures the exact normalized audit entry used by durable writes.
+func (el *EventLogger) Normalize(
+	system string,
+	sessionID string,
+	eventName string,
+	level string,
+	msg string,
+	attrs Attrs,
+) NormalizedEntry {
+	if el == nil || !el.enabled || !el.shouldLog(level) {
+		return emptyNormalizedEntry()
+	}
+	event := normalizeEvent(system, sessionID, eventName, level, msg, attrs)
+	fingerprint := dedupFingerprint(event, attrs)
+	rawPayload := ""
+	if value, ok := attrs["raw_payload"]; ok {
+		rawPayload = value.String()
+	}
+	if rawPayload != "" && el.rawHash {
+		event.RawPayloadHash = payloadHash(rawPayload)
+	}
+	event.EventID = "evt_" + fingerprint[:32]
+	return NormalizedEntry{
+		Event: event, RawPayload: rawPayload, Fingerprint: fingerprint,
+	}
+}
+
+// LogNormalizedDurable writes a previously normalized entry without changing
+// its identity or timestamp.
+func (el *EventLogger) LogNormalizedDurable(
+	ctx context.Context,
+	entry NormalizedEntry,
+) error {
+	if el == nil || !el.enabled {
+		return nil
+	}
+	el.mu.Lock()
+	defer el.mu.Unlock()
+	if el.stopping {
+		return fmt.Errorf("audit logger is stopping")
+	}
+	if _, seen := el.dedup.Get(entry.Fingerprint); seen {
+		return nil
+	}
+	for _, output := range el.outputs {
+		if err := output.Write(entry.Event, entry.RawPayload); err != nil {
+			el.log.WarnContext(
+				ctx, "durable audit output write failed",
+				slog.String("event_id", entry.Event.EventID), slog.Any("err", err),
+			)
+			return fmt.Errorf("write durable audit event: %w", err)
+		}
+	}
+	el.dedup.Add(entry.Fingerprint, struct{}{})
+	return nil
+}
+
+var (
+	_ DurableSink           = (*LocalSink)(nil)
+	_ ReplayableDurableSink = (*LocalSink)(nil)
+)
 
 func (el *EventLogger) hasQueueCapacity() bool {
 	el.mu.Lock()
@@ -656,12 +761,25 @@ func (s *sqliteEventSink) Write(event Event, _ string) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if _, err := tx.ExecContext(ctx, `insert or ignore into events values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	eventResult, err := tx.ExecContext(ctx, `insert or ignore into events values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		event.EventID, event.SchemaVersion, event.Time, event.Level, event.Message, event.System,
 		event.SessionID, event.TurnID, event.EventName, event.ToolUseID, event.ToolName, event.RawPayloadHash,
-	); err != nil {
+	)
+	if err != nil {
 		s.log.Warn("insert audit event failed", slog.String("event_id", event.EventID), slog.Any("err", err))
 		return fmt.Errorf("insert audit event: %w", err)
+	}
+	insertedCount, err := eventResult.RowsAffected()
+	if err != nil {
+		s.log.Warn("read inserted audit event count failed", slog.String("event_id", event.EventID), slog.Any("err", err))
+		return fmt.Errorf("read inserted audit event count: %w", err)
+	}
+	if insertedCount == 0 {
+		if err := tx.Commit(); err != nil {
+			s.log.Warn("commit replayed audit tx failed", slog.String("event_id", event.EventID), slog.Any("err", err))
+			return fmt.Errorf("commit replayed audit tx: %w", err)
+		}
+		return nil
 	}
 	if _, err := tx.ExecContext(ctx, `insert or ignore into operations values (?, ?, ?, ?, ?)`,
 		event.EventID, event.Operation.CWD, event.Operation.EffectiveCWD, event.Operation.Command, event.Operation.FilePath,

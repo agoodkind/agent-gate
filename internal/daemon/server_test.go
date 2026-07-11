@@ -59,6 +59,61 @@ func daemonTestConfig(t testing.TB) *config.Config {
 	}
 }
 
+func TestRuntimeSnapshotsShareInferenceRuntime(t *testing.T) {
+	setDaemonTestDirs(t)
+	cfg := daemonTestConfig(t)
+	server, err := New(newDiscardLogger(), cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer server.Close()
+	first := server.runtime.Load()
+	if first == nil || first.inferRuntime != server.inferRuntime {
+		t.Fatal("initial snapshot does not use the server inference runtime")
+	}
+	second, err := newRuntimeSnapshot(context.Background(), cfg, newDiscardLogger(), server.hotKV, server.inferRuntime)
+	if err != nil {
+		t.Fatalf("newRuntimeSnapshot: %v", err)
+	}
+	defer second.close(context.Background(), newDiscardLogger())
+	if second.inferRuntime != first.inferRuntime {
+		t.Fatal("replacement snapshot did not preserve inference channels")
+	}
+}
+
+func TestRuntimeSnapshotReplayFailureClosesIntakeStore(t *testing.T) {
+	setDaemonTestDirs(t)
+	originalReplay := replayRuntimeSnapshotPending
+	t.Cleanup(func() {
+		replayRuntimeSnapshotPending = originalReplay
+	})
+	var openedStore *sqliteIntakeStore
+	replayRuntimeSnapshotPending = func(
+		processor *deferredProcessor,
+		_ context.Context,
+	) error {
+		var ok bool
+		openedStore, ok = processor.store.(*sqliteIntakeStore)
+		if !ok {
+			t.Fatalf("processor store = %T, want *sqliteIntakeStore", processor.store)
+		}
+		return errors.New("replay unavailable")
+	}
+
+	snapshot, err := newRuntimeSnapshot(
+		context.Background(), daemonTestConfig(t), newDiscardLogger(), nil, nil,
+	)
+	if err == nil || snapshot != nil {
+		t.Fatalf("newRuntimeSnapshot = %+v, %v; want replay error", snapshot, err)
+	}
+	if openedStore == nil {
+		t.Fatal("replay hook did not capture intake store")
+	}
+	if err := openedStore.Handle().PingContext(context.Background()); err == nil {
+		t.Fatal("intake store remained open after replay failure")
+	}
+}
+
 func emdashDaemonTestConfig(t testing.TB) *config.Config {
 	t.Helper()
 	pattern := `[\x{2010}-\x{2015}]`
@@ -146,6 +201,25 @@ func TestEvaluateHook_DaemonOwnsEnforcement(t *testing.T) {
 	}
 	if got := string(resp.StdoutData); !strings.Contains(got, `"permissionDecision":"deny"`) || !strings.Contains(got, "no-broad-go-test") {
 		t.Fatalf("stdout missing Codex deny response: %s", got)
+	}
+}
+
+func TestResolveHookEnvironment_DaemonOwnsPayloadParsing(t *testing.T) {
+	server := &Server{}
+	rawJSON := []byte(`{"session_id":"s1","hook_event_name":"PreToolUse","tool_name":"Shell","tool_input":{"command":"cat \"` + "$" + `TARGET\" ` + "$" + `SECOND"}}`)
+
+	response, err := server.ResolveHookEnvironment(
+		context.Background(),
+		&daemonpb.ResolveHookEnvironmentRequest{
+			RawJson: rawJSON, ProviderHint: "codex",
+		},
+	)
+	if err != nil {
+		t.Fatalf("ResolveHookEnvironment: %v", err)
+	}
+	want := []string{"TARGET"}
+	if fmt.Sprint(response.ReferencedNames) != fmt.Sprint(want) {
+		t.Fatalf("referenced names = %v, want %v", response.ReferencedNames, want)
 	}
 }
 
@@ -241,6 +315,63 @@ func TestEvaluateHook_ConcurrentBurstCompletes(t *testing.T) {
 		if err != nil {
 			t.Fatalf("concurrent EvaluateHook: %v", err)
 		}
+	}
+}
+
+func TestServerCloseWaitsForAdmittedEvaluation(t *testing.T) {
+	setDaemonTestDirs(t)
+	server, err := New(newDiscardLogger(), daemonTestConfig(t))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	evaluationEntered := make(chan struct{})
+	releaseEvaluation := make(chan struct{})
+	setHotEvaluatorForTest(
+		t,
+		server,
+		func(
+			ctx context.Context,
+			rawJSON []byte,
+			cfg *config.Config,
+			hint hook.System,
+			getenv func(string) string,
+			eventID string,
+		) hook.HotEvaluation {
+			close(evaluationEntered)
+			<-releaseEvaluation
+			return defaultHotEvaluate(ctx, rawJSON, cfg, hint, getenv, eventID)
+		},
+	)
+
+	evaluationDone := make(chan struct{})
+	go func() {
+		defer close(evaluationDone)
+		_, _ = server.EvaluateHook(context.Background(), &daemonpb.EvaluateHookRequest{
+			RawJson:      []byte(`{"session_id":"s1","hook_event_name":"PreToolUse","tool_name":"Shell","tool_input":{"command":"echo ok"}}`),
+			ProviderHint: "codex",
+		})
+	}()
+	<-evaluationEntered
+
+	closeDone := make(chan struct{})
+	go func() {
+		server.Close()
+		close(closeDone)
+	}()
+
+	closedBeforeRelease := false
+	select {
+	case <-closeDone:
+		closedBeforeRelease = true
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(releaseEvaluation)
+	<-evaluationDone
+	<-closeDone
+
+	if closedBeforeRelease {
+		t.Fatal("Server.Close returned while an admitted evaluation still used its snapshot")
 	}
 }
 
@@ -870,7 +1001,7 @@ func setEvaluateAdmissionForTest(t testing.TB, srv *Server, concurrency int, wai
 	return snapshot
 }
 
-type failingIntakeStore struct{}
+type failingIntakeStore struct{ intakeStore }
 
 func (failingIntakeStore) Append(context.Context, intake.Record) (intake.AppendResult, error) {
 	return intake.AppendResult{}, errors.New("append failed")
@@ -880,19 +1011,47 @@ func (failingIntakeStore) Get(context.Context, string) (intake.Record, error) {
 	return intake.Record{}, errors.New("get failed")
 }
 
-func (failingIntakeStore) MarkDeferredPending(context.Context, string) error {
+func (failingIntakeStore) GetReceipt(context.Context, int64) (intake.Record, error) {
+	return intake.Record{}, errors.New("get receipt failed")
+}
+
+func (failingIntakeStore) MarkDeferredPending(context.Context, string, int64) error {
 	return errors.New("mark pending failed")
 }
 
-func (failingIntakeStore) MarkDeferredComplete(context.Context, string) error {
+func (failingIntakeStore) MarkDeferredComplete(context.Context, int64) error {
 	return errors.New("mark complete failed")
+}
+
+func (failingIntakeStore) ClaimDeferred(
+	context.Context,
+	int64,
+	string,
+	time.Duration,
+) (intake.Record, intake.DeferredClaim, error) {
+	return intake.Record{}, intake.DeferredClaim{}, errors.New("claim failed")
+}
+
+func (failingIntakeStore) ReleaseDeferredClaim(
+	context.Context,
+	intake.DeferredClaim,
+) error {
+	return errors.New("release claim failed")
+}
+
+func (failingIntakeStore) RenewDeferredClaim(
+	context.Context,
+	intake.DeferredClaim,
+	time.Duration,
+) error {
+	return errors.New("renew claim failed")
 }
 
 func (failingIntakeStore) ReplayPending(context.Context, func(intake.Record) error) error {
 	return errors.New("replay failed")
 }
 
-func (failingIntakeStore) ListPending(context.Context) ([]string, error) {
+func (failingIntakeStore) ListPending(context.Context) ([]int64, error) {
 	return nil, errors.New("list failed")
 }
 
@@ -927,6 +1086,7 @@ func replaceDeferredProcessorForTest(t testing.TB, srv *Server, queueLimit int, 
 		snapshot.intakeStore,
 		nil,
 		snapshot.cfg,
+		snapshot.inferRuntime,
 		queueLimit,
 		workers,
 		newDiscardLogger(),
@@ -939,7 +1099,11 @@ func fillDeferredProcessorQueue(t testing.TB, srv *Server) {
 	if snapshot == nil || snapshot.deferredProcessor == nil {
 		t.Fatal("deferred processor is nil")
 	}
-	snapshot.deferredProcessor.events <- "occupied"
+	snapshot.deferredProcessor.events <- deferredWork{
+		receiptID: 1,
+		eventID:   "occupied",
+		hotEvent:  hook.DeferredAuditEvent{},
+	}
 }
 
 func setHotEvaluatorForTest(t testing.TB, srv *Server, evaluator func(context.Context, []byte, *config.Config, hook.System, func(string) string, string) hook.HotEvaluation) {

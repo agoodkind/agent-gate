@@ -2,7 +2,9 @@ package hook
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
+	"time"
 
 	"goodkind.io/agent-gate/internal/audit"
 	"goodkind.io/agent-gate/internal/config"
@@ -25,6 +27,7 @@ func EvaluateHotWithEventID(ctx context.Context, rawBytes []byte, cfg *config.Co
 			Stderr:   []byte("agent-gate: parse stdin JSON: " + err.Error() + "\n"),
 			ExitCode: 2,
 			Deferred: emptyDeferredAuditEvent(SystemUnknown),
+			Trace:    emptyDecisionTrace(),
 		}
 	}
 	system := DetectWithEnv(detectionPayload, hint, getenv)
@@ -35,10 +38,23 @@ func EvaluateHotWithEventID(ctx context.Context, rawBytes []byte, cfg *config.Co
 			Stderr:   []byte("agent-gate: parse typed hook JSON: " + err.Error() + "\n"),
 			ExitCode: 2,
 			Deferred: emptyDeferredAuditEvent(system),
+			Trace:    emptyDecisionTrace(),
 		}
 	}
 
 	return evaluatePayloadHot(ctx, payload, rawBytes, cfg, getenv, eventID)
+}
+
+func emptyDecisionTrace() rules.DecisionTrace {
+	return rules.DecisionTrace{
+		Deterministic: rules.DeterministicTrace{
+			StartedAt: time.Time{}, CompletedAt: time.Time{},
+			InputJSON: json.RawMessage(`{}`), OutputJSON: json.RawMessage(`{}`),
+			InputHash: "", OutputHash: "", ServiceName: "agent-gate",
+			ServiceVersion: "", CheckedRules: nil,
+		},
+		Layers: nil,
+	}
 }
 
 func emptyDeferredAuditEvent(system System) DeferredAuditEvent {
@@ -56,6 +72,8 @@ func emptyDeferredAuditEvent(system System) DeferredAuditEvent {
 		Rules:               nil,
 		BlockingViolations:  nil,
 		AuditOnlyViolations: nil,
+		InferenceTraces:     nil,
+		Trace:               emptyDecisionTrace(),
 		Decision:            ResponseDecisionAllow,
 		DiagnosticText:      "",
 	}
@@ -71,7 +89,17 @@ func evaluatePayloadHot(ctx context.Context, payload Payload, rawBytes []byte, c
 	eventName := payload.EventName()
 	fields := payload.Fields()
 	ruleSet := rulesForConfig(cfg)
-	violations := rules.EvaluateAll(ctx, systemStr, eventName, fields, ruleSet, getenv)
+	staged := evaluateStagedRules(
+		ctx,
+		cfg,
+		systemStr,
+		eventName,
+		fields,
+		ruleSet,
+		getenv,
+		compactTraceJSON(rawBytes),
+	)
+	violations := staged.violations
 	blockingViolations := blockingMatches(violations)
 	auditOnlyViolations := auditOnlyMatches(violations)
 	canBlock := CanBlock(payload.System, eventName)
@@ -97,7 +125,8 @@ func evaluatePayloadHot(ctx context.Context, payload Payload, rawBytes []byte, c
 			Stdout:   response.Stdout,
 			Stderr:   response.Stderr,
 			ExitCode: response.ExitCode,
-			Deferred: newDeferredAuditEvent(rawBytes, payload, fields, ruleSet, blockingViolations, auditOnlyViolations, decision, diagnostic, eventID),
+			Deferred: newDeferredAuditEvent(rawBytes, payload, fields, ruleSet, blockingViolations, auditOnlyViolations, staged.trace, decision, diagnostic, eventID),
+			Trace:    staged.trace,
 		}
 	}
 
@@ -113,7 +142,8 @@ func evaluatePayloadHot(ctx context.Context, payload Payload, rawBytes []byte, c
 		Stdout:   response.Stdout,
 		Stderr:   response.Stderr,
 		ExitCode: response.ExitCode,
-		Deferred: newDeferredAuditEvent(rawBytes, payload, fields, ruleSet, blockingViolations, auditOnlyViolations, decision, diagnostic, eventID),
+		Deferred: newDeferredAuditEvent(rawBytes, payload, fields, ruleSet, blockingViolations, auditOnlyViolations, staged.trace, decision, diagnostic, eventID),
+		Trace:    staged.trace,
 	}
 }
 
@@ -131,6 +161,7 @@ func newDeferredAuditEvent(
 	ruleSet []config.Rule,
 	blockingViolations []rules.Violation,
 	auditOnlyViolations []rules.Violation,
+	trace rules.DecisionTrace,
 	decision ResponseDecision,
 	diagnosticText string,
 	eventID string,
@@ -148,6 +179,8 @@ func newDeferredAuditEvent(
 		Rules:               ruleSet,
 		BlockingViolations:  blockingViolations,
 		AuditOnlyViolations: auditOnlyViolations,
+		InferenceTraces:     nil,
+		Trace:               trace,
 		Decision:            decision,
 		DiagnosticText:      diagnosticText,
 	}

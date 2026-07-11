@@ -546,3 +546,17 @@ func TestValidateConfig_ConditionKinds(t *testing.T) {
 		t.Fatal("expected unknown condition kind error")
 	}
 }
+
+func TestValidateConfigRejectsDuplicateRuleNames(t *testing.T) {
+	cfg := &config.Config{
+		Rules: []config.Rule{
+			{Name: "duplicate", CodexEvents: []string{"PreToolUse"}},
+			{Name: "duplicate", CodexEvents: []string{"PreToolUse"}},
+		},
+	}
+
+	errs := hook.ValidateConfig(cfg)
+	if len(errs) != 1 || !strings.Contains(errs[0].Error(), `duplicate rule name "duplicate"`) {
+		t.Fatalf("duplicate rule errors = %v", errs)
+	}
+}

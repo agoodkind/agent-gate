@@ -3,6 +3,7 @@ package rules
 import (
 	"strings"
 
+	"goodkind.io/agent-gate/internal/config"
 	"goodkind.io/agent-gate/internal/rules/concerns/shellwrite"
 )
 
@@ -14,6 +15,12 @@ import (
 // Sentinel targets for unparseable write shapes carry no path and are dropped;
 // a rule that needs to default-deny those uses a shell_write condition instead.
 func (fields FieldSet) CmdWriteTargets() string {
+	return fields.CmdWriteTargetsWithSpecs(nil)
+}
+
+// CmdWriteTargetsWithSpecs adds targets from condition-owned command-shape
+// declarations while preserving the built-in structural extractor.
+func (fields FieldSet) CmdWriteTargetsWithSpecs(specs []config.ShellWriteSpec) string {
 	if !fields.hasShellCommandContext() {
 		return ""
 	}
@@ -21,7 +28,7 @@ func (fields FieldSet) CmdWriteTargets() string {
 	if command == "" {
 		return ""
 	}
-	targets := shellwrite.ExtractWriteTargets(command, fields.BaseCWD())
+	targets := shellwrite.ExtractWriteTargetsWithSpecs(command, fields.BaseCWD(), specs)
 	paths := make([]string, 0, len(targets))
 	for _, target := range targets {
 		if target.Reason != shellwrite.ReasonOK || target.Path == "" {

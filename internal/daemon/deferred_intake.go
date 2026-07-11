@@ -2,30 +2,62 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"goodkind.io/agent-gate/internal/audit"
 	"goodkind.io/agent-gate/internal/config"
 	"goodkind.io/agent-gate/internal/hook"
 	"goodkind.io/agent-gate/internal/intake"
 	"goodkind.io/agent-gate/internal/rules"
+	"goodkind.io/agent-gate/internal/version"
+	gkversion "goodkind.io/gklog/version"
 )
 
 type deferredProcessor struct {
-	events   chan string
-	store    intakeStore
-	sink     audit.Sink
-	cfg      *config.Config
-	log      *slog.Logger
-	done     chan struct{}
-	wg       sync.WaitGroup
-	stopping atomic.Bool
+	events             chan deferredWork
+	store              intakeStore
+	sink               audit.Sink
+	cfg                *config.Config
+	inferRuntime       *rules.InferRuntime
+	evaluationRecorder evaluationRecorder
+	log                *slog.Logger
+	done               chan struct{}
+	wg                 sync.WaitGroup
+	stopping           atomic.Bool
+	claimOwner         string
+	claimLease         time.Duration
+	claimRenewInterval time.Duration
 }
 
-func newDeferredProcessor(ctx context.Context, store intakeStore, sink audit.Sink, cfg *config.Config, queueLimit int, workers int, log *slog.Logger) *deferredProcessor {
+const (
+	deferredClaimLease         = 30 * time.Second
+	deferredClaimRenewInterval = 10 * time.Second
+)
+
+var deferredProcessorSequence atomic.Uint64
+
+type deferredWork struct {
+	receiptID int64
+	eventID   string
+	hotEvent  hook.DeferredAuditEvent
+}
+
+func newDeferredProcessor(
+	ctx context.Context,
+	store intakeStore,
+	sink audit.Sink,
+	cfg *config.Config,
+	inferRuntime *rules.InferRuntime,
+	queueLimit int,
+	workers int,
+	log *slog.Logger,
+) *deferredProcessor {
 	if queueLimit <= 0 {
 		queueLimit = 1
 	}
@@ -34,14 +66,21 @@ func newDeferredProcessor(ctx context.Context, store intakeStore, sink audit.Sin
 	}
 
 	processor := &deferredProcessor{
-		events:   make(chan string, queueLimit),
-		store:    store,
-		sink:     sink,
-		cfg:      cfg,
-		log:      log,
-		done:     make(chan struct{}),
-		wg:       sync.WaitGroup{},
-		stopping: atomic.Bool{},
+		events:             make(chan deferredWork, queueLimit),
+		store:              store,
+		sink:               sink,
+		cfg:                cfg,
+		inferRuntime:       inferRuntime,
+		evaluationRecorder: nil,
+		log:                log,
+		done:               make(chan struct{}),
+		wg:                 sync.WaitGroup{},
+		stopping:           atomic.Bool{},
+		claimOwner: fmt.Sprintf(
+			"agent-gate-%d-%d", os.Getpid(), deferredProcessorSequence.Add(1),
+		),
+		claimLease:         deferredClaimLease,
+		claimRenewInterval: deferredClaimRenewInterval,
 	}
 
 	for range workers {
@@ -62,25 +101,52 @@ func (p *deferredProcessor) ReplayPending(ctx context.Context) error {
 		return nil
 	}
 
-	if err := p.store.ReplayPending(ctx, func(record intake.Record) error {
-		p.processRecord(ctx, record)
-		return nil
-	}); err != nil {
+	receiptIDs, err := p.store.ListPending(ctx)
+	if err != nil {
 		if p.log != nil {
 			p.log.WarnContext(ctx, "replay pending deferred intake failed", "err", err)
 		}
-		return fmt.Errorf("replay pending deferred intake: %w", err)
+		err = fmt.Errorf("replay pending deferred intake: %w", err)
+	} else {
+		var emptyEvent hook.DeferredAuditEvent
+		for _, receiptID := range receiptIDs {
+			p.processEvent(ctx, deferredWork{
+				receiptID: receiptID, eventID: "", hotEvent: emptyEvent,
+			})
+		}
+	}
+	auditErr := p.ReplayPendingAudit(ctx)
+	if err != nil || auditErr != nil {
+		return errors.Join(err, auditErr)
 	}
 	return nil
 }
 
-func (p *deferredProcessor) Enqueue(eventID string) bool {
-	if p == nil || p.store == nil || eventID == "" || p.stopping.Load() {
+// ReplayPendingAudit delivers committed outbox entries without re-evaluating.
+func (p *deferredProcessor) ReplayPendingAudit(ctx context.Context) error {
+	if p == nil || p.store == nil || p.sink == nil {
+		return nil
+	}
+	receiptIDs, err := p.store.ListPendingDeferredAudit(ctx, 0)
+	if err != nil {
+		if p.log != nil {
+			p.log.WarnContext(ctx, "list pending deferred audit failed", "err", err)
+		}
+		return fmt.Errorf("list pending deferred audit: %w", err)
+	}
+	for _, receiptID := range receiptIDs {
+		p.processDeferredAudit(ctx, receiptID)
+	}
+	return nil
+}
+
+func (p *deferredProcessor) Enqueue(receiptID int64, eventID string, hotEvent hook.DeferredAuditEvent) bool {
+	if p == nil || p.store == nil || receiptID <= 0 || eventID == "" || p.stopping.Load() {
 		return false
 	}
 
 	select {
-	case p.events <- eventID:
+	case p.events <- deferredWork{receiptID: receiptID, eventID: eventID, hotEvent: hotEvent}:
 		return true
 	default:
 		if p.log != nil {
@@ -106,71 +172,379 @@ func (p *deferredProcessor) Close() {
 }
 
 func (p *deferredProcessor) worker(ctx context.Context) {
+	replayTicker := time.NewTicker(deferredClaimLease)
+	defer replayTicker.Stop()
 	for {
 		select {
-		case eventID := <-p.events:
-			p.processEvent(ctx, eventID)
+		case work := <-p.events:
+			p.processEvent(ctx, work)
+		case <-replayTicker.C:
+			_ = p.ReplayPending(ctx)
 		case <-p.done:
 			return
 		}
 	}
 }
 
-func (p *deferredProcessor) processEvent(ctx context.Context, eventID string) {
-	record, err := p.store.Get(ctx, eventID)
+func (p *deferredProcessor) processEvent(ctx context.Context, work deferredWork) {
+	record, claim, err := p.store.ClaimDeferred(
+		ctx, work.receiptID, p.claimOwner, p.claimLease,
+	)
 	if err != nil {
+		if errors.Is(err, intake.ErrDeferredClaimUnavailable) {
+			return
+		}
 		if p.log != nil {
-			p.log.WarnContext(ctx, "load deferred intake failed", "event_id", eventID, "err", err)
+			p.log.WarnContext(ctx, "claim deferred intake failed", "event_id", work.eventID, "err", err)
 		}
 		return
 	}
-	if record.DeferredState != intake.DeferredStatePending {
-		return
+	var hotEvent *hook.DeferredAuditEvent
+	if work.hotEvent.Valid {
+		hotEvent = &work.hotEvent
 	}
-	p.processRecord(ctx, record)
+	processingCtx, cancel := context.WithCancel(ctx)
+	stopRenewal := make(chan struct{})
+	renewalDone := make(chan struct{})
+	renewalStopped := false
+	stopRenewalAndWait := func() {
+		if renewalStopped {
+			return
+		}
+		close(stopRenewal)
+		<-renewalDone
+		renewalStopped = true
+	}
+	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil && p.log != nil {
+				p.log.ErrorContext(
+					processingCtx, "deferred claim renewal panic recovered", "err", recovered,
+				)
+			}
+		}()
+		p.renewClaim(processingCtx, cancel, claim, stopRenewal, renewalDone)
+	}()
+	defer stopRenewalAndWait()
+	defer cancel()
+	p.processRecord(processingCtx, ctx, record, claim, hotEvent, stopRenewalAndWait)
 }
 
-func (p *deferredProcessor) processRecord(ctx context.Context, record intake.Record) {
-	deferredEvent, ok := p.rebuildDeferredAudit(ctx, record)
+func (p *deferredProcessor) renewClaim(
+	ctx context.Context,
+	cancel context.CancelFunc,
+	claim intake.DeferredClaim,
+	stop <-chan struct{},
+	done chan<- struct{},
+) {
+	defer close(done)
+	ticker := time.NewTicker(p.claimRenewInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			if err := p.store.RenewDeferredClaim(ctx, claim, p.claimLease); err != nil {
+				if p.log != nil {
+					p.log.WarnContext(
+						ctx, "renew deferred intake claim failed",
+						"receipt_id", claim.ReceiptID, "attempt", claim.Attempt, "err", err,
+					)
+				}
+				cancel()
+				return
+			}
+		case <-stop:
+			return
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+func (p *deferredProcessor) processRecord(
+	ctx context.Context,
+	auditCtx context.Context,
+	record intake.Record,
+	claim intake.DeferredClaim,
+	hotEvent *hook.DeferredAuditEvent,
+	afterCommit func(),
+) {
+	deferredEvent, ok := p.rebuildDeferredAudit(ctx, record, hotEvent)
 	if !ok {
+		p.releaseClaim(ctx, claim)
 		return
 	}
-	if p.sink != nil {
-		hook.WriteDeferredAudit(ctx, deferredEvent, p.sink)
+	mode := "deferred"
+	if hotEvent == nil {
+		mode = "deferred_replay"
 	}
-	if err := p.store.MarkDeferredComplete(ctx, record.EventID); err != nil && p.log != nil {
-		p.log.WarnContext(ctx, "mark deferred intake complete failed", "event_id", record.EventID, "err", err)
+	attempt := claim.Attempt
+	configHash, err := p.cfg.Identity()
+	if err != nil {
+		p.logDeferredFailure(ctx, record, "config_identity_failed", err)
+		p.releaseClaim(ctx, claim)
+		return
+	}
+	completedAt := hotEvalNow()
+	startedAt := deferredEvent.Trace.Deterministic.StartedAt
+	if startedAt.IsZero() {
+		startedAt = completedAt
+	}
+	evaluationRecord := buildDeferredEvaluationRecord(deferredEvaluationRecordInput{
+		ReceiptID: record.ReceiptID, EventID: record.EventID, Intake: record,
+		Mode: mode, Attempt: attempt, ConfigHash: configHash,
+		EngineVersion: gkversion.Version, EngineCommit: gkversion.Commit,
+		EngineBuildHash: version.BuildHash(), StartedAt: startedAt,
+		CompletedAt: completedAt, Event: deferredEvent,
+	})
+	if p.evaluationRecorder == nil {
+		p.logDeferredFailure(ctx, record, "evaluation_recorder_unavailable", nil)
+		p.releaseClaim(ctx, claim)
+		return
+	}
+	auditEntries, err := captureDeferredAudit(ctx, deferredEvent, p.sink)
+	if err != nil {
+		p.logDeferredFailure(ctx, record, "audit_normalization_failed", err)
+		p.releaseClaim(ctx, claim)
+		return
+	}
+	if err := p.evaluationRecorder.CommitDeferredEvaluation(
+		ctx, claim, evaluationRecord, auditEntries,
+	); err != nil {
+		p.logDeferredFailure(ctx, record, "evaluation_persistence_failed", err)
+		p.releaseClaim(ctx, claim)
+		return
+	}
+	if afterCommit != nil {
+		afterCommit()
+	}
+	p.processDeferredAudit(auditCtx, record.ReceiptID)
+}
+
+func (p *deferredProcessor) processDeferredAudit(ctx context.Context, receiptID int64) {
+	if p.sink == nil {
+		return
+	}
+	sink, ok := p.sink.(audit.ReplayableDurableSink)
+	if !ok {
+		p.log.WarnContext(ctx, "deferred audit sink is not replayable", "receipt_id", receiptID)
+		return
+	}
+	entries, claim, err := p.store.ClaimDeferredAudit(
+		ctx, receiptID, p.claimOwner, p.claimLease,
+	)
+	if err != nil {
+		if !errors.Is(err, intake.ErrDeferredAuditClaimUnavailable) && p.log != nil {
+			p.log.WarnContext(ctx, "claim deferred audit failed", "receipt_id", receiptID, "err", err)
+		}
+		return
+	}
+	processingCtx, cancel := context.WithCancel(ctx)
+	stopRenewal := make(chan struct{})
+	renewalDone := make(chan struct{})
+	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil && p.log != nil {
+				p.log.ErrorContext(
+					processingCtx, "deferred audit claim renewal panic recovered", "err", recovered,
+				)
+			}
+		}()
+		p.renewAuditClaim(processingCtx, cancel, claim, stopRenewal, renewalDone)
+	}()
+	stopRenewalAndWait := func() {
+		close(stopRenewal)
+		<-renewalDone
+	}
+	defer cancel()
+	defer stopRenewalAndWait()
+	for _, entry := range entries {
+		if err := sink.LogNormalizedDurable(ctx, entry.Entry); err != nil {
+			p.releaseAuditClaim(context.WithoutCancel(ctx), claim)
+			return
+		}
+		if err := p.store.MarkDeferredAuditEntryDelivered(
+			processingCtx, claim, entry.Index,
+		); err != nil {
+			p.releaseAuditClaim(context.WithoutCancel(ctx), claim)
+			return
+		}
+	}
+	if err := p.store.CompleteDeferredAudit(processingCtx, claim); err != nil {
+		p.releaseAuditClaim(context.WithoutCancel(ctx), claim)
 	}
 }
 
-func (p *deferredProcessor) rebuildDeferredAudit(ctx context.Context, record intake.Record) (hook.DeferredAuditEvent, bool) {
+func (p *deferredProcessor) renewAuditClaim(
+	ctx context.Context,
+	cancel context.CancelFunc,
+	claim intake.DeferredAuditClaim,
+	stop <-chan struct{},
+	done chan<- struct{},
+) {
+	defer close(done)
+	ticker := time.NewTicker(p.claimRenewInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			if err := p.store.RenewDeferredAuditClaim(ctx, claim, p.claimLease); err != nil {
+				cancel()
+				return
+			}
+		case <-stop:
+			return
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+func (p *deferredProcessor) releaseAuditClaim(
+	ctx context.Context,
+	claim intake.DeferredAuditClaim,
+) {
+	if err := p.store.ReleaseDeferredAuditClaim(ctx, claim); err != nil &&
+		!errors.Is(err, intake.ErrDeferredAuditClaimLost) && p.log != nil {
+		p.log.WarnContext(ctx, "release deferred audit claim failed", "receipt_id", claim.ReceiptID, "err", err)
+	}
+}
+
+func (p *deferredProcessor) releaseClaim(ctx context.Context, claim intake.DeferredClaim) {
+	if err := p.store.ReleaseDeferredClaim(ctx, claim); err != nil &&
+		!errors.Is(err, intake.ErrDeferredClaimLost) && p.log != nil {
+		p.log.WarnContext(
+			ctx, "release deferred intake claim failed",
+			"receipt_id", claim.ReceiptID, "attempt", claim.Attempt, "err", err,
+		)
+	}
+}
+
+func (p *deferredProcessor) logDeferredFailure(
+	ctx context.Context,
+	record intake.Record,
+	statusClass string,
+	err error,
+) {
+	if p.log == nil {
+		return
+	}
+	p.log.WarnContext(
+		ctx, "record deferred evaluation failed; leaving receipt pending",
+		"receipt_id", record.ReceiptID, "event_id", record.EventID,
+		"status_class", statusClass, "err", err,
+	)
+}
+
+type normalizedAuditCollector struct {
+	sink    audit.ReplayableDurableSink
+	entries []audit.NormalizedEntry
+}
+
+func (collector *normalizedAuditCollector) Log(
+	_ context.Context,
+	system string,
+	sessionID string,
+	eventName string,
+	level string,
+	msg string,
+	attrs audit.Attrs,
+) {
+	entry := collector.sink.Normalize(
+		system, sessionID, eventName, level, msg, attrs,
+	)
+	if entry.Event.EventID != "" {
+		collector.entries = append(collector.entries, entry)
+	}
+}
+
+func (collector *normalizedAuditCollector) Close() error {
+	return nil
+}
+
+func captureDeferredAudit(
+	ctx context.Context,
+	event hook.DeferredAuditEvent,
+	sink audit.Sink,
+) ([]audit.NormalizedEntry, error) {
+	if sink == nil || !event.Valid {
+		return nil, nil
+	}
+	replayableSink, ok := sink.(audit.ReplayableDurableSink)
+	if !ok {
+		return nil, fmt.Errorf("audit sink does not support normalized replay")
+	}
+	collector := &normalizedAuditCollector{
+		sink: replayableSink, entries: make([]audit.NormalizedEntry, 0, 3),
+	}
+	hook.WriteDeferredAudit(ctx, event, collector)
+	return collector.entries, nil
+}
+
+func (p *deferredProcessor) rebuildDeferredAudit(
+	ctx context.Context,
+	record intake.Record,
+	hotEvent *hook.DeferredAuditEvent,
+) (hook.DeferredAuditEvent, bool) {
 	getenv := func(key string) string {
 		return record.EnvFingerprint[key]
 	}
 	hint := hook.SystemFromString(record.System)
 
-	syncCfg := hook.SyncConfig(p.cfg)
-	syncEval := hook.EvaluateHotWithEventID(ctx, record.RawPayload, syncCfg, hint, getenv, record.EventID)
-	if !syncEval.Deferred.Valid {
-		if p.log != nil {
-			p.log.WarnContext(ctx, "replay sync evaluation produced invalid deferred event", "event_id", record.EventID)
+	var merged hook.DeferredAuditEvent
+	if hotEvent != nil && hotEvent.Valid {
+		merged = *hotEvent
+	} else {
+		syncCfg := hook.ReplaySyncConfig(p.cfg)
+		syncEval := hook.EvaluateHotWithEventID(
+			ctx,
+			record.RawPayload,
+			syncCfg,
+			hint,
+			getenv,
+			record.EventID,
+		)
+		if !syncEval.Deferred.Valid {
+			if p.log != nil {
+				p.log.WarnContext(ctx, "replay sync evaluation produced invalid deferred event", "event_id", record.EventID)
+			}
+			var empty hook.DeferredAuditEvent
+			return empty, false
 		}
-		var empty hook.DeferredAuditEvent
-		return empty, false
+		merged = syncEval.Deferred
 	}
-
-	merged := syncEval.Deferred
 	syncRules, deferredRules := hook.PartitionRules(p.cfg)
+	deferredCfg := hook.DeferredConfig(p.cfg)
+	if hotEvent == nil || !hotEvent.Valid {
+		replaySyncCfg := hook.ReplaySyncConfig(p.cfg)
+		replayDeferredCfg := hook.ReplayDeferredConfig(p.cfg)
+		syncRules = replaySyncCfg.Rules
+		deferredRules = replayDeferredCfg.Rules
+		deferredCfg = replayDeferredCfg
+	}
 	merged.Rules = append(append([]config.Rule(nil), syncRules...), deferredRules...)
 
 	if len(deferredRules) > 0 {
-		deferredCfg := hook.DeferredConfig(p.cfg)
-		deferredEval := hook.EvaluateHotWithEventID(ctx, record.RawPayload, deferredCfg, hint, getenv, record.EventID)
+		collector := &inferenceTraceSink{traces: nil}
+		deferredCtx := rules.WithInferenceTraceCollector(ctx, collector)
+		if p.inferRuntime != nil {
+			deferredCtx = rules.WithInferRuntime(deferredCtx, p.inferRuntime)
+		}
+		deferredEval := hook.EvaluateHotWithEventID(
+			deferredCtx,
+			record.RawPayload,
+			deferredCfg,
+			hint,
+			getenv,
+			record.EventID,
+		)
 		if deferredEval.Deferred.Valid {
 			merged.AuditOnlyViolations = append(
 				append([]rules.Violation(nil), merged.AuditOnlyViolations...),
 				deferredEval.Deferred.AuditOnlyViolations...,
 			)
+			merged.InferenceTraces = append(merged.InferenceTraces, collector.snapshot()...)
+			merged.Trace = deferredEval.Trace
 		} else if p.log != nil {
 			p.log.WarnContext(ctx, "replay deferred evaluation produced invalid deferred event", "event_id", record.EventID)
 		}

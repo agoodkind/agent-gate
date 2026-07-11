@@ -489,8 +489,6 @@ goodkind.io/gksyntax v0.0.0-20260618054600-30485de6d77b h1:LnaDtsu4Myy71K/uxFLkC
 goodkind.io/gksyntax v0.0.0-20260618054600-30485de6d77b/go.mod h1:3JLFnrp91eEKlJy10WzsUECoOnypuhhv9uJxKcmvE24=
 goodkind.io/go-makefile/selfupdate v0.0.0-20260704015044-f28c82087910 h1:7OfAcfvwE+Pn0Ia82Q6zN01WqQc1gbblLN+z6r+gG+U=
 goodkind.io/go-makefile/selfupdate v0.0.0-20260704015044-f28c82087910/go.mod h1:HPxYSE2TKo9ORrGXkfLoOvaSd/r4OnWeUDlTKXR5Zns=
-goodkind.io/lm-review v0.0.0-20260708010741-dfebccdd1d75 h1:BXI77wDmk7eU/MiWFwactUUgrtztgRr3mfE8TFugx6s=
-goodkind.io/lm-review v0.0.0-20260708010741-dfebccdd1d75/go.mod h1:gGpon6mO3GE+DBGFMszMXL7yW1YAnuHWUtfzl3P2IpE=
 google.golang.org/api v0.280.0 h1:F4OfEHZhZh6a7uTufJAXXVd/2TQ8EjM4vZH+jX/vFYk=
 google.golang.org/api v0.280.0/go.mod h1:oGKmPZRDoD3vdkf6MA7F4VNkR1rxCiuaPSkhsf3EolU=
 google.golang.org/genproto v0.0.0-20260319201613-d00831a3d3e7 h1:XzmzkmB14QhVhgnawEVsOn6OFsnpyxNPRY9QV01dNB0=

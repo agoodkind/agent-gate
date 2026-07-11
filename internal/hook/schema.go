@@ -363,7 +363,14 @@ func ValidPaths(system, eventName string) EventSchema {
 // applicable events. Returns a (possibly empty) slice of validation errors.
 func ValidateConfig(cfg *config.Config) []error {
 	var errs []error
+	seenRuleNames := make(map[string]bool, len(cfg.Rules))
 	for i := range cfg.Rules {
+		ruleName := cfg.Rules[i].Name
+		if seenRuleNames[ruleName] {
+			errs = append(errs, fmt.Errorf("duplicate rule name %q", ruleName))
+		} else {
+			seenRuleNames[ruleName] = true
+		}
 		errs = append(errs, validateRuleConfig(&cfg.Rules[i])...)
 	}
 	return errs
@@ -387,7 +394,14 @@ func collectRuleFieldPaths(r *config.Rule) []string {
 	allPaths := make([]string, 0, len(r.FieldPaths))
 	allPaths = append(allPaths, r.FieldPaths...)
 	for j := range r.Conditions {
-		allPaths = append(allPaths, r.Conditions[j].FieldPaths...)
+		condition := &r.Conditions[j]
+		allPaths = append(allPaths, condition.FieldPaths...)
+		if config.ConditionKind(condition.Kind) == config.ConditionKindInfer {
+			allPaths = append(allPaths, condition.InputField, condition.CacheKey)
+			if condition.ContextSource != "" {
+				allPaths = append(allPaths, condition.ContextWorkspaceField, condition.ContextSessionField)
+			}
+		}
 	}
 	return allPaths
 }
@@ -407,7 +421,9 @@ func isKnownConditionKind(kind string) bool {
 	switch config.ConditionKind(kind) {
 	case "", config.ConditionKindRegex, config.ConditionKindCommand, config.ConditionKindProject,
 		config.ConditionKindDiff, config.ConditionKindShellRead, config.ConditionKindShellWrite,
-		config.ConditionKindExec, config.ConditionKindComposer, config.ConditionKindGitDefaultBranch:
+		config.ConditionKindExec, config.ConditionKindGitDefaultBranch,
+		config.ConditionKindGitPrimaryCheckout, config.ConditionKindGitRefMove,
+		config.ConditionKindInfer:
 		return true
 	default:
 		return false

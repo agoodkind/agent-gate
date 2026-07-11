@@ -1,0 +1,946 @@
+package rules
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
+	"math"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/encoding/protojson"
+
+	"goodkind.io/agent-gate/api/inferencepb"
+	"goodkind.io/agent-gate/internal/config"
+	"goodkind.io/agent-gate/internal/hotkv"
+	"goodkind.io/clyde/api/contextpb"
+)
+
+const (
+	inferenceCacheNamespace = "infer-condition"
+)
+
+// InferenceTrace is the payload-free record of one attempted inference layer.
+type InferenceTrace struct {
+	LayerName          string             `json:"layer_name"`
+	ConditionIndex     int                `json:"condition_index"`
+	Outcome            string             `json:"outcome"`
+	Status             string             `json:"status"`
+	Latency            time.Duration      `json:"latency"`
+	CacheHit           bool               `json:"cache_hit"`
+	ErrorClass         string             `json:"error_class,omitempty"`
+	VerifiedProvenance VerifiedProvenance `json:"verified_provenance"`
+}
+
+// InferenceTraceCollector receives sanitized in-memory layer traces.
+type InferenceTraceCollector interface {
+	CollectInferenceTrace(InferenceTrace)
+}
+
+type inferenceTraceCollectorKey struct{}
+
+// WithInferenceTraceCollector attaches a collector to an evaluation context.
+func WithInferenceTraceCollector(ctx context.Context, collector InferenceTraceCollector) context.Context {
+	return context.WithValue(ctx, inferenceTraceCollectorKey{}, collector)
+}
+
+type inferFlight struct {
+	done   chan struct{}
+	result inferResult
+}
+
+type inferResult struct {
+	matched                   bool
+	errored                   bool
+	errorClass                string
+	cacheHit                  bool
+	cacheStatus               string
+	cacheEntryVersion         *int64
+	cacheExpiresAt            *time.Time
+	outputJSON                json.RawMessage
+	upstreamMetadata          UpstreamMetadata
+	reportedPromptHash        string
+	reportedSchemaHash        string
+	reportedHashesUnavailable bool
+	contextJSON               json.RawMessage
+	contextStartedAt          time.Time
+	contextCompletedAt        time.Time
+	contextErrorClass         string
+}
+
+type cachedInferResult struct {
+	SchemaVersion    int              `json:"schema_version"`
+	Matched          bool             `json:"matched"`
+	OutputJSON       json.RawMessage  `json:"output_json"`
+	UpstreamMetadata UpstreamMetadata `json:"upstream_metadata"`
+}
+
+type inferenceErrorOutput struct {
+	Error inferenceErrorDetails `json:"error"`
+}
+
+type inferenceErrorDetails struct {
+	Code       string `json:"code"`
+	ByteLength int    `json:"byte_length"`
+	SHA256     string `json:"sha256"`
+}
+
+// InferRuntime owns reusable inference and context channels plus call state.
+type InferRuntime struct {
+	log                  *slog.Logger
+	cache                *hotkv.Store
+	ownsCache            bool
+	mu                   sync.Mutex
+	inferenceConnections map[string]*grpc.ClientConn
+	inferenceClients     map[string]inferencepb.InferenceClient
+	contextConnections   map[string]*grpc.ClientConn
+	contextClients       map[string]contextpb.ConversationContextClient
+	inflight             map[string]*inferFlight
+	now                  func() time.Time
+}
+
+// NewInferRuntimeWithCache creates a reusable runtime backed by cache.
+func NewInferRuntimeWithCache(log *slog.Logger, cache *hotkv.Store) *InferRuntime {
+	if log == nil {
+		log = slog.Default()
+	}
+	ownsCache := false
+	if cache == nil {
+		cache = hotkv.New(hotkv.Options{
+			MaxEntries:    0,
+			MaxValueBytes: 0,
+			PruneInterval: 0,
+		})
+		ownsCache = true
+	}
+	return &InferRuntime{
+		log:                  log,
+		cache:                cache,
+		ownsCache:            ownsCache,
+		mu:                   sync.Mutex{},
+		inferenceConnections: map[string]*grpc.ClientConn{},
+		inferenceClients:     map[string]inferencepb.InferenceClient{},
+		contextConnections:   map[string]*grpc.ClientConn{},
+		contextClients:       map[string]contextpb.ConversationContextClient{},
+		inflight:             map[string]*inferFlight{},
+		now:                  time.Now,
+	}
+}
+
+// Close releases all runtime-owned channels and its private cache.
+func (runtime *InferRuntime) Close() {
+	if runtime == nil {
+		return
+	}
+	runtime.mu.Lock()
+	connections := make([]*grpc.ClientConn, 0, len(runtime.inferenceConnections)+len(runtime.contextConnections))
+	for _, connection := range runtime.inferenceConnections {
+		connections = append(connections, connection)
+	}
+	for _, connection := range runtime.contextConnections {
+		connections = append(connections, connection)
+	}
+	runtime.inferenceConnections = map[string]*grpc.ClientConn{}
+	runtime.contextConnections = map[string]*grpc.ClientConn{}
+	runtime.inferenceClients = map[string]inferencepb.InferenceClient{}
+	runtime.contextClients = map[string]contextpb.ConversationContextClient{}
+	runtime.mu.Unlock()
+	for _, connection := range connections {
+		_ = connection.Close()
+	}
+	if runtime.ownsCache && runtime.cache != nil {
+		runtime.cache.Close()
+	}
+}
+
+type inferRuntimeKey struct{}
+
+var defaultInferRuntime = NewInferRuntimeWithCache(nil, nil)
+
+// WithInferRuntime attaches daemon-owned reusable inference state.
+func WithInferRuntime(ctx context.Context, runtime *InferRuntime) context.Context {
+	return context.WithValue(ctx, inferRuntimeKey{}, runtime)
+}
+
+func inferRuntimeFromContext(ctx context.Context) *InferRuntime {
+	if runtime, ok := ctx.Value(inferRuntimeKey{}).(*InferRuntime); ok && runtime != nil {
+		return runtime
+	}
+	return defaultInferRuntime
+}
+
+type inferEventMemo struct {
+	mu      sync.Mutex
+	results map[*config.Condition]bool
+}
+
+type inferEventMemoKey struct{}
+
+func withInferEventMemo(ctx context.Context) context.Context {
+	return context.WithValue(ctx, inferEventMemoKey{}, &inferEventMemo{
+		mu:      sync.Mutex{},
+		results: map[*config.Condition]bool{},
+	})
+}
+
+func inferConditionGateMatch(ctx context.Context, fields FieldSet, rule *config.Rule, conditionIndex int, condition *config.Condition) bool {
+	if memo, ok := ctx.Value(inferEventMemoKey{}).(*inferEventMemo); ok {
+		memo.mu.Lock()
+		result, found := memo.results[condition]
+		memo.mu.Unlock()
+		if found {
+			return result
+		}
+		result = inferRuntimeFromContext(ctx).evaluate(ctx, fields, rule, conditionIndex, condition)
+		memo.mu.Lock()
+		memo.results[condition] = result
+		memo.mu.Unlock()
+		return result
+	}
+	return inferRuntimeFromContext(ctx).evaluate(ctx, fields, rule, conditionIndex, condition)
+}
+
+func (runtime *InferRuntime) evaluate(ctx context.Context, fields FieldSet, rule *config.Rule, conditionIndex int, condition *config.Condition) bool {
+	started := runtime.now()
+	input := fields.StringForCondition(condition.InputFieldSelector().Selector, condition)
+	keyValue := fields.StringForCondition(condition.CacheKeySelector().Selector, condition)
+	contextWorkspace, contextSession := resolvedContextIdentity(fields, condition)
+	cacheKey := stableInferenceKey(
+		condition,
+		input,
+		keyValue,
+		contextWorkspace,
+		contextSession,
+	)
+	result := runtime.resolve(
+		ctx,
+		condition,
+		cacheKey,
+		input,
+		contextWorkspace,
+		contextSession,
+	)
+	blocked := inferResultBlocks(condition, result)
+	completed := runtime.now()
+	runtime.collectTrace(
+		ctx, condition, conditionIndex, input, cacheKey, result, completed.Sub(started),
+	)
+	runtime.collectRichTrace(ctx, rule, condition, conditionIndex, input, contextWorkspace, contextSession, cacheKey, started, completed, result)
+	if result.errored {
+		runtime.log.WarnContext(ctx, "inference condition failed",
+			"endpoint", condition.Endpoint, "rule", rule.Name,
+			"condition_index", conditionIndex, "status_class", result.errorClass)
+	}
+	return blocked
+}
+
+func (runtime *InferRuntime) resolve(
+	ctx context.Context,
+	condition *config.Condition,
+	cacheKey string,
+	input string,
+	contextWorkspace string,
+	contextSession string,
+) inferResult {
+	if result, found := runtime.cacheLookup(cacheKey); found {
+		result.cacheHit = true
+		result.cacheStatus = "hit"
+		return result
+	}
+	return runtime.singleflight(ctx, cacheKey, func() inferResult {
+		if condition.CacheTTLMs > 0 {
+			if cached, found := runtime.cacheLookup(cacheKey); found {
+				cached.cacheHit = true
+				cached.cacheStatus = "hit"
+				return cached
+			}
+		}
+		result := runtime.call(ctx, condition, input, contextWorkspace, contextSession)
+		if !result.errored && condition.CacheTTLMs > 0 {
+			runtime.cacheStore(cacheKey, condition.CacheTTLMs, result)
+		}
+		if result.cacheStatus == "" {
+			result.cacheStatus = "miss"
+		}
+		return result
+	})
+}
+
+func resolvedContextIdentity(fields FieldSet, condition *config.Condition) (string, string) {
+	if condition.ContextSource == "" {
+		return "", ""
+	}
+	workspace := fields.StringForCondition(condition.ContextWorkspaceSelector().Selector, condition)
+	session := fields.StringForCondition(condition.ContextSessionSelector().Selector, condition)
+	return workspace, session
+}
+
+func inferResultBlocks(condition *config.Condition, result inferResult) bool {
+	switch {
+	case result.errored:
+		return condition.OnError == config.OnErrorClosed
+	case condition.BlockOn == config.BlockOnMatch:
+		return result.matched
+	default:
+		return !result.matched
+	}
+}
+
+func (runtime *InferRuntime) call(
+	ctx context.Context,
+	condition *config.Condition,
+	input string,
+	contextWorkspace string,
+	contextSession string,
+) inferResult {
+	callCtx, cancel := context.WithTimeout(ctx, time.Duration(condition.TimeoutMs)*time.Millisecond)
+	defer cancel()
+	localPromptHash := traceJSONHash([]byte(condition.Prompt))
+	localSchemaHash := traceJSONHash([]byte(condition.OutputSchema))
+	contextStartedAt := runtime.now()
+	contextJSON, errClass := runtime.contextJSON(
+		callCtx,
+		condition,
+		contextWorkspace,
+		contextSession,
+	)
+	contextCompletedAt := runtime.now()
+	base := emptyInferResult()
+	base.cacheStatus = "miss"
+	base.contextJSON = json.RawMessage(contextJSON)
+	base.contextStartedAt = contextStartedAt
+	base.contextCompletedAt = contextCompletedAt
+	base.contextErrorClass = errClass
+	if len(base.contextJSON) == 0 {
+		base.contextJSON = json.RawMessage(`{}`)
+	}
+	if errClass != "" && condition.ContextOnError == "error" {
+		return mergeInferResult(base, inferError(errClass))
+	}
+	client, err := runtime.inferenceClient(condition.Endpoint)
+	if err != nil {
+		return mergeInferResult(base, inferError("invalid_endpoint"))
+	}
+	reply, err := client.Infer(callCtx, &inferencepb.InferRequest{
+		Prompt: condition.Prompt, Input: input,
+		OutputSchema: condition.OutputSchema, Context: contextJSON, Model: condition.Model,
+		GenerationOptions: generationOptions(condition),
+	})
+	if err != nil {
+		return mergeInferResult(base, inferError(grpcErrorClass(err)))
+	}
+	if reply == nil {
+		return mergeInferResult(base, inferError("non_complete"))
+	}
+	if reply.GetStatus() != inferencepb.InferenceStatus_INFERENCE_STATUS_COMPLETE {
+		return mergeInferResult(
+			base,
+			inferErrorWithMetadata("non_complete", reply.GetOutputJson(), reply.GetMetadata()),
+		)
+	}
+	matched, err := inferenceJSONMatches(condition, reply.GetOutputJson())
+	if err != nil {
+		return mergeInferResult(
+			base,
+			inferErrorWithMetadata("invalid_response", reply.GetOutputJson(), reply.GetMetadata()),
+		)
+	}
+	if invocationHashMismatch(reply.GetMetadata(), localPromptHash, localSchemaHash) {
+		return mergeInferResult(
+			base,
+			inferErrorWithMetadata("hash_mismatch", reply.GetOutputJson(), reply.GetMetadata()),
+		)
+	}
+	return mergeInferResult(base, inferSuccess(matched, json.RawMessage(reply.GetOutputJson()), reply.GetMetadata()))
+}
+
+func generationOptions(condition *config.Condition) *inferencepb.GenerationOptions {
+	if condition.ReasoningEffort == "" && condition.MaxCompletionTokens == nil && condition.Temperature == nil {
+		return nil
+	}
+	return &inferencepb.GenerationOptions{
+		ReasoningEffort:     reasoningEffortValue(condition.ReasoningEffort),
+		MaxCompletionTokens: condition.MaxCompletionTokens,
+		Temperature:         condition.Temperature,
+	}
+}
+
+func reasoningEffortValue(value config.ReasoningEffort) inferencepb.ReasoningEffort {
+	switch value {
+	case config.ReasoningEffortUnspecified:
+		return inferencepb.ReasoningEffort_REASONING_EFFORT_UNSPECIFIED
+	case config.ReasoningEffortNone:
+		return inferencepb.ReasoningEffort_REASONING_EFFORT_NONE
+	case config.ReasoningEffortMinimal:
+		return inferencepb.ReasoningEffort_REASONING_EFFORT_MINIMAL
+	case config.ReasoningEffortLow:
+		return inferencepb.ReasoningEffort_REASONING_EFFORT_LOW
+	case config.ReasoningEffortMedium:
+		return inferencepb.ReasoningEffort_REASONING_EFFORT_MEDIUM
+	case config.ReasoningEffortHigh:
+		return inferencepb.ReasoningEffort_REASONING_EFFORT_HIGH
+	case config.ReasoningEffortXHigh:
+		return inferencepb.ReasoningEffort_REASONING_EFFORT_XHIGH
+	default:
+		return inferencepb.ReasoningEffort_REASONING_EFFORT_UNSPECIFIED
+	}
+}
+
+func inferError(errorClass string) inferResult {
+	result := emptyInferResult()
+	result.errored = true
+	result.errorClass = errorClass
+	return result
+}
+
+func inferErrorWithMetadata(
+	errorClass string,
+	outputJSON string,
+	metadata *inferencepb.InvocationMetadata,
+) inferResult {
+	result := inferError(errorClass)
+	result.outputJSON = safeInferenceErrorOutput(errorClass, outputJSON)
+	result = applyInvocationMetadata(result, metadata)
+	return result
+}
+
+func safeInferenceErrorOutput(errorClass string, outputJSON string) json.RawMessage {
+	if errorClass != "invalid_response" && json.Valid([]byte(outputJSON)) {
+		return append(json.RawMessage(nil), outputJSON...)
+	}
+	encoded, err := json.Marshal(inferenceErrorOutput{Error: inferenceErrorDetails{
+		Code: errorClass, ByteLength: len(outputJSON), SHA256: traceJSONHash([]byte(outputJSON)),
+	}})
+	if err != nil {
+		return json.RawMessage(`{"error":{"code":"invalid_response","byte_length":0,"sha256":"sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}}`)
+	}
+	return encoded
+}
+
+func inferSuccess(
+	matched bool,
+	outputJSON json.RawMessage,
+	metadata *inferencepb.InvocationMetadata,
+) inferResult {
+	result := emptyInferResult()
+	result.matched = matched
+	result.outputJSON = append(json.RawMessage(nil), outputJSON...)
+	result = applyInvocationMetadata(result, metadata)
+	return result
+}
+
+func emptyInferResult() inferResult {
+	return inferResult{
+		matched: false, errored: false, errorClass: "", cacheHit: false,
+		cacheStatus: "", cacheEntryVersion: nil, cacheExpiresAt: nil,
+		outputJSON: json.RawMessage(`{}`), upstreamMetadata: emptyUpstreamMetadata(),
+		reportedPromptHash: "", reportedSchemaHash: "", reportedHashesUnavailable: false,
+		contextJSON:      nil,
+		contextStartedAt: time.Time{}, contextCompletedAt: time.Time{},
+		contextErrorClass: "",
+	}
+}
+
+func mergeInferResult(base inferResult, result inferResult) inferResult {
+	result.contextJSON = append(json.RawMessage(nil), base.contextJSON...)
+	result.contextStartedAt = base.contextStartedAt
+	result.contextCompletedAt = base.contextCompletedAt
+	result.contextErrorClass = base.contextErrorClass
+	if result.cacheStatus == "" {
+		result.cacheStatus = base.cacheStatus
+	}
+	return result
+}
+
+func invocationHashMismatch(
+	metadata *inferencepb.InvocationMetadata,
+	localPromptHash string,
+	localSchemaHash string,
+) bool {
+	if metadata == nil {
+		return false
+	}
+	return hashValueMismatch(metadata.GetPromptSha256(), localPromptHash) ||
+		hashValueMismatch(metadata.GetSchemaSha256(), localSchemaHash)
+}
+
+func hashValueMismatch(upstream string, local string) bool {
+	if upstream == "" {
+		return false
+	}
+	return strings.TrimPrefix(upstream, "sha256:") != strings.TrimPrefix(local, "sha256:")
+}
+
+func applyInvocationMetadata(
+	result inferResult,
+	metadata *inferencepb.InvocationMetadata,
+) inferResult {
+	result.upstreamMetadata = boundedUpstreamMetadata(metadata)
+	if metadata != nil {
+		result.reportedPromptHash = metadata.GetPromptSha256()
+		result.reportedSchemaHash = metadata.GetSchemaSha256()
+	}
+	return result
+}
+
+func boundedUpstreamMetadata(metadata *inferencepb.InvocationMetadata) UpstreamMetadata {
+	bounded := emptyUpstreamMetadata()
+	if metadata == nil {
+		return bounded
+	}
+	encoded, err := (protojson.MarshalOptions{UseProtoNames: true}).Marshal(metadata)
+	if err != nil || !json.Valid(encoded) {
+		bounded.Status = UpstreamMetadataOmittedMalformed
+		return bounded
+	}
+	if len(encoded) > MaxUpstreamMetadataJSONBytes {
+		bounded.Status = UpstreamMetadataOmittedOversize
+		return bounded
+	}
+	bounded.Status = UpstreamMetadataPresent
+	bounded.Raw = append(json.RawMessage(nil), encoded...)
+	return bounded
+}
+
+func (runtime *InferRuntime) contextJSON(
+	ctx context.Context,
+	condition *config.Condition,
+	contextWorkspace string,
+	contextSession string,
+) (string, string) {
+	if condition.ContextSource == "" {
+		return "", ""
+	}
+	client, err := runtime.contextClient(condition.ContextEndpoint)
+	if err != nil {
+		return "", "context_unavailable"
+	}
+	turnBudget, turnBudgetValid := checkedInt32(condition.ContextTurnBudget)
+	maxCharsPerTurn, maxCharsValid := checkedInt32(condition.ContextMaxCharsPerTurn)
+	if !turnBudgetValid || !maxCharsValid {
+		return "", "context_invalid"
+	}
+	reply, err := client.GetRecentTurns(ctx, &contextpb.GetRecentTurnsRequest{
+		WorkspaceRef:    contextWorkspace,
+		SessionRef:      contextSession,
+		TurnBudget:      turnBudget,
+		MaxCharsPerTurn: maxCharsPerTurn,
+	})
+	if err != nil || reply == nil {
+		return "", "context_unavailable"
+	}
+	type opaqueTurn struct {
+		Role string `json:"role"`
+		Text string `json:"text"`
+		TS   string `json:"ts"`
+	}
+	type opaqueContext struct {
+		Turns []opaqueTurn `json:"turns"`
+	}
+	value := opaqueContext{Turns: make([]opaqueTurn, 0, len(reply.GetTurns()))}
+	for _, turn := range reply.GetTurns() {
+		if turn != nil {
+			value.Turns = append(value.Turns, opaqueTurn{Role: turn.GetRole(), Text: turn.GetText(), TS: turn.GetTs()})
+		}
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return "", "context_invalid"
+	}
+	return string(encoded), ""
+}
+
+func checkedInt32(value int) (int32, bool) {
+	if value < math.MinInt32 || value > math.MaxInt32 {
+		return 0, false
+	}
+	return int32(value), true
+}
+
+func (runtime *InferRuntime) inferenceClient(endpoint string) (inferencepb.InferenceClient, error) {
+	endpoint = strings.TrimSpace(endpoint)
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	if client := runtime.inferenceClients[endpoint]; client != nil {
+		return client, nil
+	}
+	connection, err := grpc.NewClient(grpcEndpoint(endpoint), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		runtime.log.Warn("create inference client failed", "endpoint", endpoint, "err", err)
+		return nil, fmt.Errorf("create inference client: %w", err)
+	}
+	runtime.inferenceConnections[endpoint] = connection
+	client := inferencepb.NewInferenceClient(connection)
+	runtime.inferenceClients[endpoint] = client
+	return client, nil
+}
+
+func (runtime *InferRuntime) contextClient(endpoint string) (contextpb.ConversationContextClient, error) {
+	endpoint = strings.TrimSpace(endpoint)
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	if client := runtime.contextClients[endpoint]; client != nil {
+		return client, nil
+	}
+	connection, err := grpc.NewClient(grpcEndpoint(endpoint), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		runtime.log.Warn("create context client failed", "endpoint", endpoint, "err", err)
+		return nil, fmt.Errorf("create context client: %w", err)
+	}
+	runtime.contextConnections[endpoint] = connection
+	client := contextpb.NewConversationContextClient(connection)
+	runtime.contextClients[endpoint] = client
+	return client, nil
+}
+
+func grpcEndpoint(endpoint string) string {
+	if strings.HasPrefix(strings.TrimSpace(endpoint), "/") {
+		return "unix://" + strings.TrimSpace(endpoint)
+	}
+	return strings.TrimSpace(endpoint)
+}
+
+func (runtime *InferRuntime) singleflight(ctx context.Context, key string, function func() inferResult) inferResult {
+	runtime.mu.Lock()
+	if flight := runtime.inflight[key]; flight != nil {
+		runtime.mu.Unlock()
+		select {
+		case <-flight.done:
+			result := flight.result
+			result.cacheStatus = "coalesced"
+			return result
+		case <-ctx.Done():
+			return inferError(grpcErrorClass(ctx.Err()))
+		}
+	}
+	flight := &inferFlight{done: make(chan struct{}), result: emptyInferResult()}
+	runtime.inflight[key] = flight
+	runtime.mu.Unlock()
+	flight.result = function()
+	runtime.mu.Lock()
+	delete(runtime.inflight, key)
+	close(flight.done)
+	runtime.mu.Unlock()
+	return flight.result
+}
+
+func (runtime *InferRuntime) cacheLookup(key string) (inferResult, bool) {
+	if runtime.cache == nil {
+		return emptyInferResult(), false
+	}
+	entry, found, err := runtime.cache.Get(inferenceCacheNamespace, key)
+	if err != nil || !found {
+		return emptyInferResult(), false
+	}
+	cached, metadata, valid := decodeCachedInferResult(entry.Value)
+	if !valid {
+		_, _ = runtime.cache.Delete(inferenceCacheNamespace, key)
+		return emptyInferResult(), false
+	}
+	result := emptyInferResult()
+	result.matched = cached.Matched
+	result.outputJSON = append(json.RawMessage(nil), cached.OutputJSON...)
+	result.upstreamMetadata = cached.UpstreamMetadata
+	result.upstreamMetadata.Raw = append(json.RawMessage(nil), cached.UpstreamMetadata.Raw...)
+	if metadata != nil {
+		result.reportedPromptHash = metadata.GetPromptSha256()
+		result.reportedSchemaHash = metadata.GetSchemaSha256()
+	} else if cached.UpstreamMetadata.Status == UpstreamMetadataOmittedMalformed ||
+		cached.UpstreamMetadata.Status == UpstreamMetadataOmittedOversize {
+		result.reportedHashesUnavailable = true
+	}
+	if entry.Version <= math.MaxInt64 {
+		version := int64(entry.Version)
+		result.cacheEntryVersion = &version
+	}
+	if !entry.ExpiresAt.IsZero() {
+		expiresAt := entry.ExpiresAt
+		result.cacheExpiresAt = &expiresAt
+	}
+	return result, true
+}
+
+func decodeCachedInferResult(
+	value []byte,
+) (cachedInferResult, *inferencepb.InvocationMetadata, bool) {
+	var cached cachedInferResult
+	if json.Unmarshal(value, &cached) != nil {
+		return emptyCachedInferResult(), nil, false
+	}
+	metadata, valid := cachedInvocationMetadata(cached)
+	return cached, metadata, valid
+}
+
+func emptyCachedInferResult() cachedInferResult {
+	return cachedInferResult{
+		SchemaVersion: 0, Matched: false, OutputJSON: nil,
+		UpstreamMetadata: UpstreamMetadata{
+			Source: "", Trust: "", Status: "", Raw: nil,
+		},
+	}
+}
+
+func cachedInvocationMetadata(
+	cached cachedInferResult,
+) (*inferencepb.InvocationMetadata, bool) {
+	if cached.SchemaVersion != 2 {
+		return nil, false
+	}
+	metadata, err := UnmarshalUpstreamMetadata(cached.UpstreamMetadata)
+	if err != nil {
+		return nil, false
+	}
+	switch metadata.Status {
+	case UpstreamMetadataPresent:
+		parsed := new(inferencepb.InvocationMetadata)
+		if (protojson.UnmarshalOptions{DiscardUnknown: false}).Unmarshal(
+			metadata.Raw, parsed,
+		) != nil {
+			return nil, false
+		}
+		return parsed, true
+	case UpstreamMetadataAbsent, UpstreamMetadataOmittedMalformed,
+		UpstreamMetadataOmittedOversize:
+		return nil, len(metadata.Raw) == 0
+	default:
+		return nil, false
+	}
+}
+
+func (runtime *InferRuntime) cacheStore(key string, ttlMilliseconds int, result inferResult) {
+	encoded, err := json.Marshal(cachedInferResult{
+		SchemaVersion: 2, Matched: result.matched,
+		OutputJSON: append(json.RawMessage(nil), result.outputJSON...),
+		UpstreamMetadata: UpstreamMetadata{
+			Source: result.upstreamMetadata.Source, Trust: result.upstreamMetadata.Trust,
+			Status: result.upstreamMetadata.Status,
+			Raw:    append(json.RawMessage(nil), result.upstreamMetadata.Raw...),
+		},
+	})
+	if err != nil {
+		return
+	}
+	_, _, err = runtime.cache.Set(inferenceCacheNamespace, key, encoded, hotkv.SetOptions{
+		Mode: hotkv.SetModeAny, TTL: time.Duration(ttlMilliseconds) * time.Millisecond,
+	})
+	if err != nil {
+		runtime.log.Warn("store inference cache result failed", "status_class", "cache_error", "err", err)
+	}
+}
+
+func stableInferenceKey(
+	condition *config.Condition,
+	input string,
+	selectedKey string,
+	contextWorkspace string,
+	contextSession string,
+) string {
+	hash := sha256.New()
+	parts := []string{
+		condition.Endpoint, condition.LayerName, condition.Prompt, condition.OutputSchema,
+		condition.Model, string(condition.ReasoningEffort),
+		optionalInt64Identity(condition.MaxCompletionTokens),
+		optionalFloat64Identity(condition.Temperature),
+		condition.InputField, input, condition.CacheKey, selectedKey,
+		condition.ResponseJSONField, string(condition.ResponseJSONEqualsValue().Kind()),
+		condition.ResponseJSONEqualsValue().CanonicalString(), condition.BlockOn, condition.OnError,
+		strconv.Itoa(condition.TimeoutMs), strconv.Itoa(condition.CacheTTLMs), condition.ContextSource,
+		condition.ContextEndpoint, condition.ContextWorkspaceField, condition.ContextSessionField,
+		contextWorkspace, contextSession,
+		strconv.Itoa(condition.ContextTurnBudget), strconv.Itoa(condition.ContextMaxCharsPerTurn), condition.ContextOnError,
+	}
+	for _, part := range parts {
+		_, _ = hash.Write([]byte(strconv.Itoa(len(part))))
+		_, _ = hash.Write([]byte{':'})
+		_, _ = hash.Write([]byte(part))
+	}
+	return hex.EncodeToString(hash.Sum(nil))
+}
+
+func optionalInt64Identity(value *int64) string {
+	if value == nil {
+		return "unset"
+	}
+	return "set:" + strconv.FormatInt(*value, 10)
+}
+
+func optionalFloat64Identity(value *float64) string {
+	if value == nil {
+		return "unset"
+	}
+	return "set:" + strconv.FormatFloat(*value, 'g', -1, 64)
+}
+
+func inferenceJSONMatches(condition *config.Condition, document string) (bool, error) {
+	current := json.RawMessage(document)
+	for part := range strings.SplitSeq(condition.ResponseJSONField, ".") {
+		var value map[string]json.RawMessage
+		if err := json.Unmarshal(current, &value); err != nil {
+			return false, errors.New("invalid JSON")
+		}
+		next, ok := value[part]
+		if !ok {
+			return false, errors.New("missing JSON field")
+		}
+		current = next
+	}
+	expected := condition.ResponseJSONEqualsValue()
+	switch expected.Kind() {
+	case config.TOMLScalarUnset:
+		return false, errors.New("unsupported scalar")
+	case config.TOMLScalarBool:
+		var actual bool
+		if err := json.Unmarshal(current, &actual); err != nil {
+			return false, errors.New("decode boolean response")
+		}
+		return actual == expected.BoolValue(), nil
+	case config.TOMLScalarString:
+		var actual string
+		if err := json.Unmarshal(current, &actual); err != nil {
+			return false, errors.New("decode string response")
+		}
+		return actual == expected.StringValue(), nil
+	case config.TOMLScalarInt:
+		var actual json.Number
+		decoder := json.NewDecoder(bytes.NewReader(current))
+		decoder.UseNumber()
+		if err := decoder.Decode(&actual); err != nil {
+			return false, errors.New("decode integer response")
+		}
+		value, err := actual.Int64()
+		if err == nil {
+			return value == expected.IntValue(), nil
+		}
+		floatValue, floatErr := actual.Float64()
+		if floatErr != nil {
+			return false, errors.New("decode integer response number")
+		}
+		return floatValue == float64(expected.IntValue()), nil
+	case config.TOMLScalarFloat:
+		var actual json.Number
+		decoder := json.NewDecoder(bytes.NewReader(current))
+		decoder.UseNumber()
+		if err := decoder.Decode(&actual); err != nil {
+			return false, errors.New("decode float response")
+		}
+		value, err := actual.Float64()
+		if err == nil {
+			return value == expected.FloatValue(), nil
+		}
+		integerValue, integerErr := strconv.ParseInt(actual.String(), 10, 64)
+		if integerErr != nil {
+			return false, errors.New("decode float response integer")
+		}
+		return float64(integerValue) == expected.FloatValue(), nil
+	default:
+		return false, errors.New("unsupported scalar")
+	}
+}
+
+func grpcErrorClass(err error) string {
+	if err == nil {
+		return ""
+	}
+	code := status.Code(err)
+	if errors.Is(err, context.Canceled) {
+		code = codes.Canceled
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		code = codes.DeadlineExceeded
+	}
+	switch code {
+	case codes.Canceled:
+		return "canceled"
+	case codes.DeadlineExceeded:
+		return "deadline_exceeded"
+	case codes.InvalidArgument:
+		return "invalid_argument"
+	case codes.FailedPrecondition:
+		return "failed_precondition"
+	case codes.Unavailable:
+		return "unavailable"
+	case codes.OK, codes.Unknown, codes.NotFound, codes.AlreadyExists,
+		codes.PermissionDenied, codes.ResourceExhausted, codes.Aborted,
+		codes.OutOfRange, codes.Unimplemented, codes.Internal, codes.DataLoss,
+		codes.Unauthenticated:
+		return "rpc_error"
+	default:
+		return "rpc_error"
+	}
+}
+
+func (runtime *InferRuntime) collectTrace(
+	ctx context.Context,
+	condition *config.Condition,
+	conditionIndex int,
+	input string,
+	cacheKey string,
+	result inferResult,
+	latency time.Duration,
+) {
+	collector, _ := ctx.Value(inferenceTraceCollectorKey{}).(InferenceTraceCollector)
+	if collector == nil {
+		return
+	}
+	outcome := "nonmatched"
+	statusValue := "complete"
+	if result.matched {
+		outcome = "matched"
+	}
+	if result.errored {
+		outcome = "nonmatched"
+		statusValue = "error"
+	}
+	collector.CollectInferenceTrace(InferenceTrace{
+		LayerName: condition.LayerName, ConditionIndex: conditionIndex,
+		Outcome: outcome, Status: statusValue, Latency: latency,
+		CacheHit: result.cacheHit, ErrorClass: result.errorClass,
+		VerifiedProvenance: verifiedInferenceProvenance(condition, input, cacheKey, result),
+	})
+}
+
+func verifiedInferenceProvenance(
+	condition *config.Condition,
+	input string,
+	cacheKey string,
+	result inferResult,
+) VerifiedProvenance {
+	promptHash := traceJSONHash([]byte(condition.Prompt))
+	schemaHash := traceJSONHash([]byte(condition.OutputSchema))
+	return VerifiedProvenance{
+		RequestedModel: condition.Model,
+		EndpointHash:   traceJSONHash([]byte(condition.Endpoint)),
+		CacheKeyHash:   traceJSONHash([]byte(cacheKey)), InputHash: traceJSONHash([]byte(input)),
+		PromptSHA256: promptHash, SchemaSHA256: schemaHash,
+		ReportedPromptHashStatus: reportedHashStatus(
+			result.reportedPromptHash, promptHash, result.reportedHashesUnavailable,
+		),
+		ReportedSchemaHashStatus: reportedHashStatus(
+			result.reportedSchemaHash, schemaHash, result.reportedHashesUnavailable,
+		),
+	}
+}
+
+func reportedHashStatus(reported string, local string, unavailable bool) string {
+	if reported == "" {
+		if unavailable {
+			return "unavailable"
+		}
+		return "absent"
+	}
+	if hashValueMismatch(reported, local) {
+		return "mismatch"
+	}
+	return "match"
+}

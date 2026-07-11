@@ -9,7 +9,6 @@ import (
 	"slices"
 	"sync/atomic"
 
-	"goodkind.io/agent-gate/internal/composer"
 	"goodkind.io/agent-gate/internal/config"
 	"goodkind.io/agent-gate/internal/regex"
 	diffconcern "goodkind.io/agent-gate/internal/rules/concerns/diff"
@@ -58,12 +57,19 @@ func Evaluate(ctx context.Context, system, eventName string, fields FieldSet, ru
 // getenv is consulted by the [config.Rule.DisableIfEnv] guard. Pass nil to
 // disable env-based rule skipping.
 func EvaluateAll(ctx context.Context, system, eventName string, fields FieldSet, rulesSlice []config.Rule, getenv func(string) string) []Violation {
+	return EvaluateAllDetailed(
+		ctx, system, eventName, fields, rulesSlice, getenv, nil, "",
+	).Violations
+}
+
+func evaluateAll(ctx context.Context, system, eventName string, fields FieldSet, rulesSlice []config.Rule, getenv func(string) string) []Violation {
 	conditions := buildRuleRegexConditions(&fields, rulesSlice, system, eventName, getenv)
 	if len(conditions) == 0 {
 		return nil
 	}
 	memo := newExecEventMemo(system, eventName)
 	evalCtx := withExecEventMemo(ctx, memo)
+	evalCtx = withInferEventMemo(evalCtx)
 	orch := &pipeline.Orchestrator{
 		Conditions: conditions,
 		Scheduler:  pipeline.FixedScheduler{SlotCount: 1},
@@ -226,7 +232,9 @@ func isMatchingConditionKind(c *config.Condition) bool {
 	case config.ConditionKindRegex, config.ConditionKindDiff, config.ConditionKindShellRead, config.ConditionKindShellWrite:
 		return true
 	case config.ConditionKindCommand, config.ConditionKindProject, config.ConditionKindExec,
-		config.ConditionKindComposer, config.ConditionKindGitDefaultBranch:
+		config.ConditionKindGitDefaultBranch,
+		config.ConditionKindGitPrimaryCheckout, config.ConditionKindGitRefMove,
+		config.ConditionKindInfer:
 		// Gate-only kinds. They must pass for the rule to fire but they do
 		// not by themselves emit per-match diagnostics, so they are evaluated
 		// as part of the gate inside [allConditionsMatch] and surfaced via
@@ -377,7 +385,8 @@ func (r *ruleRegexCondition) Execute(ctx context.Context, _ pipeline.Input) (pip
 	}
 	switch conditionKind(c) {
 	case config.ConditionKindRegex:
-		matches := regexconcern.EvalFieldMatches(r.fields, c.Selectors(), c.CompiledPattern(), c.DiagnosticGroup, matchLimit)
+		accessor := conditionFieldAccessor{fields: r.fields, condition: c}
+		matches := regexconcern.EvalFieldMatches(accessor, c.Selectors(), c.CompiledPattern(), c.DiagnosticGroup, matchLimit)
 		r.budget.Consume(len(matches))
 		return ruleOutcome{
 			violations:       matchesToViolations(matches, r.rule),
@@ -411,7 +420,9 @@ func (r *ruleRegexCondition) Execute(ctx context.Context, _ pipeline.Input) (pip
 			gateMatched:      true,
 		}, nil
 	case config.ConditionKindCommand, config.ConditionKindProject, config.ConditionKindExec,
-		config.ConditionKindComposer, config.ConditionKindGitDefaultBranch:
+		config.ConditionKindGitDefaultBranch,
+		config.ConditionKindGitPrimaryCheckout, config.ConditionKindGitRefMove,
+		config.ConditionKindInfer:
 		// Gate-only kinds are handled by [allConditionsMatch] above and
 		// produce no per-condition Condition. Reaching this arm means
 		// [buildRuleRegexConditions] mis-routed a condition; emit nothing
@@ -636,7 +647,8 @@ func conditionFallbackViolation(fields FieldSet, rule *config.Rule) Violation {
 	fieldPath := "payload"
 	value := rule.Name
 	for i := range rule.Conditions {
-		if path, extracted := extractField(fields, rule.Conditions[i].Selectors()); extracted != "" {
+		condition := &rule.Conditions[i]
+		if path, extracted := fields.FirstStringForCondition(condition.Selectors(), condition); extracted != "" {
 			fieldPath = path
 			value = extracted
 			break
@@ -667,54 +679,79 @@ func conditionFallbackViolation(fields FieldSet, rule *config.Rule) Violation {
 func allConditionsMatch(ctx context.Context, fields FieldSet, rule *config.Rule, conditions []config.Condition) bool {
 	condCtx := conditionContext{commandCwds: nil}
 	if !collectCommandConditionContext(fields, conditions, &condCtx) {
+		collectRemainingInferenceSkips(ctx, rule, conditions, 0)
 		return false
 	}
 
 	for i := range conditions {
+		if ctx.Err() != nil {
+			collectRemainingInferenceSkips(ctx, rule, conditions, i)
+			return false
+		}
 		c := &conditions[i]
-		switch conditionKind(c) {
-		case config.ConditionKindRegex:
-			if !regexconcern.ConditionMatch(fields, c) {
-				return false
-			}
-		case config.ConditionKindCommand:
-			continue
-		case config.ConditionKindProject:
-			if !projectConditionMatch(fields, c, condCtx) {
-				return false
-			}
-		case config.ConditionKindDiff:
-			if !diffConditionGateMatch(fields, c) {
-				return false
-			}
-		case config.ConditionKindShellWrite:
-			if !shellWriteConditionGateMatch(fields, c) {
-				return false
-			}
-		case config.ConditionKindShellRead:
-			if !shellReadConditionGateMatch(fields, c) {
-				return false
-			}
-		case config.ConditionKindGitDefaultBranch:
-			if !gitDefaultBranchConditionMatch(fields, c, condCtx) {
-				return false
-			}
-		case config.ConditionKindExec:
-			// Exec runs last in config order because it is the only kind that
-			// forks a process; placing it after the cheap conditions means the
-			// short-circuit above keeps it from running on non-candidates.
-			if !execConditionGateMatch(ctx, fields, rule, i, c) {
-				return false
-			}
-		case config.ConditionKindComposer:
-			if !composerConditionGateMatch(ctx, fields, c) {
-				return false
-			}
-		default:
+		if !conditionGateMatches(ctx, fields, rule, i, c, condCtx) {
+			collectRemainingInferenceSkips(ctx, rule, conditions, i+1)
 			return false
 		}
 	}
 	return true
+}
+
+func collectRemainingInferenceSkips(
+	ctx context.Context,
+	rule *config.Rule,
+	conditions []config.Condition,
+	startIndex int,
+) {
+	for conditionIndex := startIndex; conditionIndex < len(conditions); conditionIndex++ {
+		condition := &conditions[conditionIndex]
+		if conditionKind(condition) == config.ConditionKindInfer {
+			collectSkippedInferenceCondition(
+				ctx,
+				rule,
+				conditionIndex,
+				condition,
+				skipPriorConditionNonmatch,
+			)
+		}
+	}
+}
+
+func conditionGateMatches(
+	ctx context.Context,
+	fields FieldSet,
+	rule *config.Rule,
+	conditionIndex int,
+	condition *config.Condition,
+	conditionContextValue conditionContext,
+) bool {
+	switch conditionKind(condition) {
+	case config.ConditionKindRegex:
+		accessor := conditionFieldAccessor{fields: &fields, condition: condition}
+		return regexconcern.ConditionMatch(accessor, condition)
+	case config.ConditionKindCommand:
+		return true
+	case config.ConditionKindProject:
+		return projectConditionMatch(fields, condition, conditionContextValue)
+	case config.ConditionKindDiff:
+		return diffConditionGateMatch(fields, condition)
+	case config.ConditionKindShellWrite:
+		return shellWriteConditionGateMatch(fields, condition)
+	case config.ConditionKindShellRead:
+		return shellReadConditionGateMatch(fields, condition)
+	case config.ConditionKindGitDefaultBranch, config.ConditionKindGitPrimaryCheckout,
+		config.ConditionKindGitRefMove:
+		fields = structuralCommandFields(ctx, fields)
+		return gitConditionMatch(
+			fields, condition, conditionContextValue, gitStateReaderFromContext(ctx),
+		)
+	case config.ConditionKindExec:
+		return execConditionGateMatch(ctx, fields, rule, conditionIndex, condition)
+	case config.ConditionKindInfer:
+		return inferConditionGateMatch(ctx, fields, rule, conditionIndex, condition)
+	default:
+		return false
+	}
 }
 
 func collectCommandConditionContext(fields FieldSet, conditions []config.Condition, condCtx *conditionContext) bool {
@@ -730,43 +767,6 @@ func collectCommandConditionContext(fields FieldSet, conditions []config.Conditi
 		condCtx.commandCwds = append(condCtx.commandCwds, cwds...)
 	}
 	return true
-}
-
-type composerDecider interface {
-	Decide(ruleSetID string, command string, cwd string) composer.Verdict
-}
-
-type composerDeciderKey struct{}
-
-type defaultComposerDecider struct{}
-
-func (defaultComposerDecider) Decide(ruleSetID string, command string, cwd string) composer.Verdict {
-	return composer.Decide(ruleSetID, command, cwd)
-}
-
-// WithComposerDecider returns a context carrying decider for composer conditions.
-func WithComposerDecider(ctx context.Context, decider composerDecider) context.Context {
-	return context.WithValue(ctx, composerDeciderKey{}, decider)
-}
-
-func composerDeciderFromContext(ctx context.Context) composerDecider {
-	if ctx != nil {
-		decider, _ := ctx.Value(composerDeciderKey{}).(composerDecider)
-		if decider != nil {
-			return decider
-		}
-	}
-	return defaultComposerDecider{}
-}
-
-func composerConditionGateMatch(ctx context.Context, fields FieldSet, c *config.Condition) bool {
-	command := fields.CommandValue()
-	cwd := fields.BaseCWD()
-	if command == "" {
-		return false
-	}
-	verdict := composerDeciderFromContext(ctx).Decide(c.RuleSetID, command, cwd)
-	return verdict == composer.Block || verdict == composer.Unknown
 }
 
 // diffConditionGateMatch reports whether the diff condition would emit any
@@ -911,11 +911,6 @@ func systemSpecificEvents(rule *config.Rule, system string) []string {
 	default:
 		return nil
 	}
-}
-
-// extractField returns the first non-empty value selected by a compiled field selector.
-func extractField(fields FieldSet, selectors []config.FieldSelectorSpec) (string, string) {
-	return fields.FirstString(selectors)
 }
 
 // cmdChainRe splits a shell command on common chain and sequence operators.

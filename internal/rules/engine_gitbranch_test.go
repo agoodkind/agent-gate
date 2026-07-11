@@ -153,6 +153,39 @@ field_paths = ["cmd_write_targets"]
 	}
 }
 
+func TestEvaluateAll_GitDefaultBranch_DeclaredWriter(t *testing.T) {
+	const tomlBody = `
+[[rules]]
+name = "default-branch-declared-writer"
+claude_events = ["PreToolUse"]
+action = "block"
+violation_message = "no declared writes while on the default branch"
+
+[[rules.conditions]]
+kind = "git_default_branch"
+field_paths = ["cmd_write_targets"]
+
+[[rules.conditions.write_specs]]
+argv0 = ["writer-all"]
+target_mode = "all_operands"
+`
+	cfg := loadTOML(t, tomlBody)
+	onMain := makeGitRepo(t, true)
+	fields := rules.FieldSet{
+		ToolName:         "Bash",
+		ToolInputCommand: "writer-all f.txt",
+		CWD:              onMain,
+	}
+	got := rules.EvaluateAll(context.Background(), "claude", "PreToolUse", fields, cfg.Rules, nil)
+	if len(got) == 0 {
+		t.Fatal("declared writer target did not reach git_default_branch condition")
+	}
+	wantTarget := filepath.Join(onMain, "f.txt")
+	if got[0].FieldPath != "cmd_write_targets" || got[0].Value != wantTarget {
+		t.Fatalf("fallback violation = %#v, want declared target %q", got[0], wantTarget)
+	}
+}
+
 // The git_default_branch condition resolves the target repo from a git verb's
 // -C flag, so the verdict follows the -C repo's branch regardless of the shell
 // cwd (here a throwaway /tmp that is not a repo).

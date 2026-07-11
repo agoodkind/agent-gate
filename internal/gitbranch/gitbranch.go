@@ -20,40 +20,6 @@ var defaultBranchNames = []string{"main", "master", "trunk"}
 
 const originHeadRef = plumbing.ReferenceName("refs/remotes/origin/HEAD")
 
-// OnDefaultBranch reports whether the git repo or worktree containing path has
-// HEAD on its default branch. resolved is false when no repo is found or the
-// branch state cannot be read; a detached HEAD resolves true with match false.
-// Callers that block should treat resolved==false and detached as "do not
-// block" (fail open).
-func OnDefaultBranch(path string) (match bool, resolved bool) {
-	start := nearestExistingDir(path)
-	if start == "" {
-		return false, false
-	}
-	repo, err := git.PlainOpenWithOptions(start, &git.PlainOpenOptions{
-		DetectDotGit:          true,
-		EnableDotGitCommonDir: true,
-	})
-	if err != nil {
-		return false, false
-	}
-	head, err := repo.Head()
-	if err != nil {
-		return false, false
-	}
-	if !head.Name().IsBranch() {
-		return false, true
-	}
-	defaultBranch := resolveDefaultBranch(repo)
-	if defaultBranch == "" {
-		// The default branch could not be determined, so the branch state is
-		// unresolved. Report resolved=false to preserve the fail-open contract
-		// rather than claiming a resolved non-match.
-		return false, false
-	}
-	return head.Name().Short() == defaultBranch, true
-}
-
 // resolveDefaultBranch returns the repo's default branch name: the target of
 // origin/HEAD when a remote records one, else the first conventional default
 // that has a local branch ref, else empty.

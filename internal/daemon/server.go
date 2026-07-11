@@ -3,6 +3,7 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -21,8 +22,8 @@ import (
 
 	"goodkind.io/agent-gate/api/daemonpb"
 	"goodkind.io/agent-gate/internal/audit"
-	"goodkind.io/agent-gate/internal/composer"
 	"goodkind.io/agent-gate/internal/config"
+	"goodkind.io/agent-gate/internal/gitbranch"
 	"goodkind.io/agent-gate/internal/hook"
 	"goodkind.io/agent-gate/internal/hotkv"
 	"goodkind.io/agent-gate/internal/intake"
@@ -34,20 +35,38 @@ import (
 
 const configReloadDebounce = 200 * time.Millisecond
 
+const intakeParseFailed = "intake_parse_failed"
+
 const (
 	overloadLogInterval = 5 * time.Second
 )
 
 type runtimeSnapshot struct {
-	cfg               *config.Config
-	eventLogger       *audit.EventLogger
-	intakeStore       intakeStore
-	deferredProcessor *deferredProcessor
-	evaluateSlots     chan struct{}
-	evaluateQueueWait time.Duration
-	hotEvaluate       func(context.Context, []byte, *config.Config, hook.System, func(string) string, string) hook.HotEvaluation
-	execRuntime       *rules.ExecRuntime
-	composerRuntime   *composer.Runtime
+	cfg                *config.Config
+	eventLogger        *audit.EventLogger
+	intakeStore        intakeStore
+	evaluationRecorder evaluationRecorder
+	deferredProcessor  *deferredProcessor
+	evaluateSlots      chan struct{}
+	evaluateQueueWait  time.Duration
+	hotEvaluate        func(context.Context, []byte, *config.Config, hook.System, func(string) string, string) hook.HotEvaluation
+	execRuntime        *rules.ExecRuntime
+	inferRuntime       *rules.InferRuntime
+}
+
+type inferenceTraceSink struct {
+	traces []rules.InferenceTrace
+}
+
+func (sink *inferenceTraceSink) CollectInferenceTrace(trace rules.InferenceTrace) {
+	sink.traces = append(sink.traces, trace)
+}
+
+func (sink *inferenceTraceSink) snapshot() []rules.InferenceTrace {
+	if sink == nil {
+		return nil
+	}
+	return append([]rules.InferenceTrace(nil), sink.traces...)
 }
 
 // Server implements the AgentGateD gRPC service.
@@ -56,10 +75,12 @@ type Server struct {
 
 	log           *slog.Logger
 	cfgMu         sync.RWMutex
+	runtimeMu     sync.RWMutex
 	runtime       atomic.Pointer[runtimeSnapshot]
 	configWatcher *fsnotify.Watcher
 	configPath    string
 	hotKV         *hotkv.Store
+	inferRuntime  *rules.InferRuntime
 	closing       bool
 	updateCancel  context.CancelFunc
 	stopDaemon    func()
@@ -80,10 +101,11 @@ func New(log *slog.Logger, cfg *config.Config) (*Server, error) {
 			Paths: config.Paths{ConversationsDir: ""},
 			Performance: config.Performance{
 				Hook: config.HookPerformance{
-					HotConcurrency:     0,
-					HotQueueWaitMS:     0,
-					DeferredQueueLimit: 0,
-					DeferredWorkers:    0,
+					HotConcurrency:          0,
+					HotQueueWaitMS:          0,
+					InferencePhaseTimeoutMS: 0,
+					DeferredQueueLimit:      0,
+					DeferredWorkers:         0,
 					Cache: config.HookCachePerformance{
 						MaxEntries:      0,
 						MaxValueBytes:   0,
@@ -99,14 +121,7 @@ func New(log *slog.Logger, cfg *config.Config) (*Server, error) {
 				AllowPrerelease: nil,
 			},
 			Telemetry: config.TelemetryConfig{OTLPEndpoint: "", SlowOpThresholdMs: 0},
-			Judge: config.Judge{
-				Enabled:             false,
-				Authority:           "",
-				LMReviewGRPCAddress: "",
-				ClydeGRPCAddress:    "",
-				DisagreementLogPath: "",
-			},
-			Rules: nil,
+			Rules:     nil,
 		}
 	}
 	if errs := hook.ValidateConfig(cfg); len(errs) > 0 {
@@ -117,8 +132,10 @@ func New(log *slog.Logger, cfg *config.Config) (*Server, error) {
 	hook.WarnCapabilityDowngrades(context.Background(), log, cfg)
 
 	hotStore := hotkv.New(hotKVOptions(cfg))
-	snapshot, err := newRuntimeSnapshot(context.Background(), cfg, log, hotStore)
+	inferRuntime := rules.NewInferRuntimeWithCache(log, hotStore)
+	snapshot, err := newRuntimeSnapshot(context.Background(), cfg, log, hotStore, inferRuntime)
 	if err != nil {
+		inferRuntime.Close()
 		hotStore.Close()
 		log.Error("failed to create runtime snapshot", slog.Any("err", err))
 		return nil, err
@@ -128,10 +145,12 @@ func New(log *slog.Logger, cfg *config.Config) (*Server, error) {
 		UnimplementedAgentGateDServer: daemonpb.UnimplementedAgentGateDServer{},
 		log:                           log,
 		cfgMu:                         sync.RWMutex{},
+		runtimeMu:                     sync.RWMutex{},
 		runtime:                       atomic.Pointer[runtimeSnapshot]{},
 		configWatcher:                 nil,
 		configPath:                    config.Path(),
 		hotKV:                         hotStore,
+		inferRuntime:                  inferRuntime,
 		closing:                       false,
 		updateCancel:                  nil,
 		stopDaemon:                    nil,
@@ -141,6 +160,7 @@ func New(log *slog.Logger, cfg *config.Config) (*Server, error) {
 	s.runtime.Store(snapshot)
 	if err := s.startConfigWatcher(); err != nil {
 		snapshot.close(context.Background(), log)
+		inferRuntime.Close()
 		hotStore.Close()
 		return nil, err
 	}
@@ -155,7 +175,9 @@ func hotKVOptions(cfg *config.Config) hotkv.Options {
 	}
 }
 
-func newRuntimeSnapshot(ctx context.Context, cfg *config.Config, log *slog.Logger, hotStore *hotkv.Store) (*runtimeSnapshot, error) {
+var replayRuntimeSnapshotPending = (*deferredProcessor).ReplayPending
+
+func newRuntimeSnapshot(ctx context.Context, cfg *config.Config, log *slog.Logger, hotStore *hotkv.Store, inferRuntime *rules.InferRuntime) (*runtimeSnapshot, error) {
 	// The intake store is created first so the audit event logger can share its
 	// single SQLite connection pool. One pool serializes intake and audit writes
 	// to audit.db, avoiding the cross-pool SQLITE_BUSY that two pools hit during
@@ -185,36 +207,31 @@ func newRuntimeSnapshot(ctx context.Context, cfg *config.Config, log *slog.Logge
 		intakeStore,
 		sink,
 		cfg,
+		inferRuntime,
 		cfg.HookDeferredQueueLimit(),
 		cfg.HookDeferredWorkers(),
 		log,
 	)
-	if err := deferredProcessor.ReplayPending(ctx); err != nil {
+	deferredProcessor.evaluationRecorder = intakeStore.Evaluations()
+	if err := replayRuntimeSnapshotPending(deferredProcessor, ctx); err != nil {
 		deferredProcessor.Close()
 		if eventLogger != nil {
 			_ = eventLogger.Close()
 		}
+		_ = closeIntakeStore(intakeStore, log)
 		return nil, fmt.Errorf("replay pending intake: %w", err)
 	}
-	composerRuntime, err := composer.NewRuntimeFromConfig(cfg)
-	if err != nil {
-		deferredProcessor.Close()
-		if eventLogger != nil {
-			_ = eventLogger.Close()
-		}
-		return nil, fmt.Errorf("create composer runtime: %w", err)
-	}
-
 	return &runtimeSnapshot{
-		cfg:               cfg,
-		eventLogger:       eventLogger,
-		intakeStore:       intakeStore,
-		deferredProcessor: deferredProcessor,
-		evaluateSlots:     make(chan struct{}, cfg.HookHotConcurrency()),
-		evaluateQueueWait: cfg.HookHotQueueWait(),
-		hotEvaluate:       defaultHotEvaluate,
-		execRuntime:       rules.NewExecRuntimeWithCache(nil, log, hotStore),
-		composerRuntime:   composerRuntime,
+		cfg:                cfg,
+		eventLogger:        eventLogger,
+		intakeStore:        intakeStore,
+		evaluationRecorder: intakeStore.Evaluations(),
+		deferredProcessor:  deferredProcessor,
+		evaluateSlots:      make(chan struct{}, cfg.HookHotConcurrency()),
+		evaluateQueueWait:  cfg.HookHotQueueWait(),
+		hotEvaluate:        defaultHotEvaluate,
+		execRuntime:        rules.NewExecRuntimeWithCache(nil, log, hotStore),
+		inferRuntime:       inferRuntime,
 	}, nil
 }
 
@@ -237,9 +254,6 @@ func (s *runtimeSnapshot) close(ctx context.Context, log *slog.Logger) {
 			log.WarnContext(ctx, "audit logger close failed", "err", err)
 		}
 	}
-	if s.composerRuntime != nil {
-		s.composerRuntime.Close()
-	}
 	if s.intakeStore != nil {
 		if err := s.intakeStore.Close(); err != nil && log != nil {
 			log.WarnContext(ctx, "intake store close failed", "err", err)
@@ -251,7 +265,9 @@ func (s *runtimeSnapshot) close(ctx context.Context, log *slog.Logger) {
 func (s *Server) Close() {
 	s.cfgMu.Lock()
 	s.closing = true
+	s.runtimeMu.Lock()
 	snapshot := s.runtime.Swap(nil)
+	s.runtimeMu.Unlock()
 	s.cfgMu.Unlock()
 
 	if s.configWatcher != nil {
@@ -261,6 +277,9 @@ func (s *Server) Close() {
 		s.updateCancel()
 	}
 	snapshot.close(context.Background(), s.log)
+	if s.inferRuntime != nil {
+		s.inferRuntime.Close()
+	}
 	if s.hotKV != nil {
 		s.hotKV.Close()
 	}
@@ -369,7 +388,7 @@ func (s *Server) reloadConfig(ctx context.Context) error {
 
 	hook.WarnCapabilityDowngrades(ctx, s.log, candidate)
 
-	newSnapshot, err := newRuntimeSnapshot(ctx, candidate, s.log, s.hotKV)
+	newSnapshot, err := newRuntimeSnapshot(ctx, candidate, s.log, s.hotKV, s.inferRuntime)
 	if err != nil {
 		s.log.WarnContext(ctx, "create runtime snapshot for reloaded config failed", "path", s.configPath, "err", err)
 		return fmt.Errorf("failed to create runtime snapshot for reloaded config: %w", err)
@@ -384,7 +403,9 @@ func (s *Server) reloadConfig(ctx context.Context) error {
 	if s.hotKV != nil {
 		s.hotKV.Configure(hotKVOptions(candidate))
 	}
+	s.runtimeMu.Lock()
 	oldSnapshot := s.runtime.Swap(newSnapshot)
+	s.runtimeMu.Unlock()
 	updateCancel := s.updateCancel
 	stopDaemon := s.stopDaemon
 	s.cfgMu.Unlock()
@@ -402,6 +423,8 @@ func (s *Server) reloadConfig(ctx context.Context) error {
 
 // EvaluateHook processes a hook event through daemon-owned enforcement.
 func (s *Server) EvaluateHook(ctx context.Context, req *daemonpb.EvaluateHookRequest) (*daemonpb.EvaluateHookResponse, error) {
+	s.runtimeMu.RLock()
+	defer s.runtimeMu.RUnlock()
 	snapshot := s.runtime.Load()
 	if snapshot == nil {
 		return failOpenEvaluateHookResponse(), nil
@@ -417,8 +440,13 @@ func (s *Server) EvaluateHook(ctx context.Context, req *daemonpb.EvaluateHookReq
 	defer s.releaseEvaluateSlot(snapshot)
 
 	ctx = rules.WithExecRuntime(ctx, snapshot.execRuntime)
-	ctx = rules.WithComposerDecider(ctx, snapshot.composerRuntime)
-
+	ctx = rules.WithInferRuntime(ctx, snapshot.inferRuntime)
+	ctx = rules.WithGitStateReader(ctx, gitbranch.ReadState)
+	var traceSink *inferenceTraceSink
+	if configHasInference(snapshot.cfg) {
+		traceSink = &inferenceTraceSink{traces: nil}
+		ctx = rules.WithInferenceTraceCollector(ctx, traceSink)
+	}
 	rawJSON := req.GetRawJson()
 	if cwd := req.GetCwd(); cwd != "" {
 		rawJSON = injectCWD(rawJSON, cwd)
@@ -432,14 +460,12 @@ func (s *Server) EvaluateHook(ctx context.Context, req *daemonpb.EvaluateHookReq
 		return envFingerprint[key]
 	}
 
-	intakeRecord, err := buildIntakeRecord(rawJSON, req.GetProviderHint(), envFingerprint)
-	if err != nil {
-		result := snapshot.hotEvaluate(ctx, rawJSON, snapshot.cfg, hook.SystemFromString(req.GetProviderHint()), getenv, "")
-		return &daemonpb.EvaluateHookResponse{
-			ExitCode:   clampExitCode(result.ExitCode),
-			StdoutData: append([]byte(nil), result.Stdout...),
-			StderrData: append([]byte(nil), result.Stderr...),
-		}, nil
+	evalStart := hotEvalNow()
+	intakeRecord, intakeErr := buildIntakeRecord(rawJSON, req.GetProviderHint(), envFingerprint)
+	if intakeErr != nil {
+		intakeRecord = buildInvalidIntakeRecord(
+			rawJSON, req.GetProviderHint(), envFingerprint,
+		)
 	}
 
 	appendResult, err := snapshot.intakeStore.Append(ctx, intakeRecord)
@@ -449,39 +475,33 @@ func (s *Server) EvaluateHook(ctx context.Context, req *daemonpb.EvaluateHookReq
 	}
 
 	syncCfg := hook.SyncConfig(snapshot.cfg)
-	evalStart := hotEvalNow()
 	result := snapshot.hotEvaluate(ctx, rawJSON, syncCfg, hook.SystemFromString(req.GetProviderHint()), getenv, appendResult.EventID)
-	s.recordHotEvalLatency(ctx, snapshot, appendResult.EventID, hotEvalNow().Sub(evalStart).Microseconds())
-	if err := enqueueDeferredReplay(ctx, requestLog, snapshot, appendResult, result.Deferred.Valid); err != nil {
-		return failOpenEvaluateHookResponse(), nil
+	result.Deferred.InferenceTraces = traceSink.snapshot()
+	systemError := ""
+	errorMessage := ""
+	if intakeErr != nil {
+		systemError = intakeParseFailed
+		errorMessage = intakeErr.Error()
 	}
-	return &daemonpb.EvaluateHookResponse{
-		ExitCode:   clampExitCode(result.ExitCode),
-		StdoutData: append([]byte(nil), result.Stdout...),
-		StderrData: append([]byte(nil), result.Stderr...),
-	}, nil
+	return s.commitHotEvaluation(ctx, hotEvaluationCommitInput{
+		Log: requestLog, Snapshot: snapshot, Intake: intakeRecord,
+		AppendResult: appendResult, StartedAt: evalStart, Result: result,
+		SystemError: systemError, ErrorMessage: errorMessage,
+	}), nil
 }
 
-// recordHotEvalLatency writes the synchronous evaluation latency back to the
-// durable intake row off the hot path. It is best-effort: the response has
-// already been computed, so a failed or late write only loses one latency
-// sample and never affects enforcement. The write is detached from the request
-// cancellation (the response is already sent) while preserving context values.
-func (s *Server) recordHotEvalLatency(ctx context.Context, snapshot *runtimeSnapshot, eventID string, latencyMicros int64) {
-	if snapshot == nil || snapshot.intakeStore == nil || eventID == "" {
-		return
+func configHasInference(cfg *config.Config) bool {
+	if cfg == nil {
+		return false
 	}
-	writeCtx := context.WithoutCancel(ctx)
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				s.log.Error("recovered in hot eval latency writer", "err", fmt.Errorf("panic: %v", r))
+	for ruleIndex := range cfg.Rules {
+		for conditionIndex := range cfg.Rules[ruleIndex].Conditions {
+			if config.ConditionKind(cfg.Rules[ruleIndex].Conditions[conditionIndex].Kind) == config.ConditionKindInfer {
+				return true
 			}
-		}()
-		if err := snapshot.intakeStore.UpdateHotEvalLatency(writeCtx, eventID, latencyMicros); err != nil {
-			s.log.WarnContext(writeCtx, "record hot eval latency failed", "event_id", eventID, "err", err)
 		}
-	}()
+	}
+	return false
 }
 
 func buildIntakeRecord(rawJSON []byte, providerHint string, envFingerprint map[string]string) (intake.Record, error) {
@@ -521,6 +541,25 @@ func buildIntakeRecord(rawJSON []byte, providerHint string, envFingerprint map[s
 	return record, nil
 }
 
+func buildInvalidIntakeRecord(
+	rawJSON []byte,
+	providerHint string,
+	envFingerprint map[string]string,
+) intake.Record {
+	return intake.Record{
+		ReceiptID: 0, ReceivedAt: time.Time{}, EventID: "", SchemaVersion: 0,
+		RecordedAt: time.Time{}, System: hook.SystemFromString(providerHint).String(),
+		SessionID: "_no-session", TurnID: "", EventName: "_invalid",
+		ToolName: "", ToolUseID: "", Operation: intake.Operation{
+			CWD: "", EffectiveCWD: "", Command: "", FilePath: "",
+		},
+		RawPayload: append([]byte(nil), rawJSON...), NormalizedJSON: json.RawMessage(`{}`),
+		RawPayloadHash: "", EnvFingerprint: cloneStringMap(envFingerprint),
+		DeferredState: intake.DeferredStateNone, PendingAt: nil, CompletedAt: nil,
+		LastReplayAt: nil, DeferredReplays: 0, Sequence: 0,
+	}
+}
+
 func firstNonEmpty(values ...string) string {
 	for _, value := range values {
 		if strings.TrimSpace(value) != "" {
@@ -539,32 +578,24 @@ func cloneStringMap(values map[string]string) map[string]string {
 	return cloned
 }
 
-func enqueueDeferredReplay(ctx context.Context, log *slog.Logger, snapshot *runtimeSnapshot, appendResult intake.AppendResult, deferredValid bool) error {
-	if !deferredValid {
-		return nil
-	}
-
-	shouldEnqueue := appendResult.Inserted
-	if !appendResult.Inserted {
-		record, err := snapshot.intakeStore.Get(ctx, appendResult.EventID)
-		if err != nil {
-			log.WarnContext(ctx, "load duplicate hook intake failed; failing open", "event_id", appendResult.EventID, "err", err)
-			return fmt.Errorf("load duplicate hook intake %q: %w", appendResult.EventID, err)
-		}
-		shouldEnqueue = record.DeferredState != intake.DeferredStateComplete
-	}
-	if !shouldEnqueue {
-		return nil
-	}
-
-	if err := snapshot.intakeStore.MarkDeferredPending(ctx, appendResult.EventID); err != nil {
-		log.WarnContext(ctx, "mark deferred intake pending failed; failing open", "event_id", appendResult.EventID, "err", err)
-		return fmt.Errorf("mark deferred intake pending %q: %w", appendResult.EventID, err)
+func enqueueDeferredReplay(
+	snapshot *runtimeSnapshot,
+	appendResult intake.AppendResult,
+	deferredEvent hook.DeferredAuditEvent,
+) {
+	if !deferredEvent.Valid {
+		return
 	}
 	if snapshot.deferredProcessor != nil {
-		snapshot.deferredProcessor.Enqueue(appendResult.EventID)
+		snapshot.deferredProcessor.Enqueue(appendResult.ReceiptID, appendResult.EventID, deferredEvent)
 	}
-	return nil
+}
+
+func failOpenHotEvaluation(result hook.HotEvaluation) hook.HotEvaluation {
+	result.Stdout = nil
+	result.Stderr = nil
+	result.ExitCode = 0
+	return result
 }
 
 func wrapServerError(message string, err error) error {

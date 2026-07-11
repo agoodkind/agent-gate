@@ -10,8 +10,12 @@ package shellwrite
 
 import (
 	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 
+	"goodkind.io/agent-gate/internal/config"
+	"goodkind.io/agent-gate/internal/rules/concerns/shellparse"
 	"goodkind.io/gksyntax/shelldecomp"
 )
 
@@ -70,9 +74,16 @@ type WriteTarget struct {
 // are served. A process-substitution redirect (`>(cmd)`) is not a file write and
 // is dropped.
 func ExtractWriteTargets(cmd, cwd string) []WriteTarget {
+	return ExtractWriteTargetsWithSpecs(cmd, cwd, nil)
+}
+
+// ExtractWriteTargetsWithSpecs returns the built-in structural write targets
+// plus targets declared through generic command-shape specifications.
+func ExtractWriteTargetsWithSpecs(cmd, cwd string, specs []config.ShellWriteSpec) []WriteTarget {
 	if strings.TrimSpace(cmd) == "" {
 		return nil
 	}
+	cmd = shellparse.ExpandLiteralAssignments(cmd)
 	home := homeDir()
 	decomposition := shelldecomp.Parse(cmd, cwd, home)
 	if decomposition.IsOpaque() {
@@ -101,6 +112,7 @@ func ExtractWriteTargets(cmd, cwd string) []WriteTarget {
 			Raw:    target.Raw,
 		})
 	}
+	out = append(out, declaredWriteTargets(decomposition, specs)...)
 	// Only recurse into embedded bodies for the local opaque shapes the sentinel
 	// already covers (eval/exec, interpreter -c, command substitution). This
 	// surfaces a real local write hidden inside `bash -c 'echo x > f'` (f,
@@ -109,6 +121,181 @@ func ExtractWriteTargets(cmd, cwd string) []WriteTarget {
 	// sentinel. An unresolved embedded write is still covered by the sentinel.
 	if opaque {
 		out = append(out, embeddedWriteTargets(decomposition, 0)...)
+	}
+	return dedupeWriteTargets(out)
+}
+
+func declaredWriteTargets(decomposition *shelldecomp.Decomposition, specs []config.ShellWriteSpec) []WriteTarget {
+	if len(specs) == 0 {
+		return nil
+	}
+	var targets []WriteTarget
+	for _, command := range decomposition.Commands() {
+		for _, spec := range specs {
+			if !slices.Contains(spec.Argv0, filepath.Base(command.Argv0)) {
+				continue
+			}
+			targets = append(targets, declaredCommandTargets(command, spec)...)
+		}
+	}
+	return targets
+}
+
+func declaredCommandTargets(command shelldecomp.Command, spec config.ShellWriteSpec) []WriteTarget {
+	operands, effectiveCWD := declaredOperands(command, spec)
+	if spec.TargetMode == config.WriteTargetLastOperand && len(operands) > 1 {
+		operands = operands[len(operands)-1:]
+	}
+	targets := make([]WriteTarget, 0, len(operands))
+	for _, operand := range operands {
+		if !operand.Resolvable {
+			targets = append(targets, WriteTarget{
+				Path:   "",
+				Tool:   ToolUnparseable,
+				Reason: ReasonUnparsedCommandShape,
+				Raw:    operand.Text,
+			})
+			continue
+		}
+		path := resolveDeclaredPath(operand.Value, effectiveCWD)
+		if path == "" {
+			targets = append(targets, WriteTarget{
+				Path:   "",
+				Tool:   ToolUnparseable,
+				Reason: ReasonUnparsedCommandShape,
+				Raw:    operand.Text,
+			})
+			continue
+		}
+		targets = append(targets, WriteTarget{
+			Path:   path,
+			Tool:   command.Argv0,
+			Reason: ReasonOK,
+			Raw:    operand.Text,
+		})
+	}
+	return targets
+}
+
+func declaredOperands(command shelldecomp.Command, spec config.ShellWriteSpec) ([]shelldecomp.Word, string) {
+	operands := make([]shelldecomp.Word, 0, len(command.Args))
+	effectiveCWD := command.Cwd
+	optionsEnded := false
+	for index := 0; index < len(command.Args); index++ {
+		argument := command.Args[index]
+		argumentValue, argumentResolved := declaredControlValue(argument)
+		if !optionsEnded && argumentResolved && argumentValue == "--" {
+			optionsEnded = spec.EndOfOptions
+			continue
+		}
+		if optionsEnded {
+			operands = append(operands, argument)
+			continue
+		}
+		if cwd, consumed, matched := consumeDeclaredCWD(command.Args, index, effectiveCWD, spec.CwdFlags); matched {
+			effectiveCWD = cwd
+			index += consumed
+			continue
+		}
+		if consumed, matched := consumeDeclaredFlagValue(argument, spec.SkipFlagsWithValues); matched {
+			index += consumed
+			continue
+		}
+		if argumentResolved && strings.HasPrefix(argumentValue, "-") {
+			continue
+		}
+		operands = append(operands, argument)
+	}
+	return operands, effectiveCWD
+}
+
+func consumeDeclaredCWD(
+	arguments []shelldecomp.Word,
+	index int,
+	current string,
+	flags []string,
+) (string, int, bool) {
+	value, matched, consumeNext := declaredFlagValue(arguments[index], flags)
+	if !matched {
+		return current, 0, false
+	}
+	if consumeNext {
+		if index+1 >= len(arguments) {
+			return current, 1, true
+		}
+		return declaredCWD(arguments[index+1], current), 1, true
+	}
+	if !arguments[index].Resolvable {
+		return shelldecomp.Unresolvable, 0, true
+	}
+	return resolveDeclaredPath(value, current), 0, true
+}
+
+func consumeDeclaredFlagValue(argument shelldecomp.Word, flags []string) (int, bool) {
+	_, matched, consumeNext := declaredFlagValue(argument, flags)
+	if !matched {
+		return 0, false
+	}
+	if consumeNext {
+		return 1, true
+	}
+	return 0, true
+}
+
+func declaredFlagValue(argument shelldecomp.Word, flags []string) (string, bool, bool) {
+	argumentValue, resolved := declaredControlValue(argument)
+	if !resolved {
+		return "", false, false
+	}
+	for _, flag := range flags {
+		if argumentValue == flag {
+			return "", true, true
+		}
+		prefix := flag + "="
+		if value, found := strings.CutPrefix(argumentValue, prefix); found {
+			return value, true, false
+		}
+	}
+	return "", false, false
+}
+
+func declaredControlValue(argument shelldecomp.Word) (string, bool) {
+	if !argument.Resolvable {
+		return "", false
+	}
+	return argument.Value, true
+}
+
+func declaredCWD(argument shelldecomp.Word, current string) string {
+	if !argument.Resolvable {
+		return shelldecomp.Unresolvable
+	}
+	return resolveDeclaredPath(argument.Value, current)
+}
+
+func resolveDeclaredPath(value string, cwd string) string {
+	if filepath.IsAbs(value) {
+		return filepath.Clean(value)
+	}
+	if cwd == "" || cwd == shelldecomp.Unresolvable {
+		return ""
+	}
+	return filepath.Clean(filepath.Join(cwd, value))
+}
+
+func dedupeWriteTargets(targets []WriteTarget) []WriteTarget {
+	seen := make(map[string]struct{}, len(targets))
+	out := make([]WriteTarget, 0, len(targets))
+	for _, target := range targets {
+		key := target.Path
+		if key == "" {
+			key = target.Reason + "\x00" + target.Tool + "\x00" + target.Raw
+		}
+		if _, found := seen[key]; found {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, target)
 	}
 	return out
 }

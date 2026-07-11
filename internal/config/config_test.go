@@ -170,50 +170,6 @@ slow_op_threshold_ms = 50
 	}
 }
 
-func TestLoadJudgeDefaultsAndOverrides(t *testing.T) {
-	setConfigHome(t, ``)
-	cfg, err := config.Load()
-	if err != nil {
-		t.Fatalf("Load() error: %v", err)
-	}
-	if cfg.JudgeEnabled() {
-		t.Fatal("JudgeEnabled = true, want false by default")
-	}
-	if cfg.JudgeLMReviewGRPCAddress() != "" {
-		t.Fatalf("JudgeLMReviewGRPCAddress = %q, want empty", cfg.JudgeLMReviewGRPCAddress())
-	}
-	if cfg.JudgeClydeGRPCAddress() != "" {
-		t.Fatalf("JudgeClydeGRPCAddress = %q, want empty", cfg.JudgeClydeGRPCAddress())
-	}
-	if cfg.JudgeDisagreementLogPath() != config.DefaultJudgeDisagreementLogPath() {
-		t.Fatalf("JudgeDisagreementLogPath = %q, want default", cfg.JudgeDisagreementLogPath())
-	}
-
-	setConfigHome(t, `
-[judge]
-enabled = true
-lm_review_grpc_address = "127.0.0.1:5501"
-clyde_grpc_address = "127.0.0.1:5502"
-disagreement_log_path = "/tmp/agent-gate-disagreements.jsonl"
-`)
-	cfg, err = config.Load()
-	if err != nil {
-		t.Fatalf("Load() override error: %v", err)
-	}
-	if !cfg.JudgeEnabled() {
-		t.Fatal("JudgeEnabled = false, want true")
-	}
-	if cfg.JudgeLMReviewGRPCAddress() != "127.0.0.1:5501" {
-		t.Fatalf("JudgeLMReviewGRPCAddress = %q", cfg.JudgeLMReviewGRPCAddress())
-	}
-	if cfg.JudgeClydeGRPCAddress() != "127.0.0.1:5502" {
-		t.Fatalf("JudgeClydeGRPCAddress = %q", cfg.JudgeClydeGRPCAddress())
-	}
-	if cfg.JudgeDisagreementLogPath() != "/tmp/agent-gate-disagreements.jsonl" {
-		t.Fatalf("JudgeDisagreementLogPath = %q", cfg.JudgeDisagreementLogPath())
-	}
-}
-
 func TestHookCachePerformanceDefaultsAndOverrides(t *testing.T) {
 	setConfigHome(t, ``)
 	cfg, err := config.Load()

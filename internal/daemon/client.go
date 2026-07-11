@@ -14,6 +14,8 @@ import (
 	"goodkind.io/agent-gate/internal/config"
 )
 
+const evaluateHookTimeout = 12 * time.Second
+
 // Client is a gRPC client for the agent-gate daemon.
 type Client struct {
 	conn *grpc.ClientConn
@@ -61,9 +63,30 @@ func (c *Client) Close() error {
 	return nil
 }
 
+// ResolveHookEnvironment asks the daemon which process environment values evaluation needs.
+func (c *Client) ResolveHookEnvironment(
+	rawJSON []byte,
+	providerHint string,
+	env map[string]string,
+) ([]string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), evaluateHookTimeout)
+	defer cancel()
+	response, err := c.rpc.ResolveHookEnvironment(
+		ctx,
+		&daemonpb.ResolveHookEnvironmentRequest{
+			RawJson: rawJSON, ProviderHint: providerHint, EnvFingerprint: env,
+		},
+	)
+	if err != nil {
+		slog.WarnContext(ctx, "daemon ResolveHookEnvironment rpc failed", slog.Any("err", err))
+		return nil, fmt.Errorf("daemon ResolveHookEnvironment rpc: %w", err)
+	}
+	return response.GetReferencedNames(), nil
+}
+
 // EvaluateHook forwards raw hook input to daemon-owned enforcement.
 func (c *Client) EvaluateHook(rawJSON []byte, providerHint, cwd string, argv []string, env map[string]string) (*daemonpb.EvaluateHookResponse, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), evaluateHookTimeout)
 	defer cancel()
 	log := slog.Default()
 

@@ -48,8 +48,58 @@ func SyncConfig(cfg *config.Config) *config.Config {
 	return cloneConfigWithRules(cfg, syncRules)
 }
 
+// ReplaySyncConfig returns hot-path rules that can be reconstructed without
+// repeating external inference attempted before the hook response.
+func ReplaySyncConfig(cfg *config.Config) *config.Config {
+	syncRules, _ := PartitionRules(cfg)
+	replayRules := make([]config.Rule, 0, len(syncRules))
+	for _, rule := range syncRules {
+		if ruleHasInference(rule) {
+			continue
+		}
+		replayRules = append(replayRules, rule)
+	}
+	return cloneConfigWithRules(cfg, replayRules)
+}
+
+func ruleHasInference(rule config.Rule) bool {
+	for _, condition := range rule.Conditions {
+		if config.ConditionKind(condition.Kind) == config.ConditionKindInfer {
+			return true
+		}
+	}
+	return false
+}
+
+func partitionInferenceRules(ruleSet []config.Rule) ([]config.Rule, []config.Rule) {
+	deterministicRules := make([]config.Rule, 0, len(ruleSet))
+	inferenceRules := make([]config.Rule, 0, len(ruleSet))
+	for _, rule := range ruleSet {
+		if ruleHasInference(rule) {
+			inferenceRules = append(inferenceRules, rule)
+			continue
+		}
+		deterministicRules = append(deterministicRules, rule)
+	}
+	return deterministicRules, inferenceRules
+}
+
 // DeferredConfig returns a shallow config copy that keeps only deferred rules.
 func DeferredConfig(cfg *config.Config) *config.Config {
 	_, deferredRules := PartitionRules(cfg)
 	return cloneConfigWithRules(cfg, deferredRules)
+}
+
+// ReplayDeferredConfig returns deferred rules that can be reconstructed
+// without repeating external inference after process-local hot state is lost.
+func ReplayDeferredConfig(cfg *config.Config) *config.Config {
+	_, deferredRules := PartitionRules(cfg)
+	replayRules := make([]config.Rule, 0, len(deferredRules))
+	for _, rule := range deferredRules {
+		if ruleHasInference(rule) {
+			continue
+		}
+		replayRules = append(replayRules, rule)
+	}
+	return cloneConfigWithRules(cfg, replayRules)
 }

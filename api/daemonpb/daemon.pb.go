@@ -21,6 +21,110 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+type ResolveHookEnvironmentRequest struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	RawJson        []byte                 `protobuf:"bytes,1,opt,name=raw_json,json=rawJson,proto3" json:"raw_json,omitempty"`
+	ProviderHint   string                 `protobuf:"bytes,2,opt,name=provider_hint,json=providerHint,proto3" json:"provider_hint,omitempty"`
+	EnvFingerprint map[string]string      `protobuf:"bytes,3,rep,name=env_fingerprint,json=envFingerprint,proto3" json:"env_fingerprint,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *ResolveHookEnvironmentRequest) Reset() {
+	*x = ResolveHookEnvironmentRequest{}
+	mi := &file_daemon_proto_msgTypes[0]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ResolveHookEnvironmentRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ResolveHookEnvironmentRequest) ProtoMessage() {}
+
+func (x *ResolveHookEnvironmentRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_daemon_proto_msgTypes[0]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ResolveHookEnvironmentRequest.ProtoReflect.Descriptor instead.
+func (*ResolveHookEnvironmentRequest) Descriptor() ([]byte, []int) {
+	return file_daemon_proto_rawDescGZIP(), []int{0}
+}
+
+func (x *ResolveHookEnvironmentRequest) GetRawJson() []byte {
+	if x != nil {
+		return x.RawJson
+	}
+	return nil
+}
+
+func (x *ResolveHookEnvironmentRequest) GetProviderHint() string {
+	if x != nil {
+		return x.ProviderHint
+	}
+	return ""
+}
+
+func (x *ResolveHookEnvironmentRequest) GetEnvFingerprint() map[string]string {
+	if x != nil {
+		return x.EnvFingerprint
+	}
+	return nil
+}
+
+type ResolveHookEnvironmentResponse struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	ReferencedNames []string               `protobuf:"bytes,1,rep,name=referenced_names,json=referencedNames,proto3" json:"referenced_names,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *ResolveHookEnvironmentResponse) Reset() {
+	*x = ResolveHookEnvironmentResponse{}
+	mi := &file_daemon_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ResolveHookEnvironmentResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ResolveHookEnvironmentResponse) ProtoMessage() {}
+
+func (x *ResolveHookEnvironmentResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_daemon_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ResolveHookEnvironmentResponse.ProtoReflect.Descriptor instead.
+func (*ResolveHookEnvironmentResponse) Descriptor() ([]byte, []int) {
+	return file_daemon_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *ResolveHookEnvironmentResponse) GetReferencedNames() []string {
+	if x != nil {
+		return x.ReferencedNames
+	}
+	return nil
+}
+
 type EvaluateHookRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// raw_json is the raw JSON payload read from hook stdin.
@@ -37,7 +141,7 @@ type EvaluateHookRequest struct {
 
 func (x *EvaluateHookRequest) Reset() {
 	*x = EvaluateHookRequest{}
-	mi := &file_daemon_proto_msgTypes[0]
+	mi := &file_daemon_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -49,7 +153,7 @@ func (x *EvaluateHookRequest) String() string {
 func (*EvaluateHookRequest) ProtoMessage() {}
 
 func (x *EvaluateHookRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_daemon_proto_msgTypes[0]
+	mi := &file_daemon_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -62,7 +166,7 @@ func (x *EvaluateHookRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EvaluateHookRequest.ProtoReflect.Descriptor instead.
 func (*EvaluateHookRequest) Descriptor() ([]byte, []int) {
-	return file_daemon_proto_rawDescGZIP(), []int{0}
+	return file_daemon_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *EvaluateHookRequest) GetRawJson() []byte {
@@ -115,7 +219,7 @@ type EvaluateHookResponse struct {
 
 func (x *EvaluateHookResponse) Reset() {
 	*x = EvaluateHookResponse{}
-	mi := &file_daemon_proto_msgTypes[1]
+	mi := &file_daemon_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -127,7 +231,7 @@ func (x *EvaluateHookResponse) String() string {
 func (*EvaluateHookResponse) ProtoMessage() {}
 
 func (x *EvaluateHookResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_daemon_proto_msgTypes[1]
+	mi := &file_daemon_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -140,7 +244,7 @@ func (x *EvaluateHookResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EvaluateHookResponse.ProtoReflect.Descriptor instead.
 func (*EvaluateHookResponse) Descriptor() ([]byte, []int) {
-	return file_daemon_proto_rawDescGZIP(), []int{1}
+	return file_daemon_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *EvaluateHookResponse) GetExitCode() int32 {
@@ -172,7 +276,7 @@ type StatusRequest struct {
 
 func (x *StatusRequest) Reset() {
 	*x = StatusRequest{}
-	mi := &file_daemon_proto_msgTypes[2]
+	mi := &file_daemon_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -184,7 +288,7 @@ func (x *StatusRequest) String() string {
 func (*StatusRequest) ProtoMessage() {}
 
 func (x *StatusRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_daemon_proto_msgTypes[2]
+	mi := &file_daemon_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -197,7 +301,7 @@ func (x *StatusRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StatusRequest.ProtoReflect.Descriptor instead.
 func (*StatusRequest) Descriptor() ([]byte, []int) {
-	return file_daemon_proto_rawDescGZIP(), []int{2}
+	return file_daemon_proto_rawDescGZIP(), []int{4}
 }
 
 type StatusResponse struct {
@@ -215,7 +319,7 @@ type StatusResponse struct {
 
 func (x *StatusResponse) Reset() {
 	*x = StatusResponse{}
-	mi := &file_daemon_proto_msgTypes[3]
+	mi := &file_daemon_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -227,7 +331,7 @@ func (x *StatusResponse) String() string {
 func (*StatusResponse) ProtoMessage() {}
 
 func (x *StatusResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_daemon_proto_msgTypes[3]
+	mi := &file_daemon_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -240,7 +344,7 @@ func (x *StatusResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StatusResponse.ProtoReflect.Descriptor instead.
 func (*StatusResponse) Descriptor() ([]byte, []int) {
-	return file_daemon_proto_rawDescGZIP(), []int{3}
+	return file_daemon_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *StatusResponse) GetPid() int64 {
@@ -308,7 +412,7 @@ type KVEntry struct {
 
 func (x *KVEntry) Reset() {
 	*x = KVEntry{}
-	mi := &file_daemon_proto_msgTypes[4]
+	mi := &file_daemon_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -320,7 +424,7 @@ func (x *KVEntry) String() string {
 func (*KVEntry) ProtoMessage() {}
 
 func (x *KVEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_daemon_proto_msgTypes[4]
+	mi := &file_daemon_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -333,7 +437,7 @@ func (x *KVEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KVEntry.ProtoReflect.Descriptor instead.
 func (*KVEntry) Descriptor() ([]byte, []int) {
-	return file_daemon_proto_rawDescGZIP(), []int{4}
+	return file_daemon_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *KVEntry) GetNamespace() string {
@@ -402,7 +506,7 @@ type KVGetRequest struct {
 
 func (x *KVGetRequest) Reset() {
 	*x = KVGetRequest{}
-	mi := &file_daemon_proto_msgTypes[5]
+	mi := &file_daemon_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -414,7 +518,7 @@ func (x *KVGetRequest) String() string {
 func (*KVGetRequest) ProtoMessage() {}
 
 func (x *KVGetRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_daemon_proto_msgTypes[5]
+	mi := &file_daemon_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -427,7 +531,7 @@ func (x *KVGetRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KVGetRequest.ProtoReflect.Descriptor instead.
 func (*KVGetRequest) Descriptor() ([]byte, []int) {
-	return file_daemon_proto_rawDescGZIP(), []int{5}
+	return file_daemon_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *KVGetRequest) GetNamespace() string {
@@ -454,7 +558,7 @@ type KVGetResponse struct {
 
 func (x *KVGetResponse) Reset() {
 	*x = KVGetResponse{}
-	mi := &file_daemon_proto_msgTypes[6]
+	mi := &file_daemon_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -466,7 +570,7 @@ func (x *KVGetResponse) String() string {
 func (*KVGetResponse) ProtoMessage() {}
 
 func (x *KVGetResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_daemon_proto_msgTypes[6]
+	mi := &file_daemon_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -479,7 +583,7 @@ func (x *KVGetResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KVGetResponse.ProtoReflect.Descriptor instead.
 func (*KVGetResponse) Descriptor() ([]byte, []int) {
-	return file_daemon_proto_rawDescGZIP(), []int{6}
+	return file_daemon_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *KVGetResponse) GetFound() bool {
@@ -509,7 +613,7 @@ type KVSetRequest struct {
 
 func (x *KVSetRequest) Reset() {
 	*x = KVSetRequest{}
-	mi := &file_daemon_proto_msgTypes[7]
+	mi := &file_daemon_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -521,7 +625,7 @@ func (x *KVSetRequest) String() string {
 func (*KVSetRequest) ProtoMessage() {}
 
 func (x *KVSetRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_daemon_proto_msgTypes[7]
+	mi := &file_daemon_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -534,7 +638,7 @@ func (x *KVSetRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KVSetRequest.ProtoReflect.Descriptor instead.
 func (*KVSetRequest) Descriptor() ([]byte, []int) {
-	return file_daemon_proto_rawDescGZIP(), []int{7}
+	return file_daemon_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *KVSetRequest) GetNamespace() string {
@@ -582,7 +686,7 @@ type KVSetResponse struct {
 
 func (x *KVSetResponse) Reset() {
 	*x = KVSetResponse{}
-	mi := &file_daemon_proto_msgTypes[8]
+	mi := &file_daemon_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -594,7 +698,7 @@ func (x *KVSetResponse) String() string {
 func (*KVSetResponse) ProtoMessage() {}
 
 func (x *KVSetResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_daemon_proto_msgTypes[8]
+	mi := &file_daemon_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -607,7 +711,7 @@ func (x *KVSetResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KVSetResponse.ProtoReflect.Descriptor instead.
 func (*KVSetResponse) Descriptor() ([]byte, []int) {
-	return file_daemon_proto_rawDescGZIP(), []int{8}
+	return file_daemon_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *KVSetResponse) GetStored() bool {
@@ -634,7 +738,7 @@ type KVDeleteRequest struct {
 
 func (x *KVDeleteRequest) Reset() {
 	*x = KVDeleteRequest{}
-	mi := &file_daemon_proto_msgTypes[9]
+	mi := &file_daemon_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -646,7 +750,7 @@ func (x *KVDeleteRequest) String() string {
 func (*KVDeleteRequest) ProtoMessage() {}
 
 func (x *KVDeleteRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_daemon_proto_msgTypes[9]
+	mi := &file_daemon_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -659,7 +763,7 @@ func (x *KVDeleteRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KVDeleteRequest.ProtoReflect.Descriptor instead.
 func (*KVDeleteRequest) Descriptor() ([]byte, []int) {
-	return file_daemon_proto_rawDescGZIP(), []int{9}
+	return file_daemon_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *KVDeleteRequest) GetNamespace() string {
@@ -685,7 +789,7 @@ type KVDeleteResponse struct {
 
 func (x *KVDeleteResponse) Reset() {
 	*x = KVDeleteResponse{}
-	mi := &file_daemon_proto_msgTypes[10]
+	mi := &file_daemon_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -697,7 +801,7 @@ func (x *KVDeleteResponse) String() string {
 func (*KVDeleteResponse) ProtoMessage() {}
 
 func (x *KVDeleteResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_daemon_proto_msgTypes[10]
+	mi := &file_daemon_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -710,7 +814,7 @@ func (x *KVDeleteResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KVDeleteResponse.ProtoReflect.Descriptor instead.
 func (*KVDeleteResponse) Descriptor() ([]byte, []int) {
-	return file_daemon_proto_rawDescGZIP(), []int{10}
+	return file_daemon_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *KVDeleteResponse) GetDeleted() bool {
@@ -730,7 +834,7 @@ type KVExistsRequest struct {
 
 func (x *KVExistsRequest) Reset() {
 	*x = KVExistsRequest{}
-	mi := &file_daemon_proto_msgTypes[11]
+	mi := &file_daemon_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -742,7 +846,7 @@ func (x *KVExistsRequest) String() string {
 func (*KVExistsRequest) ProtoMessage() {}
 
 func (x *KVExistsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_daemon_proto_msgTypes[11]
+	mi := &file_daemon_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -755,7 +859,7 @@ func (x *KVExistsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KVExistsRequest.ProtoReflect.Descriptor instead.
 func (*KVExistsRequest) Descriptor() ([]byte, []int) {
-	return file_daemon_proto_rawDescGZIP(), []int{11}
+	return file_daemon_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *KVExistsRequest) GetNamespace() string {
@@ -781,7 +885,7 @@ type KVExistsResponse struct {
 
 func (x *KVExistsResponse) Reset() {
 	*x = KVExistsResponse{}
-	mi := &file_daemon_proto_msgTypes[12]
+	mi := &file_daemon_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -793,7 +897,7 @@ func (x *KVExistsResponse) String() string {
 func (*KVExistsResponse) ProtoMessage() {}
 
 func (x *KVExistsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_daemon_proto_msgTypes[12]
+	mi := &file_daemon_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -806,7 +910,7 @@ func (x *KVExistsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KVExistsResponse.ProtoReflect.Descriptor instead.
 func (*KVExistsResponse) Descriptor() ([]byte, []int) {
-	return file_daemon_proto_rawDescGZIP(), []int{12}
+	return file_daemon_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *KVExistsResponse) GetExists() bool {
@@ -825,7 +929,7 @@ type KVTTLResponse struct {
 
 func (x *KVTTLResponse) Reset() {
 	*x = KVTTLResponse{}
-	mi := &file_daemon_proto_msgTypes[13]
+	mi := &file_daemon_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -837,7 +941,7 @@ func (x *KVTTLResponse) String() string {
 func (*KVTTLResponse) ProtoMessage() {}
 
 func (x *KVTTLResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_daemon_proto_msgTypes[13]
+	mi := &file_daemon_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -850,7 +954,7 @@ func (x *KVTTLResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KVTTLResponse.ProtoReflect.Descriptor instead.
 func (*KVTTLResponse) Descriptor() ([]byte, []int) {
-	return file_daemon_proto_rawDescGZIP(), []int{13}
+	return file_daemon_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *KVTTLResponse) GetTtl() int64 {
@@ -869,7 +973,7 @@ type KVPTTLResponse struct {
 
 func (x *KVPTTLResponse) Reset() {
 	*x = KVPTTLResponse{}
-	mi := &file_daemon_proto_msgTypes[14]
+	mi := &file_daemon_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -881,7 +985,7 @@ func (x *KVPTTLResponse) String() string {
 func (*KVPTTLResponse) ProtoMessage() {}
 
 func (x *KVPTTLResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_daemon_proto_msgTypes[14]
+	mi := &file_daemon_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -894,7 +998,7 @@ func (x *KVPTTLResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KVPTTLResponse.ProtoReflect.Descriptor instead.
 func (*KVPTTLResponse) Descriptor() ([]byte, []int) {
-	return file_daemon_proto_rawDescGZIP(), []int{14}
+	return file_daemon_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *KVPTTLResponse) GetPttl() int64 {
@@ -915,7 +1019,7 @@ type KVExpireRequest struct {
 
 func (x *KVExpireRequest) Reset() {
 	*x = KVExpireRequest{}
-	mi := &file_daemon_proto_msgTypes[15]
+	mi := &file_daemon_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -927,7 +1031,7 @@ func (x *KVExpireRequest) String() string {
 func (*KVExpireRequest) ProtoMessage() {}
 
 func (x *KVExpireRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_daemon_proto_msgTypes[15]
+	mi := &file_daemon_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -940,7 +1044,7 @@ func (x *KVExpireRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KVExpireRequest.ProtoReflect.Descriptor instead.
 func (*KVExpireRequest) Descriptor() ([]byte, []int) {
-	return file_daemon_proto_rawDescGZIP(), []int{15}
+	return file_daemon_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *KVExpireRequest) GetNamespace() string {
@@ -973,7 +1077,7 @@ type KVExpireResponse struct {
 
 func (x *KVExpireResponse) Reset() {
 	*x = KVExpireResponse{}
-	mi := &file_daemon_proto_msgTypes[16]
+	mi := &file_daemon_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -985,7 +1089,7 @@ func (x *KVExpireResponse) String() string {
 func (*KVExpireResponse) ProtoMessage() {}
 
 func (x *KVExpireResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_daemon_proto_msgTypes[16]
+	mi := &file_daemon_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -998,7 +1102,7 @@ func (x *KVExpireResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KVExpireResponse.ProtoReflect.Descriptor instead.
 func (*KVExpireResponse) Descriptor() ([]byte, []int) {
-	return file_daemon_proto_rawDescGZIP(), []int{16}
+	return file_daemon_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *KVExpireResponse) GetUpdated() bool {
@@ -1018,7 +1122,7 @@ type KVGetDeleteRequest struct {
 
 func (x *KVGetDeleteRequest) Reset() {
 	*x = KVGetDeleteRequest{}
-	mi := &file_daemon_proto_msgTypes[17]
+	mi := &file_daemon_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1030,7 +1134,7 @@ func (x *KVGetDeleteRequest) String() string {
 func (*KVGetDeleteRequest) ProtoMessage() {}
 
 func (x *KVGetDeleteRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_daemon_proto_msgTypes[17]
+	mi := &file_daemon_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1043,7 +1147,7 @@ func (x *KVGetDeleteRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KVGetDeleteRequest.ProtoReflect.Descriptor instead.
 func (*KVGetDeleteRequest) Descriptor() ([]byte, []int) {
-	return file_daemon_proto_rawDescGZIP(), []int{17}
+	return file_daemon_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *KVGetDeleteRequest) GetNamespace() string {
@@ -1070,7 +1174,7 @@ type KVGetDeleteResponse struct {
 
 func (x *KVGetDeleteResponse) Reset() {
 	*x = KVGetDeleteResponse{}
-	mi := &file_daemon_proto_msgTypes[18]
+	mi := &file_daemon_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1082,7 +1186,7 @@ func (x *KVGetDeleteResponse) String() string {
 func (*KVGetDeleteResponse) ProtoMessage() {}
 
 func (x *KVGetDeleteResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_daemon_proto_msgTypes[18]
+	mi := &file_daemon_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1095,7 +1199,7 @@ func (x *KVGetDeleteResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KVGetDeleteResponse.ProtoReflect.Descriptor instead.
 func (*KVGetDeleteResponse) Descriptor() ([]byte, []int) {
-	return file_daemon_proto_rawDescGZIP(), []int{18}
+	return file_daemon_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *KVGetDeleteResponse) GetFound() bool {
@@ -1124,7 +1228,7 @@ type KVListRequest struct {
 
 func (x *KVListRequest) Reset() {
 	*x = KVListRequest{}
-	mi := &file_daemon_proto_msgTypes[19]
+	mi := &file_daemon_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1136,7 +1240,7 @@ func (x *KVListRequest) String() string {
 func (*KVListRequest) ProtoMessage() {}
 
 func (x *KVListRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_daemon_proto_msgTypes[19]
+	mi := &file_daemon_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1149,7 +1253,7 @@ func (x *KVListRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KVListRequest.ProtoReflect.Descriptor instead.
 func (*KVListRequest) Descriptor() ([]byte, []int) {
-	return file_daemon_proto_rawDescGZIP(), []int{19}
+	return file_daemon_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *KVListRequest) GetNamespace() string {
@@ -1189,7 +1293,7 @@ type KVListResponse struct {
 
 func (x *KVListResponse) Reset() {
 	*x = KVListResponse{}
-	mi := &file_daemon_proto_msgTypes[20]
+	mi := &file_daemon_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1201,7 +1305,7 @@ func (x *KVListResponse) String() string {
 func (*KVListResponse) ProtoMessage() {}
 
 func (x *KVListResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_daemon_proto_msgTypes[20]
+	mi := &file_daemon_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1214,7 +1318,7 @@ func (x *KVListResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KVListResponse.ProtoReflect.Descriptor instead.
 func (*KVListResponse) Descriptor() ([]byte, []int) {
-	return file_daemon_proto_rawDescGZIP(), []int{20}
+	return file_daemon_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *KVListResponse) GetEntries() []*KVEntry {
@@ -1228,7 +1332,16 @@ var File_daemon_proto protoreflect.FileDescriptor
 
 const file_daemon_proto_rawDesc = "" +
 	"\n" +
-	"\fdaemon.proto\x12\tagentgate\"\x9b\x02\n" +
+	"\fdaemon.proto\x12\tagentgate\"\x89\x02\n" +
+	"\x1dResolveHookEnvironmentRequest\x12\x19\n" +
+	"\braw_json\x18\x01 \x01(\fR\arawJson\x12#\n" +
+	"\rprovider_hint\x18\x02 \x01(\tR\fproviderHint\x12e\n" +
+	"\x0fenv_fingerprint\x18\x03 \x03(\v2<.agentgate.ResolveHookEnvironmentRequest.EnvFingerprintEntryR\x0eenvFingerprint\x1aA\n" +
+	"\x13EnvFingerprintEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"K\n" +
+	"\x1eResolveHookEnvironmentResponse\x12)\n" +
+	"\x10referenced_names\x18\x01 \x03(\tR\x0freferencedNames\"\x9b\x02\n" +
 	"\x13EvaluateHookRequest\x12\x19\n" +
 	"\braw_json\x18\x01 \x01(\fR\arawJson\x12#\n" +
 	"\rprovider_hint\x18\x02 \x01(\tR\fproviderHint\x12\x10\n" +
@@ -1311,9 +1424,10 @@ const file_daemon_proto_rawDesc = "" +
 	"\x05limit\x18\x03 \x01(\x05R\x05limit\x12%\n" +
 	"\x0einclude_values\x18\x04 \x01(\bR\rincludeValues\">\n" +
 	"\x0eKVListResponse\x12,\n" +
-	"\aentries\x18\x01 \x03(\v2\x12.agentgate.KVEntryR\aentries2\xea\x05\n" +
+	"\aentries\x18\x01 \x03(\v2\x12.agentgate.KVEntryR\aentries2\xd9\x06\n" +
 	"\n" +
-	"AgentGateD\x12O\n" +
+	"AgentGateD\x12m\n" +
+	"\x16ResolveHookEnvironment\x12(.agentgate.ResolveHookEnvironmentRequest\x1a).agentgate.ResolveHookEnvironmentResponse\x12O\n" +
 	"\fEvaluateHook\x12\x1e.agentgate.EvaluateHookRequest\x1a\x1f.agentgate.EvaluateHookResponse\x12=\n" +
 	"\x06Status\x12\x18.agentgate.StatusRequest\x1a\x19.agentgate.StatusResponse\x12:\n" +
 	"\x05KVGet\x12\x17.agentgate.KVGetRequest\x1a\x18.agentgate.KVGetResponse\x12:\n" +
@@ -1338,64 +1452,70 @@ func file_daemon_proto_rawDescGZIP() []byte {
 	return file_daemon_proto_rawDescData
 }
 
-var file_daemon_proto_msgTypes = make([]protoimpl.MessageInfo, 22)
+var file_daemon_proto_msgTypes = make([]protoimpl.MessageInfo, 25)
 var file_daemon_proto_goTypes = []any{
-	(*EvaluateHookRequest)(nil),  // 0: agentgate.EvaluateHookRequest
-	(*EvaluateHookResponse)(nil), // 1: agentgate.EvaluateHookResponse
-	(*StatusRequest)(nil),        // 2: agentgate.StatusRequest
-	(*StatusResponse)(nil),       // 3: agentgate.StatusResponse
-	(*KVEntry)(nil),              // 4: agentgate.KVEntry
-	(*KVGetRequest)(nil),         // 5: agentgate.KVGetRequest
-	(*KVGetResponse)(nil),        // 6: agentgate.KVGetResponse
-	(*KVSetRequest)(nil),         // 7: agentgate.KVSetRequest
-	(*KVSetResponse)(nil),        // 8: agentgate.KVSetResponse
-	(*KVDeleteRequest)(nil),      // 9: agentgate.KVDeleteRequest
-	(*KVDeleteResponse)(nil),     // 10: agentgate.KVDeleteResponse
-	(*KVExistsRequest)(nil),      // 11: agentgate.KVExistsRequest
-	(*KVExistsResponse)(nil),     // 12: agentgate.KVExistsResponse
-	(*KVTTLResponse)(nil),        // 13: agentgate.KVTTLResponse
-	(*KVPTTLResponse)(nil),       // 14: agentgate.KVPTTLResponse
-	(*KVExpireRequest)(nil),      // 15: agentgate.KVExpireRequest
-	(*KVExpireResponse)(nil),     // 16: agentgate.KVExpireResponse
-	(*KVGetDeleteRequest)(nil),   // 17: agentgate.KVGetDeleteRequest
-	(*KVGetDeleteResponse)(nil),  // 18: agentgate.KVGetDeleteResponse
-	(*KVListRequest)(nil),        // 19: agentgate.KVListRequest
-	(*KVListResponse)(nil),       // 20: agentgate.KVListResponse
-	nil,                          // 21: agentgate.EvaluateHookRequest.EnvFingerprintEntry
+	(*ResolveHookEnvironmentRequest)(nil),  // 0: agentgate.ResolveHookEnvironmentRequest
+	(*ResolveHookEnvironmentResponse)(nil), // 1: agentgate.ResolveHookEnvironmentResponse
+	(*EvaluateHookRequest)(nil),            // 2: agentgate.EvaluateHookRequest
+	(*EvaluateHookResponse)(nil),           // 3: agentgate.EvaluateHookResponse
+	(*StatusRequest)(nil),                  // 4: agentgate.StatusRequest
+	(*StatusResponse)(nil),                 // 5: agentgate.StatusResponse
+	(*KVEntry)(nil),                        // 6: agentgate.KVEntry
+	(*KVGetRequest)(nil),                   // 7: agentgate.KVGetRequest
+	(*KVGetResponse)(nil),                  // 8: agentgate.KVGetResponse
+	(*KVSetRequest)(nil),                   // 9: agentgate.KVSetRequest
+	(*KVSetResponse)(nil),                  // 10: agentgate.KVSetResponse
+	(*KVDeleteRequest)(nil),                // 11: agentgate.KVDeleteRequest
+	(*KVDeleteResponse)(nil),               // 12: agentgate.KVDeleteResponse
+	(*KVExistsRequest)(nil),                // 13: agentgate.KVExistsRequest
+	(*KVExistsResponse)(nil),               // 14: agentgate.KVExistsResponse
+	(*KVTTLResponse)(nil),                  // 15: agentgate.KVTTLResponse
+	(*KVPTTLResponse)(nil),                 // 16: agentgate.KVPTTLResponse
+	(*KVExpireRequest)(nil),                // 17: agentgate.KVExpireRequest
+	(*KVExpireResponse)(nil),               // 18: agentgate.KVExpireResponse
+	(*KVGetDeleteRequest)(nil),             // 19: agentgate.KVGetDeleteRequest
+	(*KVGetDeleteResponse)(nil),            // 20: agentgate.KVGetDeleteResponse
+	(*KVListRequest)(nil),                  // 21: agentgate.KVListRequest
+	(*KVListResponse)(nil),                 // 22: agentgate.KVListResponse
+	nil,                                    // 23: agentgate.ResolveHookEnvironmentRequest.EnvFingerprintEntry
+	nil,                                    // 24: agentgate.EvaluateHookRequest.EnvFingerprintEntry
 }
 var file_daemon_proto_depIdxs = []int32{
-	21, // 0: agentgate.EvaluateHookRequest.env_fingerprint:type_name -> agentgate.EvaluateHookRequest.EnvFingerprintEntry
-	4,  // 1: agentgate.KVGetResponse.entry:type_name -> agentgate.KVEntry
-	4,  // 2: agentgate.KVSetResponse.entry:type_name -> agentgate.KVEntry
-	4,  // 3: agentgate.KVGetDeleteResponse.entry:type_name -> agentgate.KVEntry
-	4,  // 4: agentgate.KVListResponse.entries:type_name -> agentgate.KVEntry
-	0,  // 5: agentgate.AgentGateD.EvaluateHook:input_type -> agentgate.EvaluateHookRequest
-	2,  // 6: agentgate.AgentGateD.Status:input_type -> agentgate.StatusRequest
-	5,  // 7: agentgate.AgentGateD.KVGet:input_type -> agentgate.KVGetRequest
-	7,  // 8: agentgate.AgentGateD.KVSet:input_type -> agentgate.KVSetRequest
-	9,  // 9: agentgate.AgentGateD.KVDelete:input_type -> agentgate.KVDeleteRequest
-	11, // 10: agentgate.AgentGateD.KVExists:input_type -> agentgate.KVExistsRequest
-	5,  // 11: agentgate.AgentGateD.KVTTL:input_type -> agentgate.KVGetRequest
-	5,  // 12: agentgate.AgentGateD.KVPTTL:input_type -> agentgate.KVGetRequest
-	15, // 13: agentgate.AgentGateD.KVExpire:input_type -> agentgate.KVExpireRequest
-	17, // 14: agentgate.AgentGateD.KVGetDelete:input_type -> agentgate.KVGetDeleteRequest
-	19, // 15: agentgate.AgentGateD.KVList:input_type -> agentgate.KVListRequest
-	1,  // 16: agentgate.AgentGateD.EvaluateHook:output_type -> agentgate.EvaluateHookResponse
-	3,  // 17: agentgate.AgentGateD.Status:output_type -> agentgate.StatusResponse
-	6,  // 18: agentgate.AgentGateD.KVGet:output_type -> agentgate.KVGetResponse
-	8,  // 19: agentgate.AgentGateD.KVSet:output_type -> agentgate.KVSetResponse
-	10, // 20: agentgate.AgentGateD.KVDelete:output_type -> agentgate.KVDeleteResponse
-	12, // 21: agentgate.AgentGateD.KVExists:output_type -> agentgate.KVExistsResponse
-	13, // 22: agentgate.AgentGateD.KVTTL:output_type -> agentgate.KVTTLResponse
-	14, // 23: agentgate.AgentGateD.KVPTTL:output_type -> agentgate.KVPTTLResponse
-	16, // 24: agentgate.AgentGateD.KVExpire:output_type -> agentgate.KVExpireResponse
-	18, // 25: agentgate.AgentGateD.KVGetDelete:output_type -> agentgate.KVGetDeleteResponse
-	20, // 26: agentgate.AgentGateD.KVList:output_type -> agentgate.KVListResponse
-	16, // [16:27] is the sub-list for method output_type
-	5,  // [5:16] is the sub-list for method input_type
-	5,  // [5:5] is the sub-list for extension type_name
-	5,  // [5:5] is the sub-list for extension extendee
-	0,  // [0:5] is the sub-list for field type_name
+	23, // 0: agentgate.ResolveHookEnvironmentRequest.env_fingerprint:type_name -> agentgate.ResolveHookEnvironmentRequest.EnvFingerprintEntry
+	24, // 1: agentgate.EvaluateHookRequest.env_fingerprint:type_name -> agentgate.EvaluateHookRequest.EnvFingerprintEntry
+	6,  // 2: agentgate.KVGetResponse.entry:type_name -> agentgate.KVEntry
+	6,  // 3: agentgate.KVSetResponse.entry:type_name -> agentgate.KVEntry
+	6,  // 4: agentgate.KVGetDeleteResponse.entry:type_name -> agentgate.KVEntry
+	6,  // 5: agentgate.KVListResponse.entries:type_name -> agentgate.KVEntry
+	0,  // 6: agentgate.AgentGateD.ResolveHookEnvironment:input_type -> agentgate.ResolveHookEnvironmentRequest
+	2,  // 7: agentgate.AgentGateD.EvaluateHook:input_type -> agentgate.EvaluateHookRequest
+	4,  // 8: agentgate.AgentGateD.Status:input_type -> agentgate.StatusRequest
+	7,  // 9: agentgate.AgentGateD.KVGet:input_type -> agentgate.KVGetRequest
+	9,  // 10: agentgate.AgentGateD.KVSet:input_type -> agentgate.KVSetRequest
+	11, // 11: agentgate.AgentGateD.KVDelete:input_type -> agentgate.KVDeleteRequest
+	13, // 12: agentgate.AgentGateD.KVExists:input_type -> agentgate.KVExistsRequest
+	7,  // 13: agentgate.AgentGateD.KVTTL:input_type -> agentgate.KVGetRequest
+	7,  // 14: agentgate.AgentGateD.KVPTTL:input_type -> agentgate.KVGetRequest
+	17, // 15: agentgate.AgentGateD.KVExpire:input_type -> agentgate.KVExpireRequest
+	19, // 16: agentgate.AgentGateD.KVGetDelete:input_type -> agentgate.KVGetDeleteRequest
+	21, // 17: agentgate.AgentGateD.KVList:input_type -> agentgate.KVListRequest
+	1,  // 18: agentgate.AgentGateD.ResolveHookEnvironment:output_type -> agentgate.ResolveHookEnvironmentResponse
+	3,  // 19: agentgate.AgentGateD.EvaluateHook:output_type -> agentgate.EvaluateHookResponse
+	5,  // 20: agentgate.AgentGateD.Status:output_type -> agentgate.StatusResponse
+	8,  // 21: agentgate.AgentGateD.KVGet:output_type -> agentgate.KVGetResponse
+	10, // 22: agentgate.AgentGateD.KVSet:output_type -> agentgate.KVSetResponse
+	12, // 23: agentgate.AgentGateD.KVDelete:output_type -> agentgate.KVDeleteResponse
+	14, // 24: agentgate.AgentGateD.KVExists:output_type -> agentgate.KVExistsResponse
+	15, // 25: agentgate.AgentGateD.KVTTL:output_type -> agentgate.KVTTLResponse
+	16, // 26: agentgate.AgentGateD.KVPTTL:output_type -> agentgate.KVPTTLResponse
+	18, // 27: agentgate.AgentGateD.KVExpire:output_type -> agentgate.KVExpireResponse
+	20, // 28: agentgate.AgentGateD.KVGetDelete:output_type -> agentgate.KVGetDeleteResponse
+	22, // 29: agentgate.AgentGateD.KVList:output_type -> agentgate.KVListResponse
+	18, // [18:30] is the sub-list for method output_type
+	6,  // [6:18] is the sub-list for method input_type
+	6,  // [6:6] is the sub-list for extension type_name
+	6,  // [6:6] is the sub-list for extension extendee
+	0,  // [0:6] is the sub-list for field type_name
 }
 
 func init() { file_daemon_proto_init() }
@@ -1409,7 +1529,7 @@ func file_daemon_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_daemon_proto_rawDesc), len(file_daemon_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   22,
+			NumMessages:   25,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

@@ -5,24 +5,18 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"runtime"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/BurntSushi/toml"
-	"goodkind.io/agent-gate/internal/hotkv"
 	"goodkind.io/agent-gate/internal/regex"
 )
 
 const (
-	defaultHookMinimumHotConcurrency = 4
-	defaultHookHotConcurrencyFactor  = 4
-	defaultHookHotQueueWait          = 25 * time.Millisecond
-	defaultHookDeferredQueueLimit    = 8192
-	defaultHookDeferredWorkers       = 1
-	defaultUpdateInterval            = 24 * time.Hour
+	defaultUpdateInterval = 24 * time.Hour
 )
 
 // Log holds logging configuration decoded from the [log] TOML table.
@@ -58,11 +52,12 @@ type Performance struct {
 
 // HookPerformance tunes the daemon-owned hook evaluation pipeline.
 type HookPerformance struct {
-	HotConcurrency     int                  `toml:"hot_concurrency"`
-	HotQueueWaitMS     int                  `toml:"hot_queue_wait_ms"`
-	DeferredQueueLimit int                  `toml:"deferred_queue_limit"`
-	DeferredWorkers    int                  `toml:"deferred_workers"`
-	Cache              HookCachePerformance `toml:"cache"`
+	HotConcurrency          int                  `toml:"hot_concurrency"`
+	HotQueueWaitMS          int                  `toml:"hot_queue_wait_ms"`
+	InferencePhaseTimeoutMS int                  `toml:"inference_phase_timeout_ms"`
+	DeferredQueueLimit      int                  `toml:"deferred_queue_limit"`
+	DeferredWorkers         int                  `toml:"deferred_workers"`
+	Cache                   HookCachePerformance `toml:"cache"`
 }
 
 // HookCachePerformance tunes the daemon-owned hot memory cache used by hook
@@ -128,14 +123,11 @@ type Condition struct {
 	// Shell-read-secret condition fields. Pattern matches file contents,
 	// PathPattern matches risky paths when content probing is not possible,
 	// and ReadSpecs describes how command argv shapes expose paths.
-	PathPattern  string          `toml:"path_pattern"`
-	MaxBytes     int             `toml:"max_bytes"`
-	RemotePolicy string          `toml:"remote_policy"`
-	ReadSpecs    []ShellReadSpec `toml:"read_specs"`
-
-	// Composer condition fields. RuleSetID selects the lm-review rule set and
-	// deterministic oracle pair that decides this gate after cheap prefilters.
-	RuleSetID string `toml:"rule_set_id"`
+	PathPattern  string           `toml:"path_pattern"`
+	MaxBytes     int              `toml:"max_bytes"`
+	RemotePolicy string           `toml:"remote_policy"`
+	ReadSpecs    []ShellReadSpec  `toml:"read_specs"`
+	WriteSpecs   []ShellWriteSpec `toml:"write_specs"`
 
 	// Exec condition fields. Command is the argv executed synchronously as an
 	// external validator (no shell). TimeoutMs bounds the run. CacheKey is a
@@ -159,26 +151,42 @@ type Condition struct {
 	StdoutJSONField  string          `toml:"stdout_json_field"`
 	StdoutJSONEquals *toml.Primitive `toml:"stdout_json_equals"`
 
-	compiled         *regex.Regexp
-	compiledNot      *regex.Regexp
-	compiledPath     *regex.Regexp
-	selectors        []FieldSelectorSpec
-	fieldPairs       []FieldPairSpec
-	cacheKeySelector FieldSelectorSpec
-	forEachSelector  FieldSelectorSpec
-	stdoutJSONValue  TOMLScalarValue
+	// Infer condition fields. Inline and file declarations are resolved during
+	// config compilation, so runtime evaluation never reads configuration files.
+	Endpoint               string          `toml:"endpoint"`
+	LayerName              string          `toml:"layer_name"`
+	Prompt                 string          `toml:"prompt"`
+	PromptFile             string          `toml:"prompt_file"`
+	InputField             string          `toml:"input_field"`
+	OutputSchema           string          `toml:"output_schema"`
+	OutputSchemaFile       string          `toml:"output_schema_file"`
+	Model                  string          `toml:"model"`
+	ReasoningEffort        ReasoningEffort `toml:"reasoning_effort"`
+	MaxCompletionTokens    *int64          `toml:"max_completion_tokens"`
+	Temperature            *float64        `toml:"temperature"`
+	ResponseJSONField      string          `toml:"response_json_field"`
+	ResponseJSONEquals     *toml.Primitive `toml:"response_json_equals"`
+	ContextSource          string          `toml:"context_source"`
+	ContextEndpoint        string          `toml:"context_endpoint"`
+	ContextWorkspaceField  string          `toml:"context_workspace_field"`
+	ContextSessionField    string          `toml:"context_session_field"`
+	ContextTurnBudget      int             `toml:"context_turn_budget"`
+	ContextMaxCharsPerTurn int             `toml:"context_max_chars_per_turn"`
+	ContextOnError         string          `toml:"context_on_error"`
+
+	compiled                 *regex.Regexp
+	compiledNot              *regex.Regexp
+	compiledPath             *regex.Regexp
+	selectors                []FieldSelectorSpec
+	fieldPairs               []FieldPairSpec
+	cacheKeySelector         FieldSelectorSpec
+	forEachSelector          FieldSelectorSpec
+	stdoutJSONValue          TOMLScalarValue
+	inputSelector            FieldSelectorSpec
+	contextWorkspaceSelector FieldSelectorSpec
+	contextSessionSelector   FieldSelectorSpec
+	responseJSONValue        TOMLScalarValue
 }
-
-// CacheKeySelector returns the compiled field selector that keys the exec
-// condition's cross-event result cache.
-func (c *Condition) CacheKeySelector() FieldSelectorSpec { return c.cacheKeySelector }
-
-// ForEachSelector returns the compiled field selector that expands the exec
-// command across many target values.
-func (c *Condition) ForEachSelector() FieldSelectorSpec { return c.forEachSelector }
-
-// StdoutJSONEqualsValue returns the decoded scalar used by stdout_json_field.
-func (c *Condition) StdoutJSONEqualsValue() TOMLScalarValue { return c.stdoutJSONValue }
 
 // ShellReadSpec describes one configurable shell command shape for the
 // shell_read_secret condition kind.
@@ -209,22 +217,6 @@ type FieldPairSpec struct {
 // FieldPairs returns the parsed [FieldPairSpec] values for a condition.
 // The slice has length zero when [Condition.FieldPair] is unset.
 func (c *Condition) FieldPairs() []FieldPairSpec { return c.fieldPairs }
-
-// ConditionKind selects which evaluator applies to a rule condition.
-type ConditionKind string
-
-// ConditionKind variants.
-const (
-	ConditionKindCommand          ConditionKind = "command"
-	ConditionKindDiff             ConditionKind = "diff"
-	ConditionKindExec             ConditionKind = "exec"
-	ConditionKindProject          ConditionKind = "project"
-	ConditionKindRegex            ConditionKind = "regex"
-	ConditionKindShellRead        ConditionKind = "shell_read_secret"
-	ConditionKindShellWrite       ConditionKind = "shell_write"
-	ConditionKindComposer         ConditionKind = "composer"
-	ConditionKindGitDefaultBranch ConditionKind = "git_default_branch"
-)
 
 // Exec condition block_on variants decide which exit codes block.
 const (
@@ -469,10 +461,11 @@ type Config struct {
 	Audit       Audit           `toml:"audit"`
 	Paths       Paths           `toml:"paths"`
 	Performance Performance     `toml:"performance"`
-	Judge       Judge           `toml:"judge"`
 	Telemetry   TelemetryConfig `toml:"telemetry"`
 	Update      Update          `toml:"update"`
 	Rules       []Rule          `toml:"rules"`
+
+	sourceIdentity string
 }
 
 // ConversationsDir returns the resolved base directory for per-conversation
@@ -512,67 +505,6 @@ func (c *Config) AuditSQLitePath() string {
 	return DefaultAuditSQLitePath()
 }
 
-// HookHotConcurrency returns the daemon admission limit for synchronous hook
-// evaluation.
-func (c *Config) HookHotConcurrency() int {
-	if c != nil && c.Performance.Hook.HotConcurrency > 0 {
-		return c.Performance.Hook.HotConcurrency
-	}
-	limit := runtime.GOMAXPROCS(0) * defaultHookHotConcurrencyFactor
-	if limit < defaultHookMinimumHotConcurrency {
-		return defaultHookMinimumHotConcurrency
-	}
-	return limit
-}
-
-// HookHotQueueWait returns the maximum time a hook waits for a hot-path slot.
-func (c *Config) HookHotQueueWait() time.Duration {
-	if c != nil && c.Performance.Hook.HotQueueWaitMS > 0 {
-		return time.Duration(c.Performance.Hook.HotQueueWaitMS) * time.Millisecond
-	}
-	return defaultHookHotQueueWait
-}
-
-// HookDeferredQueueLimit returns the bounded queue size for cool audit work.
-func (c *Config) HookDeferredQueueLimit() int {
-	if c != nil && c.Performance.Hook.DeferredQueueLimit > 0 {
-		return c.Performance.Hook.DeferredQueueLimit
-	}
-	return defaultHookDeferredQueueLimit
-}
-
-// HookDeferredWorkers returns the number of workers that process cool audit work.
-func (c *Config) HookDeferredWorkers() int {
-	if c != nil && c.Performance.Hook.DeferredWorkers > 0 {
-		return c.Performance.Hook.DeferredWorkers
-	}
-	return defaultHookDeferredWorkers
-}
-
-// HookCacheMaxEntries returns the maximum daemon hot cache entry count.
-func (c *Config) HookCacheMaxEntries() int {
-	if c != nil && c.Performance.Hook.Cache.MaxEntries > 0 {
-		return c.Performance.Hook.Cache.MaxEntries
-	}
-	return hotkv.DefaultMaxEntries
-}
-
-// HookCacheMaxValueBytes returns the maximum bytes accepted per hot cache value.
-func (c *Config) HookCacheMaxValueBytes() int {
-	if c != nil && c.Performance.Hook.Cache.MaxValueBytes > 0 {
-		return c.Performance.Hook.Cache.MaxValueBytes
-	}
-	return hotkv.DefaultMaxValueBytes
-}
-
-// HookCachePruneInterval returns the daemon hot cache periodic prune interval.
-func (c *Config) HookCachePruneInterval() time.Duration {
-	if c != nil && c.Performance.Hook.Cache.PruneIntervalMS > 0 {
-		return time.Duration(c.Performance.Hook.Cache.PruneIntervalMS) * time.Millisecond
-	}
-	return hotkv.DefaultPruneInterval
-}
-
 // Load reads the config file at the XDG config path.
 // If no file exists, it returns a zero-value config with default paths.
 // All rule patterns are compiled to regexes before returning.
@@ -597,14 +529,23 @@ func loadPath(path string, requireExisting bool) (*Config, error) {
 		return nil, fmt.Errorf("stat config %s: %w", path, err)
 	}
 
-	meta, err := toml.DecodeFile(path, &cfg)
+	sourceBytes, err := os.ReadFile(path)
+	if err != nil {
+		log.Error("read config failed", "path", path, "err", err)
+		return nil, fmt.Errorf("read config %s: %w", path, err)
+	}
+	cfg.sourceIdentity = hashIdentity(sourceBytes)
+	meta, err := toml.Decode(string(sourceBytes), &cfg)
 	if err != nil {
 		log.Error("decode config failed", "path", path, "err", err)
 		return nil, fmt.Errorf("decode config %s: %w", path, err)
 	}
+	if err := validateHookPerformance(cfg.Performance.Hook); err != nil {
+		return nil, err
+	}
 
 	for i := range cfg.Rules {
-		if err := compileRule(log, &cfg.Rules[i], meta); err != nil {
+		if err := compileRule(log, &cfg.Rules[i], meta, filepath.Dir(path)); err != nil {
 			return nil, err
 		}
 	}
@@ -617,7 +558,7 @@ func loadPath(path string, requireExisting bool) (*Config, error) {
 
 // compileRule attaches compiled regexes and selectors to rule and its
 // conditions. Errors are returned with rule-context wrapping.
-func compileRule(log *slog.Logger, r *Rule, meta toml.MetaData) error {
+func compileRule(log *slog.Logger, r *Rule, meta toml.MetaData, configDirectory string) error {
 	if err := normalizeRuleAction(r); err != nil {
 		return fmt.Errorf("rule %q: %w", r.Name, err)
 	}
@@ -626,7 +567,7 @@ func compileRule(log *slog.Logger, r *Rule, meta toml.MetaData) error {
 	}
 	if len(r.Conditions) > 0 {
 		for j := range r.Conditions {
-			if err := compileCondition(log, r.Name, j, &r.Conditions[j], meta); err != nil {
+			if err := compileCondition(log, r.Name, j, &r.Conditions[j], meta, configDirectory); err != nil {
 				return err
 			}
 		}
@@ -688,13 +629,16 @@ func normalizeRuleDiagnosticFormat(r *Rule) error {
 
 // compileCondition fills in compiled regex and selector state for one
 // condition, validates the kind, and parses any field_pair value.
-func compileCondition(log *slog.Logger, ruleName string, index int, c *Condition, meta toml.MetaData) error {
+func compileCondition(log *slog.Logger, ruleName string, index int, c *Condition, meta toml.MetaData, configDirectory string) error {
 	c.selectors = CompileFieldSelectorSpecs(c.FieldPaths)
 	if c.Kind == "" {
 		c.Kind = "regex"
 	}
 	switch ConditionKind(c.Kind) {
-	case ConditionKindRegex, ConditionKindCommand, ConditionKindProject, ConditionKindDiff, ConditionKindShellRead, ConditionKindShellWrite, ConditionKindExec, ConditionKindComposer, ConditionKindGitDefaultBranch:
+	case ConditionKindRegex, ConditionKindCommand, ConditionKindProject, ConditionKindDiff,
+		ConditionKindShellRead, ConditionKindShellWrite, ConditionKindExec,
+		ConditionKindGitDefaultBranch,
+		ConditionKindGitPrimaryCheckout, ConditionKindGitRefMove, ConditionKindInfer:
 	default:
 		return fmt.Errorf("rule %q condition %d: unknown kind %q", ruleName, index, c.Kind)
 	}
@@ -735,23 +679,18 @@ func compileCondition(log *slog.Logger, ruleName string, index int, c *Condition
 	if err := validateShellReadSpecConfig(ruleName, index, c); err != nil {
 		return err
 	}
-	if err := validateComposerConfig(ruleName, index, c); err != nil {
-		return err
-	}
 	if err := compileExecConfig(ruleName, index, c, meta); err != nil {
 		return err
 	}
-	return nil
-}
-
-func validateComposerConfig(ruleName string, index int, c *Condition) error {
-	if ConditionKind(c.Kind) != ConditionKindComposer {
-		return nil
+	if err := compileInferConfig(log, ruleName, index, c, meta, configDirectory); err != nil {
+		return err
 	}
-	if strings.TrimSpace(c.RuleSetID) == "" {
-		return fmt.Errorf("rule %q condition %d: composer requires rule_set_id", ruleName, index)
+	if err := validateShellWriteSpecConfig(ruleName, index, c); err != nil {
+		return err
 	}
-	c.RuleSetID = strings.TrimSpace(c.RuleSetID)
+	if ConditionKind(c.Kind) == ConditionKindGitRefMove && len(c.FieldPaths) > 0 {
+		return fmt.Errorf("rule %q condition %d: git_ref_move does not accept field_paths", ruleName, index)
+	}
 	return nil
 }
 

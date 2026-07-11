@@ -1,6 +1,6 @@
 module goodkind.io/agent-gate
 
-go 1.26.4
+go 1.26.5
 
 require (
 	github.com/BurntSushi/toml v1.6.0
@@ -16,7 +16,6 @@ require (
 	goodkind.io/gklog v0.4.5-0.20260704010614-fd04ab29700e
 	goodkind.io/gksyntax v0.0.0-20260618054600-30485de6d77b
 	goodkind.io/go-makefile/selfupdate v0.0.0-20260704015044-f28c82087910
-	goodkind.io/lm-review v0.0.0-20260708010741-dfebccdd1d75
 	google.golang.org/grpc v1.82.0
 	google.golang.org/protobuf v1.36.11
 )
