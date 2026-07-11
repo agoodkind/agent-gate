@@ -41,6 +41,7 @@ type Layer struct {
 	InputHash         string
 	OutputHash        string
 	OutputJSON        json.RawMessage
+	MetadataJSON      json.RawMessage
 	StartedAt         time.Time
 	CompletedAt       time.Time
 	LatencyUS         int64

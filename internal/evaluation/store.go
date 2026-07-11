@@ -115,6 +115,7 @@ var evaluationSchemaStatements = []string{
 			input_hash text not null,
 			output_hash text not null,
 			output_json blob,
+			metadata_json blob not null default '{}',
 			started_at text not null,
 			completed_at text not null,
 			latency_us integer not null,
@@ -193,8 +194,59 @@ func (s *Store) initialize(ctx context.Context) error {
 			return wrapError("initialize evaluation schema", err)
 		}
 	}
+	if err := ensureLayerMetadataColumn(ctx, transaction); err != nil {
+		return err
+	}
 	if err := transaction.Commit(); err != nil {
 		return wrapError("commit evaluation schema transaction", err)
+	}
+	return nil
+}
+
+func ensureLayerMetadataColumn(ctx context.Context, transaction *sql.Tx) error {
+	rows, err := transaction.QueryContext(ctx, `pragma table_info(gate_evaluation_layers)`)
+	if err != nil {
+		return wrapError("query evaluation layer schema", err)
+	}
+	found := false
+	for rows.Next() {
+		var columnID int
+		var name string
+		var columnType string
+		var notNull int
+		var defaultValue sql.NullString
+		var primaryKey int
+		if err := rows.Scan(
+			&columnID,
+			&name,
+			&columnType,
+			&notNull,
+			&defaultValue,
+			&primaryKey,
+		); err != nil {
+			_ = rows.Close()
+			return wrapError("scan evaluation layer schema", err)
+		}
+		if name == "metadata_json" {
+			found = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return wrapError("iterate evaluation layer schema", err)
+	}
+	if err := rows.Close(); err != nil {
+		return wrapError("close evaluation layer schema", err)
+	}
+	if found {
+		return nil
+	}
+	_, err = transaction.ExecContext(ctx, `
+		alter table gate_evaluation_layers
+		add column metadata_json blob not null default '{}'
+	`)
+	if err != nil {
+		return wrapError("add evaluation layer metadata column", err)
 	}
 	return nil
 }
@@ -215,6 +267,9 @@ func validateRecord(record Record) error {
 		}
 		if !json.Valid(layer.OutputJSON) {
 			return fmt.Errorf("layer index %d output JSON is invalid", layer.LayerIndex)
+		}
+		if !json.Valid(layer.MetadataJSON) {
+			return fmt.Errorf("layer index %d metadata JSON is invalid", layer.LayerIndex)
 		}
 		if layer.ParentLayerIndex == nil {
 			continue
@@ -285,11 +340,11 @@ func insertLayer(
 		insert into gate_evaluation_layers (
 			evaluation_id, layer_index, parent_layer_index, kind, name, status,
 			input_reference, input_json, input_hash, output_hash, output_json,
-			started_at, completed_at, latency_us, service_name, service_version,
+			metadata_json, started_at, completed_at, latency_us, service_name, service_version,
 			model_name, model_version, prompt_hash, schema_hash, cache_status,
 			cache_key_hash, cache_entry_version, cache_expires_at, error_code,
 			error_message, retry_count
-		) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		evaluationID,
 		value.LayerIndex,
@@ -302,6 +357,7 @@ func insertLayer(
 		value.InputHash,
 		value.OutputHash,
 		[]byte(value.OutputJSON),
+		[]byte(value.MetadataJSON),
 		formatTime(value.StartedAt),
 		formatTime(value.CompletedAt),
 		value.LatencyUS,
@@ -409,7 +465,7 @@ func (s *Store) getLayers(ctx context.Context, evaluationID string) ([]Layer, er
 	rows, err := s.database.QueryContext(ctx, `
 		select layer_index, parent_layer_index, kind, name, status,
 			input_reference, input_json, input_hash, output_hash, output_json,
-			started_at, completed_at, latency_us, service_name, service_version,
+			metadata_json, started_at, completed_at, latency_us, service_name, service_version,
 			model_name, model_version, prompt_hash, schema_hash, cache_status,
 			cache_key_hash, cache_entry_version, cache_expires_at, error_code,
 			error_message, retry_count
@@ -442,6 +498,7 @@ func scanLayer(rows *sql.Rows) (Layer, error) {
 	var parentIndex sql.NullInt64
 	var cacheVersion sql.NullInt64
 	var cacheExpiry sql.NullString
+	var metadataJSON []byte
 	var startedAt string
 	var completedAt string
 	err := rows.Scan(
@@ -455,6 +512,7 @@ func scanLayer(rows *sql.Rows) (Layer, error) {
 		&value.InputHash,
 		&value.OutputHash,
 		&value.OutputJSON,
+		&metadataJSON,
 		&startedAt,
 		&completedAt,
 		&value.LatencyUS,
@@ -479,6 +537,7 @@ func scanLayer(rows *sql.Rows) (Layer, error) {
 		converted := int(parentIndex.Int64)
 		value.ParentLayerIndex = &converted
 	}
+	value.MetadataJSON = json.RawMessage(metadataJSON)
 	if cacheVersion.Valid {
 		value.CacheEntryVersion = &cacheVersion.Int64
 	}

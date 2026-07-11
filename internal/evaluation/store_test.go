@@ -33,6 +33,68 @@ func TestStoreRoundTripsCompletedEvaluation(t *testing.T) {
 	}
 }
 
+func TestStoreMigratesPopulatedLayerMetadata(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "audit.db")
+	intakeStore, err := intake.OpenSQLite(ctx, path, nil)
+	if err != nil {
+		t.Fatalf("OpenSQLite: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := intakeStore.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	})
+	receipt, err := intakeStore.Append(ctx, intake.Record{
+		EventID:        "evt-legacy-evaluation",
+		System:         "codex",
+		SessionID:      "session-legacy",
+		EventName:      "PreToolUse",
+		RawPayload:     []byte(`{"command":"make test"}`),
+		NormalizedJSON: json.RawMessage(`{"command":"make test"}`),
+	})
+	if err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	record := completeRecord(receipt)
+	record.Evaluation.EvaluationID = "eval-legacy"
+	if err := intakeStore.Evaluations().RecordCompleted(ctx, record); err != nil {
+		t.Fatalf("RecordCompleted legacy row: %v", err)
+	}
+	if _, err := intakeStore.Handle().ExecContext(
+		ctx,
+		`alter table gate_evaluation_layers drop column metadata_json`,
+	); err != nil {
+		t.Fatalf("remove post-Task-6 metadata column: %v", err)
+	}
+
+	migratedStore, err := evaluation.NewStore(ctx, intakeStore.Handle())
+	if err != nil {
+		t.Fatalf("NewStore migration: %v", err)
+	}
+	var metadataJSON []byte
+	err = intakeStore.Handle().QueryRowContext(ctx, `
+		select metadata_json
+		from gate_evaluation_layers
+		where evaluation_id = ? and layer_index = 0
+	`, record.Evaluation.EvaluationID).Scan(&metadataJSON)
+	if err != nil {
+		t.Fatalf("read migrated metadata: %v", err)
+	}
+	if string(metadataJSON) != "{}" {
+		t.Fatalf("migrated metadata = %q, want %q", metadataJSON, "{}")
+	}
+	got, err := migratedStore.Get(ctx, record.Evaluation.EvaluationID)
+	if err != nil {
+		t.Fatalf("Get migrated evaluation: %v", err)
+	}
+	for _, layer := range got.Layers {
+		if string(layer.MetadataJSON) != "{}" {
+			t.Fatalf("layer %d metadata = %q, want %q", layer.LayerIndex, layer.MetadataJSON, "{}")
+		}
+	}
+}
+
 func TestStoreRollsBackCompleteRecordOnLateFailure(t *testing.T) {
 	store, receipt := newEvaluationStore(t)
 	record := completeRecord(receipt)
@@ -70,6 +132,12 @@ func TestStoreRejectsInvalidJSONBeforeWriting(t *testing.T) {
 			name: "layer output",
 			mutate: func(record *evaluation.Record) {
 				record.Layers[0].OutputJSON = json.RawMessage(`{"broken"`)
+			},
+		},
+		{
+			name: "layer metadata",
+			mutate: func(record *evaluation.Record) {
+				record.Layers[0].MetadataJSON = json.RawMessage(`{"broken"`)
 			},
 		},
 	}
@@ -248,6 +316,7 @@ func completeRecord(receipt intake.AppendResult) evaluation.Record {
 				InputHash:      "sha256:layer-input-0",
 				OutputHash:     "sha256:layer-output-0",
 				OutputJSON:     json.RawMessage(`{"verdict":"allow"}`),
+				MetadataJSON:   json.RawMessage(`{"schema_version":1,"rule_name":"deterministic"}`),
 				StartedAt:      time.Date(2026, 7, 10, 1, 2, 4, 0, time.UTC),
 				CompletedAt:    time.Date(2026, 7, 10, 1, 2, 4, 200_000_000, time.UTC),
 				LatencyUS:      200_000,
@@ -266,6 +335,7 @@ func completeRecord(receipt intake.AppendResult) evaluation.Record {
 				InputHash:         "sha256:layer-input-1",
 				OutputHash:        "sha256:layer-output-1",
 				OutputJSON:        json.RawMessage(`{"verdict":"block","confidence":0.875}`),
+				MetadataJSON:      json.RawMessage(`{"schema_version":1,"request_id":"request-1"}`),
 				StartedAt:         time.Date(2026, 7, 10, 1, 2, 4, 200_000_000, time.UTC),
 				CompletedAt:       time.Date(2026, 7, 10, 1, 2, 5, 0, time.UTC),
 				LatencyUS:         800_000,
