@@ -9,11 +9,12 @@ import (
 
 // Worktree classifies whether command violates primary/default worktree rules.
 func Worktree(command, cwd string, st State) Verdict {
-	if containsDynamicCommand(command) {
+	expandedCommand := expandLiteralAssignments(command)
+	if containsDynamicCommand(expandedCommand) {
 		return Unknown
 	}
 	state := normalizeState(st)
-	decomposition := shelldecomp.Parse(command, cwd, homeDir)
+	decomposition := shelldecomp.Parse(expandedCommand, cwd, homeDir)
 	if decomposition.IsOpaque() || containsEvalCommand(decomposition) {
 		return Unknown
 	}

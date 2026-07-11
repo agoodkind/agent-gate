@@ -37,14 +37,15 @@ func (verdict Verdict) String() string {
 // Search classifies whether command searches indexed file contents.
 func Search(command, cwd string, roots []string) Verdict {
 	normalizedRoots := normalizeRoots(roots)
-	if containsDynamicCommand(command) {
+	expandedCommand := expandLiteralAssignments(command)
+	if containsDynamicCommand(expandedCommand) {
 		return Unknown
 	}
-	if verdict, handled := classifyXargs(command, cwd, normalizedRoots); handled {
+	if verdict, handled := classifyXargs(expandedCommand, cwd, normalizedRoots); handled {
 		return verdict
 	}
 
-	decomposition := shelldecomp.Parse(command, cwd, homeDir)
+	decomposition := shelldecomp.Parse(expandedCommand, cwd, homeDir)
 	if decomposition.IsOpaque() {
 		return Unknown
 	}

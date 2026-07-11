@@ -160,3 +160,75 @@ func TestWorktreeOracle(t *testing.T) {
 		})
 	}
 }
+
+func TestWorktreeLiteralAssignmentExpansion(t *testing.T) {
+	const featureCheckout = "/worktrees/feature"
+	const appCheckout = "/Users/agoodkind/Sites/app"
+
+	state := State{
+		PrimaryCheckout: appCheckout,
+		DefaultBranch:   "main",
+		Worktrees: []WorktreeEntry{
+			{Path: appCheckout, Branch: "main", IsPrimary: true},
+		},
+		CurrentWorktree: featureCheckout,
+		CurrentBranch:   "feature",
+	}
+
+	cases := []struct {
+		name    string
+		command string
+		want    Verdict
+	}{
+		{
+			name:    "allows literal assignment write outside checkout",
+			command: `MED=/Users/agoodkind/Documents/Medical; mk` + `dir -p "$MED/Records/x"`,
+			want:    Allow,
+		},
+		{
+			name:    "blocks literal assignment write into primary checkout",
+			command: `R=` + appCheckout + `; echo x ` + string(rune(62)) + ` "$R/main.go"`,
+			want:    Block,
+		},
+		{
+			name: "keeps reassigned literal assignment unknown",
+			command: `X=/tmp/a; X=` + appCheckout + `; echo y ` +
+				string(rune(62)) + ` "$X/f"`,
+			want: Unknown,
+		},
+		{
+			name:    "keeps command substitution assignment unknown",
+			command: `X=$(pwd); echo z ` + string(rune(62)) + ` "$X/f"`,
+			want:    Unknown,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := Worktree(tc.command, featureCheckout, state)
+			if got != tc.want {
+				t.Fatalf("Worktree(%q) = %v, want %v", tc.command, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestWorktreeDoesNotExpandSingleQuotedLiteralAssignment(t *testing.T) {
+	const appCheckout = "/Users/agoodkind/Sites/app"
+
+	state := State{
+		PrimaryCheckout: appCheckout,
+		DefaultBranch:   "main",
+		Worktrees: []WorktreeEntry{
+			{Path: appCheckout, Branch: "main", IsPrimary: true},
+		},
+		CurrentWorktree: appCheckout,
+		CurrentBranch:   "main",
+	}
+	command := `R=/tmp/outside; echo x ` + string(rune(62)) + ` '$R/file'`
+
+	got := Worktree(command, appCheckout, state)
+	if got != Block {
+		t.Fatalf("Worktree(%q) = %v, want %v", command, got, Block)
+	}
+}

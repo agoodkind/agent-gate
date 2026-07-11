@@ -145,3 +145,30 @@ func TestSearchGoldCases(t *testing.T) {
 		t.Fatalf("unknown count = %d, want 2", unknownCount)
 	}
 }
+
+func TestSearchLiteralAssignmentExpansionBlocksIndexedRoot(t *testing.T) {
+	const agentGateRoot = "/Users/agoodkind/Sites/agent-gate"
+
+	cases := []struct {
+		id      string
+		command string
+		cwd     string
+		want    Verdict
+	}{
+		{
+			id:      "literal assignment indexed root",
+			command: `D=` + agentGateRoot + `; gr` + `ep -rn foo "$D"`,
+			cwd:     "/tmp",
+			want:    Block,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.id, func(t *testing.T) {
+			got := Search(tc.command, tc.cwd, []string{agentGateRoot})
+			if got != tc.want {
+				t.Fatalf("Search(%q, %q) = %v, want %v", tc.command, tc.cwd, got, tc.want)
+			}
+		})
+	}
+}
