@@ -34,14 +34,14 @@ inference_phase_timeout_ms = 1250
 func TestHookInferencePhaseTimeoutRejectsValuesAboveMaximum(t *testing.T) {
 	setConfigHome(t, `
 [performance.hook]
-inference_phase_timeout_ms = 4001
+inference_phase_timeout_ms = 9001
 `)
 
 	_, err := config.Load()
 	if err == nil {
-		t.Fatal("Load() returned nil error for inference phase timeout above 4000ms")
+		t.Fatal("Load() returned nil error for inference phase timeout above 9000ms")
 	}
-	if !strings.Contains(err.Error(), "inference_phase_timeout_ms must not exceed 4000") {
+	if !strings.Contains(err.Error(), "inference_phase_timeout_ms must not exceed 9000") {
 		t.Fatalf("Load() error = %v", err)
 	}
 }
@@ -49,11 +49,11 @@ inference_phase_timeout_ms = 4001
 func TestHookInferencePhaseTimeoutCapsProgrammaticConfig(t *testing.T) {
 	cfg := &config.Config{
 		Performance: config.Performance{
-			Hook: config.HookPerformance{InferencePhaseTimeoutMS: 5000},
+			Hook: config.HookPerformance{InferencePhaseTimeoutMS: 10_000},
 		},
 	}
 
-	if cfg.HookInferencePhaseTimeout() != 4*time.Second {
-		t.Fatalf("HookInferencePhaseTimeout = %s, want capped 4s", cfg.HookInferencePhaseTimeout())
+	if cfg.HookInferencePhaseTimeout() != 9*time.Second {
+		t.Fatalf("HookInferencePhaseTimeout = %s, want capped 9s", cfg.HookInferencePhaseTimeout())
 	}
 }

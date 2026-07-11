@@ -14,6 +14,8 @@ import (
 	"goodkind.io/agent-gate/internal/config"
 )
 
+const evaluateHookTimeout = 12 * time.Second
+
 // Client is a gRPC client for the agent-gate daemon.
 type Client struct {
 	conn *grpc.ClientConn
@@ -63,7 +65,7 @@ func (c *Client) Close() error {
 
 // EvaluateHook forwards raw hook input to daemon-owned enforcement.
 func (c *Client) EvaluateHook(rawJSON []byte, providerHint, cwd string, argv []string, env map[string]string) (*daemonpb.EvaluateHookResponse, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), evaluateHookTimeout)
 	defer cancel()
 	log := slog.Default()
 

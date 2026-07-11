@@ -16,7 +16,7 @@ const (
 	// DefaultInferTimeoutMs is the default per-condition inference deadline.
 	DefaultInferTimeoutMs = 1500
 	// MaxInferTimeoutMs is the maximum per-condition inference deadline.
-	MaxInferTimeoutMs = 4000
+	MaxInferTimeoutMs = 8000
 	// DefaultContextTurnBudget is the default Clyde context turn count.
 	DefaultContextTurnBudget = 4
 	// MaxContextTurnBudget is the maximum Clyde context turn count.

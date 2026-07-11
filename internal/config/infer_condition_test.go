@@ -236,7 +236,7 @@ func TestInferConditionValidatesPoliciesAndBounds(t *testing.T) {
 	}{
 		{name: "block_on", field: `block_on = "zero"`, want: "block_on"},
 		{name: "on_error", field: `on_error = "maybe"`, want: "on_error"},
-		{name: "timeout", field: `timeout_ms = 4001`, want: "exceeds max 4000"},
+		{name: "timeout", field: `timeout_ms = 8001`, want: "exceeds max 8000"},
 		{name: "ttl", field: `cache_ttl_ms = -1`, want: "cache_ttl_ms"},
 		{name: "context source", field: `context_source = "transcript"`, want: "unknown context_source"},
 		{name: "context turns", field: "context_source = \"clyde_recent_turns\"\ncontext_endpoint = \"x\"\ncontext_workspace_field = \"cwd\"\ncontext_session_field = \"session_id\"\ncontext_turn_budget = 33\ncontext_on_error = \"empty\"", want: "context_turn_budget"},
@@ -251,6 +251,21 @@ func TestInferConditionValidatesPoliciesAndBounds(t *testing.T) {
 				t.Fatalf("error = %v", err)
 			}
 		})
+	}
+}
+
+func TestInferConditionAcceptsEightSecondTimeout(t *testing.T) {
+	body := inferRulePrefix + `
+prompt = "Classify the input"
+output_schema = '` + validOutputSchema + `'
+timeout_ms = 8000
+`
+	cfg, err := writeExecConfig(t, body)
+	if err != nil {
+		t.Fatalf("LoadExisting: %v", err)
+	}
+	if timeout := cfg.Rules[0].Conditions[0].TimeoutMs; timeout != 8000 {
+		t.Fatalf("timeout_ms = %d, want 8000", timeout)
 	}
 }
 

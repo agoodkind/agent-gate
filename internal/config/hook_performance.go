@@ -16,7 +16,7 @@ const (
 	defaultHookInferencePhaseTimeout = 4 * time.Second
 	defaultHookDeferredQueueLimit    = 8192
 	defaultHookDeferredWorkers       = 1
-	maxHookInferencePhaseTimeoutMS   = 4000
+	maxHookInferencePhaseTimeoutMS   = 9000
 )
 
 // HookHotConcurrency returns the daemon admission limit for synchronous hook
