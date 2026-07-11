@@ -116,3 +116,121 @@ A focused regression showed that `--signed yes` consumed `yes` as a separate val
 ### Signed Argument Form GREEN
 
 The signed metadata now rejects separate values while preserving bare `--signed` and validated inline `--signed=<value>` forms. The focused suite passed in `0.544s`, full `make test` passed every package, and `make check` passed all five gates.
+
+## Follow-up Commit Review
+
+### Pre-fix Verification
+
+Fresh verification of commit `47e27af55dd6b307b4e29ea558233d5c2d07eb72`
+passed the focused config, gitbranch, and rules suite. `make test` passed with
+trace `6e6fd08671081a2493898496e92372ae`, and `make check` passed all five
+gates with trace `bf6388967237a17984d51ef3168ec9c1`.
+
+### RED
+
+The read-only commit review found four uncovered ref-move forms. The focused
+command reproduced failures for local `--all` and `--mirror` pushes, separate
+and inline repository-selecting global flags, checkout and switch operands after
+`--`, and a local push whose colonless `HEAD` destination requires the source
+repository's current branch.
+
+```text
+go test -count=1 ./internal/rules -run 'TestGitRefMoveConditionMatch|TestGitRefMoveRepositorySelectingGlobalFlags'
+```
+
+Eight subtests failed before production edits. A separate symbolic-`HEAD`
+regression failed with the destination state as the only state read. A later
+self-review added both global-flag orderings and reproduced four failures around
+`--work-tree` current-path handling and explicit state-path preservation.
+
+### GREEN
+
+The first follow-up distinguished the invocation's current worktree from the
+selected state path. `--git-dir` selects repository state, and ordinary
+current-worktree comparisons use the invocation cwd. Checkout and switch stop
+reset-flag parsing when `--` precedes a reset flag.
+
+Local `--all`, `--branches`, and `--mirror` pushes initially compared the
+destination's registered branch worktrees. Colonless `HEAD` pushes resolve a
+source current branch through the injected state reader before comparing
+destination state. The second review below tightened both behaviors.
+
+The final focused command passed:
+
+```text
+ok  goodkind.io/agent-gate/internal/rules  0.546s
+```
+
+The broader config, gitbranch, and rules suite passed. Final `make test` passed
+every package with trace `f7bdaf352e9118116263d80a1c09868f`. After the
+global-option ordering self-review, the final full run passed again with trace
+`f7bdaf352e9118116263d80a1c09868f`, and final `make check` passed all five
+gates with trace `4c74582fc4b8eecc5897cb53d1e39c9b`.
+
+The follow-up commit SHA is recorded in the final handoff because the commit
+cannot contain its own stable hash.
+
+## Follow-up Re-review
+
+### RED
+
+The follow-up review found five interactions that the first fixes did not cover:
+
+- `--work-tree` changed the repository state path even though Git retains the
+  repository selected by cwd or `--git-dir`.
+- Symbolic `HEAD` used the invocation cwd instead of an explicit source
+  `--git-dir`.
+- `--all`, `--branches`, and `--mirror` shared one negation state.
+- `--all` matched destination-only branches that the source could not prove it
+  would push.
+- Checkout and switch returned a reset target before seeing a later `--`.
+
+Literal injected-state tests reproduced eleven failures across these cases,
+including both global-flag orders and distinct source and destination states.
+
+### GREEN
+
+`--work-tree` is now consumed without selecting repository state. `--git-dir`
+selects source state in either order with `--work-tree`, and an explicit git
+directory survives later `-C`. Symbolic `HEAD` reads the selected source state.
+
+All/branches and mirror use independent option effects and sentinels, so each
+negation changes only its own mode. All/branches matches only branch names proven
+by the injected source state, while mirror can still match destination-only
+branches that it may delete. Dry-run and its negation remain independent.
+
+Checkout and switch scan the complete argument list and return no reset target
+when `--` appears before or after the reset flag.
+
+The final focused suite passed in `0.689s`. The final `make check` passed all
+five gates with trace `44b866dbb3aef39821dcf0974929fb4e`, and the final
+`make test` passed every package with trace
+`6ee5b70f2bb80df6a03336fca7c76b7f`.
+
+## Follow-up Final Review
+
+### RED
+
+The final review found two remaining parser boundaries. Local push accepted
+incompatible bulk modes with explicit refspecs, with each other, or with
+delete mode. Checkout and switch also accepted more than one start-point
+operand after `-B` or `-C`.
+
+Focused tests reproduced six initial failures for incompatible bulk modes and
+excess reset operands. Three additional tests covered delete combined with
+all, branches, and mirror modes.
+
+### GREEN
+
+Local push now rejects all and mirror modes when an explicit refspec is
+present, rejects all combined with mirror, and rejects delete combined with a
+bulk mode. The recognized-option table uses valid no-refspec command shapes
+for bulk modes.
+
+Checkout and switch now accept at most one start-point operand after a reset
+target and reject a later `--` marker.
+
+The broader config, gitbranch, and rules suite passed. The final `make check`
+passed all five gates with trace `7670043b236fa082d407cd24665bf966`, and the
+final `make test` passed every package with trace
+`44c86e35bd5997379c5ce5fe674babe2`.

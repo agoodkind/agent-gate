@@ -169,8 +169,23 @@ func TestGitRefMoveConditionMatch(t *testing.T) {
 		{name: "local repo option push", command: "git push --repo /repo/main HEAD:refs/heads/main", cwd: "/repo/feature", want: true},
 		{name: "local inline repo option push", command: "git push --repo=/repo/main HEAD:refs/heads/main", cwd: "/repo/feature", want: true},
 		{name: "local repo option delete", command: "git push --delete --repo /repo/main main", cwd: "/repo/feature", want: true},
+		{name: "local push all branches", command: "git push --all /repo/main", cwd: "/repo/feature", want: true},
+		{name: "local push mirror", command: "git push --mirror /repo/main", cwd: "/repo/feature", want: true},
+		{name: "mirror survives no all", command: "git push --mirror --no-all /repo/main", cwd: "/repo/feature", want: true},
+		{name: "all survives no mirror", command: "git push --all --no-mirror /repo/main", cwd: "/repo/feature", want: true},
+		{name: "negated all without refspec", command: "git push --all --no-all /repo/main", cwd: "/repo/feature", want: false},
+		{name: "negated mirror without refspec", command: "git push --mirror --no-mirror /repo/main", cwd: "/repo/feature", want: false},
+		{name: "all dry run", command: "git push --all --dry-run /repo/main", cwd: "/repo/feature", want: false},
+		{name: "all negated dry run", command: "git push --all --dry-run --no-dry-run /repo/main", cwd: "/repo/feature", want: true},
+		{name: "all with explicit refspec", command: "git push --all /repo/main HEAD:main", cwd: "/repo/feature", want: false},
+		{name: "mirror with explicit refspec", command: "git push --mirror /repo/main HEAD:main", cwd: "/repo/feature", want: false},
+		{name: "all with mirror", command: "git push --all --mirror /repo/main", cwd: "/repo/feature", want: false},
+		{name: "mirror with all", command: "git push --mirror --all /repo/main", cwd: "/repo/feature", want: false},
+		{name: "delete with all", command: "git push --delete --all /repo/main", cwd: "/repo/feature", want: false},
+		{name: "delete with branches", command: "git push --delete --branches /repo/main", cwd: "/repo/feature", want: false},
+		{name: "delete with mirror", command: "git push --delete --mirror /repo/main", cwd: "/repo/feature", want: false},
 		{name: "local force option push", command: "git push --force /repo/main HEAD:refs/heads/main", cwd: "/repo/feature", want: true},
-		{name: "local branches option push", command: "git push --branches /repo/main HEAD:refs/heads/main", cwd: "/repo/feature", want: true},
+		{name: "branches with explicit refspec", command: "git push --branches /repo/main HEAD:refs/heads/main", cwd: "/repo/feature", want: false},
 		{name: "local progress option push", command: "git push --progress /repo/main HEAD:refs/heads/main", cwd: "/repo/feature", want: true},
 		{name: "local verify option push", command: "git push --verify /repo/main HEAD:refs/heads/main", cwd: "/repo/feature", want: true},
 		{name: "local IPv4 option push", command: "git push -4 /repo/main HEAD:refs/heads/main", cwd: "/repo/feature", want: true},
@@ -203,6 +218,18 @@ func TestGitRefMoveConditionMatch(t *testing.T) {
 		{name: "command wrapper", command: "command git branch -f main HEAD", cwd: "/repo/feature", want: true},
 		{name: "git global flags", command: "git -c user.name=x --no-pager branch -f main HEAD", cwd: "/repo/feature", want: true},
 		{name: "git dash C", command: "git -C /repo/feature branch -f main HEAD", cwd: "/tmp", want: true},
+		{name: "checkout option terminator", command: "git checkout -- -Bmain", cwd: "/repo/feature", want: false},
+		{name: "switch option terminator", command: "git switch -- -Cmain", cwd: "/repo/feature", want: false},
+		{name: "checkout trailing option terminator", command: "git checkout -B main -- file", cwd: "/repo/feature", want: false},
+		{name: "switch trailing option terminator", command: "git switch -C main -- file", cwd: "/repo/feature", want: false},
+		{name: "checkout excess start points", command: "git checkout -B main start extra", cwd: "/repo/feature", want: false},
+		{name: "switch excess start points", command: "git switch -C main start extra", cwd: "/repo/feature", want: false},
+		{name: "checkout unknown option", command: "git checkout --not-a-real-option -B main", cwd: "/repo/feature", want: false},
+		{name: "switch unknown option", command: "git switch --not-a-real-option -C main", cwd: "/repo/feature", want: false},
+		{name: "checkout conflicting detach", command: "git checkout --detach -B main", cwd: "/repo/feature", want: false},
+		{name: "switch conflicting detach", command: "git switch --detach -C main", cwd: "/repo/feature", want: false},
+		{name: "checkout quiet reset", command: "git checkout --quiet -B main", cwd: "/repo/feature", want: true},
+		{name: "switch progress reset", command: "git switch --progress -C main", cwd: "/repo/feature", want: true},
 		{name: "current worktree branch", command: "git branch -f feature HEAD", cwd: "/repo/feature", want: false},
 		{name: "detached entry", command: "git branch -f detached HEAD", cwd: "/repo/feature", want: false},
 		{name: "normal creation", command: "git branch new-branch HEAD", cwd: "/repo/feature", want: false},
@@ -228,6 +255,119 @@ func TestGitRefMoveConditionMatch(t *testing.T) {
 	}
 }
 
+func TestGitRefMoveRepositorySelectingGlobalFlags(t *testing.T) {
+	cases := []struct {
+		name     string
+		command  string
+		cwd      string
+		wantPath string
+		want     bool
+	}{
+		{name: "separate git directory", command: "git --git-dir /repo/main/.git branch -f main HEAD", cwd: "/tmp", wantPath: "/repo/main", want: true},
+		{name: "inline git directory", command: "git --git-dir=/repo/main/.git branch -f main HEAD", cwd: "/tmp", wantPath: "/repo/main", want: true},
+		{name: "separate work tree", command: "git --work-tree /unrelated branch -f main HEAD", cwd: "/repo/feature", wantPath: "/repo/feature", want: true},
+		{name: "inline work tree", command: "git --work-tree=/unrelated branch -f main HEAD", cwd: "/repo/feature", wantPath: "/repo/feature", want: true},
+		{name: "work tree before directory change", command: "git --work-tree /unrelated -C /repo/feature branch -f main HEAD", cwd: "/tmp", wantPath: "/repo/feature", want: true},
+		{name: "work tree after directory change", command: "git -C /repo/feature --work-tree /unrelated branch -f main HEAD", cwd: "/tmp", wantPath: "/repo/feature", want: true},
+		{name: "git directory before work tree", command: "git --git-dir /repo/main/.git --work-tree /unrelated branch -f main HEAD", cwd: "/tmp", wantPath: "/repo/main", want: true},
+		{name: "work tree before git directory", command: "git --work-tree /unrelated --git-dir /repo/main/.git branch -f main HEAD", cwd: "/tmp", wantPath: "/repo/main", want: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture := &gitStateFixture{state: testGitState()}
+			fields := FieldSet{ToolInputCommand: tc.command, CWD: tc.cwd}
+			got := gitRefMoveConditionMatch(fields, fixture.read)
+			if got != tc.want {
+				t.Fatalf("gitRefMoveConditionMatch(%q) = %v, want %v; paths = %v", tc.command, got, tc.want, fixture.paths)
+			}
+			if len(fixture.paths) != 1 || fixture.paths[0] != tc.wantPath {
+				t.Fatalf("state paths = %v, want [%s]", fixture.paths, tc.wantPath)
+			}
+		})
+	}
+}
+
+func TestGitRefMoveSelectedSourceResolvesHeadDestination(t *testing.T) {
+	sourceState := gitbranch.State{
+		PrimaryCheckout: "/repo/source",
+		CurrentWorktree: "/repo/source",
+		CurrentBranch:   "main",
+		Worktrees:       []gitbranch.Worktree{{Path: "/repo/source", Branch: "main", IsPrimary: true}},
+	}
+	cwdState := gitbranch.State{
+		PrimaryCheckout: "/repo/cwd",
+		CurrentWorktree: "/repo/cwd",
+		CurrentBranch:   "absent",
+		Worktrees:       []gitbranch.Worktree{{Path: "/repo/cwd", Branch: "absent", IsPrimary: true}},
+	}
+	destinationState := testGitState()
+	reader := func(path string) (gitbranch.State, error) {
+		switch path {
+		case "/repo/source":
+			return sourceState, nil
+		case "/repo/cwd":
+			return cwdState, nil
+		default:
+			return destinationState, nil
+		}
+	}
+	fields := FieldSet{
+		ToolInputCommand: "git --git-dir=/repo/source/.git push /repo/main HEAD",
+		CWD:              "/repo/cwd",
+	}
+	if !gitRefMoveConditionMatch(fields, reader) {
+		t.Fatal("selected source repository HEAD destination did not match")
+	}
+}
+
+func TestGitRefMoveAllRequiresProvenSourceBranch(t *testing.T) {
+	sourceState := gitbranch.State{
+		PrimaryCheckout: "/repo/source",
+		CurrentWorktree: "/repo/source",
+		CurrentBranch:   "topic",
+		Worktrees:       []gitbranch.Worktree{{Path: "/repo/source", Branch: "topic", IsPrimary: true}},
+	}
+	destinationState := gitbranch.State{
+		PrimaryCheckout: "/repo/main",
+		CurrentWorktree: "/repo/main",
+		CurrentBranch:   "main",
+		Worktrees:       []gitbranch.Worktree{{Path: "/repo/main", Branch: "main", IsPrimary: true}},
+	}
+	reader := func(path string) (gitbranch.State, error) {
+		if path == "/repo/source" {
+			return sourceState, nil
+		}
+		return destinationState, nil
+	}
+	allFields := FieldSet{ToolInputCommand: "git push --all /repo/main", CWD: "/repo/source"}
+	if gitRefMoveConditionMatch(allFields, reader) {
+		t.Fatal("push --all matched a destination-only checked-out branch")
+	}
+	mirrorFields := FieldSet{ToolInputCommand: "git push --mirror /repo/main", CWD: "/repo/source"}
+	if !gitRefMoveConditionMatch(mirrorFields, reader) {
+		t.Fatal("push --mirror did not match a destination-only checked-out branch")
+	}
+}
+
+func TestGitRefMoveLocalPushResolvesHeadDestination(t *testing.T) {
+	sourceState := testGitState()
+	sourceState.CurrentWorktree = "/repo/source"
+	sourceState.CurrentBranch = "main"
+	destinationState := testGitState()
+	paths := make([]string, 0, 2)
+	reader := func(path string) (gitbranch.State, error) {
+		paths = append(paths, path)
+		if path == "/repo/source" {
+			return sourceState, nil
+		}
+		return destinationState, nil
+	}
+	fields := FieldSet{ToolInputCommand: "git push /repo/main HEAD", CWD: "/repo/source"}
+	if !gitRefMoveConditionMatch(fields, reader) {
+		t.Fatalf("symbolic HEAD destination did not match; state paths = %v", paths)
+	}
+}
+
 func TestBranchMoveTargetsForceCopyClustersParseCleanly(t *testing.T) {
 	for _, cluster := range []string{"-fc", "-cf", "-fC", "-Cf"} {
 		words := []shelldecomp.Word{
@@ -246,6 +386,9 @@ func TestLocalPushRecognizedOptionTables(t *testing.T) {
 	for _, option := range pushBooleanOptions {
 		flag := "--" + option.longName
 		words := pushWords(flag)
+		if option.effect == pushEffectAllBranches || option.effect == pushEffectMirror {
+			words = pushBulkWords(flag)
+		}
 		if _, _, _, _, valid := parseLocalPushArgs(words); !valid {
 			t.Errorf("parseLocalPushArgs rejected boolean %q", flag)
 		}
@@ -330,6 +473,15 @@ func TestLocalPushShortClustersApplyEffects(t *testing.T) {
 
 func pushWords(options ...string) []shelldecomp.Word {
 	values := append(options, "/repo/main", "HEAD:refs/heads/main")
+	return pushTestWords(values)
+}
+
+func pushBulkWords(options ...string) []shelldecomp.Word {
+	values := append(options, "/repo/main")
+	return pushTestWords(values)
+}
+
+func pushTestWords(values []string) []shelldecomp.Word {
 	words := make([]shelldecomp.Word, 0, len(values))
 	for _, value := range values {
 		words = append(words, shelldecomp.Word{Value: value, Resolvable: true})

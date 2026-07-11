@@ -47,14 +47,22 @@ const (
 
 const (
 	pushEffectNone pushBooleanEffect = iota
+	pushEffectAllBranches
 	pushEffectDelete
 	pushEffectDryRun
+	pushEffectMirror
+)
+
+const (
+	gitAllBranchesTarget    = "\x00all-local-branches"
+	gitCurrentBranchTarget  = "\x00current-branch"
+	gitMirrorBranchesTarget = "\x00mirror-local-branches"
 )
 
 var pushBooleanOptions = []pushBooleanOption{
-	{longName: "all", shortName: 0, negatable: true, effect: pushEffectNone},
+	{longName: "all", shortName: 0, negatable: true, effect: pushEffectAllBranches},
 	{longName: "atomic", shortName: 0, negatable: true, effect: pushEffectNone},
-	{longName: "branches", shortName: 0, negatable: true, effect: pushEffectNone},
+	{longName: "branches", shortName: 0, negatable: true, effect: pushEffectAllBranches},
 	{longName: "delete", shortName: 'd', negatable: true, effect: pushEffectDelete},
 	{longName: "dry-run", shortName: 'n', negatable: true, effect: pushEffectDryRun},
 	{longName: "follow-tags", shortName: 0, negatable: true, effect: pushEffectNone},
@@ -62,7 +70,7 @@ var pushBooleanOptions = []pushBooleanOption{
 	{longName: "force-if-includes", shortName: 0, negatable: true, effect: pushEffectNone},
 	{longName: "ipv4", shortName: '4', negatable: false, effect: pushEffectNone},
 	{longName: "ipv6", shortName: '6', negatable: false, effect: pushEffectNone},
-	{longName: "mirror", shortName: 0, negatable: true, effect: pushEffectNone},
+	{longName: "mirror", shortName: 0, negatable: true, effect: pushEffectMirror},
 	{longName: "porcelain", shortName: 0, negatable: true, effect: pushEffectNone},
 	{longName: "progress", shortName: 0, negatable: true, effect: pushEffectNone},
 	{longName: "prune", shortName: 0, negatable: true, effect: pushEffectNone},
@@ -179,22 +187,54 @@ func gitRefMoveConditionMatch(fields FieldSet, readState gitStateReader) bool {
 		if cwd == "" {
 			cwd = base
 		}
-		subcommand, args, cwd, resolved := gitInvocation(words, cwd)
+		subcommand, args, currentPath, statePath, resolved := gitInvocation(words, cwd)
 		if !resolved {
 			continue
 		}
-		branches, statePath := movedLocalBranches(subcommand, args, cwd)
-		if len(branches) == 0 || statePath == "" {
+		branches, moveStatePath := movedLocalBranches(subcommand, args, currentPath, statePath)
+		if len(branches) == 0 || moveStatePath == "" {
 			continue
 		}
-		state, readErr := readState(statePath)
+		state, readErr := readState(moveStatePath)
 		if readErr != nil {
 			continue
 		}
-		for _, branch := range branches {
-			if gitbranch.BranchCheckedOutElsewhere(state, cwd, branch) {
+		if movedBranchCheckedOutElsewhere(state, currentPath, statePath, branches, readState) {
+			return true
+		}
+	}
+	return false
+}
+
+func movedBranchCheckedOutElsewhere(
+	state gitbranch.State,
+	currentPath string,
+	sourceStatePath string,
+	branches []string,
+	readState gitStateReader,
+) bool {
+	for _, branch := range branches {
+		if branch == gitAllBranchesTarget {
+			if sourceBranchCheckedOutElsewhere(state, currentPath, sourceStatePath, readState) {
 				return true
 			}
+			continue
+		}
+		if branch == gitMirrorBranchesTarget {
+			if anyBranchCheckedOutElsewhere(state, currentPath) {
+				return true
+			}
+			continue
+		}
+		if branch == gitCurrentBranchTarget {
+			sourceState, err := readState(sourceStatePath)
+			if err != nil || sourceState.CurrentBranch == "" {
+				continue
+			}
+			branch = sourceState.CurrentBranch
+		}
+		if gitbranch.BranchCheckedOutElsewhere(state, currentPath, branch) {
+			return true
 		}
 	}
 	return false
@@ -203,23 +243,43 @@ func gitRefMoveConditionMatch(fields FieldSet, readState gitStateReader) bool {
 func gitInvocation(
 	words []shelldecomp.Word,
 	cwd string,
-) (string, []shelldecomp.Word, string, bool) {
+) (string, []shelldecomp.Word, string, string, bool) {
+	currentPath := cwd
+	statePath := cwd
+	explicitStatePath := false
 	for index := 0; index < len(words); index++ {
 		word := words[index]
 		if !word.Resolvable {
-			return "", nil, "", false
+			return "", nil, "", "", false
 		}
 		if word.Value == "-C" {
 			if index+1 >= len(words) || !words[index+1].Resolvable {
-				return "", nil, "", false
+				return "", nil, "", "", false
 			}
 			cwd = resolvePath(cwd, words[index+1].Value)
+			currentPath = cwd
+			if !explicitStatePath {
+				statePath = cwd
+			}
 			index++
+			continue
+		}
+		name, value, nextIndex, matched, valid := gitRepositoryFlag(words, index)
+		if matched {
+			if !valid {
+				return "", nil, "", "", false
+			}
+			if name == "--git-dir" {
+				selectedPath := resolvePath(cwd, value)
+				statePath = gitDirectoryStatePath(selectedPath)
+				explicitStatePath = true
+			}
+			index = nextIndex
 			continue
 		}
 		if gitGlobalValueFlags[word.Value] {
 			if index+1 >= len(words) || !words[index+1].Resolvable {
-				return "", nil, "", false
+				return "", nil, "", "", false
 			}
 			index++
 			continue
@@ -227,27 +287,54 @@ func gitInvocation(
 		if word.Kind == shelldecomp.WordKindFlag {
 			continue
 		}
-		return word.Value, words[index+1:], cwd, true
+		return word.Value, words[index+1:], currentPath, statePath, true
 	}
-	return "", nil, "", false
+	return "", nil, "", "", false
+}
+
+func gitRepositoryFlag(
+	words []shelldecomp.Word,
+	index int,
+) (string, string, int, bool, bool) {
+	value := words[index].Value
+	for _, name := range []string{"--git-dir", "--work-tree"} {
+		if value == name {
+			if index+1 >= len(words) || !words[index+1].Resolvable {
+				return name, "", index, true, false
+			}
+			return name, words[index+1].Value, index + 1, true, true
+		}
+		if inlineValue, found := strings.CutPrefix(value, name+"="); found {
+			return name, inlineValue, index, true, inlineValue != ""
+		}
+	}
+	return "", "", index, false, false
+}
+
+func gitDirectoryStatePath(path string) string {
+	if filepath.Base(path) == ".git" {
+		return filepath.Dir(path)
+	}
+	return path
 }
 
 func movedLocalBranches(
 	subcommand string,
 	args []shelldecomp.Word,
-	cwd string,
+	currentPath string,
+	statePath string,
 ) ([]string, string) {
 	switch gitRefSubcommand(subcommand) {
 	case gitRefSubcommandBranch:
-		return branchMoveTargets(args), cwd
+		return branchMoveTargets(args), statePath
 	case gitRefSubcommandUpdateRef:
-		return updateRefTargets(args), cwd
+		return updateRefTargets(args), statePath
 	case gitRefSubcommandCheckout:
-		return resetBranchTarget(args, "B"), cwd
+		return resetBranchTarget(args, "B"), statePath
 	case gitRefSubcommandSwitch:
-		return resetBranchTarget(args, "C"), cwd
+		return resetBranchTarget(args, "C"), statePath
 	case gitRefSubcommandPush:
-		return localPushTargets(args, cwd)
+		return localPushTargets(args, currentPath)
 	default:
 		return nil, ""
 	}
@@ -432,21 +519,72 @@ func updateRefTargets(args []shelldecomp.Word) []string {
 }
 
 func resetBranchTarget(args []shelldecomp.Word, flag string) []string {
+	var target []string
+	foundReset := false
+	targetIndex := -1
+	startPointCount := 0
 	for index, argument := range args {
 		if !argument.Resolvable {
 			return nil
 		}
+		if argument.Value == "--" {
+			return nil
+		}
+		if index == targetIndex {
+			continue
+		}
 		if argument.Value == "-"+flag {
-			if index+1 >= len(args) || !args[index+1].Resolvable {
+			if foundReset || index+1 >= len(args) || !args[index+1].Resolvable {
 				return nil
 			}
-			return localBranchTarget(args[index+1].Value)
+			foundReset = true
+			targetIndex = index + 1
+			target = localBranchTarget(args[index+1].Value)
+			continue
 		}
-		if target, found := strings.CutPrefix(argument.Value, "-"+flag); found && target != "" {
-			return localBranchTarget(target)
+		if inlineTarget, found := strings.CutPrefix(argument.Value, "-"+flag); found && inlineTarget != "" {
+			if foundReset {
+				return nil
+			}
+			foundReset = true
+			target = localBranchTarget(inlineTarget)
+			continue
+		}
+		if strings.HasPrefix(argument.Value, "-") {
+			if !resetBranchOptionAllowed(argument.Value) {
+				return nil
+			}
+			continue
+		}
+		startPointCount++
+		if startPointCount > 1 {
+			return nil
 		}
 	}
-	return nil
+	if !foundReset {
+		return nil
+	}
+	return target
+}
+
+func resetBranchOptionAllowed(value string) bool {
+	return slices.Contains([]string{
+		"-f",
+		"-q",
+		"--discard-changes",
+		"--force",
+		"--guess",
+		"--ignore-other-worktrees",
+		"--merge",
+		"--no-guess",
+		"--no-progress",
+		"--no-recurse-submodules",
+		"--no-track",
+		"--progress",
+		"--quiet",
+		"--recurse-submodules",
+		"--track",
+	}, value)
 }
 
 func localPushTargets(args []shelldecomp.Word, cwd string) ([]string, string) {
@@ -464,11 +602,13 @@ func localPushTargets(args []shelldecomp.Word, cwd string) ([]string, string) {
 
 func parseLocalPushArgs(args []shelldecomp.Word) (string, []string, bool, bool, bool) {
 	state := localPushParseState{
-		repository:  "",
-		positionals: make([]string, 0, len(args)),
-		deleteRefs:  false,
-		dryRun:      false,
-		endOptions:  false,
+		repository:     "",
+		positionals:    make([]string, 0, len(args)),
+		allBranches:    false,
+		deleteRefs:     false,
+		dryRun:         false,
+		endOptions:     false,
+		mirrorBranches: false,
 	}
 	for index := 0; index < len(args); index++ {
 		if !args[index].Resolvable {
@@ -484,11 +624,13 @@ func parseLocalPushArgs(args []shelldecomp.Word) (string, []string, bool, bool, 
 }
 
 type localPushParseState struct {
-	repository  string
-	positionals []string
-	deleteRefs  bool
-	dryRun      bool
-	endOptions  bool
+	repository     string
+	positionals    []string
+	allBranches    bool
+	deleteRefs     bool
+	dryRun         bool
+	endOptions     bool
+	mirrorBranches bool
 }
 
 func consumeLocalPushArgument(
@@ -532,12 +674,23 @@ func consumeLocalPushArgument(
 func finishLocalPushArgs(state localPushParseState) (string, []string, bool, bool, bool) {
 	refspecs := state.positionals
 	if state.repository == "" {
-		if len(state.positionals) < 2 {
+		if len(state.positionals) < 1 {
 			return "", nil, false, false, false
 		}
 		state.repository = state.positionals[0]
 		refspecs = state.positionals[1:]
-	} else if len(refspecs) == 0 {
+	}
+	bulkMode := state.allBranches || state.mirrorBranches
+	if state.allBranches && state.mirrorBranches || bulkMode && state.deleteRefs || bulkMode && len(refspecs) > 0 {
+		return "", nil, false, false, false
+	}
+	switch {
+	case len(refspecs) > 0:
+	case state.mirrorBranches:
+		refspecs = []string{gitMirrorBranchesTarget}
+	case state.allBranches:
+		refspecs = []string{gitAllBranchesTarget}
+	default:
 		return "", nil, false, false, false
 	}
 	return state.repository, refspecs, state.deleteRefs, state.dryRun, true
@@ -592,10 +745,14 @@ func applyPushBooleanEffect(
 	state *localPushParseState,
 ) {
 	switch effect {
+	case pushEffectAllBranches:
+		state.allBranches = enabled
 	case pushEffectDelete:
 		state.deleteRefs = enabled
 	case pushEffectDryRun:
 		state.dryRun = enabled
+	case pushEffectMirror:
+		state.mirrorBranches = enabled
 	case pushEffectNone:
 	}
 }
@@ -658,6 +815,14 @@ func optionValueAllowed(option pushValueOption, value string) bool {
 func pushRefspecBranches(refspecs []string, deleteRefs bool) []string {
 	branches := make([]string, 0, len(refspecs))
 	for _, refspec := range refspecs {
+		if refspec == gitAllBranchesTarget {
+			branches = append(branches, gitAllBranchesTarget)
+			continue
+		}
+		if refspec == gitMirrorBranchesTarget {
+			branches = append(branches, gitMirrorBranchesTarget)
+			continue
+		}
 		if deleteRefs {
 			branches = append(branches, localBranchTarget(refspec)...)
 			continue
@@ -665,11 +830,46 @@ func pushRefspecBranches(refspecs []string, deleteRefs bool) []string {
 		cleaned := strings.TrimPrefix(refspec, "+")
 		_, destination, found := strings.Cut(cleaned, ":")
 		if !found {
+			if cleaned == "HEAD" {
+				branches = append(branches, gitCurrentBranchTarget)
+				continue
+			}
 			destination = cleaned
 		}
 		branches = append(branches, localBranchTarget(destination)...)
 	}
 	return branches
+}
+
+func anyBranchCheckedOutElsewhere(state gitbranch.State, currentPath string) bool {
+	for _, worktree := range state.Worktrees {
+		if worktree.Branch != "" && gitbranch.BranchCheckedOutElsewhere(state, currentPath, worktree.Branch) {
+			return true
+		}
+	}
+	return false
+}
+
+func sourceBranchCheckedOutElsewhere(
+	destinationState gitbranch.State,
+	currentPath string,
+	sourceStatePath string,
+	readState gitStateReader,
+) bool {
+	sourceState, err := readState(sourceStatePath)
+	if err != nil {
+		return false
+	}
+	for _, worktree := range sourceState.Worktrees {
+		if worktree.Branch != "" && gitbranch.BranchCheckedOutElsewhere(
+			destinationState,
+			currentPath,
+			worktree.Branch,
+		) {
+			return true
+		}
+	}
+	return false
 }
 
 func localPushRepository(remote, cwd string) string {
