@@ -349,6 +349,17 @@ type Rule struct {
 	CodexEvents  []string    `toml:"codex_events"`
 	GeminiEvents []string    `toml:"gemini_events"`
 	Conditions   []Condition `toml:"conditions"`
+	// Eval declares an ordered list of evaluators (deterministic and infer) and
+	// their roles. A rule with no Eval entries behaves as it does today.
+	Eval []RuleEval `toml:"eval,omitempty"`
+	// Intent is the natural-language statement of what this rule forbids. An
+	// infer evaluator judges a command against it, so a rule that declares an
+	// infer eval entry must set it.
+	Intent string `toml:"intent,omitempty"`
+	// EvalInference is populated at compile time with the inference points this
+	// rule's Eval entries reference (by use and escalate_to), so the engine can
+	// resolve them without threading the whole config through evaluation.
+	EvalInference map[string]InferencePoint `toml:"-"`
 	// FieldPaths and Pattern are used when Conditions is empty (simple rules).
 	FieldPaths []string `toml:"field_paths"`
 	Pattern    string   `toml:"pattern"`
@@ -434,6 +445,9 @@ func NewSimpleRule(name, pattern string, compiled *regex.Regexp, events, fieldPa
 		CodexEvents:       nil,
 		GeminiEvents:      nil,
 		Conditions:        nil,
+		Eval:              nil,
+		Intent:            "",
+		EvalInference:     nil,
 		FieldPaths:        fieldPaths,
 		Action:            action,
 		ViolationMessage:  violationMessage,
@@ -463,7 +477,10 @@ type Config struct {
 	Performance Performance     `toml:"performance"`
 	Telemetry   TelemetryConfig `toml:"telemetry"`
 	Update      Update          `toml:"update"`
-	Rules       []Rule          `toml:"rules"`
+	// Inference holds named inference points that rules reference by name through
+	// a per-rule [RuleEval] entry.
+	Inference map[string]InferencePoint `toml:"inference,omitempty"`
+	Rules     []Rule                    `toml:"rules"`
 
 	sourceIdentity string
 }
@@ -543,9 +560,12 @@ func loadPath(path string, requireExisting bool) (*Config, error) {
 	if err := validateHookPerformance(cfg.Performance.Hook); err != nil {
 		return nil, err
 	}
+	if err := validateInferencePoints(log, cfg.Inference); err != nil {
+		return nil, err
+	}
 
 	for i := range cfg.Rules {
-		if err := compileRule(log, &cfg.Rules[i], meta, filepath.Dir(path)); err != nil {
+		if err := compileRule(log, &cfg.Rules[i], cfg.Inference, meta, filepath.Dir(path)); err != nil {
 			return nil, err
 		}
 	}
@@ -558,12 +578,27 @@ func loadPath(path string, requireExisting bool) (*Config, error) {
 
 // compileRule attaches compiled regexes and selectors to rule and its
 // conditions. Errors are returned with rule-context wrapping.
-func compileRule(log *slog.Logger, r *Rule, meta toml.MetaData, configDirectory string) error {
+func compileRule(
+	log *slog.Logger,
+	r *Rule,
+	inference map[string]InferencePoint,
+	meta toml.MetaData,
+	configDirectory string,
+) error {
 	if err := normalizeRuleAction(r); err != nil {
 		return fmt.Errorf("rule %q: %w", r.Name, err)
 	}
 	if err := normalizeRuleDiagnosticFormat(r); err != nil {
 		return fmt.Errorf("rule %q: %w", r.Name, err)
+	}
+	if err := validateRuleEval(log, r.Name, r.Eval, inference); err != nil {
+		return err
+	}
+	if err := validateRuleEvalConditions(log, r.Name, r.Eval, len(r.Conditions)); err != nil {
+		return err
+	}
+	if err := compileRuleEvalInference(r, inference); err != nil {
+		return err
 	}
 	if len(r.Conditions) > 0 {
 		for j := range r.Conditions {

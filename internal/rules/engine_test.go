@@ -28,6 +28,9 @@ func testFields(payload map[string]any) rules.FieldSet {
 	if value, ok := payload["command"].(string); ok {
 		fields.Command = value
 	}
+	if value, ok := payload["tool_input_command"].(string); ok {
+		fields.ToolInputCommand = value
+	}
 	if value, ok := payload["assistant_message"].(string); ok {
 		fields.AssistantMessage = value
 	}

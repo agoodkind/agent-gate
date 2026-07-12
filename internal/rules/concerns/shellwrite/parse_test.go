@@ -215,3 +215,115 @@ func TestExtractWriteTargets_ProcessSubstitutionIsNotAWrite(t *testing.T) {
 		}
 	}
 }
+
+// TestExtractWriteTargets_EditorEmitsFileOperand covers scripted editors and
+// in-place interpreters. Each must emit its file operand as a resolved write
+// target so a protected-checkout rule blocks an edit into the checkout.
+func TestExtractWriteTargets_EditorEmitsFileOperand(t *testing.T) {
+	commands := []string{
+		"vim -u NONE -N -es +source /tmp/x.vim -- config.go",
+		"vim -es -c ':1s/a/b/' -c ':wq' config.go",
+		"vi config.go",
+		"nvim -es +wq config.go",
+		"ex -s config.go '+%s/a/b/' '+wq'",
+		"ed config.go",
+		"emacs -Q --batch config.go --eval '(save-buffer)'",
+		"nano config.go",
+		"perl -i -pe 's/a/b/' config.go",
+		"perl -pi -e 's/a/b/' config.go",
+		"perl -i.bak -pe 's/a/b/' config.go",
+		"ruby -i -pe '$_.upcase!' config.go",
+	}
+	for _, command := range commands {
+		t.Run(command, func(t *testing.T) {
+			targets := shellwriteconcern.ExtractWriteTargets(command, "/repo")
+			if _, ok := findTarget(targets, "/repo/config.go"); !ok {
+				t.Fatalf("expected write target /repo/config.go for %q, got %#v", command, targets)
+			}
+		})
+	}
+}
+
+// TestExtractWriteTargets_NonEditorNoFileTarget pins the deferred and read-only
+// cases. A bare script-file interpreter run, a pure viewer, and an interpreter
+// without an in-place flag must not emit the file operand as a write target, so
+// routine scripts and file reads are not blocked from a protected checkout.
+func TestExtractWriteTargets_NonEditorNoFileTarget(t *testing.T) {
+	commands := []string{
+		"python3 writer.py config.go",
+		"python writer.py",
+		"node writer.js config.go",
+		"view config.go",
+		"less config.go",
+		"more config.go",
+		"perl -e 'print 1' config.go",
+		// Attached-value flags that contain an 'i' but are not in-place edits.
+		"perl -Mstrict config.go",
+		"perl -Ilib config.go",
+		"ruby -Ilib config.go",
+		"ruby -rdigest config.go",
+	}
+	for _, command := range commands {
+		t.Run(command, func(t *testing.T) {
+			targets := shellwriteconcern.ExtractWriteTargets(command, "/repo")
+			if _, ok := findTarget(targets, "/repo/config.go"); ok {
+				t.Fatalf("unexpected write target /repo/config.go for %q: %#v", command, targets)
+			}
+		})
+	}
+}
+
+// TestExtractWriteTargets_EditorPathQualified confirms a path-qualified editor or
+// in-place interpreter (matched by base name) still emits its file operand.
+func TestExtractWriteTargets_EditorPathQualified(t *testing.T) {
+	commands := []string{
+		"/usr/bin/vim config.go",
+		"/opt/homebrew/bin/nvim -es +wq config.go",
+		"/usr/bin/perl -i -pe 's/a/b/' config.go",
+	}
+	for _, command := range commands {
+		t.Run(command, func(t *testing.T) {
+			targets := shellwriteconcern.ExtractWriteTargets(command, "/repo")
+			if _, ok := findTarget(targets, "/repo/config.go"); !ok {
+				t.Fatalf("expected write target /repo/config.go for %q, got %#v", command, targets)
+			}
+		})
+	}
+}
+
+// TestExtractWriteTargets_EditorInSubshell confirms an editor or in-place edit
+// wrapped in an interpreter subshell still emits its file operand, so a subshell
+// does not evade the checkout guard.
+func TestExtractWriteTargets_EditorInSubshell(t *testing.T) {
+	commands := []string{
+		`bash -c "vim config.go"`,
+		`sh -c 'perl -i -pe "s/a/b/" config.go'`,
+		`bash -c "ex -s config.go '+wq'"`,
+	}
+	for _, command := range commands {
+		t.Run(command, func(t *testing.T) {
+			targets := shellwriteconcern.ExtractWriteTargets(command, "/repo")
+			if _, ok := findTarget(targets, "/repo/config.go"); !ok {
+				t.Fatalf("expected write target /repo/config.go for %q, got %#v", command, targets)
+			}
+		})
+	}
+}
+
+// TestExtractWriteTargets_ClusteredInPlaceFlag confirms a clustered in-place flag
+// (perl -pi, -wpi.bak) is detected as an in-place edit.
+func TestExtractWriteTargets_ClusteredInPlaceFlag(t *testing.T) {
+	commands := []string{
+		"perl -pi -e 's/a/b/' config.go",
+		"perl -wpi.bak -e 's/a/b/' config.go",
+		"perl -i.bak -pe 's/a/b/' config.go",
+	}
+	for _, command := range commands {
+		t.Run(command, func(t *testing.T) {
+			targets := shellwriteconcern.ExtractWriteTargets(command, "/repo")
+			if _, ok := findTarget(targets, "/repo/config.go"); !ok {
+				t.Fatalf("expected write target /repo/config.go for %q, got %#v", command, targets)
+			}
+		})
+	}
+}

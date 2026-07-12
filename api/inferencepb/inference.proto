@@ -47,6 +47,10 @@ message InvocationMetadata {
   string normalization_kind = 15;
   string raw_output_sha256 = 16;
   string upstream_response_id = 17;
+  // confidence is a token-logprob-derived confidence in [0, 1] for the decision,
+  // present only when the backend returned per-token logprobs. A local backend
+  // that does not emit logprobs leaves this unset.
+  optional double confidence = 18;
 }
 
 enum InferenceStatus {

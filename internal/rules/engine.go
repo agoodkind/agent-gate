@@ -178,6 +178,18 @@ func buildRuleRegexConditions(fields *FieldSet, rulesSlice []config.Rule, system
 		if envGuardFires(getenv, rule.DisableIfEnv) {
 			continue
 		}
+		if len(rule.Eval) > 0 {
+			// A rule that declares an evaluator matrix is evaluated through it
+			// instead of the implicit AND over its conditions. The deterministic
+			// evaluator runs the rule's condition block; role and combine decide
+			// the verdict.
+			conditions = append(conditions, &evalMatrixCondition{
+				name:   rule.Name,
+				fields: fields,
+				rule:   rule,
+			})
+			continue
+		}
 		if len(rule.Conditions) == 0 {
 			conditions = append(conditions, &ruleRegexCondition{
 				name:    rule.Name,
@@ -785,6 +797,9 @@ func diffConditionGateMatch(fields FieldSet, c *config.Condition) bool {
 		CodexEvents:       nil,
 		GeminiEvents:      nil,
 		Conditions:        nil,
+		Eval:              nil,
+		Intent:            "",
+		EvalInference:     nil,
 		FieldPaths:        nil,
 		Pattern:           "",
 		NotPattern:        "",
@@ -836,6 +851,9 @@ func shellReadConditionGateMatch(fields FieldSet, c *config.Condition) bool {
 		CodexEvents:       nil,
 		GeminiEvents:      nil,
 		Conditions:        nil,
+		Eval:              nil,
+		Intent:            "",
+		EvalInference:     nil,
 		FieldPaths:        nil,
 		Pattern:           "",
 		NotPattern:        "",
