@@ -158,7 +158,13 @@ func (e *evalMatrixCondition) runInferConcurrently(ctx context.Context) map[int]
 		wg.Add(1)
 		go func(index int, eval config.RuleEval) {
 			defer wg.Done()
-			verdict := verdictAllow
+			// Default the verdict to the entry's on-error outcome so a panic before
+			// resolveInferSingle completes respects on_error, failing closed unless
+			// the entry opts into fail open.
+			verdict := verdictBlock
+			if eval.OnError == config.OnErrorOpen {
+				verdict = verdictAllow
+			}
 			defer func() {
 				if recovered := recover(); recovered != nil {
 					slog.ErrorContext(
