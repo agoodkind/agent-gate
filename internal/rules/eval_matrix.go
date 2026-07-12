@@ -132,14 +132,46 @@ func (e *evalMatrixCondition) Execute(ctx context.Context, _ pipeline.Input) (pi
 
 // resolveEvaluator runs one declared evaluator. A deterministic entry runs the
 // rule's condition block and blocks when every condition matches. An infer entry
-// fails closed until inference routing is wired, so an enabled-but-unrouted infer
-// evaluator blocks rather than silently allowing a protected write.
-func (e *evalMatrixCondition) resolveEvaluator(ctx context.Context, _ int, eval config.RuleEval) evalVerdict {
+// routes the command to its inference point.
+func (e *evalMatrixCondition) resolveEvaluator(ctx context.Context, index int, eval config.RuleEval) evalVerdict {
 	if eval.Kind == config.EvalKindDeterministic {
 		if allConditionsMatch(ctx, *e.fields, e.rule, e.rule.Conditions) {
 			return verdictBlock
 		}
 		return verdictAllow
 	}
-	return verdictBlock
+	return e.resolveInfer(ctx, index, eval)
+}
+
+// resolveInfer routes the command to the evaluator's inference point, judging it
+// against the rule's intent, and records each inference call as a trace layer. A
+// result whose confidence is below the point's threshold escalates to the
+// declared escalation point. Any inference failure fails closed (block), so an
+// inference outage cannot silently open the guard for a protected write.
+func (e *evalMatrixCondition) resolveInfer(ctx context.Context, index int, eval config.RuleEval) evalVerdict {
+	point, ok := e.rule.EvalInference[eval.Use]
+	if !ok {
+		return verdictBlock
+	}
+	runtime := inferRuntimeFromContext(ctx)
+	input := e.fields.Command
+	result := runtime.evaluatePoint(ctx, point, e.rule.Intent, input)
+	recordPointLayer(ctx, e.rule.Name, index, result)
+	if result.errored {
+		return verdictBlock
+	}
+	if eval.EscalateTo != "" && result.confidencePresent && result.confidence < point.ConfidenceThreshold {
+		if escalated, present := e.rule.EvalInference[eval.EscalateTo]; present {
+			escalatedResult := runtime.evaluatePoint(ctx, escalated, e.rule.Intent, input)
+			recordPointLayer(ctx, e.rule.Name, index+escalationTraceOffset, escalatedResult)
+			if escalatedResult.errored {
+				return verdictBlock
+			}
+			result = escalatedResult
+		}
+	}
+	if result.block {
+		return verdictBlock
+	}
+	return verdictAllow
 }

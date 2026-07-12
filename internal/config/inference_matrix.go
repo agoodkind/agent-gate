@@ -115,6 +115,34 @@ func validConfidenceSource(source string) bool {
 	return source == "" || source == ConfidenceOutputField || source == ConfidenceLogprob
 }
 
+// compileRuleEvalInference resolves the inference points a rule's Eval entries
+// reference into Rule.EvalInference and requires an intent when the rule declares
+// an infer evaluator. It runs after validateRuleEval, so every referenced point
+// is known to exist.
+func compileRuleEvalInference(rule *Rule, points map[string]InferencePoint) error {
+	rule.EvalInference = nil
+	hasInfer := false
+	resolved := map[string]InferencePoint{}
+	for index := range rule.Eval {
+		eval := rule.Eval[index]
+		if eval.Kind != EvalKindInfer {
+			continue
+		}
+		hasInfer = true
+		resolved[eval.Use] = points[eval.Use]
+		if eval.EscalateTo != "" {
+			resolved[eval.EscalateTo] = points[eval.EscalateTo]
+		}
+	}
+	if hasInfer && rule.Intent == "" {
+		return fmt.Errorf("rule %q: an infer evaluator requires intent", rule.Name)
+	}
+	if len(resolved) > 0 {
+		rule.EvalInference = resolved
+	}
+	return nil
+}
+
 // validateRuleEval checks a rule's evaluator list against the declared inference
 // points. It confirms kinds, roles, fan-out, and combine values, and that every
 // referenced inference point exists. It logs the offending entry before
