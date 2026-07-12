@@ -197,7 +197,11 @@ func (e *evalMatrixCondition) resolveInferSingle(ctx context.Context, index int,
 		return verdictBlock
 	}
 	runtime := inferRuntimeFromContext(ctx)
-	result := runtime.evaluatePoint(ctx, point, e.rule.Intent, e.fields.Command)
+	// CommandValue prefers ToolInputCommand, where the hook payload carries the
+	// command, over the generic Command field, which stays empty for a tool call.
+	// Passing the empty Command made the inference service reject the request as
+	// invalid_argument, so the enforcer always errored and fell back to on_error.
+	result := runtime.evaluatePoint(ctx, point, e.rule.Intent, e.fields.CommandValue())
 	recordPointLayer(ctx, e.rule.Name, index, result)
 	if result.errored {
 		if eval.OnError == config.OnErrorOpen {

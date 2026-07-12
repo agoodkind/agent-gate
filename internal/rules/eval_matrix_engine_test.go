@@ -169,6 +169,54 @@ use = "dead"
 	}
 }
 
+// TestEvalMatrixInferUsesToolInputCommand confirms the infer evaluator sends the
+// command from ToolInputCommand, where the hook payload carries it, rather than
+// the generic Command field that stays empty for a tool call. A regression here
+// makes the inference service reject the request as invalid_argument.
+func TestEvalMatrixInferUsesToolInputCommand(t *testing.T) {
+	const cfgBody = `
+[inference.dead]
+endpoint = "[::1]:1"
+model = "test-model"
+
+[[rules]]
+name = "matrix-infer-toolinput"
+events = ["Stop"]
+action = "block"
+violation_message = "blocked by infer"
+intent = "Do not write into a protected checkout."
+[[rules.eval]]
+kind = "infer"
+role = "enforce"
+use = "dead"
+`
+	cfg := loadRuleConfig(t, cfgBody)
+	const command = "vim -es +source /tmp/x.vim -- config.go"
+	// Command carried only in ToolInputCommand, not the generic Command field.
+	payload := map[string]any{"tool_input_command": command}
+	detailed := rules.EvaluateAllDetailed(
+		context.Background(), "claude", "Stop", testFields(payload), cfg.Rules, nil, nil, "test",
+	)
+	var inferLayer *rules.LayerTrace
+	for index := range detailed.Trace.Layers {
+		if detailed.Trace.Layers[index].Kind == "inference" {
+			inferLayer = &detailed.Trace.Layers[index]
+		}
+	}
+	if inferLayer == nil {
+		t.Fatalf("no inference layer recorded")
+	}
+	var decoded struct {
+		Input string `json:"input"`
+	}
+	if err := json.Unmarshal(inferLayer.InputJSON, &decoded); err != nil {
+		t.Fatalf("input JSON unmarshal: %v (raw %q)", err, string(inferLayer.InputJSON))
+	}
+	if decoded.Input != command {
+		t.Fatalf("recorded input = %q, want the ToolInputCommand %q", decoded.Input, command)
+	}
+}
+
 // TestEvalMatrixInferFailsOpen confirms that an infer evaluator with
 // on_error = open allows the command when its inference point is unreachable, so
 // an inference outage degrades coverage without blocking work. The deterministic
