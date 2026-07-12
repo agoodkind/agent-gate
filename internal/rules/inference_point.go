@@ -13,23 +13,40 @@ import (
 // not set its own timeout.
 const defaultPointTimeout = 4 * time.Second
 
+// escalationTraceOffset separates a primary inference layer from its escalation
+// layer in the trace collector, whose identity keys on the condition index.
+const escalationTraceOffset = 100000
+
 // decisionOutputSchema is the JSON Schema an inference point answers with when it
 // judges a command against a rule: a single decision of allow or block.
 const decisionOutputSchema = `{"type":"object","properties":{"decision":{"type":"string","enum":["allow","block"]}},"required":["decision"],"additionalProperties":false}`
 
-// pointVerdict is the outcome of evaluating one inference point.
+// pointVerdict is the outcome of evaluating one inference point, plus the fields
+// needed to record it as an inference layer in the decision trace.
 type pointVerdict struct {
 	block             bool
 	confidence        float64
 	confidencePresent bool
 	errored           bool
+	outputJSON        string
+	errorCode         string
+	model             string
+	startedAt         time.Time
+	completedAt       time.Time
 }
 
 // evaluatePoint asks one inference point to judge input against prompt, returning
 // its decision plus any logprob-derived confidence. A transport, status, or parse
 // failure returns errored so the caller can fail closed.
 func (runtime *InferRuntime) evaluatePoint(ctx context.Context, point config.InferencePoint, prompt, input string) pointVerdict {
-	failed := pointVerdict{block: false, confidence: 0, confidencePresent: false, errored: true}
+	startedAt := runtime.now()
+	fail := func(code string) pointVerdict {
+		return pointVerdict{
+			block: false, confidence: 0, confidencePresent: false, errored: true,
+			outputJSON: "{}", errorCode: code, model: point.Model,
+			startedAt: startedAt, completedAt: runtime.now(),
+		}
+	}
 	timeout := time.Duration(point.TimeoutMs) * time.Millisecond
 	if timeout <= 0 {
 		timeout = defaultPointTimeout
@@ -38,7 +55,7 @@ func (runtime *InferRuntime) evaluatePoint(ctx context.Context, point config.Inf
 	defer cancel()
 	client, err := runtime.inferenceClient(point.Endpoint)
 	if err != nil {
-		return failed
+		return fail("invalid_endpoint")
 	}
 	reply, err := client.Infer(callCtx, &inferencepb.InferRequest{
 		Prompt:            prompt,
@@ -48,12 +65,15 @@ func (runtime *InferRuntime) evaluatePoint(ctx context.Context, point config.Inf
 		Model:             point.Model,
 		GenerationOptions: pointGenerationOptions(point),
 	})
-	if err != nil || reply == nil || reply.GetStatus() != inferencepb.InferenceStatus_INFERENCE_STATUS_COMPLETE {
-		return failed
+	if err != nil {
+		return fail(grpcErrorClass(err))
+	}
+	if reply == nil || reply.GetStatus() != inferencepb.InferenceStatus_INFERENCE_STATUS_COMPLETE {
+		return fail("non_complete")
 	}
 	decision, ok := parsePointDecision(reply.GetOutputJson())
 	if !ok {
-		return failed
+		return fail("invalid_response")
 	}
 	confidence, confidencePresent := pointConfidence(reply.GetMetadata())
 	return pointVerdict{
@@ -61,7 +81,45 @@ func (runtime *InferRuntime) evaluatePoint(ctx context.Context, point config.Inf
 		confidence:        confidence,
 		confidencePresent: confidencePresent,
 		errored:           false,
+		outputJSON:        reply.GetOutputJson(),
+		errorCode:         "",
+		model:             point.Model,
+		startedAt:         startedAt,
+		completedAt:       runtime.now(),
 	}
+}
+
+// recordPointLayer records one inference-point call as an inference layer in the
+// decision trace, so both the routed verdict and any escalation appear in
+// gate_evaluation_layers. traceIndex separates layers for the same rule.
+func recordPointLayer(ctx context.Context, ruleName string, traceIndex int, verdict pointVerdict) {
+	collector := richTraceCollectorFromContext(ctx)
+	if collector == nil {
+		return
+	}
+	status := traceStatusComplete
+	outcome := "nonmatch"
+	if verdict.block {
+		outcome = "match"
+	}
+	if verdict.errored {
+		status = traceStatusError
+		outcome = ""
+	}
+	output := json.RawMessage(verdict.outputJSON)
+	if len(output) == 0 {
+		output = json.RawMessage(`{}`)
+	}
+	layer := newLayerTrace(ruleName, traceIndex, verdict.model, "inference")
+	layer.Status = status
+	layer.Outcome = outcome
+	layer.StartedAt = verdict.startedAt
+	layer.CompletedAt = verdict.completedAt
+	layer.OutputJSON = output
+	layer.OutputHash = traceJSONHash(output)
+	layer.ServiceName = "inference"
+	layer.ErrorCode = verdict.errorCode
+	collector.collect(layer)
 }
 
 func pointGenerationOptions(point config.InferencePoint) *inferencepb.GenerationOptions {

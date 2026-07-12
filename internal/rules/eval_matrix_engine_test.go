@@ -122,3 +122,43 @@ use = "dead"
 		t.Fatalf("rule = %q, want matrix-infer-failclosed", violations[0].RuleName)
 	}
 }
+
+// TestEvalMatrixInferRecordsLayer confirms an infer evaluator records an
+// inference layer in the decision trace, so the LLM verdict per rule appears in
+// gate_evaluation_layers. The point is unreachable here, so the recorded layer
+// carries an error status.
+func TestEvalMatrixInferRecordsLayer(t *testing.T) {
+	const failClosedConfig = `
+[inference.dead]
+endpoint = "[::1]:1"
+model = "test-model"
+
+[[rules]]
+name = "matrix-infer-record"
+events = ["Stop"]
+action = "block"
+violation_message = "blocked by infer"
+intent = "Do not write into a protected checkout."
+[[rules.eval]]
+kind = "infer"
+role = "enforce"
+use = "dead"
+`
+	cfg := loadRuleConfig(t, failClosedConfig)
+	payload := map[string]any{"command": "echo anything"}
+	detailed := rules.EvaluateAllDetailed(
+		context.Background(), "claude", "Stop", testFields(payload), cfg.Rules, nil, nil, "test",
+	)
+	var inferLayers []rules.LayerTrace
+	for _, layer := range detailed.Trace.Layers {
+		if layer.RuleName == "matrix-infer-record" && layer.Kind == "inference" {
+			inferLayers = append(inferLayers, layer)
+		}
+	}
+	if len(inferLayers) == 0 {
+		t.Fatalf("expected an inference layer for the matrix rule, got layers %+v", detailed.Trace.Layers)
+	}
+	if inferLayers[0].ServiceName != "inference" {
+		t.Fatalf("layer ServiceName = %q, want inference", inferLayers[0].ServiceName)
+	}
+}
