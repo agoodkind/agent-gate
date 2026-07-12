@@ -350,9 +350,16 @@ type Rule struct {
 	GeminiEvents []string    `toml:"gemini_events"`
 	Conditions   []Condition `toml:"conditions"`
 	// Eval declares an ordered list of evaluators (deterministic and infer) and
-	// their roles. It is parsed and validated here; the evaluation engine consumes
-	// it in later work. A rule with no Eval entries behaves as it does today.
+	// their roles. A rule with no Eval entries behaves as it does today.
 	Eval []RuleEval `toml:"eval,omitempty"`
+	// Intent is the natural-language statement of what this rule forbids. An
+	// infer evaluator judges a command against it, so a rule that declares an
+	// infer eval entry must set it.
+	Intent string `toml:"intent,omitempty"`
+	// EvalInference is populated at compile time with the inference points this
+	// rule's Eval entries reference (by use and escalate_to), so the engine can
+	// resolve them without threading the whole config through evaluation.
+	EvalInference map[string]InferencePoint `toml:"-"`
 	// FieldPaths and Pattern are used when Conditions is empty (simple rules).
 	FieldPaths []string `toml:"field_paths"`
 	Pattern    string   `toml:"pattern"`
@@ -439,6 +446,8 @@ func NewSimpleRule(name, pattern string, compiled *regex.Regexp, events, fieldPa
 		GeminiEvents:      nil,
 		Conditions:        nil,
 		Eval:              nil,
+		Intent:            "",
+		EvalInference:     nil,
 		FieldPaths:        fieldPaths,
 		Action:            action,
 		ViolationMessage:  violationMessage,
@@ -586,6 +595,9 @@ func compileRule(
 		return err
 	}
 	if err := validateRuleEvalConditions(log, r.Name, r.Eval, len(r.Conditions)); err != nil {
+		return err
+	}
+	if err := compileRuleEvalInference(r, inference); err != nil {
 		return err
 	}
 	if len(r.Conditions) > 0 {

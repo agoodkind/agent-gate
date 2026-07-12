@@ -38,6 +38,7 @@ confidence_source = "logprob"
 name = "example"
 events = ["PreToolUse"]
 violation_message = "no"
+intent = "Do not write into a protected checkout."
 
 [[rules.conditions]]
 kind = "regex"
@@ -73,6 +74,12 @@ combine = "union"
 	infer := cfg.Rules[0].Eval[1]
 	if infer.Use != "local" || infer.EscalateTo != "escalation" || infer.Combine != config.CombineUnion {
 		t.Fatalf("infer eval = %#v", infer)
+	}
+	if _, ok := cfg.Rules[0].EvalInference["local"]; !ok {
+		t.Fatalf("EvalInference missing local: %#v", cfg.Rules[0].EvalInference)
+	}
+	if _, ok := cfg.Rules[0].EvalInference["escalation"]; !ok {
+		t.Fatalf("EvalInference missing escalation: %#v", cfg.Rules[0].EvalInference)
 	}
 }
 
@@ -190,6 +197,19 @@ pattern = "x"
 kind = "deterministic"
 role = "enforce"`,
 			want: "requires the rule to declare conditions",
+		},
+		{
+			name: "infer without intent",
+			body: `[inference.local]
+endpoint = "[::1]:5401"
+model = "m"
+[[rules]]
+name = "r"
+[[rules.eval]]
+kind = "infer"
+role = "enforce"
+use = "local"`,
+			want: "requires intent",
 		},
 	}
 	for _, testCase := range cases {

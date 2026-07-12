@@ -89,3 +89,36 @@ role = "verify"
 		})
 	}
 }
+
+// TestEvalMatrixInferFailsClosed confirms that an infer evaluator whose inference
+// point is unreachable blocks, so an inference outage cannot silently open the
+// guard for a protected write.
+func TestEvalMatrixInferFailsClosed(t *testing.T) {
+	const failClosedConfig = `
+[inference.dead]
+endpoint = "[::1]:1"
+model = "test-model"
+
+[[rules]]
+name = "matrix-infer-failclosed"
+events = ["Stop"]
+action = "block"
+violation_message = "blocked by infer"
+intent = "Do not write into a protected checkout."
+[[rules.eval]]
+kind = "infer"
+role = "enforce"
+use = "dead"
+`
+	cfg := loadRuleConfig(t, failClosedConfig)
+	payload := map[string]any{"command": "echo anything"}
+	violations := rules.EvaluateAll(
+		context.Background(), "claude", "Stop", testFields(payload), cfg.Rules, nil,
+	)
+	if len(violations) == 0 {
+		t.Fatalf("expected a fail-closed violation when the inference point is unreachable")
+	}
+	if violations[0].RuleName != "matrix-infer-failclosed" {
+		t.Fatalf("rule = %q, want matrix-infer-failclosed", violations[0].RuleName)
+	}
+}

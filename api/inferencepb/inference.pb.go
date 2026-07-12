@@ -351,8 +351,12 @@ type InvocationMetadata struct {
 	NormalizationKind  string                 `protobuf:"bytes,15,opt,name=normalization_kind,json=normalizationKind,proto3" json:"normalization_kind,omitempty"`
 	RawOutputSha256    string                 `protobuf:"bytes,16,opt,name=raw_output_sha256,json=rawOutputSha256,proto3" json:"raw_output_sha256,omitempty"`
 	UpstreamResponseId string                 `protobuf:"bytes,17,opt,name=upstream_response_id,json=upstreamResponseId,proto3" json:"upstream_response_id,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	// confidence is a token-logprob-derived confidence in [0, 1] for the decision,
+	// present only when the backend returned per-token logprobs. A local backend
+	// that does not emit logprobs leaves this unset.
+	Confidence    *float64 `protobuf:"fixed64,18,opt,name=confidence,proto3,oneof" json:"confidence,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *InvocationMetadata) Reset() {
@@ -504,6 +508,13 @@ func (x *InvocationMetadata) GetUpstreamResponseId() string {
 	return ""
 }
 
+func (x *InvocationMetadata) GetConfidence() float64 {
+	if x != nil && x.Confidence != nil {
+		return *x.Confidence
+	}
+	return 0
+}
+
 var File_inferencepb_inference_proto protoreflect.FileDescriptor
 
 const file_inferencepb_inference_proto_rawDesc = "" +
@@ -527,7 +538,7 @@ const file_inferencepb_inference_proto_rawDesc = "" +
 	"\x15max_completion_tokens\x18\x02 \x01(\x03H\x00R\x13maxCompletionTokens\x88\x01\x01\x12%\n" +
 	"\vtemperature\x18\x03 \x01(\x01H\x01R\vtemperature\x88\x01\x01B\x18\n" +
 	"\x16_max_completion_tokensB\x0e\n" +
-	"\f_temperature\"\x87\x06\n" +
+	"\f_temperature\"\xbb\x06\n" +
 	"\x12InvocationMetadata\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\tR\trequestId\x12'\n" +
@@ -548,10 +559,14 @@ const file_inferencepb_inference_proto_rawDesc = "" +
 	"\x11output_normalized\x18\x0e \x01(\bR\x10outputNormalized\x12-\n" +
 	"\x12normalization_kind\x18\x0f \x01(\tR\x11normalizationKind\x12*\n" +
 	"\x11raw_output_sha256\x18\x10 \x01(\tR\x0frawOutputSha256\x120\n" +
-	"\x14upstream_response_id\x18\x11 \x01(\tR\x12upstreamResponseIdB\x10\n" +
+	"\x14upstream_response_id\x18\x11 \x01(\tR\x12upstreamResponseId\x12#\n" +
+	"\n" +
+	"confidence\x18\x12 \x01(\x01H\x03R\n" +
+	"confidence\x88\x01\x01B\x10\n" +
 	"\x0e_prompt_tokensB\x14\n" +
 	"\x12_completion_tokensB\x0f\n" +
-	"\r_total_tokens*R\n" +
+	"\r_total_tokensB\r\n" +
+	"\v_confidence*R\n" +
 	"\x0fInferenceStatus\x12 \n" +
 	"\x1cINFERENCE_STATUS_UNSPECIFIED\x10\x00\x12\x1d\n" +
 	"\x19INFERENCE_STATUS_COMPLETE\x10\x01*\xda\x01\n" +
