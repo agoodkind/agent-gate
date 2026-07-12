@@ -257,12 +257,72 @@ func TestExtractWriteTargets_NonEditorNoFileTarget(t *testing.T) {
 		"less config.go",
 		"more config.go",
 		"perl -e 'print 1' config.go",
+		// Attached-value flags that contain an 'i' but are not in-place edits.
+		"perl -Mstrict config.go",
+		"perl -Ilib config.go",
+		"ruby -Ilib config.go",
+		"ruby -rdigest config.go",
 	}
 	for _, command := range commands {
 		t.Run(command, func(t *testing.T) {
 			targets := shellwriteconcern.ExtractWriteTargets(command, "/repo")
 			if _, ok := findTarget(targets, "/repo/config.go"); ok {
 				t.Fatalf("unexpected write target /repo/config.go for %q: %#v", command, targets)
+			}
+		})
+	}
+}
+
+// TestExtractWriteTargets_EditorPathQualified confirms a path-qualified editor or
+// in-place interpreter (matched by base name) still emits its file operand.
+func TestExtractWriteTargets_EditorPathQualified(t *testing.T) {
+	commands := []string{
+		"/usr/bin/vim config.go",
+		"/opt/homebrew/bin/nvim -es +wq config.go",
+		"/usr/bin/perl -i -pe 's/a/b/' config.go",
+	}
+	for _, command := range commands {
+		t.Run(command, func(t *testing.T) {
+			targets := shellwriteconcern.ExtractWriteTargets(command, "/repo")
+			if _, ok := findTarget(targets, "/repo/config.go"); !ok {
+				t.Fatalf("expected write target /repo/config.go for %q, got %#v", command, targets)
+			}
+		})
+	}
+}
+
+// TestExtractWriteTargets_EditorInSubshell confirms an editor or in-place edit
+// wrapped in an interpreter subshell still emits its file operand, so a subshell
+// does not evade the checkout guard.
+func TestExtractWriteTargets_EditorInSubshell(t *testing.T) {
+	commands := []string{
+		`bash -c "vim config.go"`,
+		`sh -c 'perl -i -pe "s/a/b/" config.go'`,
+		`bash -c "ex -s config.go '+wq'"`,
+	}
+	for _, command := range commands {
+		t.Run(command, func(t *testing.T) {
+			targets := shellwriteconcern.ExtractWriteTargets(command, "/repo")
+			if _, ok := findTarget(targets, "/repo/config.go"); !ok {
+				t.Fatalf("expected write target /repo/config.go for %q, got %#v", command, targets)
+			}
+		})
+	}
+}
+
+// TestExtractWriteTargets_ClusteredInPlaceFlag confirms a clustered in-place flag
+// (perl -pi, -wpi.bak) is detected as an in-place edit.
+func TestExtractWriteTargets_ClusteredInPlaceFlag(t *testing.T) {
+	commands := []string{
+		"perl -pi -e 's/a/b/' config.go",
+		"perl -wpi.bak -e 's/a/b/' config.go",
+		"perl -i.bak -pe 's/a/b/' config.go",
+	}
+	for _, command := range commands {
+		t.Run(command, func(t *testing.T) {
+			targets := shellwriteconcern.ExtractWriteTargets(command, "/repo")
+			if _, ok := findTarget(targets, "/repo/config.go"); !ok {
+				t.Fatalf("expected write target /repo/config.go for %q, got %#v", command, targets)
 			}
 		})
 	}

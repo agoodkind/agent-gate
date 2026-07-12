@@ -307,8 +307,11 @@ const maxEmbeddedDepth = 5
 
 // embeddedWriteTargets collects the resolved write targets of every parsed
 // embedded region (an interpreter -c body, a command substitution, a heredoc fed
-// to an interpreter), recursively. Unresolvable embedded writes are dropped; the
-// outer sentinel already covers the default-deny case for those.
+// to an interpreter), recursively. It surfaces both structural writes and
+// editor or in-place interpreter edits (for example `bash -c "vim config.go"`),
+// so wrapping an edit in a subshell does not evade the checkout guard.
+// Unresolvable embedded writes are dropped; the outer sentinel already covers the
+// default-deny case for those.
 func embeddedWriteTargets(decomposition *shelldecomp.Decomposition, depth int) []WriteTarget {
 	if decomposition == nil || depth >= maxEmbeddedDepth {
 		return nil
@@ -329,6 +332,7 @@ func embeddedWriteTargets(decomposition *shelldecomp.Decomposition, depth int) [
 				Raw:    target.Raw,
 			})
 		}
+		out = append(out, editorWriteTargets(region.Parsed)...)
 		out = append(out, embeddedWriteTargets(region.Parsed, depth+1)...)
 	}
 	return out
@@ -407,7 +411,8 @@ var inPlaceInterpreters = map[string]bool{"perl": true, "ruby": true}
 func editorWriteTargets(decomposition *shelldecomp.Decomposition) []WriteTarget {
 	var out []WriteTarget
 	for _, command := range decomposition.Commands() {
-		if !editors[command.Argv0] && !isInterpreterInPlace(command) {
+		base := filepath.Base(command.Argv0)
+		if !editors[base] && !isInterpreterInPlace(command) {
 			continue
 		}
 		for _, argument := range command.Args {
@@ -424,7 +429,7 @@ func editorWriteTargets(decomposition *shelldecomp.Decomposition) []WriteTarget 
 			}
 			out = append(out, WriteTarget{
 				Path:   path,
-				Tool:   command.Argv0,
+				Tool:   base,
 				Reason: ReasonOK,
 				Raw:    argument.Text,
 			})
@@ -435,8 +440,10 @@ func editorWriteTargets(decomposition *shelldecomp.Decomposition) []WriteTarget 
 
 // isInterpreterInPlace reports whether a command runs an in-place interpreter
 // edit (perl -i, ruby -i), whose written files the outer gate cannot enumerate.
+// The argv0 is matched by base name so a path-qualified /usr/bin/perl still
+// counts.
 func isInterpreterInPlace(command shelldecomp.Command) bool {
-	if !inPlaceInterpreters[command.Argv0] {
+	if !inPlaceInterpreters[filepath.Base(command.Argv0)] {
 		return false
 	}
 	for _, arg := range command.Args {
@@ -447,19 +454,35 @@ func isInterpreterInPlace(command shelldecomp.Command) bool {
 	return false
 }
 
+// valueConsumingFlags are single-letter perl and ruby options whose remaining
+// token characters are that option's attached value, not further clustered
+// flags. Scanning a flag cluster stops at the first of these so that -Ilib,
+// -Mstrict, and -rdigest are not misread as containing an in-place i.
+var valueConsumingFlags = map[byte]bool{
+	'e': true, 'E': true, 'I': true, 'M': true,
+	'm': true, 'r': true, 'F': true, 'C': true, 'K': true,
+}
+
 // isInPlaceFlagToken reports whether a single-dash perl or ruby flag token
-// requests in-place editing. It matches -i, -i<suffix> (a backup extension), and
-// a single-dash cluster containing a lowercase i such as -pi or -pi.bak. The
-// uppercase -I (include or load path) does not match.
+// requests in-place editing. It scans the flag cluster left to right and returns
+// true at the first bare i (so -i, -i.bak, and clusters like -pi and -wpi.bak
+// all match). It stops at the first value-consuming flag, whose trailing
+// characters are that flag's value rather than more flags, so -Ilib, -Mstrict,
+// and -rdigest do not match.
 func isInPlaceFlagToken(token string) bool {
 	if len(token) < 2 || token[0] != '-' || token[1] == '-' {
 		return false
 	}
-	flags := token[1:]
-	if dot := strings.IndexByte(flags, '.'); dot >= 0 {
-		flags = flags[:dot]
+	for index := 1; index < len(token); index++ {
+		character := token[index]
+		if character == 'i' {
+			return true
+		}
+		if valueConsumingFlags[character] {
+			return false
+		}
 	}
-	return strings.ContainsRune(flags, 'i')
+	return false
 }
 
 // hasCommandSubstitution reports whether a command carries an operand that is a
