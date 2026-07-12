@@ -130,8 +130,6 @@ Installed object shape in `$HOME/.claude/settings.json`:
 | `TaskCreated`        |         | Task tracker creation              |
 | `TeammateIdle`       |         | Multi-agent idle signal            |
 | `UserPromptSubmit`   |         | User submitted a prompt            |
-| `WorktreeCreate`     |         | Git worktree created               |
-| `WorktreeRemove`     |         | Git worktree removed               |
 
 ## Codex hooks
 
