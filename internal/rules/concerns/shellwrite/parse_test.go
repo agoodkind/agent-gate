@@ -215,3 +215,55 @@ func TestExtractWriteTargets_ProcessSubstitutionIsNotAWrite(t *testing.T) {
 		}
 	}
 }
+
+// TestExtractWriteTargets_EditorEmitsFileOperand covers scripted editors and
+// in-place interpreters. Each must emit its file operand as a resolved write
+// target so a protected-checkout rule blocks an edit into the checkout.
+func TestExtractWriteTargets_EditorEmitsFileOperand(t *testing.T) {
+	commands := []string{
+		"vim -u NONE -N -es +source /tmp/x.vim -- config.go",
+		"vim -es -c ':1s/a/b/' -c ':wq' config.go",
+		"vi config.go",
+		"nvim -es +wq config.go",
+		"ex -s config.go '+%s/a/b/' '+wq'",
+		"ed config.go",
+		"emacs -Q --batch config.go --eval '(save-buffer)'",
+		"nano config.go",
+		"perl -i -pe 's/a/b/' config.go",
+		"perl -pi -e 's/a/b/' config.go",
+		"perl -i.bak -pe 's/a/b/' config.go",
+		"ruby -i -pe '$_.upcase!' config.go",
+	}
+	for _, command := range commands {
+		t.Run(command, func(t *testing.T) {
+			targets := shellwriteconcern.ExtractWriteTargets(command, "/repo")
+			if _, ok := findTarget(targets, "/repo/config.go"); !ok {
+				t.Fatalf("expected write target /repo/config.go for %q, got %#v", command, targets)
+			}
+		})
+	}
+}
+
+// TestExtractWriteTargets_NonEditorNoFileTarget pins the deferred and read-only
+// cases. A bare script-file interpreter run, a pure viewer, and an interpreter
+// without an in-place flag must not emit the file operand as a write target, so
+// routine scripts and file reads are not blocked from a protected checkout.
+func TestExtractWriteTargets_NonEditorNoFileTarget(t *testing.T) {
+	commands := []string{
+		"python3 writer.py config.go",
+		"python writer.py",
+		"node writer.js config.go",
+		"view config.go",
+		"less config.go",
+		"more config.go",
+		"perl -e 'print 1' config.go",
+	}
+	for _, command := range commands {
+		t.Run(command, func(t *testing.T) {
+			targets := shellwriteconcern.ExtractWriteTargets(command, "/repo")
+			if _, ok := findTarget(targets, "/repo/config.go"); ok {
+				t.Fatalf("unexpected write target /repo/config.go for %q: %#v", command, targets)
+			}
+		})
+	}
+}

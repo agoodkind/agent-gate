@@ -113,6 +113,7 @@ func ExtractWriteTargetsWithSpecs(cmd, cwd string, specs []config.ShellWriteSpec
 		})
 	}
 	out = append(out, declaredWriteTargets(decomposition, specs)...)
+	out = append(out, editorWriteTargets(decomposition)...)
 	// Only recurse into embedded bodies for the local opaque shapes the sentinel
 	// already covers (eval/exec, interpreter -c, command substitution). This
 	// surfaces a real local write hidden inside `bash -c 'echo x > f'` (f,
@@ -378,6 +379,87 @@ func isInterpreterWithScript(command shelldecomp.Command) bool {
 		}
 	}
 	return false
+}
+
+// editors are text editors invoked to write a file. The static gate cannot read
+// an editor's own write commands, so it treats each path-shaped operand as a
+// write target; a rule that checks cmd_write_targets against a protected checkout
+// then blocks an edit into it. Pure viewers that cannot write (view, less, more)
+// are deliberately excluded.
+var editors = map[string]bool{
+	"vim": true, "vi": true, "nvim": true, "ex": true,
+	"ed": true, "emacs": true, "nano": true,
+}
+
+// inPlaceInterpreters are interpreters whose -i flag rewrites the file operands
+// in place, the way sed -i and awk -i inplace already do (those two shelldecomp
+// models directly). python -i and node -i are interactive REPLs, not in-place
+// edits, so they are excluded. A bare script-file run (python script.py) is not
+// treated as a write, so routine build and test scripts are not blocked.
+var inPlaceInterpreters = map[string]bool{"perl": true, "ruby": true}
+
+// editorWriteTargets returns the resolved file operands of every editor and
+// in-place interpreter edit in the decomposition. Flag tokens (a leading - or +)
+// and unresolvable operands are skipped, and paths resolve against the command's
+// cd-aware cwd. Over-inclusion of a non-file operand is safe because a
+// protected-checkout rule only matches targets that resolve inside the checkout,
+// so a stray value outside it never blocks and a real edit inside it always does.
+func editorWriteTargets(decomposition *shelldecomp.Decomposition) []WriteTarget {
+	var out []WriteTarget
+	for _, command := range decomposition.Commands() {
+		if !editors[command.Argv0] && !isInterpreterInPlace(command) {
+			continue
+		}
+		for _, argument := range command.Args {
+			if !argument.Resolvable {
+				continue
+			}
+			value := argument.Value
+			if value == "" || strings.HasPrefix(value, "-") || strings.HasPrefix(value, "+") {
+				continue
+			}
+			path := resolveDeclaredPath(value, command.Cwd)
+			if path == "" {
+				continue
+			}
+			out = append(out, WriteTarget{
+				Path:   path,
+				Tool:   command.Argv0,
+				Reason: ReasonOK,
+				Raw:    argument.Text,
+			})
+		}
+	}
+	return out
+}
+
+// isInterpreterInPlace reports whether a command runs an in-place interpreter
+// edit (perl -i, ruby -i), whose written files the outer gate cannot enumerate.
+func isInterpreterInPlace(command shelldecomp.Command) bool {
+	if !inPlaceInterpreters[command.Argv0] {
+		return false
+	}
+	for _, arg := range command.Args {
+		if isInPlaceFlagToken(arg.Text) {
+			return true
+		}
+	}
+	return false
+}
+
+// isInPlaceFlagToken reports whether a single-dash perl or ruby flag token
+// requests in-place editing. It matches -i, -i<suffix> (a backup extension), and
+// a single-dash cluster containing a lowercase i such as -pi or -pi.bak. The
+// uppercase -I (include or load path) does not match.
+func isInPlaceFlagToken(token string) bool {
+	if len(token) < 2 || token[0] != '-' || token[1] == '-' {
+		return false
+	}
+	flags := token[1:]
+	if dot := strings.IndexByte(flags, '.'); dot >= 0 {
+		flags = flags[:dot]
+	}
+	return strings.ContainsRune(flags, 'i')
 }
 
 // hasCommandSubstitution reports whether a command carries an operand that is a
