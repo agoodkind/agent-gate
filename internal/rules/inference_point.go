@@ -24,6 +24,7 @@ const decisionOutputSchema = `{"type":"object","properties":{"decision":{"type":
 type pointVerdict struct {
 	block       bool
 	errored     bool
+	inputJSON   string
 	outputJSON  string
 	errorCode   string
 	model       string
@@ -37,10 +38,11 @@ type pointVerdict struct {
 // failure returns errored so the caller can apply the entry's on-error policy.
 func (runtime *InferRuntime) evaluatePoint(ctx context.Context, point config.InferencePoint, prompt, input string) pointVerdict {
 	startedAt := runtime.now()
+	inputJSON := marshalPointInput(prompt, input, point.Model)
 	fail := func(code string) pointVerdict {
 		return pointVerdict{
 			block: false, errored: true,
-			outputJSON: "{}", errorCode: code, model: point.Model,
+			inputJSON: inputJSON, outputJSON: "{}", errorCode: code, model: point.Model,
 			upstream:  boundedUpstreamMetadata(nil),
 			startedAt: startedAt, completedAt: runtime.now(),
 		}
@@ -76,6 +78,7 @@ func (runtime *InferRuntime) evaluatePoint(ctx context.Context, point config.Inf
 	return pointVerdict{
 		block:       decision == "block",
 		errored:     false,
+		inputJSON:   inputJSON,
 		outputJSON:  reply.GetOutputJson(),
 		errorCode:   "",
 		model:       point.Model,
@@ -83,6 +86,21 @@ func (runtime *InferRuntime) evaluatePoint(ctx context.Context, point config.Inf
 		startedAt:   startedAt,
 		completedAt: runtime.now(),
 	}
+}
+
+// marshalPointInput renders the fields an inference point judged as a compact
+// JSON object, so the recorded inference layer carries a valid, self-describing
+// input rather than an empty blob the evaluation store would reject.
+func marshalPointInput(prompt, input, model string) string {
+	encoded, err := json.Marshal(struct {
+		Prompt string `json:"prompt"`
+		Input  string `json:"input"`
+		Model  string `json:"model"`
+	}{Prompt: prompt, Input: input, Model: model})
+	if err != nil {
+		return "{}"
+	}
+	return string(encoded)
 }
 
 // recordPointLayer records one inference-point call as an inference layer in the
@@ -108,11 +126,18 @@ func recordPointLayer(ctx context.Context, ruleName string, traceIndex int, verd
 	if len(output) == 0 {
 		output = json.RawMessage(`{}`)
 	}
+	input := json.RawMessage(verdict.inputJSON)
+	if len(input) == 0 || !json.Valid(input) {
+		input = json.RawMessage(`{}`)
+	}
 	layer := newLayerTrace(ruleName, traceIndex, verdict.model, "inference")
 	layer.Status = status
 	layer.Outcome = outcome
 	layer.StartedAt = verdict.startedAt
 	layer.CompletedAt = verdict.completedAt
+	layer.InputReference = "intake.normalized_json"
+	layer.InputJSON = input
+	layer.InputHash = traceJSONHash(input)
 	layer.OutputJSON = output
 	layer.OutputHash = traceJSONHash(output)
 	layer.ServiceName = "inference"

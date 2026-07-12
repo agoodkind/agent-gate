@@ -2,6 +2,7 @@ package rules_test
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -160,6 +161,11 @@ use = "dead"
 	}
 	if inferLayers[0].ServiceName != "inference" {
 		t.Fatalf("layer ServiceName = %q, want inference", inferLayers[0].ServiceName)
+	}
+	// The evaluation store rejects a layer whose input JSON is not valid, so the
+	// recorded inference layer must carry a valid, non-empty input.
+	if len(inferLayers[0].InputJSON) == 0 || !json.Valid(inferLayers[0].InputJSON) {
+		t.Fatalf("layer InputJSON = %q, want valid non-empty JSON", string(inferLayers[0].InputJSON))
 	}
 }
 
