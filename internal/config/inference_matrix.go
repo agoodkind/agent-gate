@@ -102,6 +102,8 @@ func inferencePointProblem(point InferencePoint) string {
 			"confidence_source %q must be %q, %q, or empty",
 			point.ConfidenceSource, ConfidenceOutputField, ConfidenceLogprob,
 		)
+	case point.ConfidenceSource == ConfidenceOutputField && point.ConfidenceField == "":
+		return "confidence_field is required when confidence_source is output_field"
 	case point.ConfidenceThreshold < 0 || point.ConfidenceThreshold > 1:
 		return fmt.Sprintf(
 			"confidence_threshold %v must be within [0, 1]",
@@ -144,8 +146,8 @@ func evalEntryProblem(eval RuleEval, points map[string]InferencePoint) string {
 		return problem
 	}
 	if eval.Kind == EvalKindDeterministic {
-		if eval.Use != "" || eval.EscalateTo != "" {
-			return "deterministic evaluator does not accept use or escalate_to"
+		if eval.Use != "" || eval.EscalateTo != "" || eval.Fanout != "" {
+			return "deterministic evaluator does not accept use, escalate_to, or fanout"
 		}
 		return ""
 	}

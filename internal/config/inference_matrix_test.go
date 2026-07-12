@@ -157,6 +157,24 @@ role = "enforce"
 use = "local"`,
 			want: "does not accept use",
 		},
+		{
+			name: "deterministic with fanout",
+			body: `[[rules]]
+name = "r"
+[[rules.eval]]
+kind = "deterministic"
+role = "enforce"
+fanout = "batch"`,
+			want: "does not accept use, escalate_to, or fanout",
+		},
+		{
+			name: "output_field source without confidence_field",
+			body: `[inference.local]
+endpoint = "[::1]:5401"
+model = "m"
+confidence_source = "output_field"`,
+			want: "confidence_field is required",
+		},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
