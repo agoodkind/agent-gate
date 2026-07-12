@@ -83,6 +83,76 @@ func TestInstallHooksUpdatesCursorJSONIdempotently(t *testing.T) {
 	}
 }
 
+func TestInstallHooksRemovesClaudeWorktreeFactoryHooks(t *testing.T) {
+	binPath := writeExecutable(t, filepath.Join(t.TempDir(), "agent-gate"))
+	homeDir := t.TempDir()
+	claudeDir := filepath.Join(homeDir, ".claude")
+	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll Claude directory: %v", err)
+	}
+	settingsPath := filepath.Join(claudeDir, "settings.json")
+	initialContent := `{
+  "theme": "kept",
+  "hooks": {
+    "WorktreeCreate": [{"hooks": [{"type": "command", "command": "/old/agent-gate"}]}],
+    "WorktreeRemove": [{"hooks": [{"type": "command", "command": "/old/agent-gate"}]}]
+  }
+}
+`
+	if err := os.WriteFile(settingsPath, []byte(initialContent), 0o600); err != nil {
+		t.Fatalf("WriteFile Claude settings: %v", err)
+	}
+
+	options := DefaultHooksOptions(binPath)
+	options.HomeDir = homeDir
+	options.InstallCodex = false
+	options.InstallCursor = false
+	options.InstallGemini = false
+	options.InstallCopilot = false
+	if err := InstallHooks(options); err != nil {
+		t.Fatalf("InstallHooks first run: %v", err)
+	}
+	firstContent, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile Claude settings after first install: %v", err)
+	}
+	if err := InstallHooks(options); err != nil {
+		t.Fatalf("InstallHooks second run: %v", err)
+	}
+	secondContent, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile Claude settings after second install: %v", err)
+	}
+	if string(firstContent) != string(secondContent) {
+		t.Fatalf("Claude hook install is not idempotent\nfirst:\n%s\nsecond:\n%s", firstContent, secondContent)
+	}
+
+	var settings struct {
+		Theme string                     `json:"theme"`
+		Hooks map[string]json.RawMessage `json:"hooks"`
+	}
+	if err := json.Unmarshal(secondContent, &settings); err != nil {
+		t.Fatalf("Unmarshal Claude settings: %v\n%s", err, secondContent)
+	}
+	if settings.Theme != "kept" {
+		t.Fatalf("theme = %q, want kept", settings.Theme)
+	}
+	if _, ok := settings.Hooks["WorktreeCreate"]; ok {
+		t.Fatalf("WorktreeCreate hook survived installation: %s", settings.Hooks["WorktreeCreate"])
+	}
+	if _, ok := settings.Hooks["WorktreeRemove"]; ok {
+		t.Fatalf("WorktreeRemove hook survived installation: %s", settings.Hooks["WorktreeRemove"])
+	}
+	preToolUse, ok := settings.Hooks["PreToolUse"]
+	if !ok {
+		t.Fatal("PreToolUse hook missing after installation")
+	}
+	if !strings.Contains(string(preToolUse), binPath) {
+		t.Fatalf("PreToolUse hook missing agent-gate command: %s", preToolUse)
+	}
+	assertFileMode(t, settingsPath, privateFileMode)
+}
+
 func TestInstallHooksUpdatesCodexTomlIdempotently(t *testing.T) {
 	binPath := writeExecutable(t, filepath.Join(t.TempDir(), "agent-gate"))
 	homeDir := t.TempDir()

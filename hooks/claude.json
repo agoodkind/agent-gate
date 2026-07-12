@@ -276,27 +276,5 @@
       ],
       "failClosed": false
     }
-  ],
-  "WorktreeCreate": [
-    {
-      "hooks": [
-        {
-          "type": "command",
-          "command": "__AGENT_GATE_BIN__"
-        }
-      ],
-      "failClosed": false
-    }
-  ],
-  "WorktreeRemove": [
-    {
-      "hooks": [
-        {
-          "type": "command",
-          "command": "__AGENT_GATE_BIN__"
-        }
-      ],
-      "failClosed": false
-    }
   ]
 }
