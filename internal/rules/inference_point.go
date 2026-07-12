@@ -13,37 +13,35 @@ import (
 // not set its own timeout.
 const defaultPointTimeout = 4 * time.Second
 
-// escalationTraceOffset separates a primary inference layer from its escalation
-// layer in the trace collector, whose identity keys on the condition index.
-const escalationTraceOffset = 100000
-
 // decisionOutputSchema is the JSON Schema an inference point answers with when it
 // judges a command against a rule: a single decision of allow or block.
 const decisionOutputSchema = `{"type":"object","properties":{"decision":{"type":"string","enum":["allow","block"]}},"required":["decision"],"additionalProperties":false}`
 
 // pointVerdict is the outcome of evaluating one inference point, plus the fields
-// needed to record it as an inference layer in the decision trace.
+// needed to record it as an inference layer in the decision trace. upstream holds
+// the model's invocation metadata, whose logprob-derived confidence is recorded
+// for a backend that reports it (mini) and absent for one that does not (v4).
 type pointVerdict struct {
-	block             bool
-	confidence        float64
-	confidencePresent bool
-	errored           bool
-	outputJSON        string
-	errorCode         string
-	model             string
-	startedAt         time.Time
-	completedAt       time.Time
+	block       bool
+	errored     bool
+	outputJSON  string
+	errorCode   string
+	model       string
+	upstream    UpstreamMetadata
+	startedAt   time.Time
+	completedAt time.Time
 }
 
 // evaluatePoint asks one inference point to judge input against prompt, returning
-// its decision plus any logprob-derived confidence. A transport, status, or parse
-// failure returns errored so the caller can fail closed.
+// its decision plus the model's invocation metadata. A transport, status, or parse
+// failure returns errored so the caller can apply the entry's on-error policy.
 func (runtime *InferRuntime) evaluatePoint(ctx context.Context, point config.InferencePoint, prompt, input string) pointVerdict {
 	startedAt := runtime.now()
 	fail := func(code string) pointVerdict {
 		return pointVerdict{
-			block: false, confidence: 0, confidencePresent: false, errored: true,
+			block: false, errored: true,
 			outputJSON: "{}", errorCode: code, model: point.Model,
+			upstream:  boundedUpstreamMetadata(nil),
 			startedAt: startedAt, completedAt: runtime.now(),
 		}
 	}
@@ -75,23 +73,23 @@ func (runtime *InferRuntime) evaluatePoint(ctx context.Context, point config.Inf
 	if !ok {
 		return fail("invalid_response")
 	}
-	confidence, confidencePresent := pointConfidence(reply.GetMetadata())
 	return pointVerdict{
-		block:             decision == "block",
-		confidence:        confidence,
-		confidencePresent: confidencePresent,
-		errored:           false,
-		outputJSON:        reply.GetOutputJson(),
-		errorCode:         "",
-		model:             point.Model,
-		startedAt:         startedAt,
-		completedAt:       runtime.now(),
+		block:       decision == "block",
+		errored:     false,
+		outputJSON:  reply.GetOutputJson(),
+		errorCode:   "",
+		model:       point.Model,
+		upstream:    boundedUpstreamMetadata(reply.GetMetadata()),
+		startedAt:   startedAt,
+		completedAt: runtime.now(),
 	}
 }
 
 // recordPointLayer records one inference-point call as an inference layer in the
-// decision trace, so both the routed verdict and any escalation appear in
-// gate_evaluation_layers. traceIndex separates layers for the same rule.
+// decision trace, so every routed verdict appears in gate_evaluation_layers.
+// traceIndex separates layers for the same rule, and the model's invocation
+// metadata (including its confidence when reported) rides in the layer's upstream
+// metadata.
 func recordPointLayer(ctx context.Context, ruleName string, traceIndex int, verdict pointVerdict) {
 	collector := richTraceCollectorFromContext(ctx)
 	if collector == nil {
@@ -119,6 +117,8 @@ func recordPointLayer(ctx context.Context, ruleName string, traceIndex int, verd
 	layer.OutputHash = traceJSONHash(output)
 	layer.ServiceName = "inference"
 	layer.ErrorCode = verdict.errorCode
+	layer.UpstreamMetadata = verdict.upstream
+	layer.UpstreamMetadata.Raw = append(json.RawMessage(nil), verdict.upstream.Raw...)
 	collector.collect(layer)
 }
 
@@ -144,11 +144,4 @@ func parsePointDecision(outputJSON string) (string, bool) {
 		return "", false
 	}
 	return decoded.Decision, true
-}
-
-func pointConfidence(metadata *inferencepb.InvocationMetadata) (float64, bool) {
-	if metadata == nil || metadata.Confidence == nil {
-		return 0, false
-	}
-	return metadata.GetConfidence(), true
 }

@@ -162,3 +162,80 @@ use = "dead"
 		t.Fatalf("layer ServiceName = %q, want inference", inferLayers[0].ServiceName)
 	}
 }
+
+// TestEvalMatrixInferFailsOpen confirms that an infer evaluator with
+// on_error = open allows the command when its inference point is unreachable, so
+// an inference outage degrades coverage without blocking work. The deterministic
+// evaluators remain the fail-closed backstop.
+func TestEvalMatrixInferFailsOpen(t *testing.T) {
+	const failOpenConfig = `
+[inference.dead]
+endpoint = "[::1]:1"
+model = "test-model"
+
+[[rules]]
+name = "matrix-infer-failopen"
+events = ["Stop"]
+action = "block"
+violation_message = "blocked by infer"
+intent = "Do not write into a protected checkout."
+[[rules.eval]]
+kind = "infer"
+role = "enforce"
+use = "dead"
+on_error = "open"
+`
+	cfg := loadRuleConfig(t, failOpenConfig)
+	payload := map[string]any{"command": "echo anything"}
+	violations := rules.EvaluateAll(
+		context.Background(), "claude", "Stop", testFields(payload), cfg.Rules, nil,
+	)
+	if len(violations) != 0 {
+		t.Fatalf("expected no violation (fail open), got %d: %+v", len(violations), violations)
+	}
+}
+
+// TestEvalMatrixRecordsBothInferLayers confirms that an enforce and a verify infer
+// evaluator both record an inference layer, so the enforced decider and the
+// recorded-only training verdict both appear in the decision trace.
+func TestEvalMatrixRecordsBothInferLayers(t *testing.T) {
+	const bothConfig = `
+[inference.decider]
+endpoint = "[::1]:1"
+model = "gpt-5.4-mini"
+
+[inference.trainer]
+endpoint = "[::1]:1"
+model = "agentgate/agent-gate-judge-v4"
+
+[[rules]]
+name = "matrix-both"
+events = ["Stop"]
+action = "block"
+violation_message = "blocked"
+intent = "Do not write into a protected checkout."
+[[rules.eval]]
+kind = "infer"
+role = "enforce"
+use = "decider"
+on_error = "open"
+[[rules.eval]]
+kind = "infer"
+role = "verify"
+use = "trainer"
+`
+	cfg := loadRuleConfig(t, bothConfig)
+	payload := map[string]any{"command": "echo anything"}
+	detailed := rules.EvaluateAllDetailed(
+		context.Background(), "claude", "Stop", testFields(payload), cfg.Rules, nil, nil, "test",
+	)
+	models := make(map[string]bool)
+	for _, layer := range detailed.Trace.Layers {
+		if layer.RuleName == "matrix-both" && layer.Kind == "inference" {
+			models[layer.LayerName] = true
+		}
+	}
+	if !models["gpt-5.4-mini"] || !models["agentgate/agent-gate-judge-v4"] {
+		t.Fatalf("expected inference layers for both models, got %+v", models)
+	}
+}

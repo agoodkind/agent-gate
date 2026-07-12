@@ -22,17 +22,14 @@ func writeTempConfig(t *testing.T, body string) string {
 // a per-rule eval block loads and exposes the parsed values.
 func TestLoadParsesInferenceMatrix(t *testing.T) {
 	body := `
-[inference.local]
-endpoint = "[::1]:5401"
-model = "agentgate/agent-gate-judge-v4"
-confidence_source = "output_field"
-confidence_field = "confidence"
-confidence_threshold = 0.7
-
-[inference.escalation]
+[inference.mini]
 endpoint = "[::1]:5401"
 model = "gpt-5.4-mini"
 confidence_source = "logprob"
+
+[inference.v4]
+endpoint = "[::1]:5401"
+model = "agentgate/agent-gate-judge-v4"
 
 [[rules]]
 name = "example"
@@ -47,39 +44,47 @@ pattern = "x"
 
 [[rules.eval]]
 kind = "deterministic"
-role = "verify"
+role = "enforce"
 
 [[rules.eval]]
 kind = "infer"
 role = "enforce"
-use = "local"
-escalate_to = "escalation"
-fanout = "batch"
+use = "mini"
+on_error = "open"
 combine = "union"
+
+[[rules.eval]]
+kind = "infer"
+role = "verify"
+use = "v4"
 `
 	cfg, err := config.LoadExisting(writeTempConfig(t, body))
 	if err != nil {
 		t.Fatalf("LoadExisting: %v", err)
 	}
-	point, ok := cfg.Inference["local"]
+	point, ok := cfg.Inference["mini"]
 	if !ok {
-		t.Fatalf("inference point local missing; have %v", cfg.Inference)
+		t.Fatalf("inference point mini missing; have %v", cfg.Inference)
 	}
-	if point.Model != "agentgate/agent-gate-judge-v4" || point.ConfidenceThreshold != 0.7 {
-		t.Fatalf("local point = %#v", point)
+	if point.Model != "gpt-5.4-mini" || point.ConfidenceSource != config.ConfidenceLogprob {
+		t.Fatalf("mini point = %#v", point)
 	}
-	if len(cfg.Rules) != 1 || len(cfg.Rules[0].Eval) != 2 {
+	if len(cfg.Rules) != 1 || len(cfg.Rules[0].Eval) != 3 {
 		t.Fatalf("rules/eval = %#v", cfg.Rules)
 	}
-	infer := cfg.Rules[0].Eval[1]
-	if infer.Use != "local" || infer.EscalateTo != "escalation" || infer.Combine != config.CombineUnion {
-		t.Fatalf("infer eval = %#v", infer)
+	enforce := cfg.Rules[0].Eval[1]
+	if enforce.Use != "mini" || enforce.Role != config.RoleEnforce || enforce.OnError != config.OnErrorOpen {
+		t.Fatalf("enforce eval = %#v", enforce)
 	}
-	if _, ok := cfg.Rules[0].EvalInference["local"]; !ok {
-		t.Fatalf("EvalInference missing local: %#v", cfg.Rules[0].EvalInference)
+	verify := cfg.Rules[0].Eval[2]
+	if verify.Use != "v4" || verify.Role != config.RoleVerify {
+		t.Fatalf("verify eval = %#v", verify)
 	}
-	if _, ok := cfg.Rules[0].EvalInference["escalation"]; !ok {
-		t.Fatalf("EvalInference missing escalation: %#v", cfg.Rules[0].EvalInference)
+	if _, ok := cfg.Rules[0].EvalInference["mini"]; !ok {
+		t.Fatalf("EvalInference missing mini: %#v", cfg.Rules[0].EvalInference)
+	}
+	if _, ok := cfg.Rules[0].EvalInference["v4"]; !ok {
+		t.Fatalf("EvalInference missing v4: %#v", cfg.Rules[0].EvalInference)
 	}
 }
 
@@ -177,7 +182,7 @@ name = "r"
 kind = "deterministic"
 role = "enforce"
 fanout = "batch"`,
-			want: "does not accept use, escalate_to, or fanout",
+			want: "does not accept use, fanout, or on_error",
 		},
 		{
 			name: "output_field source without confidence_field",

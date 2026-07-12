@@ -2,6 +2,9 @@ package rules
 
 import (
 	"context"
+	"fmt"
+	"log/slog"
+	"sync"
 
 	"goodkind.io/agent-gate/internal/config"
 	"goodkind.io/agent-gate/pipeline"
@@ -111,8 +114,15 @@ func (e *evalMatrixCondition) Profile() pipeline.Profile {
 }
 
 func (e *evalMatrixCondition) Execute(ctx context.Context, _ pipeline.Input) (pipeline.Outcome, error) {
+	inferVerdicts := e.runInferConcurrently(ctx)
 	decision := runEvalMatrix(e.rule.Eval, func(index int, eval config.RuleEval) evalVerdict {
-		return e.resolveEvaluator(ctx, index, eval)
+		if eval.Kind == config.EvalKindInfer {
+			return inferVerdicts[index]
+		}
+		if allConditionsMatch(ctx, *e.fields, e.rule, e.rule.Conditions) {
+			return verdictBlock
+		}
+		return verdictAllow
 	})
 	if !decision.block {
 		return ruleOutcome{
@@ -130,45 +140,70 @@ func (e *evalMatrixCondition) Execute(ctx context.Context, _ pipeline.Input) (pi
 	}, nil
 }
 
-// resolveEvaluator runs one declared evaluator. A deterministic entry runs the
-// rule's condition block and blocks when every condition matches. An infer entry
-// routes the command to its inference point.
-func (e *evalMatrixCondition) resolveEvaluator(ctx context.Context, index int, eval config.RuleEval) evalVerdict {
-	if eval.Kind == config.EvalKindDeterministic {
-		if allConditionsMatch(ctx, *e.fields, e.rule, e.rule.Conditions) {
-			return verdictBlock
+// runInferConcurrently evaluates every infer entry against its inference point at
+// once and returns each entry's verdict by index. Running the entries together
+// keeps the hot-path latency near the slowest call rather than their sum, so the
+// recorded-only v4 verify entry does not add to the time the enforcing mini entry
+// already takes. Each call records its own trace layer, and recordPointLayer is
+// safe to call from several goroutines.
+func (e *evalMatrixCondition) runInferConcurrently(ctx context.Context) map[int]evalVerdict {
+	verdicts := make(map[int]evalVerdict)
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	for index := range e.rule.Eval {
+		eval := e.rule.Eval[index]
+		if eval.Kind != config.EvalKindInfer {
+			continue
 		}
-		return verdictAllow
+		wg.Add(1)
+		go func(index int, eval config.RuleEval) {
+			defer wg.Done()
+			// Default the verdict to the entry's on-error outcome so a panic before
+			// resolveInferSingle completes respects on_error, failing closed unless
+			// the entry opts into fail open.
+			verdict := verdictBlock
+			if eval.OnError == config.OnErrorOpen {
+				verdict = verdictAllow
+			}
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					slog.ErrorContext(
+						ctx,
+						"eval matrix inference goroutine panicked",
+						"err", fmt.Errorf("panic: %v", recovered),
+						"rule", e.rule.Name, "index", index,
+					)
+				}
+				mu.Lock()
+				verdicts[index] = verdict
+				mu.Unlock()
+			}()
+			verdict = e.resolveInferSingle(ctx, index, eval)
+		}(index, eval)
 	}
-	return e.resolveInfer(ctx, index, eval)
+	wg.Wait()
+	return verdicts
 }
 
-// resolveInfer routes the command to the evaluator's inference point, judging it
-// against the rule's intent, and records each inference call as a trace layer. A
-// result whose confidence is below the point's threshold escalates to the
-// declared escalation point. Any inference failure fails closed (block), so an
-// inference outage cannot silently open the guard for a protected write.
-func (e *evalMatrixCondition) resolveInfer(ctx context.Context, index int, eval config.RuleEval) evalVerdict {
+// resolveInferSingle routes the command to the evaluator's inference point, judges
+// it against the rule's intent, and records the call as a trace layer. On an
+// inference failure it fails open when the entry sets on_error = open, and fails
+// closed otherwise. The deterministic evaluators stay the fail-closed backstop, so
+// a fail-open infer entry only widens coverage without dropping the guard for a
+// command a deterministic evaluator already blocks.
+func (e *evalMatrixCondition) resolveInferSingle(ctx context.Context, index int, eval config.RuleEval) evalVerdict {
 	point, ok := e.rule.EvalInference[eval.Use]
 	if !ok {
 		return verdictBlock
 	}
 	runtime := inferRuntimeFromContext(ctx)
-	input := e.fields.Command
-	result := runtime.evaluatePoint(ctx, point, e.rule.Intent, input)
+	result := runtime.evaluatePoint(ctx, point, e.rule.Intent, e.fields.Command)
 	recordPointLayer(ctx, e.rule.Name, index, result)
 	if result.errored {
-		return verdictBlock
-	}
-	if eval.EscalateTo != "" && result.confidencePresent && result.confidence < point.ConfidenceThreshold {
-		if escalated, present := e.rule.EvalInference[eval.EscalateTo]; present {
-			escalatedResult := runtime.evaluatePoint(ctx, escalated, e.rule.Intent, input)
-			recordPointLayer(ctx, e.rule.Name, index+escalationTraceOffset, escalatedResult)
-			if escalatedResult.errored {
-				return verdictBlock
-			}
-			result = escalatedResult
+		if eval.OnError == config.OnErrorOpen {
+			return verdictAllow
 		}
+		return verdictBlock
 	}
 	if result.block {
 		return verdictBlock

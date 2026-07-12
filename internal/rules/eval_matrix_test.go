@@ -20,11 +20,11 @@ func resolverFromVerdicts(verdicts map[int]evalVerdict, ran *[]int) evaluatorRes
 }
 
 func detEval(role string) config.RuleEval {
-	return config.RuleEval{Kind: config.EvalKindDeterministic, Role: role, Use: "", EscalateTo: "", Fanout: "", Combine: ""}
+	return config.RuleEval{Kind: config.EvalKindDeterministic, Role: role, Use: "", Fanout: "", Combine: "", OnError: ""}
 }
 
 func inferEval(role, combine string) config.RuleEval {
-	return config.RuleEval{Kind: config.EvalKindInfer, Role: role, Use: "local", EscalateTo: "", Fanout: "", Combine: combine}
+	return config.RuleEval{Kind: config.EvalKindInfer, Role: role, Use: "local", Fanout: "", Combine: combine, OnError: ""}
 }
 
 // TestRunEvalMatrixModes covers the five declared interaction modes.
