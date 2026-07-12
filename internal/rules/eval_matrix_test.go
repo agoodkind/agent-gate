@@ -65,20 +65,6 @@ func TestRunEvalMatrixModes(t *testing.T) {
 			wantRan:   []int{0, 1},
 		},
 		{
-			name:      "llm fallback: deterministic resolves, fallback skipped",
-			evals:     []config.RuleEval{detEval(config.RoleEnforce), inferEval(config.RoleFallback, "")},
-			verdicts:  map[int]evalVerdict{0: verdictBlock},
-			wantBlock: true,
-			wantRan:   []int{0},
-		},
-		{
-			name:      "llm fallback: deterministic unresolved, fallback runs and decides",
-			evals:     []config.RuleEval{detEval(config.RoleEnforce), inferEval(config.RoleFallback, "")},
-			verdicts:  map[int]evalVerdict{0: verdictUnresolved, 1: verdictBlock},
-			wantBlock: true,
-			wantRan:   []int{0, 1},
-		},
-		{
 			name:      "union: either enforcing blocks",
 			evals:     []config.RuleEval{detEval(config.RoleEnforce), inferEval(config.RoleEnforce, config.CombineUnion)},
 			verdicts:  map[int]evalVerdict{0: verdictAllow, 1: verdictBlock},

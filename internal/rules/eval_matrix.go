@@ -15,15 +15,11 @@ const (
 	verdictAllow evalVerdict = iota
 	// verdictBlock means the evaluator found a violation.
 	verdictBlock
-	// verdictUnresolved means the evaluator could not statically decide. Only a
-	// deterministic evaluator returns this; it is what arms a fallback evaluator.
-	verdictUnresolved
 )
 
 // evaluatorResolver runs the declared evaluator at index and returns its verdict.
 // The engine supplies this: a deterministic entry runs the rule's condition
-// block, an infer entry calls the named inference point. A fallback entry is only
-// invoked when a prior enforcing deterministic evaluator returned unresolved.
+// block, an infer entry calls the named inference point.
 type evaluatorResolver func(index int, eval config.RuleEval) evalVerdict
 
 // matrixDecision is the enforced decision for a rule's evaluator matrix.
@@ -33,14 +29,12 @@ type matrixDecision struct {
 
 // runEvalMatrix executes a rule's declared evaluators in order and returns the
 // enforced decision. It honors each entry's role: an enforce entry participates
-// in the decision, a verify entry runs but does not decide, and a fallback entry
-// runs only when a prior enforcing deterministic evaluator returned unresolved.
-// Enforcing entries are joined by the combine operator. Union, the default,
-// blocks when any enforcing evaluator blocks. The and operator blocks only when
-// every enforcing evaluator blocks. A fallback entry that runs participates as an
-// enforcing entry.
+// in the decision, and a verify entry runs but does not decide. Enforcing entries
+// are joined by the combine operator. Union, the default, blocks when any
+// enforcing evaluator blocks. The and operator blocks only when every enforcing
+// evaluator blocks.
 func runEvalMatrix(evals []config.RuleEval, resolve evaluatorResolver) matrixDecision {
-	state := matrixRunState{deterministicUnresolved: false, enforcingCount: 0, blockingCount: 0}
+	state := matrixRunState{enforcingCount: 0, blockingCount: 0}
 	for index := range evals {
 		runMatrixEntry(index, evals[index], resolve, &state)
 	}
@@ -48,25 +42,16 @@ func runEvalMatrix(evals []config.RuleEval, resolve evaluatorResolver) matrixDec
 	return matrixDecision{block: block}
 }
 
-// matrixRunState accumulates the cross-entry facts runEvalMatrix needs: whether a
-// deterministic evaluator returned unresolved (which arms a fallback), and the
-// enforcing and blocking tallies the combine operator joins.
+// matrixRunState accumulates the enforcing and blocking tallies the combine
+// operator joins across evaluator entries.
 type matrixRunState struct {
-	deterministicUnresolved bool
-	enforcingCount          int
-	blockingCount           int
+	enforcingCount int
+	blockingCount  int
 }
 
-// runMatrixEntry resolves one evaluator entry and folds its verdict into state. A
-// fallback entry whose deterministic trigger has not occurred is skipped.
+// runMatrixEntry resolves one evaluator entry and folds its verdict into state.
 func runMatrixEntry(index int, eval config.RuleEval, resolve evaluatorResolver, state *matrixRunState) {
-	if eval.Role == config.RoleFallback && !state.deterministicUnresolved {
-		return
-	}
 	verdict := resolve(index, eval)
-	if eval.Kind == config.EvalKindDeterministic && verdict == verdictUnresolved {
-		state.deterministicUnresolved = true
-	}
 	if evaluatorEnforces(eval) {
 		state.enforcingCount++
 		if verdict == verdictBlock {
@@ -76,10 +61,9 @@ func runMatrixEntry(index int, eval config.RuleEval, resolve evaluatorResolver, 
 }
 
 // evaluatorEnforces reports whether an evaluator participates in the decision. An
-// enforce entry always does, a fallback entry does when it runs, and a verify
-// entry never does.
+// enforce entry does; a verify entry never does.
 func evaluatorEnforces(eval config.RuleEval) bool {
-	return eval.Role == config.RoleEnforce || eval.Role == config.RoleFallback
+	return eval.Role == config.RoleEnforce
 }
 
 // matrixCombineOperator returns the combine operator for the rule, taken from the
