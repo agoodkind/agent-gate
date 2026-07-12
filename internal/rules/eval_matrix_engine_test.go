@@ -1,0 +1,91 @@
+package rules_test
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"goodkind.io/agent-gate/internal/config"
+	"goodkind.io/agent-gate/internal/rules"
+)
+
+func loadRuleConfig(t *testing.T, body string) *config.Config {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := config.LoadExisting(path)
+	if err != nil {
+		t.Fatalf("LoadExisting: %v", err)
+	}
+	return cfg
+}
+
+// TestEvalMatrixRoutingThroughEngine confirms a rule that declares an evaluator
+// matrix routes through it in EvaluateAll, and that the declared role decides:
+// an enforce deterministic evaluator blocks a matching command, a verify
+// evaluator records without enforcing, and a non-matching command does not block.
+func TestEvalMatrixRoutingThroughEngine(t *testing.T) {
+	const enforceConfig = `
+[[rules]]
+name = "matrix-enforce"
+events = ["Stop"]
+action = "block"
+violation_message = "blocked by matrix"
+[[rules.conditions]]
+kind = "regex"
+field_paths = ["tool_input.command", "command"]
+pattern = "SECRET"
+[[rules.eval]]
+kind = "deterministic"
+role = "enforce"
+`
+	const verifyConfig = `
+[[rules]]
+name = "matrix-verify"
+events = ["Stop"]
+action = "block"
+violation_message = "blocked by matrix"
+[[rules.conditions]]
+kind = "regex"
+field_paths = ["tool_input.command", "command"]
+pattern = "SECRET"
+[[rules.eval]]
+kind = "deterministic"
+role = "verify"
+`
+	cases := []struct {
+		name      string
+		config    string
+		command   string
+		wantBlock bool
+		wantRule  string
+	}{
+		{name: "enforce blocks matching", config: enforceConfig, command: "echo SECRET", wantBlock: true, wantRule: "matrix-enforce"},
+		{name: "enforce allows non-matching", config: enforceConfig, command: "echo hello", wantBlock: false, wantRule: ""},
+		{name: "verify does not enforce", config: verifyConfig, command: "echo SECRET", wantBlock: false, wantRule: ""},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			cfg := loadRuleConfig(t, testCase.config)
+			payload := map[string]any{"command": testCase.command}
+			violations := rules.EvaluateAll(
+				context.Background(), "claude", "Stop", testFields(payload), cfg.Rules, nil,
+			)
+			if testCase.wantBlock {
+				if len(violations) == 0 {
+					t.Fatalf("expected a violation, got none")
+				}
+				if violations[0].RuleName != testCase.wantRule {
+					t.Fatalf("rule = %q, want %q", violations[0].RuleName, testCase.wantRule)
+				}
+				return
+			}
+			if len(violations) != 0 {
+				t.Fatalf("expected no violation, got %d: %+v", len(violations), violations)
+			}
+		})
+	}
+}

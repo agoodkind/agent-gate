@@ -14,15 +14,12 @@ const (
 )
 
 // Evaluator roles for a [RuleEval] entry. The role decides whether an evaluator
-// enforces the verdict, runs only for comparison, or fills in for another.
+// enforces the verdict or runs only for comparison.
 const (
 	// RoleEnforce means this evaluator's verdict is enforced.
 	RoleEnforce = "enforce"
 	// RoleVerify means this evaluator runs and is recorded, but does not enforce.
 	RoleVerify = "verify"
-	// RoleFallback means this evaluator runs only when the deterministic layer
-	// returns an unresolved result.
-	RoleFallback = "fallback"
 )
 
 // Fan-out modes for an infer [RuleEval] entry.
@@ -139,6 +136,34 @@ func validateRuleEval(
 	return nil
 }
 
+// validateRuleEvalConditions rejects a deterministic evaluator on a rule that
+// declares no conditions. A deterministic evaluator runs the rule's condition
+// block, so with an empty condition list allConditionsMatch is vacuously true and
+// the evaluator would block every command, ignoring the rule's own pattern
+// matcher. It logs the offending rule before returning so a failed config load
+// leaves a diagnostic trail.
+func validateRuleEvalConditions(
+	log *slog.Logger,
+	ruleName string,
+	evals []RuleEval,
+	conditionCount int,
+) error {
+	if conditionCount > 0 {
+		return nil
+	}
+	for index := range evals {
+		if evals[index].Kind != EvalKindDeterministic {
+			continue
+		}
+		log.Warn("deterministic evaluator without conditions", "rule", ruleName, "index", index)
+		return fmt.Errorf(
+			"rule %q eval %d: a deterministic evaluator requires the rule to declare conditions",
+			ruleName, index,
+		)
+	}
+	return nil
+}
+
 // evalEntryProblem returns a human-readable problem string for an invalid
 // evaluator entry, or an empty string when the entry is valid.
 func evalEntryProblem(eval RuleEval, points map[string]InferencePoint) string {
@@ -160,8 +185,8 @@ func evalEntryShapeProblem(eval RuleEval) string {
 	if eval.Kind != EvalKindDeterministic && eval.Kind != EvalKindInfer {
 		return fmt.Sprintf("kind %q must be %q or %q", eval.Kind, EvalKindDeterministic, EvalKindInfer)
 	}
-	if eval.Role != RoleEnforce && eval.Role != RoleVerify && eval.Role != RoleFallback {
-		return fmt.Sprintf("role %q must be %q, %q, or %q", eval.Role, RoleEnforce, RoleVerify, RoleFallback)
+	if eval.Role != RoleEnforce && eval.Role != RoleVerify {
+		return fmt.Sprintf("role %q must be %q or %q", eval.Role, RoleEnforce, RoleVerify)
 	}
 	if eval.Fanout != "" && eval.Fanout != FanoutBatch && eval.Fanout != FanoutIndividual {
 		return fmt.Sprintf("fanout %q must be %q, %q, or empty", eval.Fanout, FanoutBatch, FanoutIndividual)

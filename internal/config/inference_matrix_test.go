@@ -39,6 +39,11 @@ name = "example"
 events = ["PreToolUse"]
 violation_message = "no"
 
+[[rules.conditions]]
+kind = "regex"
+field_paths = ["tool_input.command"]
+pattern = "x"
+
 [[rules.eval]]
 kind = "deterministic"
 role = "verify"
@@ -174,6 +179,17 @@ endpoint = "[::1]:5401"
 model = "m"
 confidence_source = "output_field"`,
 			want: "confidence_field is required",
+		},
+		{
+			name: "deterministic eval without conditions",
+			body: `[[rules]]
+name = "r"
+events = ["PreToolUse"]
+pattern = "x"
+[[rules.eval]]
+kind = "deterministic"
+role = "enforce"`,
+			want: "requires the rule to declare conditions",
 		},
 	}
 	for _, testCase := range cases {

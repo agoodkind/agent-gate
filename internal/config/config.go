@@ -585,6 +585,9 @@ func compileRule(
 	if err := validateRuleEval(log, r.Name, r.Eval, inference); err != nil {
 		return err
 	}
+	if err := validateRuleEvalConditions(log, r.Name, r.Eval, len(r.Conditions)); err != nil {
+		return err
+	}
 	if len(r.Conditions) > 0 {
 		for j := range r.Conditions {
 			if err := compileCondition(log, r.Name, j, &r.Conditions[j], meta, configDirectory); err != nil {
