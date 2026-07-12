@@ -2,6 +2,7 @@ package rules_test
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -160,6 +161,59 @@ use = "dead"
 	}
 	if inferLayers[0].ServiceName != "inference" {
 		t.Fatalf("layer ServiceName = %q, want inference", inferLayers[0].ServiceName)
+	}
+	// The evaluation store rejects a layer whose input JSON is not valid, so the
+	// recorded inference layer must carry a valid, non-empty input.
+	if len(inferLayers[0].InputJSON) == 0 || !json.Valid(inferLayers[0].InputJSON) {
+		t.Fatalf("layer InputJSON = %q, want valid non-empty JSON", string(inferLayers[0].InputJSON))
+	}
+}
+
+// TestEvalMatrixInferUsesToolInputCommand confirms the infer evaluator sends the
+// command from ToolInputCommand, where the hook payload carries it, rather than
+// the generic Command field that stays empty for a tool call. A regression here
+// makes the inference service reject the request as invalid_argument.
+func TestEvalMatrixInferUsesToolInputCommand(t *testing.T) {
+	const cfgBody = `
+[inference.dead]
+endpoint = "[::1]:1"
+model = "test-model"
+
+[[rules]]
+name = "matrix-infer-toolinput"
+events = ["Stop"]
+action = "block"
+violation_message = "blocked by infer"
+intent = "Do not write into a protected checkout."
+[[rules.eval]]
+kind = "infer"
+role = "enforce"
+use = "dead"
+`
+	cfg := loadRuleConfig(t, cfgBody)
+	const command = "vim -es +source /tmp/x.vim -- config.go"
+	// Command carried only in ToolInputCommand, not the generic Command field.
+	payload := map[string]any{"tool_input_command": command}
+	detailed := rules.EvaluateAllDetailed(
+		context.Background(), "claude", "Stop", testFields(payload), cfg.Rules, nil, nil, "test",
+	)
+	var inferLayer *rules.LayerTrace
+	for index := range detailed.Trace.Layers {
+		if detailed.Trace.Layers[index].Kind == "inference" {
+			inferLayer = &detailed.Trace.Layers[index]
+		}
+	}
+	if inferLayer == nil {
+		t.Fatalf("no inference layer recorded")
+	}
+	var decoded struct {
+		Input string `json:"input"`
+	}
+	if err := json.Unmarshal(inferLayer.InputJSON, &decoded); err != nil {
+		t.Fatalf("input JSON unmarshal: %v (raw %q)", err, string(inferLayer.InputJSON))
+	}
+	if decoded.Input != command {
+		t.Fatalf("recorded input = %q, want the ToolInputCommand %q", decoded.Input, command)
 	}
 }
 
