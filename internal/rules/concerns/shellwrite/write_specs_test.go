@@ -185,9 +185,10 @@ func TestExtractWriteTargetsWithSpecsWriterShapes(t *testing.T) {
 	updateTimeName := "to" + "uch"
 	copyName := "c" + "p"
 	moveName := "m" + "v"
+	linkName := "l" + "n"
 	specs := []config.ShellWriteSpec{
 		writeSpec([]string{removeName, makeDirectoryName, updateTimeName}, config.WriteTargetAllOperands),
-		writeSpec([]string{copyName, moveName, "nvim"}, config.WriteTargetLastOperand),
+		writeSpec([]string{copyName, moveName, linkName}, config.WriteTargetLastOperand),
 	}
 	tests := []struct {
 		command string
@@ -198,7 +199,7 @@ func TestExtractWriteTargetsWithSpecsWriterShapes(t *testing.T) {
 		{command: updateTimeName + " first.txt second.txt", want: []string{"/repo/first.txt", "/repo/second.txt"}},
 		{command: copyName + " source.txt destination.txt", want: []string{"/repo/destination.txt"}},
 		{command: moveName + " source.txt destination.txt", want: []string{"/repo/destination.txt"}},
-		{command: "nvim first.txt second.txt", want: []string{"/repo/second.txt"}},
+		{command: linkName + " first.txt second.txt", want: []string{"/repo/second.txt"}},
 	}
 	for _, test := range tests {
 		t.Run(test.command, func(t *testing.T) {
