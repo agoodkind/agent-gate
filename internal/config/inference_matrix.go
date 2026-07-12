@@ -136,6 +136,34 @@ func validateRuleEval(
 	return nil
 }
 
+// validateRuleEvalConditions rejects a deterministic evaluator on a rule that
+// declares no conditions. A deterministic evaluator runs the rule's condition
+// block, so with an empty condition list allConditionsMatch is vacuously true and
+// the evaluator would block every command, ignoring the rule's own pattern
+// matcher. It logs the offending rule before returning so a failed config load
+// leaves a diagnostic trail.
+func validateRuleEvalConditions(
+	log *slog.Logger,
+	ruleName string,
+	evals []RuleEval,
+	conditionCount int,
+) error {
+	if conditionCount > 0 {
+		return nil
+	}
+	for index := range evals {
+		if evals[index].Kind != EvalKindDeterministic {
+			continue
+		}
+		log.Warn("deterministic evaluator without conditions", "rule", ruleName, "index", index)
+		return fmt.Errorf(
+			"rule %q eval %d: a deterministic evaluator requires the rule to declare conditions",
+			ruleName, index,
+		)
+	}
+	return nil
+}
+
 // evalEntryProblem returns a human-readable problem string for an invalid
 // evaluator entry, or an empty string when the entry is valid.
 func evalEntryProblem(eval RuleEval, points map[string]InferencePoint) string {
