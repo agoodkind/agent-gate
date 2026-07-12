@@ -34,9 +34,14 @@ const (
 const (
 	// CombineAnd blocks only when every enforcing evaluator blocks.
 	CombineAnd = "and"
-	// CombineUnion blocks when any enforcing evaluator (or its escalation) blocks.
+	// CombineUnion blocks when any enforcing evaluator blocks.
 	CombineUnion = "union"
 )
+
+// An infer [RuleEval] entry reuses the shared OnErrorOpen and OnErrorClosed
+// values to decide its verdict when the inference call fails. OnErrorOpen allows
+// the command (fail open, with the deterministic evaluators as the backstop), and
+// OnErrorClosed blocks it (fail closed).
 
 // Confidence sources for an [InferencePoint].
 const (
@@ -61,14 +66,15 @@ type InferencePoint struct {
 
 // RuleEval declares one evaluator in a rule's ordered evaluation. The ordering of
 // entries plus each entry's role expresses how the deterministic layer and the
-// inference layer combine for the rule, without a fixed mode enum.
+// inference layer combine for the rule, without a fixed mode enum. OnError applies
+// to an infer entry and decides its verdict when the inference call fails.
 type RuleEval struct {
-	Kind       string `toml:"kind"`
-	Role       string `toml:"role"`
-	Use        string `toml:"use,omitempty"`
-	EscalateTo string `toml:"escalate_to,omitempty"`
-	Fanout     string `toml:"fanout,omitempty"`
-	Combine    string `toml:"combine,omitempty"`
+	Kind    string `toml:"kind"`
+	Role    string `toml:"role"`
+	Use     string `toml:"use,omitempty"`
+	Fanout  string `toml:"fanout,omitempty"`
+	Combine string `toml:"combine,omitempty"`
+	OnError string `toml:"on_error,omitempty"`
 }
 
 // validateInferencePoints checks every named inference point in isolation and
@@ -130,9 +136,6 @@ func compileRuleEvalInference(rule *Rule, points map[string]InferencePoint) erro
 		}
 		hasInfer = true
 		resolved[eval.Use] = points[eval.Use]
-		if eval.EscalateTo != "" {
-			resolved[eval.EscalateTo] = points[eval.EscalateTo]
-		}
 	}
 	if hasInfer && rule.Intent == "" {
 		return fmt.Errorf("rule %q: an infer evaluator requires intent", rule.Name)
@@ -199,8 +202,8 @@ func evalEntryProblem(eval RuleEval, points map[string]InferencePoint) string {
 		return problem
 	}
 	if eval.Kind == EvalKindDeterministic {
-		if eval.Use != "" || eval.EscalateTo != "" || eval.Fanout != "" {
-			return "deterministic evaluator does not accept use, escalate_to, or fanout"
+		if eval.Use != "" || eval.Fanout != "" || eval.OnError != "" {
+			return "deterministic evaluator does not accept use, fanout, or on_error"
 		}
 		return ""
 	}
@@ -222,22 +225,20 @@ func evalEntryShapeProblem(eval RuleEval) string {
 	if eval.Combine != "" && eval.Combine != CombineAnd && eval.Combine != CombineUnion {
 		return fmt.Sprintf("combine %q must be %q, %q, or empty", eval.Combine, CombineAnd, CombineUnion)
 	}
+	if eval.OnError != "" && eval.OnError != OnErrorOpen && eval.OnError != OnErrorClosed {
+		return fmt.Sprintf("on_error %q must be %q, %q, or empty", eval.OnError, OnErrorOpen, OnErrorClosed)
+	}
 	return ""
 }
 
 // inferEntryReferenceProblem validates that an infer evaluator names a declared
-// inference point for its use and optional escalate_to references.
+// inference point for its use reference.
 func inferEntryReferenceProblem(eval RuleEval, points map[string]InferencePoint) string {
 	if eval.Use == "" {
 		return "infer evaluator requires use"
 	}
 	if _, ok := points[eval.Use]; !ok {
 		return fmt.Sprintf("use %q is not a declared inference point", eval.Use)
-	}
-	if eval.EscalateTo != "" {
-		if _, ok := points[eval.EscalateTo]; !ok {
-			return fmt.Sprintf("escalate_to %q is not a declared inference point", eval.EscalateTo)
-		}
 	}
 	return ""
 }
