@@ -154,7 +154,7 @@ gksyntax-grammars:
 # Daemon control comes from go-service.mk: service-install, service-uninstall,
 # service-restart, service-status. Templates live at packaging/{macos,systemd}/.
 
-.PHONY: proto smoke-build deploy deploy-service install-release install-release-bin install-release-hooks install-release-service \
+.PHONY: proto smoke-build deploy deploy-service install-release \
         daemon-wait daemon-status spawn-smoke
 
 proto:
@@ -211,15 +211,6 @@ deploy-service:
 # into $XDG_BIN_HOME.
 install-release:
 	./install.sh $(ARGS)
-
-install-release-bin:
-	./install.sh --bin-only $(ARGS)
-
-install-release-hooks:
-	./install.sh --hooks-only $(ARGS)
-
-install-release-service:
-	./install.sh --service-only --bin-dir $(INSTALL_DIR) $(ARGS)
 
 # daemon-status calls the agent-gate CLI's own status subcommand, which is
 # richer than launchctl/systemctl status. service-status from go-service.mk
