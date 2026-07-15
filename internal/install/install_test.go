@@ -14,7 +14,7 @@ import (
 	"testing"
 )
 
-func TestValidateHooksOptionsRejectsInvalidTemplateWithoutWrites(t *testing.T) {
+func TestPrepareHookInstallationRejectsInvalidTemplateWithoutWrites(t *testing.T) {
 	binPath := writeExecutable(t, filepath.Join(t.TempDir(), "agent-gate"))
 	homeDir := t.TempDir()
 	templatesDir := t.TempDir()
@@ -33,8 +33,8 @@ func TestValidateHooksOptionsRejectsInvalidTemplateWithoutWrites(t *testing.T) {
 	options.InstallGemini = false
 	options.InstallCopilot = false
 
-	if err := ValidateHooksOptions(options); err == nil {
-		t.Fatal("ValidateHooksOptions returned nil")
+	if _, err := PrepareHookInstallation(options); err == nil {
+		t.Fatal("PrepareHookInstallation returned nil")
 	}
 	if _, err := os.Stat(filepath.Join(homeDir, ".cursor", "hooks.json")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("cursor hook was written during validation: %v", err)
@@ -60,14 +60,14 @@ func TestInstallHooksUpdatesCursorJSONIdempotently(t *testing.T) {
 	options.InstallCodex = false
 	options.InstallGemini = false
 	options.InstallCopilot = false
-	if err := InstallHooks(options); err != nil {
+	if err := installHooks(options); err != nil {
 		t.Fatalf("InstallHooks first run: %v", err)
 	}
 	firstContent, err := os.ReadFile(cursorPath)
 	if err != nil {
 		t.Fatalf("ReadFile first hooks.json: %v", err)
 	}
-	if err := InstallHooks(options); err != nil {
+	if err := installHooks(options); err != nil {
 		t.Fatalf("InstallHooks second run: %v", err)
 	}
 	secondContent, err := os.ReadFile(cursorPath)
@@ -145,14 +145,14 @@ func TestInstallHooksRemovesClaudeWorktreeFactoryHooks(t *testing.T) {
 	options.InstallCursor = false
 	options.InstallGemini = false
 	options.InstallCopilot = false
-	if err := InstallHooks(options); err != nil {
+	if err := installHooks(options); err != nil {
 		t.Fatalf("InstallHooks first run: %v", err)
 	}
 	firstContent, err := os.ReadFile(settingsPath)
 	if err != nil {
 		t.Fatalf("ReadFile Claude settings after first install: %v", err)
 	}
-	if err := InstallHooks(options); err != nil {
+	if err := installHooks(options); err != nil {
 		t.Fatalf("InstallHooks second run: %v", err)
 	}
 	secondContent, err := os.ReadFile(settingsPath)
@@ -224,14 +224,14 @@ func TestInstallHooksMergesGeminiJSONIdempotently(t *testing.T) {
 	options.InstallCodex = false
 	options.InstallCursor = false
 	options.InstallCopilot = false
-	if err := InstallHooks(options); err != nil {
+	if err := installHooks(options); err != nil {
 		t.Fatalf("InstallHooks first run: %v", err)
 	}
 	firstContent, err := os.ReadFile(settingsPath)
 	if err != nil {
 		t.Fatalf("ReadFile first Gemini settings: %v", err)
 	}
-	if err := InstallHooks(options); err != nil {
+	if err := installHooks(options); err != nil {
 		t.Fatalf("InstallHooks second run: %v", err)
 	}
 	secondContent, err := os.ReadFile(settingsPath)
@@ -285,7 +285,7 @@ func TestInstallHooksRejectsMalformedExistingJSONWithoutChangingIt(t *testing.T)
 	options.InstallCursor = false
 	options.InstallGemini = false
 	options.InstallCopilot = false
-	if err := InstallHooks(options); err == nil {
+	if err := installHooks(options); err == nil {
 		t.Fatal("InstallHooks returned nil for malformed existing JSON")
 	}
 	got, err := os.ReadFile(settingsPath)
@@ -294,6 +294,71 @@ func TestInstallHooksRejectsMalformedExistingJSONWithoutChangingIt(t *testing.T)
 	}
 	if string(got) != string(initialContent) {
 		t.Fatalf("malformed existing JSON changed\nwant: %s\ngot: %s", initialContent, got)
+	}
+}
+
+func TestInstallHooksMalformedLaterProviderLeavesEveryTargetUntouched(t *testing.T) {
+	binPath := writeExecutable(t, filepath.Join(t.TempDir(), "agent-gate"))
+	homeDir := t.TempDir()
+	initialFiles := map[string][]byte{
+		filepath.Join(homeDir, ".claude", "settings.json"):             []byte(`{"theme":"claude"}`),
+		filepath.Join(homeDir, ".codex", "config.toml"):                []byte("model = \"original\"\n"),
+		filepath.Join(homeDir, ".cursor", "hooks.json"):                []byte(`{"hooks":`),
+		filepath.Join(homeDir, ".gemini", "settings.json"):             []byte(`{"theme":"gemini"}`),
+		filepath.Join(homeDir, ".copilot", "hooks", "agent-gate.json"): []byte(`{"owned":"copilot"}`),
+	}
+	for path, content := range initialFiles {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("MkdirAll %s: %v", filepath.Dir(path), err)
+		}
+		if err := os.WriteFile(path, content, 0o600); err != nil {
+			t.Fatalf("WriteFile %s: %v", path, err)
+		}
+	}
+
+	options := DefaultHooksOptions(binPath)
+	options.HomeDir = homeDir
+	if err := installHooks(options); err == nil {
+		t.Fatal("InstallHooks returned nil for malformed Cursor JSON")
+	}
+	for path, want := range initialFiles {
+		got, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("ReadFile %s: %v", path, err)
+		}
+		if string(got) != string(want) {
+			t.Errorf("%s changed after preflight failure\nwant: %s\ngot: %s", path, want, got)
+		}
+	}
+}
+
+func TestPrepareHookInstallationRejectsMalformedCodexManagedBlockWithoutWrites(t *testing.T) {
+	binPath := writeExecutable(t, filepath.Join(t.TempDir(), "agent-gate"))
+	homeDir := t.TempDir()
+	configPath := filepath.Join(homeDir, ".codex", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll Codex directory: %v", err)
+	}
+	initialContent := []byte("model = \"original\"\n\n" + codexManagedBlockStart + "\nold = true\n")
+	if err := os.WriteFile(configPath, initialContent, 0o600); err != nil {
+		t.Fatalf("WriteFile Codex config: %v", err)
+	}
+	options := DefaultHooksOptions(binPath)
+	options.HomeDir = homeDir
+	options.InstallClaude = false
+	options.InstallCursor = false
+	options.InstallGemini = false
+	options.InstallCopilot = false
+
+	if _, err := PrepareHookInstallation(options); err == nil {
+		t.Fatal("PrepareHookInstallation returned nil for malformed Codex managed block")
+	}
+	got, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile Codex config: %v", err)
+	}
+	if string(got) != string(initialContent) {
+		t.Fatalf("Codex config changed during preparation\nwant: %s\ngot: %s", initialContent, got)
 	}
 }
 
@@ -315,7 +380,7 @@ func TestInstallHooksFullyReplacesCopilotFile(t *testing.T) {
 	options.InstallCodex = false
 	options.InstallCursor = false
 	options.InstallGemini = false
-	if err := InstallHooks(options); err != nil {
+	if err := installHooks(options); err != nil {
 		t.Fatalf("InstallHooks: %v", err)
 	}
 	content, err := os.ReadFile(hookPath)
@@ -394,10 +459,10 @@ old = "block"
 	options.InstallCursor = false
 	options.InstallGemini = false
 	options.InstallCopilot = false
-	if err := InstallHooks(options); err != nil {
+	if err := installHooks(options); err != nil {
 		t.Fatalf("InstallHooks first run: %v", err)
 	}
-	if err := InstallHooks(options); err != nil {
+	if err := installHooks(options); err != nil {
 		t.Fatalf("InstallHooks second run: %v", err)
 	}
 
@@ -449,7 +514,7 @@ hooks = false
 	options.InstallCursor = false
 	options.InstallGemini = false
 	options.InstallCopilot = false
-	if err := InstallHooks(options); err != nil {
+	if err := installHooks(options); err != nil {
 		t.Fatalf("InstallHooks: %v", err)
 	}
 
@@ -475,7 +540,7 @@ func TestInstallHooksReplacesNestedJSONCommands(t *testing.T) {
 	options.InstallCodex = false
 	options.InstallCursor = false
 	options.InstallCopilot = false
-	if err := InstallHooks(options); err != nil {
+	if err := installHooks(options); err != nil {
 		t.Fatalf("InstallHooks: %v", err)
 	}
 
@@ -499,7 +564,7 @@ func TestInstallFromScratchCreatesExpectedFiles(t *testing.T) {
 
 	hookOptions := DefaultHooksOptions(binPath)
 	hookOptions.HomeDir = homeDir
-	if err := InstallHooks(hookOptions); err != nil {
+	if err := installHooks(hookOptions); err != nil {
 		t.Fatalf("InstallHooks() error: %v", err)
 	}
 
@@ -575,6 +640,60 @@ func TestInstallFromScratchCreatesExpectedFiles(t *testing.T) {
 		assertFileMode(t, servicePath, privateFileMode)
 	default:
 		t.Fatalf("unexpected runtime.GOOS = %s", runtime.GOOS)
+	}
+}
+
+func TestInstallRendersCanonicalExecutablePathFromSymlink(t *testing.T) {
+	targetPath := writeExecutable(t, filepath.Join(t.TempDir(), "agent-gate"))
+	canonicalTargetPath, err := filepath.EvalSymlinks(targetPath)
+	if err != nil {
+		t.Fatalf("EvalSymlinks executable target: %v", err)
+	}
+	linkPath := filepath.Join(t.TempDir(), "agent-gate")
+	if err := os.Symlink(targetPath, linkPath); err != nil {
+		t.Fatalf("Symlink executable: %v", err)
+	}
+	homeDir := t.TempDir()
+	hookOptions := DefaultHooksOptions(linkPath)
+	hookOptions.HomeDir = homeDir
+	hookOptions.InstallClaude = false
+	hookOptions.InstallCodex = false
+	hookOptions.InstallGemini = false
+	hookOptions.InstallCopilot = false
+	if err := installHooks(hookOptions); err != nil {
+		t.Fatalf("InstallHooks: %v", err)
+	}
+	serviceOptions := ServiceOptions{
+		BinPath:    linkPath,
+		HomeDir:    homeDir,
+		ConfigHome: filepath.Join(homeDir, ".config"),
+		StateHome:  filepath.Join(homeDir, ".local", "state"),
+		Runner:     &recordingRunner{},
+	}
+	if err := InstallService(serviceOptions); err != nil {
+		t.Fatalf("InstallService: %v", err)
+	}
+
+	paths := []string{filepath.Join(homeDir, ".cursor", "hooks.json")}
+	switch runtime.GOOS {
+	case "darwin":
+		paths = append(paths, filepath.Join(homeDir, "Library", "LaunchAgents", launchdLabel+".plist"))
+	case "linux":
+		paths = append(paths, filepath.Join(homeDir, ".config", "systemd", "user", systemdServiceName))
+	default:
+		t.Fatalf("unexpected runtime.GOOS = %s", runtime.GOOS)
+	}
+	for _, path := range paths {
+		content, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("ReadFile %s: %v", path, err)
+		}
+		if !strings.Contains(string(content), canonicalTargetPath) {
+			t.Errorf("%s missing canonical executable %q:\n%s", path, canonicalTargetPath, content)
+		}
+		if strings.Contains(string(content), linkPath) {
+			t.Errorf("%s retained symlink path %q:\n%s", path, linkPath, content)
+		}
 	}
 }
 
@@ -706,6 +825,14 @@ func (runner *recordingRunner) assertCalls(t *testing.T, prefixes []string) {
 	}
 }
 
+func installHooks(options HooksOptions) error {
+	plan, err := PrepareHookInstallation(options)
+	if err != nil {
+		return err
+	}
+	return ApplyHookInstallation(plan)
+}
+
 func writeExecutable(t *testing.T, path string) string {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -714,7 +841,11 @@ func writeExecutable(t *testing.T, path string) string {
 	if err := os.WriteFile(path, []byte("#!/usr/bin/env sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatalf("WriteFile executable: %v", err)
 	}
-	return path
+	canonicalPath, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		t.Fatalf("EvalSymlinks executable: %v", err)
+	}
+	return canonicalPath
 }
 
 func assertFileMode(t *testing.T, path string, want os.FileMode) {

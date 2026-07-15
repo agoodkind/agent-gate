@@ -10,7 +10,6 @@ import (
 	"io"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"time"
 
 	"goodkind.io/agent-gate/internal/config"
@@ -51,13 +50,13 @@ type daemonStatusLookup func(context.Context) (daemonIdentity, error)
 type installDependencies struct {
 	resolveExecutable  func() (string, error)
 	validateExecutable func(string) error
-	validateHooks      func(agentinstall.HooksOptions) error
+	prepareHooks       func(agentinstall.HooksOptions) (*agentinstall.HookInstallationPlan, error)
+	applyHooks         func(*agentinstall.HookInstallationPlan) error
 	validateService    func(agentinstall.ServiceOptions) error
 	ensureConfig       func(string) error
 	validateConfig     func() error
 	installService     func(agentinstall.ServiceOptions) error
 	waitForReady       func(string) error
-	installHooks       func(agentinstall.HooksOptions) error
 }
 
 func runInstall(args []string) int {
@@ -97,11 +96,12 @@ func runInstallHooks(args []string, dependencies installDependencies) int {
 		fmt.Fprintf(os.Stderr, "agent-gate install hooks: preflight: %v\n", err)
 		return 2
 	}
-	if err := dependencies.validateHooks(hookOptions(values)); err != nil {
+	plan, err := dependencies.prepareHooks(hookOptions(values))
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent-gate install hooks: preflight: hooks: %v\n", err)
 		return 2
 	}
-	if err := dependencies.installHooks(hookOptions(values)); err != nil {
+	if err := dependencies.applyHooks(plan); err != nil {
 		fmt.Fprintf(os.Stderr, "agent-gate install hooks: hooks: %v\n", err)
 		return 1
 	}
@@ -157,7 +157,8 @@ func runInstallAll(args []string, dependencies installDependencies) int {
 		fmt.Fprintf(os.Stderr, "agent-gate install all: preflight: %v\n", err)
 		return 2
 	}
-	if err := dependencies.validateHooks(hookOptions(values)); err != nil {
+	hookPlan, err := dependencies.prepareHooks(hookOptions(values))
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent-gate install all: preflight: hooks: %v\n", err)
 		return 2
 	}
@@ -183,7 +184,7 @@ func runInstallAll(args []string, dependencies installDependencies) int {
 			return 1
 		}
 	}
-	if err := dependencies.installHooks(hookOptions(values)); err != nil {
+	if err := dependencies.applyHooks(hookPlan); err != nil {
 		fmt.Fprintf(os.Stderr, "agent-gate install all: hooks: %v\n", err)
 		return 1
 	}
@@ -194,7 +195,8 @@ func defaultInstallDependencies() installDependencies {
 	return installDependencies{
 		resolveExecutable:  os.Executable,
 		validateExecutable: agentinstall.ValidateExecutable,
-		validateHooks:      agentinstall.ValidateHooksOptions,
+		prepareHooks:       agentinstall.PrepareHookInstallation,
+		applyHooks:         agentinstall.ApplyHookInstallation,
 		validateService:    agentinstall.ValidateServiceOptions,
 		ensureConfig: func(autoUpdate string) error {
 			_, err := config.EnsureDefaults(config.EnsureDefaultsOptions{AutoUpdateMode: autoUpdate})
@@ -212,7 +214,6 @@ func defaultInstallDependencies() installDependencies {
 		},
 		installService: agentinstall.InstallService,
 		waitForReady:   waitForInstalledDaemon,
-		installHooks:   agentinstall.InstallHooks,
 	}
 }
 
@@ -229,6 +230,11 @@ func resolveAndValidateInstallValues(
 		}
 		values.binPath = binPath
 	}
+	canonicalPath, err := agentinstall.CanonicalExecutablePath(values.binPath)
+	if err != nil {
+		return err
+	}
+	values.binPath = canonicalPath
 	if err := dependencies.validateExecutable(values.binPath); err != nil {
 		return err
 	}
@@ -291,7 +297,11 @@ func serviceOptions(
 }
 
 func waitForInstalledDaemon(binPath string) error {
-	buildHash, err := executableBuildHash(binPath)
+	canonicalPath, err := agentinstall.CanonicalExecutablePath(binPath)
+	if err != nil {
+		return err
+	}
+	buildHash, err := executableBuildHash(canonicalPath)
 	if err != nil {
 		return err
 	}
@@ -299,7 +309,7 @@ func waitForInstalledDaemon(binPath string) error {
 	defer cancel()
 	return waitForDaemonReady(
 		ctx,
-		filepath.Clean(binPath),
+		canonicalPath,
 		buildHash,
 		installReadinessInterval,
 		lookupDaemonIdentity,
@@ -316,15 +326,23 @@ func waitForDaemonReady(
 	var lastErr error
 	for {
 		identity, err := status(ctx)
-		if err == nil && filepath.Clean(identity.ExecutablePath) == expectedPath &&
-			identity.BuildHash == expectedBuildHash {
-			return nil
+		reportedPath := identity.ExecutablePath
+		if err == nil {
+			canonicalPath, resolveErr := agentinstall.CanonicalExecutablePath(identity.ExecutablePath)
+			if resolveErr != nil {
+				err = fmt.Errorf("resolve daemon executable identity: %w", resolveErr)
+			} else {
+				reportedPath = canonicalPath
+				if reportedPath == expectedPath && identity.BuildHash == expectedBuildHash {
+					return nil
+				}
+			}
 		}
 		attemptErr := err
 		if attemptErr == nil {
 			attemptErr = fmt.Errorf(
 				"daemon identity mismatch: executable=%q buildHash=%q, want executable=%q buildHash=%q",
-				identity.ExecutablePath,
+				reportedPath,
 				identity.BuildHash,
 				expectedPath,
 				expectedBuildHash,

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -23,8 +24,10 @@ import (
 
 type readinessDaemonFake struct {
 	daemonpb.UnimplementedAgentGateDServer
-	callCount atomic.Int32
-	exited    chan struct{}
+	callCount      atomic.Int32
+	executablePath string
+	buildHash      string
+	exited         chan struct{}
 }
 
 func (server *readinessDaemonFake) Status(
@@ -33,8 +36,8 @@ func (server *readinessDaemonFake) Status(
 ) (*daemonpb.StatusResponse, error) {
 	if server.callCount.Add(1) == 1 {
 		return &daemonpb.StatusResponse{
-			ExecutablePath: "/old/agent-gate",
-			BuildHash:      "old",
+			ExecutablePath: server.executablePath,
+			BuildHash:      server.buildHash,
 		}, nil
 	}
 	<-ctx.Done()
@@ -44,14 +47,18 @@ func (server *readinessDaemonFake) Status(
 
 func TestRunInstallDefaultsBinPathThroughResolver(t *testing.T) {
 	binPath := writeCommandExecutable(t)
+	canonicalBinPath, err := filepath.EvalSymlinks(binPath)
+	if err != nil {
+		t.Fatalf("EvalSymlinks executable: %v", err)
+	}
 	for _, subcommand := range []string{"hooks", "service", "all"} {
 		t.Run(subcommand, func(t *testing.T) {
 			dependencies := successfulInstallDependencies(binPath)
 			var hookBinPath string
 			var serviceBinPath string
-			dependencies.installHooks = func(options agentinstall.HooksOptions) error {
+			dependencies.prepareHooks = func(options agentinstall.HooksOptions) (*agentinstall.HookInstallationPlan, error) {
 				hookBinPath = options.BinPath
-				return nil
+				return &agentinstall.HookInstallationPlan{}, nil
 			}
 			dependencies.installService = func(options agentinstall.ServiceOptions) error {
 				serviceBinPath = options.BinPath
@@ -65,11 +72,61 @@ func TestRunInstallDefaultsBinPathThroughResolver(t *testing.T) {
 			if exitCode != 0 {
 				t.Fatalf("exitCode = %d, want 0", exitCode)
 			}
-			if subcommand != "service" && hookBinPath != binPath {
-				t.Fatalf("hook bin path = %q, want %q", hookBinPath, binPath)
+			if subcommand != "service" && hookBinPath != canonicalBinPath {
+				t.Fatalf("hook bin path = %q, want %q", hookBinPath, canonicalBinPath)
 			}
-			if subcommand != "hooks" && serviceBinPath != binPath {
-				t.Fatalf("service bin path = %q, want %q", serviceBinPath, binPath)
+			if subcommand != "hooks" && serviceBinPath != canonicalBinPath {
+				t.Fatalf("service bin path = %q, want %q", serviceBinPath, canonicalBinPath)
+			}
+		})
+	}
+}
+
+func TestRunInstallCanonicalizesSymlinkedBinPathBeforeInstallation(t *testing.T) {
+	targetPath := writeCommandExecutable(t)
+	canonicalTargetPath, err := filepath.EvalSymlinks(targetPath)
+	if err != nil {
+		t.Fatalf("EvalSymlinks executable target: %v", err)
+	}
+	linkPath := filepath.Join(t.TempDir(), "agent-gate")
+	if err := os.Symlink(targetPath, linkPath); err != nil {
+		t.Fatalf("Symlink executable: %v", err)
+	}
+
+	for _, subcommand := range []string{"service", "all"} {
+		t.Run(subcommand, func(t *testing.T) {
+			dependencies := successfulInstallDependencies(targetPath)
+			var hookBinPath string
+			var serviceBinPath string
+			var readinessBinPath string
+			dependencies.prepareHooks = func(options agentinstall.HooksOptions) (*agentinstall.HookInstallationPlan, error) {
+				hookBinPath = options.BinPath
+				return &agentinstall.HookInstallationPlan{}, nil
+			}
+			dependencies.installService = func(options agentinstall.ServiceOptions) error {
+				serviceBinPath = options.BinPath
+				return options.Ready()
+			}
+			dependencies.waitForReady = func(binPath string) error {
+				readinessBinPath = binPath
+				return nil
+			}
+
+			exitCode := runInstallWithDependencies(
+				[]string{subcommand, "--bin-path", linkPath},
+				dependencies,
+			)
+			if exitCode != 0 {
+				t.Fatalf("exitCode = %d, want 0", exitCode)
+			}
+			if serviceBinPath != canonicalTargetPath {
+				t.Fatalf("service bin path = %q, want canonical %q", serviceBinPath, canonicalTargetPath)
+			}
+			if readinessBinPath != canonicalTargetPath {
+				t.Fatalf("readiness bin path = %q, want canonical %q", readinessBinPath, canonicalTargetPath)
+			}
+			if subcommand == "all" && hookBinPath != canonicalTargetPath {
+				t.Fatalf("hook bin path = %q, want canonical %q", hookBinPath, canonicalTargetPath)
 			}
 		})
 	}
@@ -92,7 +149,7 @@ func TestRunInstallPrevalidatesBeforeMutations(t *testing.T) {
 			mutationCount++
 			return nil
 		}
-		dependencies.installHooks = func(agentinstall.HooksOptions) error {
+		dependencies.applyHooks = func(*agentinstall.HookInstallationPlan) error {
 			mutationCount++
 			return nil
 		}
@@ -102,6 +159,45 @@ func TestRunInstallPrevalidatesBeforeMutations(t *testing.T) {
 		}
 		if mutationCount != 0 {
 			t.Fatalf("runInstallWithDependencies(%v) mutations = %d, want 0", args, mutationCount)
+		}
+	}
+}
+
+func TestRunInstallRejectsBrokenExecutableSymlinkBeforeMutations(t *testing.T) {
+	binPath := writeCommandExecutable(t)
+	brokenLinkPath := filepath.Join(t.TempDir(), "agent-gate")
+	if err := os.Symlink(filepath.Join(t.TempDir(), "missing"), brokenLinkPath); err != nil {
+		t.Fatalf("Symlink broken executable: %v", err)
+	}
+	dependencies := successfulInstallDependencies(binPath)
+	mutationCount := 0
+	dependencies.ensureConfig = func(string) error {
+		mutationCount++
+		return nil
+	}
+	dependencies.installService = func(agentinstall.ServiceOptions) error {
+		mutationCount++
+		return nil
+	}
+	dependencies.applyHooks = func(*agentinstall.HookInstallationPlan) error {
+		mutationCount++
+		return nil
+	}
+
+	exitCode, stderr := captureInstallStderrWithDependencies(
+		t,
+		[]string{"all", "--bin-path", brokenLinkPath},
+		dependencies,
+	)
+	if exitCode != 2 {
+		t.Fatalf("exitCode = %d, want 2", exitCode)
+	}
+	if mutationCount != 0 {
+		t.Fatalf("mutationCount = %d, want 0", mutationCount)
+	}
+	for _, want := range []string{brokenLinkPath, "resolve executable symlinks", "no such file"} {
+		if !strings.Contains(stderr, want) {
+			t.Fatalf("stderr = %q, want %q", stderr, want)
 		}
 	}
 }
@@ -121,8 +217,8 @@ func TestRunInstallAllPrevalidatesInstallerOptionsBeforeMutations(t *testing.T) 
 					return errors.New("invalid service template")
 				}
 			} else {
-				dependencies.validateHooks = func(agentinstall.HooksOptions) error {
-					return errors.New("invalid hook template")
+				dependencies.prepareHooks = func(agentinstall.HooksOptions) (*agentinstall.HookInstallationPlan, error) {
+					return nil, errors.New("invalid hook template")
 				}
 			}
 
@@ -133,6 +229,54 @@ func TestRunInstallAllPrevalidatesInstallerOptionsBeforeMutations(t *testing.T) 
 				t.Fatalf("mutationCount = %d, want 0", mutationCount)
 			}
 		})
+	}
+}
+
+func TestRunInstallAllMalformedLaterHookLeavesConfigServiceAndHooksUntouched(t *testing.T) {
+	binPath := writeCommandExecutable(t)
+	homeDir := t.TempDir()
+	initialFiles := map[string][]byte{
+		filepath.Join(homeDir, "config-state"):                         []byte("config-original"),
+		filepath.Join(homeDir, "service-state"):                        []byte("service-original"),
+		filepath.Join(homeDir, ".claude", "settings.json"):             []byte(`{"theme":"claude"}`),
+		filepath.Join(homeDir, ".codex", "config.toml"):                []byte("model = \"original\"\n"),
+		filepath.Join(homeDir, ".cursor", "hooks.json"):                []byte(`{"hooks":`),
+		filepath.Join(homeDir, ".gemini", "settings.json"):             []byte(`{"theme":"gemini"}`),
+		filepath.Join(homeDir, ".copilot", "hooks", "agent-gate.json"): []byte(`{"owned":"copilot"}`),
+	}
+	for path, content := range initialFiles {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("MkdirAll %s: %v", filepath.Dir(path), err)
+		}
+		if err := os.WriteFile(path, content, 0o600); err != nil {
+			t.Fatalf("WriteFile %s: %v", path, err)
+		}
+	}
+	dependencies := successfulInstallDependencies(binPath)
+	dependencies.prepareHooks = func(options agentinstall.HooksOptions) (*agentinstall.HookInstallationPlan, error) {
+		options.HomeDir = homeDir
+		return agentinstall.PrepareHookInstallation(options)
+	}
+	dependencies.ensureConfig = func(string) error {
+		return os.WriteFile(filepath.Join(homeDir, "config-state"), []byte("config-mutated"), 0o600)
+	}
+	dependencies.installService = func(agentinstall.ServiceOptions) error {
+		return os.WriteFile(filepath.Join(homeDir, "service-state"), []byte("service-mutated"), 0o600)
+	}
+	dependencies.applyHooks = agentinstall.ApplyHookInstallation
+
+	exitCode := runInstallWithDependencies([]string{"all"}, dependencies)
+	if exitCode != 2 {
+		t.Fatalf("exitCode = %d, want preflight exit 2", exitCode)
+	}
+	for path, want := range initialFiles {
+		got, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("ReadFile %s: %v", path, err)
+		}
+		if string(got) != string(want) {
+			t.Errorf("%s changed after hook preflight failure\nwant: %s\ngot: %s", path, want, got)
+		}
 	}
 }
 
@@ -156,7 +300,7 @@ func TestRunInstallAllOrdersConfigServiceReadinessAndHooks(t *testing.T) {
 		calls = append(calls, "ready")
 		return nil
 	}
-	dependencies.installHooks = func(agentinstall.HooksOptions) error {
+	dependencies.applyHooks = func(*agentinstall.HookInstallationPlan) error {
 		calls = append(calls, "hooks")
 		return nil
 	}
@@ -171,6 +315,47 @@ func TestRunInstallAllOrdersConfigServiceReadinessAndHooks(t *testing.T) {
 	want := []string{"config:check", "validate", "service", "ready", "hooks"}
 	if !reflect.DeepEqual(calls, want) {
 		t.Fatalf("calls = %v, want %v", calls, want)
+	}
+}
+
+func TestRunInstallAllAppliesPreparedHookBytesAfterServiceReadiness(t *testing.T) {
+	binPath := writeCommandExecutable(t)
+	homeDir := t.TempDir()
+	cursorPath := filepath.Join(homeDir, ".cursor", "hooks.json")
+	if err := os.MkdirAll(filepath.Dir(cursorPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll Cursor directory: %v", err)
+	}
+	if err := os.WriteFile(cursorPath, []byte(`{"version":1,"theme":"prepared"}`), 0o600); err != nil {
+		t.Fatalf("WriteFile Cursor hooks: %v", err)
+	}
+	dependencies := successfulInstallDependencies(binPath)
+	dependencies.prepareHooks = func(options agentinstall.HooksOptions) (*agentinstall.HookInstallationPlan, error) {
+		options.HomeDir = homeDir
+		return agentinstall.PrepareHookInstallation(options)
+	}
+	dependencies.installService = func(options agentinstall.ServiceOptions) error {
+		if err := os.WriteFile(cursorPath, []byte(`{"hooks":`), 0o600); err != nil {
+			return err
+		}
+		return options.Ready()
+	}
+	dependencies.applyHooks = agentinstall.ApplyHookInstallation
+
+	exitCode := runInstallWithDependencies([]string{
+		"all", "--no-config", "--no-claude", "--no-codex", "--no-gemini", "--no-copilot",
+	}, dependencies)
+	if exitCode != 0 {
+		t.Fatalf("exitCode = %d, want 0", exitCode)
+	}
+	content, err := os.ReadFile(cursorPath)
+	if err != nil {
+		t.Fatalf("ReadFile Cursor hooks: %v", err)
+	}
+	if !json.Valid(content) {
+		t.Fatalf("prepared Cursor hooks were not applied: %s", content)
+	}
+	if !strings.Contains(string(content), `"theme": "prepared"`) {
+		t.Fatalf("prepared Cursor content missing preserved setting: %s", content)
 	}
 }
 
@@ -193,9 +378,9 @@ func TestRunInstallAllHonorsOptOutFlags(t *testing.T) {
 		readinessCalled = true
 		return nil
 	}
-	dependencies.installHooks = func(options agentinstall.HooksOptions) error {
+	dependencies.prepareHooks = func(options agentinstall.HooksOptions) (*agentinstall.HookInstallationPlan, error) {
 		hooks = options
-		return nil
+		return &agentinstall.HookInstallationPlan{}, nil
 	}
 
 	exitCode := runInstallWithDependencies([]string{
@@ -232,7 +417,7 @@ func TestRunInstallAllDoesNotWriteHooksAfterReadinessFailure(t *testing.T) {
 	dependencies.waitForReady = func(string) error {
 		return errors.New("identity mismatch")
 	}
-	dependencies.installHooks = func(agentinstall.HooksOptions) error {
+	dependencies.applyHooks = func(*agentinstall.HookInstallationPlan) error {
 		hooksCalled = true
 		return nil
 	}
@@ -254,6 +439,8 @@ func TestRunInstallAllDoesNotWriteHooksAfterReadinessFailure(t *testing.T) {
 }
 
 func TestWaitForDaemonReadyRetriesUntilIdentityMatches(t *testing.T) {
+	oldPath := canonicalCommandExecutable(t)
+	newPath := canonicalCommandExecutable(t)
 	attemptCount := 0
 	status := func(context.Context) (daemonIdentity, error) {
 		attemptCount++
@@ -261,14 +448,14 @@ func TestWaitForDaemonReadyRetriesUntilIdentityMatches(t *testing.T) {
 			return daemonIdentity{}, errors.New("not accepting connections")
 		}
 		if attemptCount == 2 {
-			return daemonIdentity{ExecutablePath: "/old/agent-gate", BuildHash: "old"}, nil
+			return daemonIdentity{ExecutablePath: oldPath, BuildHash: "old"}, nil
 		}
-		return daemonIdentity{ExecutablePath: "/new/agent-gate", BuildHash: "new"}, nil
+		return daemonIdentity{ExecutablePath: newPath, BuildHash: "new"}, nil
 	}
 
 	err := waitForDaemonReady(
 		context.Background(),
-		"/new/agent-gate",
+		newPath,
 		"new",
 		time.Millisecond,
 		status,
@@ -281,18 +468,47 @@ func TestWaitForDaemonReadyRetriesUntilIdentityMatches(t *testing.T) {
 	}
 }
 
+func TestWaitForDaemonReadyCanonicalizesReportedExecutablePath(t *testing.T) {
+	targetPath := writeCommandExecutable(t)
+	canonicalTargetPath, err := filepath.EvalSymlinks(targetPath)
+	if err != nil {
+		t.Fatalf("EvalSymlinks executable target: %v", err)
+	}
+	linkPath := filepath.Join(t.TempDir(), "agent-gate")
+	if err := os.Symlink(targetPath, linkPath); err != nil {
+		t.Fatalf("Symlink executable: %v", err)
+	}
+	status := func(context.Context) (daemonIdentity, error) {
+		return daemonIdentity{ExecutablePath: linkPath, BuildHash: "same"}, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
+	defer cancel()
+
+	if err := waitForDaemonReady(
+		ctx,
+		canonicalTargetPath,
+		"same",
+		time.Millisecond,
+		status,
+	); err != nil {
+		t.Fatalf("waitForDaemonReady: %v", err)
+	}
+}
+
 func TestWaitForDaemonReadyTimeoutIncludesLastMismatch(t *testing.T) {
+	oldPath := canonicalCommandExecutable(t)
+	newPath := canonicalCommandExecutable(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
 	defer cancel()
 	status := func(context.Context) (daemonIdentity, error) {
-		return daemonIdentity{ExecutablePath: "/old/agent-gate", BuildHash: "old"}, nil
+		return daemonIdentity{ExecutablePath: oldPath, BuildHash: "old"}, nil
 	}
 
-	err := waitForDaemonReady(ctx, "/new/agent-gate", "new", time.Millisecond, status)
+	err := waitForDaemonReady(ctx, newPath, "new", time.Millisecond, status)
 	if err == nil {
 		t.Fatal("waitForDaemonReady returned nil")
 	}
-	for _, want := range []string{"timed out", "/old/agent-gate", "old"} {
+	for _, want := range []string{"timed out", oldPath, "old"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("error = %q, want %q", err, want)
 		}
@@ -300,6 +516,8 @@ func TestWaitForDaemonReadyTimeoutIncludesLastMismatch(t *testing.T) {
 }
 
 func TestWaitForDaemonReadyProductionLookupPreservesMismatchAtDeadline(t *testing.T) {
+	oldPath := canonicalCommandExecutable(t)
+	newPath := canonicalCommandExecutable(t)
 	runtimeDir, err := os.MkdirTemp("/tmp", "agent-gate-ready.")
 	if err != nil {
 		t.Fatalf("MkdirTemp runtime dir: %v", err)
@@ -314,7 +532,11 @@ func TestWaitForDaemonReadyProductionLookupPreservesMismatchAtDeadline(t *testin
 		t.Fatalf("Listen daemon socket: %v", err)
 	}
 	server := grpc.NewServer()
-	fake := &readinessDaemonFake{exited: make(chan struct{})}
+	fake := &readinessDaemonFake{
+		executablePath: oldPath,
+		buildHash:      "old",
+		exited:         make(chan struct{}),
+	}
 	daemonpb.RegisterAgentGateDServer(server, fake)
 	go func() {
 		_ = server.Serve(listener)
@@ -325,7 +547,7 @@ func TestWaitForDaemonReadyProductionLookupPreservesMismatchAtDeadline(t *testin
 	defer cancel()
 	err = waitForDaemonReady(
 		ctx,
-		"/new/agent-gate",
+		newPath,
 		"new",
 		time.Millisecond,
 		lookupDaemonIdentity,
@@ -333,7 +555,7 @@ func TestWaitForDaemonReadyProductionLookupPreservesMismatchAtDeadline(t *testin
 	if err == nil {
 		t.Fatal("waitForDaemonReady returned nil")
 	}
-	for _, want := range []string{"timed out", "/old/agent-gate", "old"} {
+	for _, want := range []string{"timed out", oldPath, "old"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error = %q, want %q", err, want)
 		}
@@ -349,10 +571,13 @@ func successfulInstallDependencies(binPath string) installDependencies {
 	return installDependencies{
 		resolveExecutable:  func() (string, error) { return binPath, nil },
 		validateExecutable: agentinstall.ValidateExecutable,
-		validateHooks:      func(agentinstall.HooksOptions) error { return nil },
-		validateService:    func(agentinstall.ServiceOptions) error { return nil },
-		ensureConfig:       func(string) error { return nil },
-		validateConfig:     func() error { return nil },
+		prepareHooks: func(agentinstall.HooksOptions) (*agentinstall.HookInstallationPlan, error) {
+			return &agentinstall.HookInstallationPlan{}, nil
+		},
+		applyHooks:      func(*agentinstall.HookInstallationPlan) error { return nil },
+		validateService: func(agentinstall.ServiceOptions) error { return nil },
+		ensureConfig:    func(string) error { return nil },
+		validateConfig:  func() error { return nil },
 		installService: func(options agentinstall.ServiceOptions) error {
 			if options.Ready != nil {
 				return options.Ready()
@@ -360,7 +585,6 @@ func successfulInstallDependencies(binPath string) installDependencies {
 			return nil
 		},
 		waitForReady: func(string) error { return nil },
-		installHooks: func(agentinstall.HooksOptions) error { return nil },
 	}
 }
 
@@ -369,6 +593,15 @@ func writeCommandExecutable(t *testing.T) string {
 	path := filepath.Join(t.TempDir(), "agent-gate")
 	if err := os.WriteFile(path, []byte("executable"), 0o755); err != nil {
 		t.Fatalf("WriteFile executable: %v", err)
+	}
+	return path
+}
+
+func canonicalCommandExecutable(t *testing.T) string {
+	t.Helper()
+	path, err := filepath.EvalSymlinks(writeCommandExecutable(t))
+	if err != nil {
+		t.Fatalf("EvalSymlinks executable: %v", err)
 	}
 	return path
 }
