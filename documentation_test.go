@@ -17,6 +17,7 @@ var (
 	makeCommandPattern      = regexp.MustCompile(`(?m)^\s*(?:\$ )?make ([A-Za-z0-9_-]+)`)
 	makeTargetPattern       = regexp.MustCompile(`(?m)^([A-Za-z0-9][A-Za-z0-9_-]*):(?:[ \t]|$)`)
 	agentGateCommandPattern = regexp.MustCompile(`(?m)^\s*(?:\$ )?agent-gate ([a-z][a-z0-9-]*)(?: ([a-z][a-z0-9-]*))?`)
+	installerFlagPattern    = regexp.MustCompile(`--[a-z][a-z0-9-]*`)
 )
 
 func TestConfigExampleLoadsAsProductionConfig(t *testing.T) {
@@ -45,7 +46,7 @@ func TestFirstPartyDocumentationRejectsStaleClaims(t *testing.T) {
 		"make install-service",
 		"make daemon-restart",
 		"_release_build.yml",
-		"/Users/agoodkind/Sites/clyde",
+		"/Users/agoodkind/.local/bin/clyde",
 	}
 
 	for _, path := range documentationPaths {
@@ -56,6 +57,30 @@ func TestFirstPartyDocumentationRejectsStaleClaims(t *testing.T) {
 		for _, stale := range staleStrings {
 			if strings.Contains(string(contents), stale) {
 				t.Errorf("%s contains stale string %q", path, stale)
+			}
+		}
+	}
+}
+
+func TestDocumentedShellInstallerFlagsAreSupported(t *testing.T) {
+	supportedFlags := map[string]bool{
+		"--bin-dir":             true,
+		"--require-attestation": true,
+		"--version":             true,
+	}
+	for _, path := range []string{"README.md", "HOOKS.md", "docs/hook-schemas.md"} {
+		contents, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		for lineNumber, line := range strings.Split(string(contents), "\n") {
+			if !strings.Contains(line, "install.sh") {
+				continue
+			}
+			for _, flag := range installerFlagPattern.FindAllString(line, -1) {
+				if !supportedFlags[flag] {
+					t.Errorf("%s:%d documents unsupported install.sh flag %q", path, lineNumber+1, flag)
+				}
 			}
 		}
 	}

@@ -62,8 +62,7 @@ agent-gate install hooks --bin-path "$(command -v agent-gate)" --no-claude --no-
 ```
 
 The commands above select Claude, Codex, Cursor, Gemini, and Copilot in that
-order. `./install.sh --hooks-only` is the release-installer path for reinstalling
-all providers.
+order.
 
 ## Claude
 
