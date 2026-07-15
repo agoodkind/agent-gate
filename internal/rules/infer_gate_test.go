@@ -52,6 +52,7 @@ type clydeFake struct {
 	requests []*contextpb.GetRecentTurnsRequest
 	err      error
 	delay    time.Duration
+	turns    []*contextpb.Turn
 }
 
 func (server *clydeFake) GetRecentTurns(ctx context.Context, request *contextpb.GetRecentTurnsRequest) (*contextpb.GetRecentTurnsReply, error) {
@@ -68,7 +69,11 @@ func (server *clydeFake) GetRecentTurns(ctx context.Context, request *contextpb.
 	if server.err != nil {
 		return nil, server.err
 	}
-	return &contextpb.GetRecentTurnsReply{Turns: []*contextpb.Turn{{Role: "user", Text: "hello", Ts: "now"}}}, nil
+	turns := server.turns
+	if turns == nil {
+		turns = []*contextpb.Turn{{Role: "user", Text: "hello", Ts: "now"}}
+	}
+	return &contextpb.GetRecentTurnsReply{Turns: turns}, nil
 }
 
 type connectionCounter struct{ count atomic.Int32 }
@@ -754,6 +759,37 @@ func TestInferClydeContextPoliciesSelectorsBoundsAndChannelReuse(t *testing.T) {
 	errorPolicy := loadInferRule(t, endpoint, extra+"\non_error = \"closed\"")
 	if got := evaluateInfer(t, ctx, errorPolicy, "four"); len(got) != 1 {
 		t.Fatal("context error policy should flow to closed inference error")
+	}
+}
+
+// TestInferClydeContextDropsEmptyAndInterruptedTurns confirms the rendered
+// context keeps only meaningful turns, so the judge budget is not spent on the
+// tool-only assistant turns and the interruption markers that dominate a busy
+// session.
+func TestInferClydeContextDropsEmptyAndInterruptedTurns(t *testing.T) {
+	clyde := &clydeFake{turns: []*contextpb.Turn{
+		{Role: "user", Text: "please clean up the worktree", Ts: "t1"},
+		{Role: "assistant", Text: "", Ts: "t2"},
+		{Role: "user", Text: "[Request interrupted by user for tool use]", Ts: "t3"},
+		{Role: "assistant", Text: "removing it now", Ts: "t4"},
+	}}
+	clydeEndpoint, _ := startClydeServer(t, clyde)
+	var captured atomic.Value
+	inference := &inferenceFake{handler: func(_ context.Context, request *inferencepb.InferRequest) (*inferencepb.InferReply, error) {
+		captured.Store(request.GetContext())
+		return &inferencepb.InferReply{OutputJson: `{"decision":"block"}`, Status: 1}, nil
+	}}
+	endpoint, _ := startInferenceServer(t, inference)
+	extra := "context_source = \"clyde_recent_turns\"\ncontext_endpoint = \"" + clydeEndpoint + "\"\ncontext_workspace_field = \"cwd\"\ncontext_session_field = \"session_id\"\ncontext_turn_budget = 10\ncontext_max_chars_per_turn = 120\ncontext_on_error = \"error\""
+	runtime := rules.NewInferRuntimeWithCache(nil, nil)
+	t.Cleanup(runtime.Close)
+	ctx := rules.WithInferRuntime(context.Background(), runtime)
+	rule := loadInferRule(t, endpoint, extra)
+	evaluateInfer(t, ctx, rule, "one")
+	got, _ := captured.Load().(string)
+	want := `{"turns":[{"role":"user","text":"please clean up the worktree","ts":"t1"},{"role":"assistant","text":"removing it now","ts":"t4"}]}`
+	if got != want {
+		t.Fatalf("filtered context = %q, want %q", got, want)
 	}
 }
 
