@@ -1,0 +1,6 @@
+#!/bin/bash
+set -euo pipefail
+
+printf '%s\0' "$@" >"$CAPTURE_DIR/bash-args"
+cat >"$CAPTURE_DIR/bash-stdin"
+exit "$FAKE_BASH_EXIT_CODE"

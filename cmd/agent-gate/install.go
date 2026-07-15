@@ -1,10 +1,20 @@
 package main
 
 import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"flag"
 	"fmt"
+	"io"
+	"log/slog"
 	"os"
+	"time"
 
+	"goodkind.io/agent-gate/internal/config"
+	"goodkind.io/agent-gate/internal/daemon"
+	"goodkind.io/agent-gate/internal/hook"
 	agentinstall "goodkind.io/agent-gate/internal/install"
 )
 
@@ -12,12 +22,17 @@ const (
 	installSubcommandAll     = "all"
 	installSubcommandHooks   = "hooks"
 	installSubcommandService = "service"
+	installReadinessTimeout  = 10 * time.Second
+	installReadinessInterval = 200 * time.Millisecond
 )
 
 type installFlagValues struct {
 	binPath             string
 	templatesDir        string
 	serviceTemplatesDir string
+	autoUpdate          string
+	noConfig            bool
+	noService           bool
 	noClaude            bool
 	noCodex             bool
 	noCursor            bool
@@ -25,25 +40,48 @@ type installFlagValues struct {
 	noCopilot           bool
 }
 
+type daemonIdentity struct {
+	ExecutablePath string
+	BuildHash      string
+}
+
+type daemonStatusLookup func(context.Context) (daemonIdentity, error)
+
+type installDependencies struct {
+	resolveExecutable  func() (string, error)
+	validateExecutable func(string) error
+	prepareHooks       func(agentinstall.HooksOptions) (*agentinstall.HookInstallationPlan, error)
+	applyHooks         func(*agentinstall.HookInstallationPlan) error
+	validateService    func(agentinstall.ServiceOptions) error
+	ensureConfig       func(string) error
+	validateConfig     func() error
+	installService     func(agentinstall.ServiceOptions) error
+	waitForReady       func(string) error
+}
+
 func runInstall(args []string) int {
+	return runInstallWithDependencies(args, defaultInstallDependencies())
+}
+
+func runInstallWithDependencies(args []string, dependencies installDependencies) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: agent-gate install {hooks|service|all} --bin-path PATH")
+		fmt.Fprintln(os.Stderr, "usage: agent-gate install {hooks|service|all} [--bin-path PATH]")
 		return 2
 	}
 	switch args[0] {
 	case installSubcommandHooks:
-		return runInstallHooks(args[1:])
+		return runInstallHooks(args[1:], dependencies)
 	case installSubcommandService:
-		return runInstallService(args[1:])
+		return runInstallService(args[1:], dependencies)
 	case installSubcommandAll:
-		return runInstallAll(args[1:])
+		return runInstallAll(args[1:], dependencies)
 	default:
 		fmt.Fprintf(os.Stderr, "agent-gate install: unknown subcommand %q\n", args[0])
 		return 2
 	}
 }
 
-func runInstallHooks(args []string) int {
+func runInstallHooks(args []string, dependencies installDependencies) int {
 	values := installFlagValues{}
 	flags := newInstallFlagSet("agent-gate install hooks", &values)
 	registerHookInstallFlags(flags, &values)
@@ -54,19 +92,23 @@ func runInstallHooks(args []string) int {
 		fmt.Fprintf(os.Stderr, "agent-gate install hooks: unexpected argument %q\n", flags.Arg(0))
 		return 2
 	}
-	if values.binPath == "" {
-		fmt.Fprintln(os.Stderr, "usage: agent-gate install hooks --bin-path PATH")
+	if err := resolveAndValidateInstallValues(&values, dependencies); err != nil {
+		fmt.Fprintf(os.Stderr, "agent-gate install hooks: preflight: %v\n", err)
 		return 2
 	}
-	options := hookOptions(values)
-	if err := agentinstall.InstallHooks(options); err != nil {
-		fmt.Fprintf(os.Stderr, "agent-gate install hooks: %v\n", err)
+	plan, err := dependencies.prepareHooks(hookOptions(values))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-gate install hooks: preflight: hooks: %v\n", err)
+		return 2
+	}
+	if err := dependencies.applyHooks(plan); err != nil {
+		fmt.Fprintf(os.Stderr, "agent-gate install hooks: hooks: %v\n", err)
 		return 1
 	}
 	return 0
 }
 
-func runInstallService(args []string) int {
+func runInstallService(args []string, dependencies installDependencies) int {
 	values := installFlagValues{}
 	flags := newInstallFlagSet("agent-gate install service", &values)
 	registerServiceInstallFlags(flags, &values)
@@ -77,23 +119,29 @@ func runInstallService(args []string) int {
 		fmt.Fprintf(os.Stderr, "agent-gate install service: unexpected argument %q\n", flags.Arg(0))
 		return 2
 	}
-	if values.binPath == "" {
-		fmt.Fprintln(os.Stderr, "usage: agent-gate install service --bin-path PATH")
+	if err := resolveAndValidateInstallValues(&values, dependencies); err != nil {
+		fmt.Fprintf(os.Stderr, "agent-gate install service: preflight: %v\n", err)
 		return 2
 	}
-	options := serviceOptions(values)
-	if err := agentinstall.InstallService(options); err != nil {
-		fmt.Fprintf(os.Stderr, "agent-gate install service: %v\n", err)
+	if err := dependencies.validateService(serviceOptions(values, dependencies)); err != nil {
+		fmt.Fprintf(os.Stderr, "agent-gate install service: preflight: service: %v\n", err)
+		return 2
+	}
+	if err := dependencies.installService(serviceOptions(values, dependencies)); err != nil {
+		fmt.Fprintf(os.Stderr, "agent-gate install service: service: %v\n", err)
 		return 1
 	}
 	return 0
 }
 
-func runInstallAll(args []string) int {
+func runInstallAll(args []string, dependencies installDependencies) int {
 	values := installFlagValues{}
 	flags := newInstallFlagSet("agent-gate install all", &values)
 	registerHookInstallFlags(flags, &values)
 	registerServiceInstallFlags(flags, &values)
+	flags.BoolVar(&values.noConfig, "no-config", false, "skip default config creation and merge")
+	flags.BoolVar(&values.noService, "no-service", false, "skip service installation and readiness")
+	flags.StringVar(&values.autoUpdate, "auto-update", "", "set update mode: check, apply, or off")
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
@@ -101,19 +149,105 @@ func runInstallAll(args []string) int {
 		fmt.Fprintf(os.Stderr, "agent-gate install all: unexpected argument %q\n", flags.Arg(0))
 		return 2
 	}
-	if values.binPath == "" {
-		fmt.Fprintln(os.Stderr, "usage: agent-gate install all --bin-path PATH")
+	if err := validateAutoUpdate(values.autoUpdate); err != nil {
+		fmt.Fprintf(os.Stderr, "agent-gate install all: preflight: %v\n", err)
 		return 2
 	}
-	if err := agentinstall.InstallHooks(hookOptions(values)); err != nil {
+	if err := resolveAndValidateInstallValues(&values, dependencies); err != nil {
+		fmt.Fprintf(os.Stderr, "agent-gate install all: preflight: %v\n", err)
+		return 2
+	}
+	hookPlan, err := dependencies.prepareHooks(hookOptions(values))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-gate install all: preflight: hooks: %v\n", err)
+		return 2
+	}
+	if !values.noService {
+		if err := dependencies.validateService(serviceOptions(values, dependencies)); err != nil {
+			fmt.Fprintf(os.Stderr, "agent-gate install all: preflight: service: %v\n", err)
+			return 2
+		}
+	}
+	if !values.noConfig {
+		if err := dependencies.ensureConfig(values.autoUpdate); err != nil {
+			fmt.Fprintf(os.Stderr, "agent-gate install all: config: %v\n", err)
+			return 1
+		}
+	}
+	if err := dependencies.validateConfig(); err != nil {
+		fmt.Fprintf(os.Stderr, "agent-gate install all: config validation: %v\n", err)
+		return 1
+	}
+	if !values.noService {
+		if err := dependencies.installService(serviceOptions(values, dependencies)); err != nil {
+			fmt.Fprintf(os.Stderr, "agent-gate install all: service: %v\n", err)
+			return 1
+		}
+	}
+	if err := dependencies.applyHooks(hookPlan); err != nil {
 		fmt.Fprintf(os.Stderr, "agent-gate install all: hooks: %v\n", err)
 		return 1
 	}
-	if err := agentinstall.InstallService(serviceOptions(values)); err != nil {
-		fmt.Fprintf(os.Stderr, "agent-gate install all: service: %v\n", err)
-		return 1
-	}
 	return 0
+}
+
+func defaultInstallDependencies() installDependencies {
+	return installDependencies{
+		resolveExecutable:  os.Executable,
+		validateExecutable: agentinstall.ValidateExecutable,
+		prepareHooks:       agentinstall.PrepareHookInstallation,
+		applyHooks:         agentinstall.ApplyHookInstallation,
+		validateService:    agentinstall.ValidateServiceOptions,
+		ensureConfig: func(autoUpdate string) error {
+			_, err := config.EnsureDefaults(config.EnsureDefaultsOptions{AutoUpdateMode: autoUpdate})
+			return err
+		},
+		validateConfig: func() error {
+			cfg, err := config.Load()
+			if err != nil {
+				return err
+			}
+			if validationErrors := hook.ValidateConfig(cfg); len(validationErrors) > 0 {
+				return validationErrors[0]
+			}
+			return nil
+		},
+		installService: agentinstall.InstallService,
+		waitForReady:   waitForInstalledDaemon,
+	}
+}
+
+func resolveAndValidateInstallValues(
+	values *installFlagValues,
+	dependencies installDependencies,
+) error {
+	if values.binPath == "" {
+		binPath, err := dependencies.resolveExecutable()
+		if err != nil {
+			wrappedErr := fmt.Errorf("resolve running executable: %w", err)
+			slog.Warn("install executable resolution failed", "err", wrappedErr)
+			return wrappedErr
+		}
+		values.binPath = binPath
+	}
+	canonicalPath, err := agentinstall.CanonicalExecutablePath(values.binPath)
+	if err != nil {
+		return err
+	}
+	values.binPath = canonicalPath
+	if err := dependencies.validateExecutable(values.binPath); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateAutoUpdate(value string) error {
+	switch value {
+	case "", config.UpdateModeCheck, config.UpdateModeApply, "off":
+		return nil
+	default:
+		return fmt.Errorf("auto-update mode must be %q, %q, or %q", config.UpdateModeCheck, config.UpdateModeApply, "off")
+	}
 }
 
 func newInstallFlagSet(name string, values *installFlagValues) *flag.FlagSet {
@@ -148,10 +282,132 @@ func hookOptions(values installFlagValues) agentinstall.HooksOptions {
 	return options
 }
 
-func serviceOptions(values installFlagValues) agentinstall.ServiceOptions {
+func serviceOptions(
+	values installFlagValues,
+	dependencies installDependencies,
+) agentinstall.ServiceOptions {
 	return agentinstall.ServiceOptions{
 		BinPath:             values.binPath,
 		ServiceTemplatesDir: values.serviceTemplatesDir,
 		Stdout:              os.Stdout,
+		Ready: func() error {
+			return dependencies.waitForReady(values.binPath)
+		},
 	}
+}
+
+func waitForInstalledDaemon(binPath string) error {
+	canonicalPath, err := agentinstall.CanonicalExecutablePath(binPath)
+	if err != nil {
+		return err
+	}
+	buildHash, err := executableBuildHash(canonicalPath)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), installReadinessTimeout)
+	defer cancel()
+	return waitForDaemonReady(
+		ctx,
+		canonicalPath,
+		buildHash,
+		installReadinessInterval,
+		lookupDaemonIdentity,
+	)
+}
+
+func waitForDaemonReady(
+	ctx context.Context,
+	expectedPath string,
+	expectedBuildHash string,
+	pollInterval time.Duration,
+	status daemonStatusLookup,
+) error {
+	var lastErr error
+	for {
+		identity, err := status(ctx)
+		reportedPath := identity.ExecutablePath
+		if err == nil {
+			canonicalPath, resolveErr := agentinstall.CanonicalExecutablePath(identity.ExecutablePath)
+			if resolveErr != nil {
+				err = fmt.Errorf("resolve daemon executable identity: %w", resolveErr)
+			} else {
+				reportedPath = canonicalPath
+				if reportedPath == expectedPath && identity.BuildHash == expectedBuildHash {
+					return nil
+				}
+			}
+		}
+		attemptErr := err
+		if attemptErr == nil {
+			attemptErr = fmt.Errorf(
+				"daemon identity mismatch: executable=%q buildHash=%q, want executable=%q buildHash=%q",
+				reportedPath,
+				identity.BuildHash,
+				expectedPath,
+				expectedBuildHash,
+			)
+		}
+		if ctx.Err() != nil {
+			if lastErr == nil || !isContextTermination(attemptErr) {
+				lastErr = attemptErr
+			}
+			return daemonReadinessTimeout(ctx, lastErr)
+		}
+		lastErr = attemptErr
+
+		timer := time.NewTimer(pollInterval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return daemonReadinessTimeout(ctx, lastErr)
+		case <-timer.C:
+		}
+	}
+}
+
+func isContextTermination(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+}
+
+func daemonReadinessTimeout(ctx context.Context, lastErr error) error {
+	if lastErr == nil {
+		lastErr = ctx.Err()
+	}
+	wrappedErr := fmt.Errorf("daemon readiness timed out: %w", lastErr)
+	slog.WarnContext(ctx, "install daemon readiness timed out", "err", wrappedErr)
+	return wrappedErr
+}
+
+func lookupDaemonIdentity(ctx context.Context) (daemonIdentity, error) {
+	client, err := daemon.Connect(ctx)
+	if err != nil {
+		return daemonIdentity{}, err
+	}
+	defer func() { _ = client.Close() }()
+	status, err := client.StatusContext(ctx)
+	if err != nil {
+		return daemonIdentity{}, err
+	}
+	return daemonIdentity{
+		ExecutablePath: status.GetExecutablePath(),
+		BuildHash:      status.GetBuildHash(),
+	}, nil
+}
+
+func executableBuildHash(path string) (string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		wrappedErr := fmt.Errorf("open installer executable for hashing: %w", err)
+		slog.Warn("install executable hash open failed", "path", path, "err", wrappedErr)
+		return "", wrappedErr
+	}
+	defer func() { _ = file.Close() }()
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		wrappedErr := fmt.Errorf("hash installer executable: %w", err)
+		slog.Warn("install executable hash failed", "path", path, "err", wrappedErr)
+		return "", wrappedErr
+	}
+	return hex.EncodeToString(hash.Sum(nil))[:12], nil
 }

@@ -1,485 +1,231 @@
-# agent-gate configuration
+# agent-gate annotated configuration
 #
-# Copy this file to your XDG config directory:
+# Copy this file to:
+#   ${XDG_CONFIG_HOME:-$HOME/.config}/agent-gate/config.toml
 #
-#   mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/agent-gate"
-#   cp config.toml.example "${XDG_CONFIG_HOME:-$HOME/.config}/agent-gate/config.toml"
-#
-# Then edit to taste. agent-gate will not start if no config file is found.
+# The complete file is valid production TOML. Only the deterministic example
+# rule is enabled. Optional examples stay commented so copying this file does
+# not start external validators or inference calls.
 
 [log]
-level = "debug"   # debug | info | warn | error
-
-# ── Path overrides (optional) ────────────────────────────────────────────────
-#
-# Audit decisions (received / blocked / allowed / audit_violation) and their
-# violations are persisted to SQLite only, in:
-#
-#   $XDG_STATE_HOME/agent-gate/sqlite/audit.db
-#                  ($XDG_STATE_HOME defaults to ~/.local/state)
-#
-# The same audit.db also backs the durable intake store (raw hook receipts,
-# including the full raw_payload per event). The operational agent-gate.jsonl
-# log is for debugging agent-gate itself, not audit output.
-#
-# conversations_dir is legacy and only kept for compatibility with older logs.
-
-[paths]
-conversations_dir = ""   # example: "/var/log/agent-gate/conversations"
+level = "info" # debug | info | warn | error
 
 [audit]
 enabled = true
-level = "debug"
+level = "info"
 
 [audit.outputs.sqlite]
-path = ""   # default: $XDG_STATE_HOME/agent-gate/sqlite/audit.db
+# Empty selects ${XDG_STATE_HOME:-$HOME/.local/state}/agent-gate/sqlite/audit.db.
+# The database owns durable intake, derived decisions, and evaluator records.
+path = ""
 
-# ── Auto-update (optional) ──────────────────────────────────────────────────
+[paths]
+# Legacy compatibility path for older per-conversation logs. Current audit
+# state does not use this directory.
+conversations_dir = ""
 
 [update]
 enabled = true
-mode = "apply"   # check | apply
+mode = "check" # check | apply
 interval = "24h"
 repo = "agoodkind/agent-gate"
 allow_prerelease = false
 
-# ── Hook performance (optional) ──────────────────────────────────────────────
+[telemetry]
+otlp_endpoint = ""
+slow_op_threshold_ms = 0
+
+[performance.hook]
+# Zero selects the runtime default for every field.
+hot_concurrency = 0
+hot_queue_wait_ms = 0
+inference_phase_timeout_ms = 0
+deferred_queue_limit = 0
+deferred_workers = 0
 
 [performance.hook.cache]
-# Daemon-owned hot cache for exec validator debounce and `agent-gate kv`.
-# Entries are memory-only and are lost on daemon restart.
+# This cache is daemon memory shared by exec validators, infer conditions, and
+# `agent-gate kv`. It is cleared on daemon restart and reconfigured on reload.
 max_entries = 4096
 max_value_bytes = 1048576
 prune_interval_ms = 30000
 
-# ── Rules ────────────────────────────────────────────────────────────────────
+# Named inference points declare a reusable endpoint and model. A point does
+# nothing until a [[rules.eval]] entry references it with `use`.
+[inference.local_review]
+endpoint = "127.0.0.1:5401"
+model = "agent-gate-review"
+reasoning_effort = "low"
+confidence_source = "output_field" # output_field | logprob; omit for no confidence source
+confidence_field = "confidence"
+confidence_threshold = 0.80
+timeout_ms = 1500 # zero uses the 4000 ms point default
+
+# Every applicable rule is evaluated. More than one rule can match one event,
+# and the blocking response reports every concrete match. A simple rule tests
+# the first non-empty selected field. `not_pattern`, when set, exempts matching
+# values.
+[[rules]]
+name = "build-through-make"
+description = "Require the repository build target"
+events = ["PreToolUse", "preToolUse", "beforeShellExecution", "BeforeTool"]
+field_paths = ["tool_input.command", "command"]
+pattern = '''(?:^|\s)go\s+build(?:\s|$)'''
+not_pattern = '''(?:^|\s)go\s+build\s+-n(?:\s|$)'''
+action = "block" # block | audit; block is the default
+violation_message = "Run the repository build target instead of go build directly."
+diagnostic_group = 0
+diagnostic_format = "detailed" # detailed | message_only
+redact_diagnostics = false
+disable_if_env = ["AGENT_GATE_MAINTENANCE"]
+
+# Provider-specific filters can supplement or replace shared `events` for the
+# four providers with dedicated fields:
+#   claude_events = ["PreToolUse"]
+#   codex_events = ["PreToolUse"]
+#   cursor_events = ["preToolUse", "beforeShellExecution"]
+#   gemini_events = ["BeforeTool"]
+# Copilot uses shared `events` because it carries Claude-style event names
+# through the Copilot adapter.
+
+# A conditional rule uses all-match semantics. Every [[rules.conditions]]
+# entry must match before the rule fires. Conditions run in order, so cheap
+# deterministic filters should precede filesystem, process, or inference work.
 #
-# Each rule is evaluated in order. The first matching rule wins.
+# Supported kinds and their fields:
 #
-# Fields:
-#   name              - unique identifier shown in audit log and error messages
-#   description       - human-readable explanation
-#   action            - "block" stops the tool call (default), "audit" records without blocking
-#   events            - hook event names this rule applies to (empty = all)
-#   field_paths       - dot-path(s) into the JSON payload to inspect;
-#                       first non-empty value found across all paths is tested
-#                       tool_response uses searchable text for structured objects,
-#                       so image payload bytes are not scanned as output text
-#   pattern           - PCRE2 regex matched against the extracted field value
-#   not_pattern       - optional PCRE2 regex that allows the value when it matches
-#   (action above; "block" by default, set to "audit" for record-only)
-#   violation_message - message sent back to the AI and written to the audit log
-#   diagnostic_group - optional capture group to underline in diagnostics (default: 0, the full match)
-#   diagnostic_format - "detailed" by default; "message_only" prints only violation_message
-#
-# Conditional rules can use:
-#   kind = "regex"    - default; uses field_paths plus pattern/not_pattern
-#   kind = "command"  - matches shell command segments by argv0/subcommands
-#   kind = "project"  - checks files relative to a discovered project root
-#   kind = "shell_read_secret" - probes configured shell read targets
-#   kind = "shell_write" - matches configured shell write targets
+# regex
+#   field_paths, pattern, not_pattern, diagnostic_group
+# command
+#   argv0, subcommands, strip_env, strip_args, cwd_flags, pattern, not_pattern
+# project
+#   root_markers, require_any, require_all, forbid_any
+# diff
+#   field_pair, pattern, not_pattern
+# shell_read_secret
+#   field_paths, pattern, path_pattern, max_bytes, remote_policy, read_specs
+# shell_write
+#   field_paths, globs, write_specs
+# exec
+#   command, timeout_ms, cache_key, cache_ttl_ms, block_on, on_error,
+#   search_tools, for_each, match_mode, stdout_json_field, stdout_json_equals
+# infer
+#   endpoint, layer_name, prompt or prompt_file, input_field, output_schema or
+#   output_schema_file, model, generation options, response predicate, timeout,
+#   cache, error policy, and optional recent-turn context fields
+# git_default_branch, git_primary_checkout, git_ref_move
+#   typed Git state gates; git_ref_move does not accept field_paths
 
-[[rules]]
-name        = "no-shell-redirection"
-description = "Block direct shell output/error redirections that suppress, buffer, or truncate command output"
-events      = ["PreToolUse", "beforeShellExecution", "preToolUse", "BeforeTool"]
-field_paths = ["cmd_redirections"]
-pattern     = '.+'
-action      = "block"
-violation_message = "Direct shell output redirection is not permitted here. Send both streams to standard output only when you need a combined stream."
-
-[[rules]]
-name        = "no-lossy-output-sampling"
-description = "Block any pipe to head or tail, plus direct head/tail on diagnostic log paths"
-events      = ["PreToolUse", "preToolUse", "beforeShellExecution"]
-field_paths = ["cmd_segments", "tool_input.command", "command"]
-pattern     = '''(?im)(?:[^;&\n|]+\|\s*(?:head|tail)\b|\b(?:head|tail)\b[^;&\n]*(?:\.log\b|/logs?/|journal|daemon|audit|trace|error|incident))'''
-action      = "block"
-violation_message = "Do not sample command output with head or tail. Preserve the full output, write it to a file if needed, and inspect explicit line ranges or search terms. Use rg with context, sed -n with exact ranges after locating line numbers, or save the full output and cite the path."
-
-[[rules]]
-name        = "go-build-through-make"
-description = "Require make build for Go build in Go modules that provide a Makefile"
-claude_events = ["PreToolUse"]
-cursor_events = ["preToolUse", "beforeShellExecution"]
-codex_events  = ["PreToolUse"]
-gemini_events = ["BeforeTool"]
-action      = "block"
-violation_message = "Run make build instead of go build in Go modules that provide a Makefile."
-
-[[rules.conditions]]
-kind        = "command"
-argv0       = "go"
-subcommands = ["build"]
-strip_env   = true
-strip_args  = ["env", "time", "command"]
-cwd_flags   = ["-C"]
-pattern     = '^build(?:\s|$)'
-
-[[rules.conditions]]
-kind         = "project"
-root_markers = ["go.mod"]
-require_any  = ["Makefile", "makefile", "GNUmakefile"]
-
-[[rules]]
-name        = "use-make-not-swift-build-direct"
-description = "Force make targets for SwiftPM builds in Swift packages that provide a Makefile."
-claude_events = ["PreToolUse"]
-cursor_events = ["preToolUse", "beforeShellExecution"]
-codex_events  = ["PreToolUse"]
-gemini_events = ["BeforeTool"]
-action      = "block"
-violation_message = "This Swift project has a Makefile. Use make build or the repo's documented make target instead of running swift build directly."
-
-[[rules.conditions]]
-kind        = "command"
-argv0       = "swift"
-subcommands = ["build"]
-strip_env   = true
-strip_args  = ["env", "time", "command", "xcrun"]
-cwd_flags   = ["--package-path"]
-
-[[rules.conditions]]
-kind         = "project"
-root_markers = ["Package.swift"]
-require_any  = ["Makefile", "makefile", "GNUmakefile"]
-
-[[rules]]
-name        = "no-unbounded-root-find"
-description = "Block unbounded recursive find commands from filesystem root"
-claude_events = ["PreToolUse"]
-cursor_events = ["preToolUse", "beforeShellExecution"]
-codex_events  = ["PreToolUse"]
-gemini_events = ["BeforeTool"]
-action      = "block"
-violation_message = "Do not run unbounded recursive find from filesystem root. Use a bounded command such as `find / -maxdepth 1 ...`, `find / -xdev ...`, or search a narrower path."
-
-[[rules.conditions]]
-kind        = "command"
-argv0       = "find"
-strip_env   = true
-strip_args  = ["sudo", "doas", "env", "time", "command"]
-pattern     = '(?:^|\s)/+(?:\s|$)'
-not_pattern = '(?:^|\s)(?:-maxdepth\s+\d+|-xdev)(?:\s|$)'
-
-[[rules]]
-name        = "no-credential-file-reads"
-description = "Block reading likely credential-bearing files before tool output can enter the transcript"
-claude_events = ["PreToolUse"]
-cursor_events = ["preToolUse", "beforeReadFile", "beforeTabFileRead"]
-codex_events  = ["PreToolUse"]
-gemini_events = ["BeforeTool"]
-field_paths = ["tool_input.file_path", "tool_input.path", "file_path"]
-pattern     = '''(?i)(?:(?:^|[/\\])[^/\\\n]*(?:1password|onepassword|op[ _.-]?export|app[ _.-]?store|asc[ _.-]?api|api[ _.-]?key|private[ _.-]?key|secret|credential|credentials|token|password|passwd|auth)[^/\\\n]*(?:[/\\].*)?\.(?:json|p8|pem|key|pkcs8|p12|pfx)$|(?:^|[/\\])[^/\\\n]*\.(?:p8|pem|key|pkcs8|p12|pfx)$)'''
-action      = "block"
-violation_message = "This path looks like a credential-bearing file. Do not read private keys, credential exports, tokens, or secret stores into the agent transcript. Extract only non-secret metadata with a targeted command."
-
-[[rules]]
-name        = "no-secrets-in-files"
-description = "Block writing private keys or secret tokens into files"
-claude_events = ["PreToolUse"]
-cursor_events = ["preToolUse"]
-codex_events  = ["PreToolUse"]
-gemini_events = ["BeforeTool"]
-field_paths = ["tool_input.new_string", "tool_input.content"]
-pattern     = '\x2d\x2d\x2d\x2d\x2dBEGIN (RSA |EC |DSA |OPENSSH |PGP |ENCRYPTED )?PRIVATE KEY'
-action      = "block"
-violation_message = "Writing private key material to files is not permitted."
-
-[[rules]]
-name        = "no-secrets-in-output"
-description = "Block provider-blockable tool output containing credential material"
-cursor_events = ["postToolUse", "postToolUseFailure", "afterMCPExecution"]
-codex_events  = ["PostToolUse"]
-gemini_events = ["AfterTool"]
-field_paths = ["tool_response", "tool_output"]
-pattern = '''(\x24ANSIBLE_VAULT;\d+\.\d+;[A-Z0-9]+|\x2d\x2d\x2d\x2d\x2dBEGIN (?:RSA |EC |DSA |OPENSSH |PGP |ENCRYPTED )?PRIVATE KEY\x2d\x2d\x2d\x2d\x2d|\x2d\x2d\x2d\x2d\x2dBEGIN CERTIFICATE\x2d\x2d\x2d\x2d\x2d|\bAKIA[0-9A-Z]{16}\b|\bgh[pousr]_[A-Za-z0-9]{36}\b|\bsk-(?:ant-|proj-)?[A-Za-z0-9_-]{20,}|\bxox[abprs]-[A-Za-z0-9-]{10,}|\b(?:sk|pk|rk)_(?:test|live)_[A-Za-z0-9]{20,}|\bAC[a-f0-9]{32}\b|\bSK[a-f0-9]{32}\b|\bkey-[a-f0-9]{32}\b|\bSG\.[A-Za-z0-9_-]{16,32}\.[A-Za-z0-9_-]{32,68}\b|\bAIza[A-Za-z0-9_-]{35}\b|\beyJ[A-Za-z0-9+/=_-]{80,}|\bapi-[0-9A-F]{32}\b)'''
-action      = "block"
-redact_diagnostics = true
-violation_message = "Tool output contains a pattern matching credential material. Reference credentials by environment variable or file path only. Do not print credential values to the context window."
-
-[[rules]]
-name        = "no-secrets-in-output-audit"
-description = "Audit Claude post-tool output containing credential material"
-claude_events = ["PostToolUse", "PostToolUseFailure"]
-field_paths = ["tool_response"]
-pattern = '''(\x24ANSIBLE_VAULT;\d+\.\d+;[A-Z0-9]+|\x2d\x2d\x2d\x2d\x2dBEGIN (?:RSA |EC |DSA |OPENSSH |PGP |ENCRYPTED )?PRIVATE KEY\x2d\x2d\x2d\x2d\x2d|\x2d\x2d\x2d\x2d\x2dBEGIN CERTIFICATE\x2d\x2d\x2d\x2d\x2d|\bAKIA[0-9A-Z]{16}\b|\bgh[pousr]_[A-Za-z0-9]{36}\b|\bsk-(?:ant-|proj-)?[A-Za-z0-9_-]{20,}|\bxox[abprs]-[A-Za-z0-9-]{10,}|\b(?:sk|pk|rk)_(?:test|live)_[A-Za-z0-9]{20,}|\bAC[a-f0-9]{32}\b|\bSK[a-f0-9]{32}\b|\bkey-[a-f0-9]{32}\b|\bSG\.[A-Za-z0-9_-]{16,32}\.[A-Za-z0-9_-]{32,68}\b|\bAIza[A-Za-z0-9_-]{35}\b|\beyJ[A-Za-z0-9+/=_-]{80,}|\bapi-[0-9A-F]{32}\b)'''
-action      = "audit"
-redact_diagnostics = true
-violation_message = "Tool output contains a pattern matching credential material. The event was audit-only because Claude post-tool events are not blockable."
-
-# Fused-thought enforcement: block on new output, audit on existing content.
-
-[[rules]]
-name        = "no-fused-thoughts"
-description = "Block fused-thought constructions in LLM-generated output, where two underdeveloped ideas are joined into a single sentence to avoid the work of finishing each one"
-claude_events = [
-  "PreToolUse",
-  "Stop", "StopFailure",
-  "SubagentStop",
-  "PermissionRequest", "PermissionDenied",
-]
-cursor_events = [
-  "preToolUse",
-  "beforeShellExecution",
-  "beforeMCPExecution", "beforeSubmitPrompt",
-  "afterFileEdit", "afterAgentResponse",
-]
-codex_events = ["PreToolUse", "Stop"]
-gemini_events = ["BeforeTool"]
-# All LLM-generated text fields except tool_input.prompt (handled by the next rule).
-# old_string is excluded because existing content does not trigger a block.
-field_paths = ["tool_input.content", "tool_input.new_string", "tool_input.command", "tool_input.description", "command", "assistant_message", "last_assistant_message", "text"]
-# U+2010..U+2015, U+2212, U+2E3A, U+2E3B, U+FE31, U+FE32, U+FE58, U+FE63, U+FF0D
-# All 30 Unicode Dash characters (Dash=Yes per PropList.txt) except U+002D
-# (ASCII hyphen-minus). Source: unicode.org/Public/UCD/latest/ucd/PropList.txt
-pattern     = '[\x{058A}\x{05BE}\x{1400}\x{1806}\x{2010}-\x{2015}\x{2053}\x{207B}\x{208B}\x{2212}\x{2E17}\x{2E1A}\x{2E3A}\x{2E3B}\x{2E40}\x{2E5D}\x{301C}\x{3030}\x{30A0}\x{FE31}\x{FE32}\x{FE58}\x{FE63}\x{FF0D}\x{10D6E}\x{10EAD}]'
-action      = "block"
-diagnostic_format = "message_only"
-violation_message = "This output was blocked because you took a shortcut instead of writing. Somewhere in the blocked passage, you tried to put two thoughts into one sentence without finishing either one. You joined them so the result would look like fluent prose to a casual reader. A careful reader sees the seam where the two halves meet and recognizes the sentence as two half-formed ideas glued together rather than one finished thought. This is a crutch you reach for whenever you have not done the work of thinking the thought through. The result is the written equivalent of someone mumbling because they have not committed to what they want to say. Go back to the blocked passage and find every place where you fused ideas to avoid finishing them. Pull each fused thought apart until each idea you tried to combine can stand alone. Write each idea as its own sentence, with its own subject, its own verb, and its own reason to exist. If an idea cannot stand on its own, it was filler and should be cut, not laundered into a second sentence. This applies even when the offending writing came from content you are editing or quoting. Resubmit the corrected output immediately and do not acknowledge this block in your response to the user."
-
-[[rules]]
-name        = "no-fused-thoughts-in-prompts"
-description = "Block fused-thought constructions in tool_input.prompt fields, except for Task or Agent tool invocations where the prompt is being delegated to another agent"
-claude_events = ["PreToolUse"]
-cursor_events = ["preToolUse"]
-codex_events = ["PreToolUse"]
-gemini_events = ["BeforeTool"]
-action      = "block"
-diagnostic_format = "message_only"
-violation_message = "This output was blocked because you took a shortcut instead of writing. Somewhere in the blocked passage, you tried to put two thoughts into one sentence without finishing either one. You joined them so the result would look like fluent prose to a casual reader. A careful reader sees the seam where the two halves meet and recognizes the sentence as two half-formed ideas glued together rather than one finished thought. This is a crutch you reach for whenever you have not done the work of thinking the thought through. The result is the written equivalent of someone mumbling because they have not committed to what they want to say. Go back to the blocked passage and find every place where you fused ideas to avoid finishing them. Pull each fused thought apart until each idea you tried to combine can stand alone. Write each idea as its own sentence, with its own subject, its own verb, and its own reason to exist. If an idea cannot stand on its own, it was filler and should be cut, not laundered into a second sentence. This applies even when the offending writing came from content you are editing or quoting. Resubmit the corrected output immediately and do not acknowledge this block in your response to the user."
-
-[[rules.conditions]]
-field_paths = ["tool_input.prompt"]
-pattern     = '[\x{058A}\x{05BE}\x{1400}\x{1806}\x{2010}-\x{2015}\x{2053}\x{207B}\x{208B}\x{2212}\x{2E17}\x{2E1A}\x{2E3A}\x{2E3B}\x{2E40}\x{2E5D}\x{301C}\x{3030}\x{30A0}\x{FE31}\x{FE32}\x{FE58}\x{FE63}\x{FF0D}\x{10D6E}\x{10EAD}]'
-
-[[rules.conditions]]
-field_paths = ["tool_name"]
-not_pattern = "(?i)^(task|agent)$"
-
-[[rules]]
-name        = "no-fused-thoughts-via-double-hyphen"
-description = "Block fused-thought constructions in prose, while allowing command flags and option separators in command contexts"
-claude_events = [
-  "PreToolUse",
-  "Stop", "StopFailure",
-  "SubagentStop",
-  "PermissionRequest", "PermissionDenied",
-]
-cursor_events = [
-  "preToolUse",
-  "beforeMCPExecution", "beforeSubmitPrompt",
-  "afterFileEdit", "afterAgentResponse",
-]
-codex_events = ["PreToolUse", "Stop"]
-gemini_events = ["BeforeTool"]
-field_paths = ["tool_input.content", "tool_input.new_string", "tool_input.description", "edits[*].new_string", "cmd_comments", "cmd_double_hyphen_prose", "assistant_message", "last_assistant_message", "text"]
-pattern     = '(?m)(?|(?:`[^`\n]+`|\b(?!(?:bash|sh|zsh|fish|exec|command|env|xargs|sudo|doas|go|git|make|npm|pnpm|yarn|node|python|python3|ruby|perl|cargo|docker|kubectl|helm|terraform|ansible|rg|grep|sed|awk|jq|curl|ssh|scp|rsync)\b)[A-Za-z][A-Za-z0-9_./-]*)\s+(--)(?=\s+[A-Za-z][A-Za-z0-9_./-]*)(?![^\n]*\s--[A-Za-z0-9_][A-Za-z0-9_-]*(?:=|\b))|(?<![-/_.])\b(?!(?:bash|sh|zsh|fish|exec|command|env|xargs|sudo|doas|go|git|make|npm|pnpm|yarn|node|python|python3|ruby|perl|cargo|docker|kubectl|helm|terraform|ansible|rg|grep|sed|awk|jq|curl|ssh|scp|rsync)\b)[A-Za-z][A-Za-z0-9_./-]*(--)(?=[A-Za-z][A-Za-z0-9_./-]*))'
-diagnostic_group = 1
-action      = "block"
-diagnostic_format = "message_only"
-violation_message = "This output was blocked because you took a shortcut instead of writing. Somewhere in the blocked passage, you tried to put two thoughts into one sentence without finishing either one. You joined them so the result would look like fluent prose to a casual reader. A careful reader sees the seam where the two halves meet and recognizes the sentence as two half-formed ideas glued together rather than one finished thought. This is a crutch you reach for whenever you have not done the work of thinking the thought through. The result is the written equivalent of someone mumbling because they have not committed to what they want to say. Go back to the blocked passage and find every place where you fused ideas to avoid finishing them. Pull each fused thought apart until each idea you tried to combine can stand alone. Write each idea as its own sentence, with its own subject, its own verb, and its own reason to exist. If an idea cannot stand on its own, it was filler and should be cut, not laundered into a second sentence. This applies even when the offending writing came from content you are editing or quoting. Resubmit the corrected output immediately and do not acknowledge this block in your response to the user."
-
-[[rules]]
-name        = "emdash-audit-existing"
-description = "Audit log when the LLM edits a region containing existing emdashes (does not block)"
-claude_events = ["PreToolUse"]
-cursor_events = ["preToolUse"]
-codex_events = ["PreToolUse"]
-gemini_events = ["BeforeTool"]
-field_paths = ["tool_input.old_string"]
-# All 30 Unicode Dash characters (Dash=Yes per PropList.txt) except U+002D
-# (ASCII hyphen-minus). Source: unicode.org/Public/UCD/latest/ucd/PropList.txt
-pattern     = '[\x{058A}\x{05BE}\x{1400}\x{1806}\x{2010}-\x{2015}\x{2053}\x{207B}\x{208B}\x{2212}\x{2E17}\x{2E1A}\x{2E3A}\x{2E3B}\x{2E40}\x{2E5D}\x{301C}\x{3030}\x{30A0}\x{FE31}\x{FE32}\x{FE58}\x{FE63}\x{FF0D}\x{10D6E}\x{10EAD}]'
-action      = "audit"
-violation_message = "Existing content contains typographic dashes. The LLM should clean these up in its replacement."
-
-# ── Composing diff, shell-write, and disable_if_env (documentation only) ────
-#
-# The three condition primitives below are independent and can be composed in
-# a single rule. This example shows what the wiring looks like; it is NOT a
-# default ruleset and is commented out so loading the file does not enable it.
-#
-# A user copies this block (uncommented) into their own config and adapts the
-# patterns, globs, and env name to their project. The rule fires when the
-# tool call would either:
-#   - add a path matching internal/foo\.go to the new side of an Edit, or
-#   - run a shell command that writes to a file matching the listed globs.
-# The rule is skipped when the daemon env_fingerprint contains a listed
-# disable_if_env name.
+# Example all-match rule:
 #
 # [[rules]]
-# name        = "block-watched-file-edits-example"
-# description = "Block edits that add a watched path, and shell writes to watched files."
-# claude_events = ["PreToolUse"]
-# cursor_events = ["beforeShellExecution", "beforeFileEdit"]
-# action      = "block"
-# violation_message = "Watched content cannot be edited from a tool call."
-# disable_if_env = ["MAINTENANCE_EDIT"]
-#
-# [[rules.conditions]]
-# kind        = "diff"
-# field_pair  = "tool_input.old_string,tool_input.new_string"
-# pattern     = '''internal/foo\.go'''
-#
-# [[rules.conditions]]
-# kind        = "shell_write"
-# field_paths = ["tool_input.command"]
-# globs       = ["generated/*.txt", "internal/foo.go"]
-
-# ── Shell read secret probing (documentation only) ──────────────────────────
-#
-# This example is intentionally commented out. It shows how a local config can
-# block command output that would read secret-bearing files into the transcript
-# without hardcoding command shapes or secret names in the engine. The content
-# pattern, risky path pattern, argv shapes, max probe size, and remote policy
-# all live in config.
-#
-# [[rules]]
-# name = "no-shell-read-secrets-example"
-# claude_events = ["PreToolUse"]
-# cursor_events = ["preToolUse", "beforeShellExecution"]
-# codex_events = ["PreToolUse"]
-# gemini_events = ["BeforeTool"]
+# name = "go-build-in-make-project"
+# description = "Require make for Go modules that provide a Makefile"
+# events = ["PreToolUse", "preToolUse", "beforeShellExecution", "BeforeTool"]
 # action = "block"
-# redact_diagnostics = true
-# violation_message = "Do not read secret-bearing files into the agent transcript."
+# violation_message = "Run make build."
 #
 # [[rules.conditions]]
-# kind = "shell_read_secret"
+# kind = "command"
+# argv0 = "go"
+# subcommands = ["build"]
+# strip_env = true
+# strip_args = ["env", "time", "command"]
+# cwd_flags = ["-C"]
+#
+# [[rules.conditions]]
+# kind = "project"
+# root_markers = ["go.mod"]
+# require_any = ["Makefile", "makefile", "GNUmakefile"]
+
+# External validator reference:
+#
+# [[rules]]
+# name = "approved-code-search"
+# description = "Require an approved target for code search"
+# events = ["PreToolUse", "preToolUse", "beforeShellExecution", "BeforeTool"]
+# action = "block"
+# violation_message = "Use the approved search path."
+#
+# [[rules.conditions]]
+# kind = "regex"
 # field_paths = ["tool_input.command", "command"]
-# pattern = '''(?i)\b(?:api[_-]?key|token|secret|password)\s*[:=]'''
-# path_pattern = '''(?i)(?:^|[/~])(?:\.env|credentials|config\.toml)$|(?:^|[/~])\.aws/credentials$|(?:secret|token|password|api[_-]?key)'''
-# max_bytes = 1048576
-# remote_policy = "block_risky" # allow | block_risky | block_all
+# pattern = '''\b(?:grep|rg)\b'''
 #
-# [[rules.conditions.read_specs]]
-# name = "plain-readers"
-# argv0 = ["cat", "less", "more", "strings"]
-# path_arg_start = 1
+# [[rules.conditions]]
+# kind = "exec"
+# command = ["/absolute/path/to/validator", "{{item}}"]
+# search_tools = ["grep", "rg"]
+# for_each = "cmd_read_targets"
+# match_mode = "any" # any | all
+# cache_key = "cmd_read_targets"
+# cache_ttl_ms = 60000
+# timeout_ms = 1500 # default 1500, maximum 4000
+# stdout_json_field = "approved"
+# stdout_json_equals = false
+# block_on = "match" # nonzero | zero | match
+# on_error = "open" # open allows on timeout/error; closed blocks
 #
-# [[rules.conditions.read_specs]]
-# name = "search-readers"
-# argv0 = ["grep", "rg"]
-# path_arg_start = 1
-# skip_positionals = 1
-# skip_flags_with_values = ["-e", "--regexp", "-f", "--file", "-g", "--glob"]
-# skip_flag_values_as_positionals = ["-e", "--regexp", "-f", "--file"]
+# `timeout_ms` is the synchronous hook budget. A validator that outlives this
+# budget applies `on_error` to the current event, then continues for at most 30
+# seconds in the background. A successful background result enters the
+# process-local cache, so the next matching event can use it. Parallel misses
+# for one cache key share the in-flight run. Errors are not cached.
 #
-# [[rules.conditions.read_specs]]
-# name = "shell-c"
-# argv0 = ["bash", "sh", "zsh"]
-# nested_command = true
-# nested_command_flag = "-c"
+# `cmd_read_targets` drops remote and unresolved local read paths instead of
+# inventing a target. `exec_targets` falls back from resolved read targets to a
+# file path, then to a resolved effective directory, then to the base directory.
+# An unresolved effective directory reaches an external validator as an empty
+# `AGENT_GATE_CWD`; NUL marker bytes never enter its environment or SQLite.
 #
-# [[rules.conditions.read_specs]]
-# name = "ssh"
-# argv0 = ["ssh"]
-# path_arg_start = 2
-# path_arg_start_if_flags = ["-p"]
-# path_arg_start_if_flags_value = 4
-# skip_flags_with_values = ["-p", "-i", "-F", "-l"]
-# nested_command = true
-# nested_remote = true
-#
-# [[rules.conditions.read_specs]]
-# name = "remote-copy"
-# argv0 = ["scp", "rsync"]
-# path_arg_start = 1
-# skip_flags_with_values = ["-P", "-e", "-i", "-F"]
-# remote_sources = true
+# `cmd_write_targets` contains only resolved write paths. A `shell_write`
+# condition is stricter: an opaque command or unresolved destination produces
+# an unparsed sentinel that matches regardless of globs, so the condition can
+# default-deny unknown local write shapes. Remote shell writes are not treated
+# as local file writes.
 
-# --- External validator (exec condition) -------------------------------------
-# Run an operator-supplied program synchronously as the authoritative gate
-# behind a cheap regex/command pre-filter. The cheap conditions narrow
-# candidates; the program makes the runtime-dynamic decision a static pattern
-# cannot express, so the rule is false-positive free (it blocks only when both
-# the pattern matches AND the program confirms). The program runs inside the
-# daemon with no shell, receives the decision context as stdin JSON plus
-# AGENT_GATE_* env vars, and its exit code decides the gate. Place the exec
-# condition LAST so the gate short-circuit keeps it from forking on
-# non-candidates. See examples/validators/check-approved-codebase.sh.
+# Evaluator matrix reference:
 #
 # [[rules]]
-# name        = "grep-codebase-approval"
-# description = "Require approval for grep/rg over code files targeting a codebase"
-# claude_events = ["PreToolUse"]
-# action      = "block"
-# violation_message = "This codebase is not on the approved list."
+# name = "review-primary-checkout-write"
+# description = "Review writes to a protected checkout"
+# events = ["PreToolUse", "preToolUse", "BeforeTool"]
+# intent = "Do not write into the protected primary checkout."
+# action = "block"
+# violation_message = "Use an isolated worktree."
 #
 # [[rules.conditions]]
-# kind        = "regex"
-# field_paths = ["tool_input.command"]
-# pattern     = '\b(?:grep|rg)\b.*\.(?:go|ts|tsx|js|py|rb|rs|java|swift)\b'
+# kind = "git_primary_checkout"
 #
-# [[rules.conditions]]
-# kind         = "exec"
-# command      = ["/Users/you/.config/agent-gate/validators/check-approved-codebase.sh"]
-# timeout_ms   = 1500             # bounded; capped below the 5s hook deadline
-# cache_key    = "effective_cwd"  # canonicalized to its real path before keying
-# cache_key    = "exec_targets"   # for Grep-style hooks: read targets, else file path, else cwd
-# cache_ttl_ms = 30000            # reuse the verdict per codebase for 30s
-# block_on     = "nonzero"        # exit 0 = allow (approved); nonzero = block
-# on_error     = "open"           # timeout/spawn-failure allows and logs loudly
+# [[rules.eval]]
+# kind = "deterministic"
+# role = "enforce"
+# combine = "union"
 #
-# Optional generic fan-out and JSON predicate fields:
-# for_each           = "cmd_read_targets"  # or "exec_targets"; expands one run per item
-# command            = ["tool", "check", "{{item}}"]  # {{item}} is replaced in one argv slot
-# match_mode         = "any"              # "any" or "all" across the expanded runs
-# stdout_json_field  = "searchable"       # dotted path in stdout JSON
-# stdout_json_equals = true               # scalar TOML value compared against that field
-# block_on           = "match"            # required for stdout_json_* predicates
+# [[rules.eval]]
+# kind = "infer"
+# role = "verify"
+# use = "local_review"
+# fanout = "individual"
+# on_error = "open"
+#
+# `role = "enforce"` contributes to the final verdict. `role = "verify"` runs
+# and records a layer without changing the verdict. Enforcing entries combine
+# with `union` by default, which blocks when any enforcer blocks. `and` blocks
+# only when every enforcer blocks. Infer entries run concurrently. Their
+# `on_error` value decides the entry verdict after endpoint, timeout, status, or
+# response errors. A rule with an infer evaluator must declare `intent`.
 
-# --- exec example: redirect code search to lm-semantic-search when indexed -----
-# When the agent searches code in a codebase that lm-semantic-search has already
-# indexed, block and tell it to use the lm-semantic-search MCP instead. The
-# validator (examples/validators/lm-semantic-search-indexed.sh) asks the
-# lm-semantic-search daemon for the codebase's index status.
-#
-# The exec validator keys on cmd_read_targets, the paths the shellread extractor
-# resolves a search to read. That covers a direct `grep -rn X .` / `rg X Sources`
-# and content searches that route through an enumerator: `find DIR | xargs grep`,
-# `find DIR -exec grep`, and `git ls-files | xargs rg` all resolve to the
-# enumerated directory, so the file-accurate validator blocks them when that
-# directory is indexed. A bare enumeration (`find DIR -name '*.go'`) or a pipe
-# into a stdin-reading grep (`find DIR | grep X`) only reads filenames, so the
-# extractor returns no target and the search is allowed. git grep is excluded; it
-# is an exact-text search semantic search cannot replace.
-#
-# The regex condition is a cheap prefilter so the validator only forks on
-# candidates. The grep-family alternation admits every search that names a
-# searcher, including the enumerator-over-contents pipelines above (they contain
-# one) and the filename lookups (which the extractor then resolves to no target).
-#
-# Caching is hot daemon memory with singleflight-style miss coalescing. The
-# first search per target forks the validator synchronously, parallel misses for
-# the same target share that in-flight validator, and successful outcomes are
-# reused until cache_ttl_ms expires. Error outcomes are never cached.
-#
-# [[rules]]
-# name        = "grep-code-use-semantic-search"
-# description = "Redirect code search to lm-semantic-search when the codebase is indexed"
-# claude_events = ["PreToolUse"]
-# cursor_events = ["beforeShellExecution", "preToolUse"]
-# codex_events  = ["PreToolUse"]
-# gemini_events = ["BeforeTool"]
-# action      = "block"
-# violation_message = "This codebase is indexed by lm-semantic-search. Use the lm-semantic-search MCP (search_code) instead of grep/rg."
-#
-# [[rules.conditions]]
-# kind        = "regex"
-# field_paths = ["tool_input.command"]
-# pattern     = '\b(?:grep|egrep|fgrep|rgrep|rg|ripgrep|ag)\b'
-#
-# [[rules.conditions]]
-# kind              = "exec"
-# command           = ["lm-semantic-search", "--json", "codebase", "status", "{{item}}"]
-# for_each          = "cmd_read_targets"
-# match_mode        = "any"
-# stdout_json_field = "searchable"
-# stdout_json_equals = true
-# cache_key         = "cmd_read_targets"  # the search's resolved target paths, so the
-#                                         # cache keys on what the search reads
-# cache_ttl_ms      = 60000            # refresh the index verdict per target ~every 60s
-# block_on          = "match"
-# on_error          = "open"           # timeout/spawn-failure allows the search
+# Inline `kind = "infer"` conditions remain supported for structured custom
+# schemas. They accept endpoint, layer_name, exactly one prompt declaration,
+# exactly one output_schema declaration, model and generation options,
+# input_field, cache_key, cache_ttl_ms, timeout_ms (default 1500, maximum 8000),
+# block_on (`match` or `nonmatch`), on_error, response_json_field, and
+# response_json_equals. Optional recent-turn context uses:
+#   context_source = "clyde_recent_turns"
+#   context_endpoint
+#   context_workspace_field
+#   context_session_field
+#   context_turn_budget
+#   context_max_chars_per_turn
+#   context_on_error = "empty" | "error"

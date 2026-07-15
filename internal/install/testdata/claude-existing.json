@@ -1,0 +1,40 @@
+{
+  "theme": "kept",
+  "permissions": {
+    "allow": ["Read"]
+  },
+  "hooks": {
+    "EmptyExternal": [],
+    "WorktreeCreate": [
+      {
+        "hooks": [
+          {"type": "command", "command": "/obsolete/bin/agent-gate"}
+        ],
+        "failClosed": false
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {"type": "command", "command": "/Users/example/.local/bin/clyde hook sessionstart"}
+        ],
+        "failClosed": false
+      },
+      {
+        "matcher": "external-first",
+        "hooks": [
+          {"type": "command", "command": "external-hook --first"},
+          {"type": "command", "command": "/obsolete/bin/agent-gate session-start"},
+          {"type": "command", "command": "wrapper --delegate /obsolete/bin/agent-gate"},
+          {"type": "command", "command": "external-hook --last"}
+        ],
+        "failClosed": true
+      },
+      {
+        "matcher": "empty-external",
+        "hooks": [],
+        "failClosed": true
+      }
+    ]
+  }
+}

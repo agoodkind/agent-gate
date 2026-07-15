@@ -178,15 +178,6 @@
         }
       ],
       "failClosed": false
-    },
-    {
-      "hooks": [
-        {
-          "type": "command",
-          "command": "/Users/agoodkind/.local/bin/clyde hook sessionstart"
-        }
-      ],
-      "failClosed": false
     }
   ],
   "Stop": [

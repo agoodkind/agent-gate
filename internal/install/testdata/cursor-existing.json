@@ -1,0 +1,18 @@
+{
+  "version": 7,
+  "theme": "kept",
+  "hooks": {
+    "removedEvent": [
+      {"command": "/obsolete/bin/agent-gate", "failClosed": false}
+    ],
+    "preToolUse": [
+      {"command": "external-hook --first", "failClosed": true},
+      {"command": "agent-gate", "failClosed": false},
+      {"command": "wrapper --delegate agent-gate", "failClosed": true},
+      {"command": "external-hook --last", "failClosed": true}
+    ],
+    "oldEvent": [
+      {"command": "old", "failClosed": true}
+    ]
+  }
+}

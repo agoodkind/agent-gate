@@ -100,6 +100,18 @@ type HooksOptions struct {
 	InstallCopilot bool
 }
 
+// HookInstallationPlan contains fully prepared hook file updates.
+type HookInstallationPlan struct {
+	writes []hookInstallationWrite
+	writer io.Writer
+}
+
+type hookInstallationWrite struct {
+	targetPath string
+	provider   string
+	content    []byte
+}
+
 // DefaultHooksOptions returns hook options matching install.sh defaults.
 func DefaultHooksOptions(binPath string) HooksOptions {
 	return HooksOptions{
@@ -124,62 +136,145 @@ type ServiceOptions struct {
 	StateHome           string
 	Stdout              io.Writer
 	Runner              CommandRunner
+	Ready               func() error
 }
 
-// InstallHooks writes configured hook files.
-func InstallHooks(options HooksOptions) error {
-	if err := validateExecutable(options.BinPath); err != nil {
+// ValidateServiceOptions verifies service inputs without writing service files.
+func ValidateServiceOptions(options ServiceOptions) error {
+	canonicalBinPath, err := CanonicalExecutablePath(options.BinPath)
+	if err != nil {
+		return err
+	}
+	options.BinPath = canonicalBinPath
+	if err := ValidateExecutable(options.BinPath); err != nil {
 		return err
 	}
 	homeDir, err := resolvedHomeDir(options.HomeDir)
 	if err != nil {
 		return err
 	}
+	switch servicePlatform(runtime.GOOS) {
+	case servicePlatformDarwin:
+		stateDir := defaultStateDir(homeDir, options.StateHome)
+		_, err = renderServiceTemplate(
+			options.ServiceTemplatesDir,
+			"macos",
+			launchdTemplateName,
+			map[string]string{
+				"@@BIN_PATH@@": options.BinPath,
+				"@@HOME@@":     homeDir,
+				"@@LOG_PATH@@": filepath.Join(stateDir, agentGateBinaryName+".log"),
+			},
+		)
+	case servicePlatformLinux:
+		_, err = renderServiceTemplate(
+			options.ServiceTemplatesDir,
+			"systemd",
+			systemdServiceTemplate,
+			map[string]string{"@@BIN_PATH@@": options.BinPath},
+		)
+	default:
+		return fmt.Errorf("unsupported OS for service install: %s", runtime.GOOS)
+	}
+	return err
+}
+
+// PrepareHookInstallation reads and validates every selected hook update without writing files.
+func PrepareHookInstallation(options HooksOptions) (*HookInstallationPlan, error) {
+	canonicalBinPath, err := CanonicalExecutablePath(options.BinPath)
+	if err != nil {
+		return nil, err
+	}
+	if err := ValidateExecutable(canonicalBinPath); err != nil {
+		return nil, err
+	}
+	homeDir, err := resolvedHomeDir(options.HomeDir)
+	if err != nil {
+		return nil, err
+	}
 	writer := options.Stdout
 	if writer == nil {
 		writer = io.Discard
 	}
+	plan := &HookInstallationPlan{writes: nil, writer: writer}
 	if options.InstallClaude {
 		targetPath := filepath.Join(homeDir, ".claude", "settings.json")
-		if err := updateJSONHooks(options.TemplatesDir, "claude", options.BinPath, targetPath, false); err != nil {
-			return err
+		content, prepareErr := prepareJSONHooks(options.TemplatesDir, "claude", canonicalBinPath, targetPath, false)
+		if prepareErr != nil {
+			return nil, prepareErr
 		}
-		_, _ = fmt.Fprintf(writer, "agent-gate install: updated %s (claude hooks)\n", targetPath)
+		plan.addWrite(targetPath, "claude", content)
 	}
 	if options.InstallCodex {
 		targetPath := filepath.Join(homeDir, ".codex", "config.toml")
-		if err := updateCodexHooks(options.TemplatesDir, options.BinPath, targetPath); err != nil {
-			return err
+		content, prepareErr := prepareCodexHooks(options.TemplatesDir, canonicalBinPath, targetPath)
+		if prepareErr != nil {
+			return nil, prepareErr
 		}
-		_, _ = fmt.Fprintf(writer, "agent-gate install: updated %s (codex hooks)\n", targetPath)
+		plan.addWrite(targetPath, "codex", content)
 	}
 	if options.InstallCursor {
 		targetPath := filepath.Join(homeDir, ".cursor", "hooks.json")
-		if err := updateJSONHooks(options.TemplatesDir, "cursor", options.BinPath, targetPath, true); err != nil {
-			return err
+		content, prepareErr := prepareJSONHooks(options.TemplatesDir, "cursor", canonicalBinPath, targetPath, true)
+		if prepareErr != nil {
+			return nil, prepareErr
 		}
-		_, _ = fmt.Fprintf(writer, "agent-gate install: updated %s (cursor hooks)\n", targetPath)
+		plan.addWrite(targetPath, "cursor", content)
 	}
 	if options.InstallGemini {
 		targetPath := filepath.Join(homeDir, ".gemini", "settings.json")
-		if err := updateJSONHooks(options.TemplatesDir, "gemini", options.BinPath, targetPath, false); err != nil {
-			return err
+		content, prepareErr := prepareJSONHooks(options.TemplatesDir, "gemini", canonicalBinPath, targetPath, false)
+		if prepareErr != nil {
+			return nil, prepareErr
 		}
-		_, _ = fmt.Fprintf(writer, "agent-gate install: updated %s (gemini hooks)\n", targetPath)
+		plan.addWrite(targetPath, "gemini", content)
 	}
 	if options.InstallCopilot {
 		targetPath := filepath.Join(homeDir, ".copilot", "hooks", "agent-gate.json")
-		if err := updateJSONHooks(options.TemplatesDir, "copilot", options.BinPath, targetPath, false); err != nil {
+		content, prepareErr := prepareReplacementJSONHooks(options.TemplatesDir, "copilot", canonicalBinPath, targetPath)
+		if prepareErr != nil {
+			return nil, prepareErr
+		}
+		plan.addWrite(targetPath, "copilot", content)
+	}
+	return plan, nil
+}
+
+// ApplyHookInstallation writes bytes retained by a prepared hook installation plan.
+func ApplyHookInstallation(plan *HookInstallationPlan) error {
+	if plan == nil {
+		return errors.New("hook installation plan is required")
+	}
+	for _, write := range plan.writes {
+		if err := writeFileAtomic(write.targetPath, write.content); err != nil {
 			return err
 		}
-		_, _ = fmt.Fprintf(writer, "agent-gate install: updated %s (copilot hooks)\n", targetPath)
+		_, _ = fmt.Fprintf(
+			plan.writer,
+			"agent-gate install: updated %s (%s hooks)\n",
+			write.targetPath,
+			write.provider,
+		)
 	}
 	return nil
 }
 
+func (plan *HookInstallationPlan) addWrite(targetPath string, provider string, content []byte) {
+	plan.writes = append(plan.writes, hookInstallationWrite{
+		targetPath: targetPath,
+		provider:   provider,
+		content:    content,
+	})
+}
+
 // InstallService writes and starts the per-user daemon service.
 func InstallService(options ServiceOptions) error {
-	if err := validateExecutable(options.BinPath); err != nil {
+	canonicalBinPath, err := CanonicalExecutablePath(options.BinPath)
+	if err != nil {
+		return err
+	}
+	options.BinPath = canonicalBinPath
+	if err := ValidateServiceOptions(options); err != nil {
 		return err
 	}
 	runner := options.Runner
@@ -236,11 +331,8 @@ func installLaunchdService(options ServiceOptions, homeDir string, writer io.Wri
 	if err := runner.Run("launchctl", "bootstrap", domain, targetPath); err != nil {
 		return logInstallError("launchctl bootstrap failed", fmt.Errorf("launchctl bootstrap failed: %s: %w", targetPath, err), slog.String("path", targetPath))
 	}
-	if err := runner.Run("launchctl", "kickstart", "-k", serviceTarget); err != nil {
-		return logInstallError("launchctl kickstart failed", fmt.Errorf("launchctl kickstart failed: %s: %w", serviceTarget, err), slog.String("service_target", serviceTarget))
-	}
 	_, _ = fmt.Fprintf(writer, "agent-gate install: installed launchd service %s\n", targetPath)
-	return nil
+	return waitForServiceReadiness(options.Ready)
 }
 
 func installSystemdService(options ServiceOptions, homeDir string, writer io.Writer, runner CommandRunner) error {
@@ -266,14 +358,22 @@ func installSystemdService(options ServiceOptions, homeDir string, writer io.Wri
 	if err := runner.Run("systemctl", "--user", "enable", "--now", systemdServiceName); err != nil {
 		return logInstallError("systemctl enable failed", fmt.Errorf("systemctl --user enable --now failed: %w", err))
 	}
-	if err := runner.Run("systemctl", "--user", "restart", systemdServiceName); err != nil {
-		return logInstallError("systemctl restart failed", fmt.Errorf("systemctl --user restart failed: %w", err))
-	}
 	_, _ = fmt.Fprintf(writer, "agent-gate install: installed systemd user service %s\n", targetPath)
+	return waitForServiceReadiness(options.Ready)
+}
+
+func waitForServiceReadiness(ready func() error) error {
+	if ready == nil {
+		return nil
+	}
+	if err := ready(); err != nil {
+		return logInstallError("service readiness failed", fmt.Errorf("readiness: %w", err))
+	}
 	return nil
 }
 
-func validateExecutable(binPath string) error {
+// ValidateExecutable verifies that binPath identifies an executable file.
+func ValidateExecutable(binPath string) error {
 	if binPath == "" {
 		return errors.New("--bin-path is required")
 	}
@@ -290,10 +390,16 @@ func validateExecutable(binPath string) error {
 	return nil
 }
 
-func updateJSONHooks(templatesDir string, tool string, binPath string, targetPath string, cursor bool) error {
+func prepareJSONHooks(
+	templatesDir string,
+	tool string,
+	binPath string,
+	targetPath string,
+	cursor bool,
+) ([]byte, error) {
 	renderedHooks, err := renderJSONHooks(templatesDir, tool, binPath)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	configJSON := []byte(defaultGenericJSONHooks)
 	if cursor {
@@ -302,11 +408,11 @@ func updateJSONHooks(templatesDir string, tool string, binPath string, targetPat
 	if existingJSON, readErr := os.ReadFile(targetPath); readErr == nil {
 		configJSON = existingJSON
 	} else if !errors.Is(readErr, os.ErrNotExist) {
-		return logInstallError("read JSON hook config failed", fmt.Errorf("read %s: %w", targetPath, readErr), slog.String("path", targetPath))
+		return nil, logInstallError("read JSON hook config failed", fmt.Errorf("read %s: %w", targetPath, readErr), slog.String("path", targetPath))
 	}
 	var target map[string]json.RawMessage
 	if err := json.Unmarshal(configJSON, &target); err != nil {
-		return logInstallError("parse JSON hook config failed", fmt.Errorf("parse %s: %w", targetPath, err), slog.String("path", targetPath))
+		return nil, logInstallError("parse JSON hook config failed", fmt.Errorf("parse %s: %w", targetPath, err), slog.String("path", targetPath))
 	}
 	if target == nil {
 		target = make(map[string]json.RawMessage)
@@ -316,13 +422,163 @@ func updateJSONHooks(templatesDir string, tool string, binPath string, targetPat
 			target["version"] = json.RawMessage("1")
 		}
 	}
-	target["hooks"] = renderedHooks
+	mergedHooks, err := mergeJSONHooks(target["hooks"], renderedHooks)
+	if err != nil {
+		return nil, logInstallError("merge JSON hooks failed", fmt.Errorf("merge %s: %w", targetPath, err), slog.String("path", targetPath))
+	}
+	target["hooks"] = mergedHooks
+	return marshalJSONHookConfig(targetPath, target)
+}
+
+func prepareReplacementJSONHooks(
+	templatesDir string,
+	tool string,
+	binPath string,
+	targetPath string,
+) ([]byte, error) {
+	renderedHooks, err := renderJSONHooks(templatesDir, tool, binPath)
+	if err != nil {
+		return nil, err
+	}
+	if _, readErr := os.ReadFile(targetPath); readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
+		return nil, logInstallError("read JSON hook config failed", fmt.Errorf("read %s: %w", targetPath, readErr), slog.String("path", targetPath))
+	}
+	target := map[string]json.RawMessage{"hooks": renderedHooks}
+	return marshalJSONHookConfig(targetPath, target)
+}
+
+func marshalJSONHookConfig(targetPath string, target map[string]json.RawMessage) ([]byte, error) {
 	output, err := json.MarshalIndent(target, "", "  ")
 	if err != nil {
-		return logInstallError("render JSON hook config failed", fmt.Errorf("render %s: %w", targetPath, err), slog.String("path", targetPath))
+		return nil, logInstallError("render JSON hook config failed", fmt.Errorf("render %s: %w", targetPath, err), slog.String("path", targetPath))
 	}
 	output = append(output, '\n')
-	return writeFileAtomic(targetPath, output)
+	return output, nil
+}
+
+func mergeJSONHooks(existingJSON json.RawMessage, managedJSON json.RawMessage) (json.RawMessage, error) {
+	existingHooks := make(map[string][]json.RawMessage)
+	if len(existingJSON) > 0 && string(existingJSON) != "null" {
+		if err := json.Unmarshal(existingJSON, &existingHooks); err != nil {
+			return nil, logInstallError("parse existing JSON hooks failed", fmt.Errorf("parse existing hooks: %w", err))
+		}
+	}
+	managedHooks := make(map[string][]json.RawMessage)
+	if err := json.Unmarshal(managedJSON, &managedHooks); err != nil {
+		return nil, logInstallError("parse managed JSON hooks failed", fmt.Errorf("parse managed hooks: %w", err))
+	}
+
+	for eventName, groups := range existingHooks {
+		if len(groups) == 0 {
+			continue
+		}
+		preservedGroups := make([]json.RawMessage, 0, len(groups))
+		for _, group := range groups {
+			preservedGroup, preserve, err := removeAgentGateCommands(group)
+			if err != nil {
+				return nil, logInstallError("clean JSON hook event failed", fmt.Errorf("clean event %s: %w", eventName, err), slog.String("event", eventName))
+			}
+			if preserve {
+				preservedGroups = append(preservedGroups, preservedGroup)
+			}
+		}
+		if len(preservedGroups) == 0 {
+			delete(existingHooks, eventName)
+			continue
+		}
+		existingHooks[eventName] = preservedGroups
+	}
+
+	for eventName, managedGroups := range managedHooks {
+		existingHooks[eventName] = append(existingHooks[eventName], managedGroups...)
+	}
+	output, err := json.Marshal(existingHooks)
+	if err != nil {
+		return nil, logInstallError("marshal merged JSON hooks failed", fmt.Errorf("marshal merged hooks: %w", err))
+	}
+	return json.RawMessage(output), nil
+}
+
+func removeAgentGateCommands(group json.RawMessage) (json.RawMessage, bool, error) {
+	var groupObject map[string]json.RawMessage
+	if err := json.Unmarshal(group, &groupObject); err != nil {
+		return nil, false, logInstallError("parse JSON hook group failed", fmt.Errorf("parse hook group: %w", err))
+	}
+	if isAgentGateCommandObject(groupObject) {
+		return nil, false, nil
+	}
+	nestedHooksJSON, hasNestedHooks := groupObject["hooks"]
+	if !hasNestedHooks {
+		return group, true, nil
+	}
+	var nestedHooks []json.RawMessage
+	if err := json.Unmarshal(nestedHooksJSON, &nestedHooks); err != nil {
+		return nil, false, logInstallError("parse JSON command group failed", fmt.Errorf("parse command group: %w", err))
+	}
+	if len(nestedHooks) == 0 {
+		return group, true, nil
+	}
+	preservedHooks := make([]json.RawMessage, 0, len(nestedHooks))
+	for _, hook := range nestedHooks {
+		var hookObject map[string]json.RawMessage
+		if err := json.Unmarshal(hook, &hookObject); err != nil {
+			preservedHooks = append(preservedHooks, hook)
+			continue
+		}
+		if !isAgentGateCommandObject(hookObject) {
+			preservedHooks = append(preservedHooks, hook)
+		}
+	}
+	if len(preservedHooks) == 0 {
+		return nil, false, nil
+	}
+	preservedHooksJSON, err := json.Marshal(preservedHooks)
+	if err != nil {
+		return nil, false, logInstallError("marshal JSON command group failed", fmt.Errorf("marshal command group: %w", err))
+	}
+	groupObject["hooks"] = preservedHooksJSON
+	preservedGroup, err := json.Marshal(groupObject)
+	if err != nil {
+		return nil, false, logInstallError("marshal JSON hook group failed", fmt.Errorf("marshal hook group: %w", err))
+	}
+	return json.RawMessage(preservedGroup), true, nil
+}
+
+func isAgentGateCommandObject(commandObject map[string]json.RawMessage) bool {
+	commandJSON, ok := commandObject["command"]
+	if !ok {
+		return false
+	}
+	var command string
+	if err := json.Unmarshal(commandJSON, &command); err != nil {
+		return false
+	}
+	trimmedCommand := strings.TrimSpace(command)
+	if trimmedCommand == agentGateBinaryName {
+		return true
+	}
+	executable := firstCommandToken(trimmedCommand)
+	return filepath.Base(executable) == agentGateBinaryName
+}
+
+func firstCommandToken(command string) string {
+	if command == "" {
+		return ""
+	}
+	if command[0] != '\'' && command[0] != '"' {
+		fields := strings.Fields(command)
+		if len(fields) == 0 {
+			return ""
+		}
+		return fields[0]
+	}
+	quote := command[0]
+	for i := 1; i < len(command); i++ {
+		if command[i] == quote {
+			return command[1:i]
+		}
+	}
+	return command
 }
 
 func renderJSONHooks(templatesDir string, tool string, binPath string) (json.RawMessage, error) {
@@ -409,17 +665,20 @@ func replaceJSONCommand(value json.RawMessage, binPath string) (json.RawMessage,
 	return json.RawMessage(output), true
 }
 
-func updateCodexHooks(templatesDir string, binPath string, targetPath string) error {
+func prepareCodexHooks(templatesDir string, binPath string, targetPath string) ([]byte, error) {
 	templateContent, err := readHookTemplate(templatesDir, "codex", "toml")
 	if err != nil {
-		return err
+		return nil, err
 	}
 	renderedTemplate := strings.ReplaceAll(string(templateContent), agentGatePlaceholder, binPath)
 	existingContent := ""
 	if content, readErr := os.ReadFile(targetPath); readErr == nil {
 		existingContent = string(content)
 	} else if !errors.Is(readErr, os.ErrNotExist) {
-		return logInstallError("read Codex config failed", fmt.Errorf("read %s: %w", targetPath, readErr), slog.String("path", targetPath))
+		return nil, logInstallError("read Codex config failed", fmt.Errorf("read %s: %w", targetPath, readErr), slog.String("path", targetPath))
+	}
+	if err := validateCodexManagedBlock(existingContent); err != nil {
+		return nil, logInstallError("validate Codex managed hooks failed", fmt.Errorf("validate %s: %w", targetPath, err), slog.String("path", targetPath))
 	}
 	contentWithoutBlock := removeCodexManagedBlock(existingContent)
 	contentWithFeature := ensureCodexHooksFeature(contentWithoutBlock)
@@ -430,7 +689,31 @@ func updateCodexHooks(templatesDir string, binPath string, targetPath string) er
 	output += "\n" + codexManagedBlockStart + "\n"
 	output += strings.TrimRight(renderedTemplate, "\n") + "\n"
 	output += codexManagedBlockEnd + "\n"
-	return writeFileAtomic(targetPath, []byte(output))
+	return []byte(output), nil
+}
+
+func validateCodexManagedBlock(content string) error {
+	inManagedBlock := false
+	sawManagedBlock := false
+	for _, line := range splitLines(content) {
+		switch line {
+		case codexManagedBlockStart:
+			if inManagedBlock || sawManagedBlock {
+				return errors.New("codex managed hooks contain multiple start markers")
+			}
+			inManagedBlock = true
+			sawManagedBlock = true
+		case codexManagedBlockEnd:
+			if !inManagedBlock {
+				return errors.New("codex managed hooks contain an unmatched end marker")
+			}
+			inManagedBlock = false
+		}
+	}
+	if inManagedBlock {
+		return errors.New("codex managed hooks contain an unmatched start marker")
+	}
+	return nil
 }
 
 func removeCodexManagedBlock(content string) string {

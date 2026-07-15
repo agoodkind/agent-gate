@@ -1,700 +1,249 @@
-# Hook Event Schemas
+# Hook payload and response contracts
 
-Complete JSON payload schemas for supported hook events in Claude Code, Cursor, Codex, and Gemini CLI.
+The daemon parses the provider payload fields below into typed adapters. Fields
+not listed here can remain in the raw intake payload, but they do not define the
+current typed rule surface. [../HOOKS.md](../HOOKS.md) lists which events the
+installer registers.
 
-**Sources:**
-- Claude Code: https://code.claude.com/docs/en/hooks
-- Cursor: https://cursor.com/docs/hooks
-- Codex: local integration notes in this repository
-- Gemini CLI: local integration notes in this repository
+All providers send JSON on standard input. The daemon selects an adapter from
+the explicit hook subcommand, provider environment signals, and payload
+fingerprints. Unknown events retain their common event, session, conversation,
+and working-directory fields through the fallback payload.
 
-Last verified: 2026-04-15.
+## Claude
 
----
+Claude payloads share this envelope:
+
+```typescript
+type ClaudeEnvelope = {
+  hook_event_name: string;
+  session_id: string;
+  transcript_path: string;
+  cwd: string;
+  permission_mode?: string;
+  agent_id?: string;
+  agent_type?: string;
+  model?: string;
+  turn_id?: string;
+  timestamp?: string;
+};
+```
+
+The typed adapter recognizes these event-specific fields:
+
+| Event | Additional fields parsed by agent-gate |
+| --- | --- |
+| `SessionStart` | `source` |
+| `SessionEnd` | `reason`, `duration_ms` |
+| `Setup` | `trigger` |
+| `PreToolUse` | `tool_name`, `tool_use_id`, `tool_input` |
+| `PostToolUse` | tool fields plus `tool_response` |
+| `PostToolUseFailure` | tool fields plus `error`, `error_type`, `is_interrupt` |
+| `PermissionRequest` | tool fields plus `permission_suggestions` |
+| `PermissionDenied` | tool fields plus `reason` |
+| `UserPromptSubmit` | `prompt`, `session_title` |
+| `Stop` | `stop_hook_active`, nullable `last_assistant_message` |
+| `StopFailure` | `error`, `error_details`, `last_assistant_message` |
+| `SubagentStart` | envelope fields |
+| `SubagentStop` | `stop_hook_active`, `agent_transcript_path`, `last_assistant_message` |
+| `TaskCreated`, `TaskCompleted` | `task_id`, `task_subject`, `task_description`, `teammate_name`, `team_name` |
+| `Notification` | `notification_type`, `message`, `title` |
+| `PreCompact` | `trigger`, `custom_instructions` |
+| `PostCompact` | `trigger`, `compact_summary` |
+| `InstructionsLoaded` | `file_path`, `memory_type`, `load_reason`, `globs`, `trigger_file_path`, `parent_file_path` |
+| `ConfigChange` | `source`, `file_path` |
+| `CwdChanged` | `old_cwd`, `new_cwd` |
+| `FileChanged` | `file_path`, `event` |
+| `WorktreeCreate` | `name` |
+| `WorktreeRemove` | `worktree_path` |
+| `Elicitation` | `mcp_server_name`, `message`, `mode`, `url`, `elicitation_id` |
+| `ElicitationResult` | `mcp_server_name`, `elicitation_id`, `mode`, `action` |
+| `TeammateIdle` | `teammate_name`, `team_name` |
+| `PostToolBatch` | `tool_calls[]` with tool name, id, input, and response |
+| `UserPromptExpansion` | `expansion_type`, `command_name`, `command_args`, `command_source`, `prompt` |
+| `MessageDisplay` | `message_id`, `index`, `final`, `delta` |
+
+Claude tool inputs expose `command`, `file_path`, `content`, `old_string`,
+`new_string`, `description`, `prompt`, `pattern`, `url`, and `query`
+when the invoking tool supplies them. Structured tool responses contribute only
+searchable text to rule fields; image bytes remain in raw intake and are not
+scanned as output text.
+
+An allow response writes `{}` to standard output and exits 0. A blocking event
+writes the diagnostic to standard error and exits 2. Observe-only events are
+downgraded before response rendering.
 
 ## Codex
 
-### Common fields
+Codex payloads share this envelope:
 
 ```typescript
-{
-  session_id: string;
-  transcript_path: string | null;
-  cwd: string;
+type CodexEnvelope = {
   hook_event_name: string;
-  model: string;
-}
-```
-
-### Supported events
-
-```typescript
-type CodexEvent =
-  | "SessionStart"
-  | "PreToolUse"
-  | "PermissionRequest"
-  | "PostToolUse"
-  | "UserPromptSubmit"
-  | "Stop";
-```
-
-### Important event-specific fields
-
-```typescript
-// SessionStart
-{ source: "startup" | "resume" | "clear" }
-
-// PreToolUse / PermissionRequest / PostToolUse
-{ turn_id: string; tool_name: string; tool_use_id?: string; tool_input: object; tool_response?: object }
-
-// UserPromptSubmit
-{ turn_id: string; prompt: string }
-
-// Stop
-{ turn_id: string; stop_hook_active: boolean; last_assistant_message?: string }
-```
-
----
-
-## Gemini CLI
-
-### Common fields
-
-```typescript
-{
   session_id: string;
   transcript_path: string;
   cwd: string;
+  model: string;
+};
+```
+
+| Event | Additional fields parsed by agent-gate |
+| --- | --- |
+| `SessionStart` | `source` |
+| `PreToolUse`, `PermissionRequest` | `turn_id`, `tool_name`, `tool_use_id`, `tool_input` |
+| `PostToolUse` | tool fields plus `tool_response` |
+| `UserPromptSubmit` | `turn_id`, `prompt` |
+| `Stop` | `turn_id`, `stop_hook_active`, `last_assistant_message` |
+| `PreCompact`, `PostCompact` | `turn_id`, `trigger` |
+| `SubagentStart` | `turn_id`, `permission_mode`, `agent_id`, `agent_type` |
+| `SubagentStop` | start fields plus `stop_hook_active`, `agent_transcript_path`, `last_assistant_message` |
+
+Codex tool inputs expose `command`, `file_path`, `content`, `old_string`,
+`new_string`, `description`, `prompt`, `workdir`, `directory`, `path`,
+`pattern`, `url`, and `query` when present.
+
+Codex allow responses write `{}` and exit 0. Blocks also exit 0 and use the
+event-specific JSON channel:
+
+- `PreToolUse` sets `hookSpecificOutput.permissionDecision` to `deny` and adds
+  `permissionDecisionReason`.
+- `PermissionRequest` sets `hookSpecificOutput.decision.behavior` to `deny` and
+  adds its message.
+- `PostToolUse` sets `continue` to false, `decision` to `block`, and carries the
+  diagnostic in `stopReason` and `reason`.
+- `UserPromptSubmit` sets `decision` to `block` and carries `reason`.
+- Lifecycle events render `{}` because they are observe-only.
+
+## Copilot
+
+Copilot uses Claude-style event names and a VS Code-shaped payload:
+
+```typescript
+type CopilotPayload = {
   hook_event_name: string;
-  timestamp: string;
-}
-```
-
-### Supported events
-
-```typescript
-type GeminiEvent =
-  | "BeforeTool"
-  | "AfterTool"
-  | "BeforeAgent"
-  | "AfterAgent"
-  | "BeforeModel"
-  | "BeforeToolSelection"
-  | "AfterModel"
-  | "SessionStart"
-  | "SessionEnd"
-  | "Notification"
-  | "PreCompress";
-```
-
-### Important event-specific fields
-
-```typescript
-// BeforeTool / AfterTool
-{ tool_name: string; tool_input: object; tool_response?: object; mcp_context?: object; original_request_name?: string }
-
-// BeforeAgent
-{ prompt: string }
-
-// AfterAgent
-{ prompt: string; prompt_response: string; stop_hook_active: boolean }
-
-// BeforeModel / BeforeToolSelection / AfterModel
-{ llm_request: object; llm_response?: object }
-
-// SessionStart / SessionEnd / Notification / PreCompress
-{ source?: "startup" | "resume" | "clear"; reason?: string; notification_type?: string; message?: string; trigger?: "auto" | "manual" }
-```
-
----
-
-## Claude Code (26 events)
-
-Source: https://code.claude.com/docs/en/hooks
-
-### Common fields (all events)
-
-```typescript
-{
   session_id: string;
   transcript_path: string;
   cwd: string;
-  hook_event_name: string;
-  permission_mode?: "default" | "plan" | "acceptEdits" | "auto" | "dontAsk" | "bypassPermissions";
-  agent_id?: string;
-  agent_type?: string;
-}
-```
-
-### SessionStart
-
-```typescript
-{
-  source: "startup" | "resume" | "clear" | "compact";
-  model: string;
-  agent_type?: string;
-}
-```
-
-### SessionEnd
-
-```typescript
-{
-  reason: "clear" | "resume" | "logout" | "prompt_input_exit" | "bypass_permissions_disabled" | "other";
-}
-```
-
-### UserPromptSubmit
-
-```typescript
-{
-  prompt: string;
-}
-```
-
-### PreToolUse
-
-```typescript
-{
-  tool_name: string;
-  tool_input: ToolInput; // varies by tool, see below
-  tool_use_id: string;
-}
-```
-
-**Tool input by tool_name:**
-
-```typescript
-// Bash
-{ command: string; description?: string; timeout?: number; run_in_background?: boolean; }
-
-// Write
-{ file_path: string; content: string; }
-
-// Edit
-{ file_path: string; old_string: string; new_string: string; replace_all?: boolean; }
-
-// Read
-{ file_path: string; offset?: number; limit?: number; }
-
-// Glob
-{ pattern: string; path?: string; }
-
-// Grep
-{ pattern: string; path?: string; glob?: string; output_mode?: "content" | "files_with_matches" | "count"; "-i"?: boolean; multiline?: boolean; }
-
-// WebFetch
-{ url: string; prompt: string; }
-
-// WebSearch
-{ query: string; allowed_domains?: string[]; blocked_domains?: string[]; }
-
-// Agent
-{ prompt: string; description: string; subagent_type: string; model?: string; }
-
-// AskUserQuestion
-{ questions: Array<{ question: string; header: string; options: Array<{ label: string }>; multiSelect?: boolean; }>; answers?: Record<string, string>; }
-
-// ExitPlanMode
-{}
-```
-
-### PostToolUse
-
-```typescript
-{
-  tool_name: string;
-  tool_input: ToolInput;
-  tool_response: any;
-  tool_use_id: string;
-}
-```
-
-### PostToolUseFailure
-
-```typescript
-{
-  tool_name: string;
-  tool_input: ToolInput;
-  tool_use_id: string;
-  error: string;
-  is_interrupt?: boolean;
-}
-```
-
-### PermissionRequest
-
-```typescript
-{
-  tool_name: string;
-  tool_input: ToolInput;
-  permission_suggestions?: Array<{
-    type: "addRules" | "replaceRules" | "removeRules" | "setMode" | "addDirectories" | "removeDirectories";
-    rules?: Array<{ toolName: string; ruleContent?: string }>;
-    behavior?: "allow" | "deny" | "ask";
-    mode?: "default" | "acceptEdits" | "dontAsk" | "bypassPermissions" | "plan";
-    directories?: string[];
-    destination: "session" | "localSettings" | "projectSettings" | "userSettings";
-  }>;
-}
-```
-
-### PermissionDenied
-
-```typescript
-{
-  tool_name: string;
-  tool_input: ToolInput;
-  tool_use_id: string;
-  reason: string;
-}
-```
-
-### Notification
-
-```typescript
-{
-  message: string;
-  title?: string;
-  notification_type: "permission_prompt" | "idle_prompt" | "auth_success" | "elicitation_dialog";
-}
-```
-
-### SubagentStart
-
-```typescript
-{
-  agent_id: string;
-  agent_type: string;
-}
-```
-
-### SubagentStop
-
-```typescript
-{
-  stop_hook_active: boolean;
-  agent_id: string;
-  agent_type: string;
-  agent_transcript_path: string;
-  last_assistant_message: string;
-}
-```
-
-### TaskCreated
-
-```typescript
-{
-  task_id: string;
-  task_subject: string;
-  task_description?: string;
-  teammate_name?: string;
-  team_name?: string;
-}
-```
-
-### TaskCompleted
-
-```typescript
-{
-  task_id: string;
-  task_subject: string;
-  task_description?: string;
-  teammate_name?: string;
-  team_name?: string;
-}
-```
-
-### Stop
-
-```typescript
-{
-  // No additional fields beyond common.
-}
-```
-
-### StopFailure
-
-```typescript
-{
-  error_type: "rate_limit" | "authentication_failed" | "billing_error" | "invalid_request" | "server_error" | "max_output_tokens" | "unknown";
-}
-```
-
-### TeammateIdle
-
-```typescript
-{
-  teammate_name?: string;
-  team_name?: string;
-}
-```
-
-### InstructionsLoaded
-
-```typescript
-{
-  file_path: string;
-  memory_type: "User" | "Project" | "Local" | "Managed";
-  load_reason: "session_start" | "nested_traversal" | "path_glob_match" | "include" | "compact";
-  globs?: string[];
-  trigger_file_path?: string;
-  parent_file_path?: string;
-}
-```
-
-### ConfigChange
-
-```typescript
-{
-  // Common fields only.
-}
-```
-
-### CwdChanged
-
-```typescript
-{
-  new_cwd: string;
-  previous_cwd: string;
-}
-```
-
-### FileChanged
-
-```typescript
-{
-  file_path: string;
-  change_type: "created" | "modified" | "deleted";
-}
-```
-
-### WorktreeCreate
-
-```typescript
-{
-  isolation_type: "worktree";
-  parent_worktree_path?: string;
-}
-```
-
-### WorktreeRemove
-
-```typescript
-{
-  worktree_path: string;
-}
-```
-
-### PreCompact
-
-```typescript
-{
-  trigger: "manual" | "auto";
-}
-```
-
-### PostCompact
-
-```typescript
-{
-  trigger: "manual" | "auto";
-}
-```
-
-### Elicitation
-
-```typescript
-{
-  mcp_server_name: string;
-  tool_name: string;
-  elicitation_request: {
-    type: string;
-    prompt: string;
-    fields: Array<{
-      name: string;
-      type: string;
-      description?: string;
-      required?: boolean;
+  tool_name?: string;
+  tool_use_id?: string;
+  tool_input?: {
+    command?: string;
+    filePath?: string;
+    content?: string;
+    prompt?: string;
+    oldString?: string;
+    newString?: string;
+    replacements?: Array<{
+      filePath?: string;
+      oldString?: string;
+      newString?: string;
     }>;
   };
-}
+  text?: string;
+  assistant_message?: string;
+  last_assistant_message?: string;
+};
 ```
 
-### ElicitationResult
+The adapter joins multi-replacement old and new strings into the corresponding
+rule fields. On `Stop`, it reads the last assistant message from the referenced
+JSONL transcript only when the payload omits assistant text. Copilot uses the
+same allow and block response shapes as Claude.
+
+## Cursor
+
+Cursor payloads share this envelope:
 
 ```typescript
-{
-  mcp_server_name: string;
-  tool_name: string;
-  user_response: Record<string, any>;
-}
-```
-
----
-
-## Cursor (20 events)
-
-Source: https://cursor.com/docs/hooks
-
-### Common fields (all events)
-
-```typescript
-{
+type CursorEnvelope = {
+  hook_event_name: string;
+  session_id?: string;
   conversation_id: string;
   generation_id: string;
   model: string;
-  hook_event_name: string;
   cursor_version: string;
-  workspace_roots: string[];
-  user_email: string | null;
+  user_email: string;
   transcript_path: string | null;
-}
+};
 ```
 
-### sessionStart
+| Event | Additional fields parsed by agent-gate |
+| --- | --- |
+| `sessionStart` | envelope fields |
+| `sessionEnd` | `reason`, `final_status` |
+| `preToolUse` | `tool_name`, `tool_use_id`, `tool_input`, `cwd`, `duration` |
+| `postToolUse` | tool fields plus `tool_output`, `duration` |
+| `postToolUseFailure` | tool fields plus `error_message`, `failure_type`, `is_interrupt`, `duration` |
+| `beforeShellExecution` | `command`, `cwd`, `sandbox` |
+| `afterShellExecution` | `command`, `cwd`, `output`, `sandbox`, `duration` |
+| `beforeMCPExecution` | `tool_name`, `tool_use_id`, object or string `tool_input`, `cwd` |
+| `afterMCPExecution` | MCP fields plus `tool_output`, `result_json` |
+| `beforeReadFile`, `beforeTabFileRead` | `file_path`, `cwd` |
+| `afterFileEdit`, `afterTabFileEdit` | `file_path`, `edits[]` |
+| `beforeSubmitPrompt` | `prompt`, `text`, `cwd`, `attachments[]` |
+| `subagentStart` | `subagent_id`, `subagent_type`, `task`, `parent_conversation_id`, `tool_call_id`, worker flags |
+| `subagentStop` | subagent identity plus `description`, `agent_transcript_path`, counts, and duration |
+| `preCompact` | `trigger`, context counts, token counts, `is_first_compaction` |
+| `stop` | `status`, `loop_count`, `composer_mode`, token counts |
+| `afterAgentResponse` | `text`, `assistant_message`, token counts |
+| `afterAgentThought` | `text`, `assistant_message` |
+
+Cursor tool input objects expose `command`, `file_path`, `content`, `pattern`,
+`url`, `query`, `workdir`, `working_directory`, `directory`, and `cwd` when
+present. MCP inputs may arrive as an object, a JSON-encoded string, or plain
+text. Malformed JSON strings remain available as content.
+
+Allow responses write `{"permission":"allow"}` and exit 0. Block responses
+write `permission: "deny"`, copy the diagnostic to `user_message` and
+`agent_message`, and exit 0. The capability layer prevents observe-only events
+from receiving a deny response.
+
+## Gemini
+
+Gemini payloads share this envelope:
 
 ```typescript
-{
+type GeminiEnvelope = {
+  hook_event_name: string;
   session_id: string;
-  is_background_agent: boolean;
-  composer_mode: string | null;
-}
-```
-
-### sessionEnd
-
-```typescript
-{
-  session_id: string;
-  reason: "completed" | "aborted" | "error" | "window_close" | "user_close";
-  duration_ms: number;
-  is_background_agent: boolean;
-  final_status: string;
-  error_message: string | null;
-}
-```
-
-### preToolUse
-
-```typescript
-{
-  tool_name: string;
-  tool_input: object;
-  tool_use_id: string;
+  transcript_path: string;
   cwd: string;
-  model: string;
-  agent_message: string;
-}
+  timestamp: string;
+};
 ```
 
-### postToolUse
+| Event | Additional fields parsed by agent-gate |
+| --- | --- |
+| `BeforeTool` | `tool_name`, `tool_input`, `mcp_context`, `original_request_name` |
+| `AfterTool` | tool fields plus `tool_response` |
+| `BeforeAgent` | `prompt` |
+| `AfterAgent` | `prompt`, `prompt_response`, `stop_hook_active` |
+| `BeforeModel`, `BeforeToolSelection` | `llm_request` |
+| `AfterModel` | `llm_request`, `llm_response` |
+| `SessionStart` | `source` |
+| `SessionEnd` | `reason` |
+| `Notification` | `notification_type`, `message`, `details` |
+| `PreCompress` | `trigger` |
 
-```typescript
-{
-  tool_name: string;
-  tool_input: object;
-  tool_output: string;
-  tool_use_id: string;
-  cwd: string;
-  duration: number;
-  model: string;
-}
-```
+Gemini tool inputs expose `command`, `file_path`, `content`, `old_string`,
+`new_string`, `description`, `workdir`, `directory`, `path`, `pattern`, `url`,
+and `query` when present.
 
-### postToolUseFailure
+Gemini allow responses write `{}` and exit 0. A `BeforeTool` block writes
+`{"decision":"deny","reason":"..."}` and exits 0. Other registered Gemini
+events are observe-only in the current capability table.
 
-```typescript
-{
-  tool_name: string;
-  tool_input: object;
-  tool_use_id: string;
-  cwd: string;
-  error_message: string;
-  failure_type: "timeout" | "error" | "permission_denied";
-  duration: number;
-  is_interrupt: boolean;
-}
-```
+## Rule-visible virtual fields
 
-### subagentStart
+The typed payload fields above can be combined with daemon-computed selectors:
 
-```typescript
-{
-  subagent_id: string;
-  subagent_type: string;
-  task: string;
-  parent_conversation_id: string;
-  tool_call_id: string;
-  subagent_model: string;
-  is_parallel_worker: boolean;
-  git_branch: string | null;
-}
-```
+- `effective_cwd` chooses the operation-level directory, applies shell `cd`
+  transitions, and falls back to the payload directory.
+- `cmd_segments` exposes parsed shell command segments.
+- `cmd_comments` and `cmd_double_hyphen_prose` isolate prose-like command text.
+- `cmd_redirections` exposes direct output redirections.
+- `cmd_write_targets` exposes parsed local write targets.
 
-### subagentStop
-
-```typescript
-{
-  subagent_type: string;
-  status: "completed" | "error" | "aborted";
-  task: string;
-  description: string;
-  summary: string;
-  duration_ms: number;
-  message_count: number;
-  tool_call_count: number;
-  loop_count: number;
-  modified_files: string[];
-  agent_transcript_path: string | null;
-}
-```
-
-### beforeShellExecution
-
-```typescript
-{
-  command: string;
-  cwd: string;
-  sandbox: boolean;
-}
-```
-
-### afterShellExecution
-
-```typescript
-{
-  command: string;
-  output: string;
-  duration: number;
-  sandbox: boolean;
-}
-```
-
-### beforeMCPExecution
-
-```typescript
-{
-  tool_name: string;
-  tool_input: string;
-  url?: string;     // for HTTP MCP servers
-  command?: string;  // for stdio MCP servers
-}
-```
-
-### afterMCPExecution
-
-```typescript
-{
-  tool_name: string;
-  tool_input: string;
-  result_json: string;
-  duration: number;
-}
-```
-
-### beforeReadFile
-
-```typescript
-{
-  file_path: string;
-  content: string;
-  attachments: Array<{
-    type: "file" | "rule";
-    file_path: string;
-  }>;
-}
-```
-
-### afterFileEdit
-
-```typescript
-{
-  file_path: string;
-  edits: Array<{
-    old_string: string;
-    new_string: string;
-  }>;
-}
-```
-
-### beforeSubmitPrompt
-
-```typescript
-{
-  prompt: string;
-  attachments: Array<{
-    type: "file" | "rule";
-    file_path: string;
-  }>;
-}
-```
-
-### preCompact
-
-```typescript
-{
-  trigger: "auto" | "manual";
-  context_usage_percent: number;
-  context_tokens: number;
-  context_window_size: number;
-  message_count: number;
-  messages_to_compact: number;
-  is_first_compaction: boolean;
-}
-```
-
-### stop
-
-```typescript
-{
-  status: "completed" | "aborted" | "error";
-  loop_count: number;
-}
-```
-
-### afterAgentResponse
-
-```typescript
-{
-  text: string;
-}
-```
-
-### afterAgentThought
-
-```typescript
-{
-  text: string;
-  duration_ms: number | null;
-}
-```
-
-### beforeTabFileRead
-
-```typescript
-{
-  file_path: string;
-  content: string;
-}
-```
-
-### afterTabFileEdit
-
-```typescript
-{
-  file_path: string;
-  edits: Array<{
-    old_string: string;
-    new_string: string;
-    range: {
-      start_line_number: number;
-      start_column: number;
-      end_line_number: number;
-      end_column: number;
-    };
-    old_line: string;
-    new_line: string;
-  }>;
-}
-```
+The annotated [../config.toml.example](../config.toml.example) shows how these
+selectors participate in deterministic, external-validator, and inference
+conditions.
