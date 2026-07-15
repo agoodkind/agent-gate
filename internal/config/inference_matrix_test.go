@@ -193,6 +193,24 @@ confidence_source = "output_field"`,
 			want: "confidence_field is required",
 		},
 		{
+			name: "invalid context_on_error",
+			body: `[inference.local]
+endpoint = "[::1]:5401"
+model = "m"
+context_endpoint = "[::1]:5402"
+context_workspace_field = "cwd"
+context_on_error = "sometimes"`,
+			want: "context_on_error",
+		},
+		{
+			name: "negative context_turn_budget",
+			body: `[inference.local]
+endpoint = "[::1]:5401"
+model = "m"
+context_turn_budget = -1`,
+			want: "context_turn_budget",
+		},
+		{
 			name: "deterministic eval without conditions",
 			body: `[[rules]]
 name = "r"

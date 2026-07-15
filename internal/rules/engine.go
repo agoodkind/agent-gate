@@ -70,6 +70,10 @@ func evaluateAll(ctx context.Context, system, eventName string, fields FieldSet,
 	memo := newExecEventMemo(system, eventName)
 	evalCtx := withExecEventMemo(ctx, memo)
 	evalCtx = withInferEventMemo(evalCtx)
+	// Judge every fanout=batch rule in one inference call per model before the rule
+	// conditions run, so the eval matrix reads each rule's decision from the memo
+	// instead of issuing a call per rule.
+	evalCtx = withBatchInferenceMemo(evalCtx, runBatchInference(evalCtx, &fields, rulesSlice, system, eventName, getenv))
 	orch := &pipeline.Orchestrator{
 		Conditions: conditions,
 		Scheduler:  pipeline.FixedScheduler{SlotCount: 1},
