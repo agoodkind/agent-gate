@@ -1,412 +1,196 @@
 # agent-gate
 
-A unified hook daemon for [Claude Code](https://code.claude.com), [Cursor](https://cursor.com), Codex, and Gemini CLI. Hook binaries are dumb gRPC clients; the daemon writes a structured audit trail and enforces configurable rules that can block unwanted actions across providers.
+`agent-gate` applies one daemon-owned rule set to Claude Code, Codex, Cursor,
+Gemini CLI, and GitHub Copilot Chat hooks. Provider hook processes only carry
+JSON between the host and the daemon. The daemon detects the provider, parses
+the payload, enriches rule fields, evaluates policy, renders the provider
+response, and records durable state.
 
-## What it does
+The installed hook inventory lives in [HOOKS.md](HOOKS.md). The payload and
+response contracts live in [docs/hook-schemas.md](docs/hook-schemas.md).
 
-Claude Code, Cursor, Codex, and Gemini CLI all expose lifecycle hook systems that call external binaries via stdin/stdout JSON. `agent-gate` installs a small hook entrypoint for each tool, but all parsing, enrichment, rule evaluation, response formatting, and audit logging happen in the background daemon.
+## Install a release
 
-1. **Audit.** Every hook invocation produces a structured JSON log entry with full payload details: tool inputs (command, file_path, old_string, new_string, content), prompts, agent messages, session metadata, and build provenance (commit, version, buildHash, dirty).
-
-2. **Enforce.** Rules defined in TOML are evaluated against each incoming payload. The first matching rule blocks the action and sends the violation message back to the LLM. Rules support per-system event filtering, multi-condition AND logic, and audit-only mode (log without blocking).
-
-## Installation
-
-### One-liner (recommended)
-
-Pulls the latest rolling release tarball for your platform, installs the binary
-to `${XDG_BIN_HOME:-$HOME/.local/bin}`, installs and starts the user daemon
-service, writes or merges the canonical `agent-gate` config with daemon-owned
-auto-update enabled, and merges hook templates into your Claude, Codex,
-Cursor, Gemini, and Copilot config files. Existing user settings in those
-files are
-preserved.
+The release installer downloads and verifies the selected release, installs the
+binary, creates or updates the default config, installs the user service, waits
+for the daemon, and installs all five hook templates.
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/agoodkind/agent-gate/main/install.sh | bash
 ```
 
-Flags:
+The default installation uses these paths:
+
+- Binary: `${XDG_BIN_HOME:-$HOME/.local/bin}/agent-gate`
+- Config: `${XDG_CONFIG_HOME:-$HOME/.config}/agent-gate/config.toml`
+- Operational log: `${XDG_STATE_HOME:-$HOME/.local/state}/agent-gate/agent-gate.jsonl`
+- SQLite state: `${XDG_STATE_HOME:-$HOME/.local/state}/agent-gate/sqlite/audit.db`
+- macOS service: `$HOME/Library/LaunchAgents/io.goodkind.agent-gate.plist`
+- Linux service: `${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/agent-gate.service`
+
+Use the release wrapper flags to select a version, installation directory, or
+attestation requirement:
 
 ```sh
-./install.sh --bin-only          # binary only, skip hook config updates
-./install.sh --hooks-only        # update hook configs, skip download
-./install.sh --service-only      # install/start only the user daemon service
-./install.sh --no-service        # skip launchd/systemd user service setup
-./install.sh --no-config         # skip agent-gate config creation / merge
-./install.sh --no-auto-update    # write or merge config with auto-update off
-./install.sh --auto-update check # write or merge config with check-only mode
-./install.sh --no-claude         # opt out of Claude (additive: combine flags)
-./install.sh --no-codex
-./install.sh --no-cursor
-./install.sh --no-gemini
-./install.sh --no-copilot
-./install.sh --bin-dir /opt/bin  # override $XDG_BIN_HOME
-./install.sh --version v1.2.3    # pin to a specific release tag
-./install.sh --channel stable    # use GitHub's latest stable release
-./install.sh --repo owner/name   # override the GitHub release repo
+./install.sh --version v1.2.3
+./install.sh --bin-dir "$HOME/.local/bin"
 ./install.sh --require-attestation
 ```
 
-`make install-release`, `make install-release-bin`, `make install-release-hooks`,
-and `make install-release-service` are thin wrappers around the script. The script
-downloads or locates the release binary first, then delegates hook and service
-setup to `agent-gate install`.
-
-### From source
-
-Requires the Go version declared in `go.mod`. Go 1.21 and newer can select a
-newer toolchain automatically when `GOTOOLCHAIN=auto`, but older source builds
-are not supported. `agent-gate` uses PCRE2 via cgo, so build hosts must have
-PCRE2 and a working C toolchain available.
-
-Install prerequisites:
-- macOS: `brew install pcre2`
-- Debian/Ubuntu: `sudo apt-get update && sudo apt-get install -y libpcre2-dev`
-- Fedora/RHEL: `sudo dnf install pcre2-devel`
-- Alpine: `apk add pcre2-dev build-base`
-
-When building, set `CGO_ENABLED=1`. Rule patterns compile against system
-`libpcre2-8` (PCRE2 10.x) via cgo. There is no bundled third-party Go
-regex binding.
+Run `make install-release ARGS='--version v1.2.3'` from a source checkout when
+you want the Make wrapper around the same installer. After the binary exists,
+use its install commands to repair one layer or omit selected providers:
 
 ```sh
-git clone https://github.com/agoodkind/agent-gate
-cd agent-gate
-make build               # writes dist/agent-gate
+agent-gate install all --auto-update check
+agent-gate install all --no-config --no-service --no-copilot
+agent-gate install hooks --no-claude --no-codex --no-cursor --no-gemini
+agent-gate install service
 ```
 
-CI and release builds export `CGO_ENABLED=1` so PCRE2 JIT and match
-limits are available at runtime.
+## Understand enforcement
 
-## Daemon and hooks
+Each hook reads one JSON payload from standard input and sends the raw bytes,
+provider hint, process arguments, working directory, and selected environment
+signals to the supervised daemon over its Unix socket. The daemon stores the
+receipt before evaluation, then applies every rule that targets the detected
+provider and event. A block response includes every matching blocking rule that
+the provider event can enforce.
 
-The daemon is the source of truth for enforcement. Hook invocations only
-read stdin, forward raw bytes and a small provider hint over gRPC, mirror
-the daemon response, and exit. If stdin, daemon availability, RPC, or hook
-entrypoint failures prevent daemon evaluation, hooks fail open with the
-hinted provider's allow response and exit code 0. When no provider hint is
-available, hooks use a generic empty success response.
+Rules with multiple `[[rules.conditions]]` entries use all-match semantics.
+Every condition must match before that rule fires. Separate rules remain
+independent, so more than one rule can match the same event. Provider events
+that cannot block are recorded as audit-only outcomes even when a rule declares
+`action = "block"`.
 
-The installer manages a per-user service:
+Hook transport stays fail-open. A standard-input read failure, unavailable
+daemon, failed daemon RPC, or recovered hook-entrypoint panic returns the hinted
+provider's allow response with exit code 0. An unknown provider receives empty
+standard output with exit code 0. A policy block returned by a healthy daemon is
+not an availability failure, so the hook mirrors that response unchanged.
 
-- macOS: `~/Library/LaunchAgents/io.goodkind.agent-gate.plist`
-- Linux: `${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/agent-gate.service`
+## Configure one deterministic rule
 
-Useful local commands:
-
-```sh
-make install-service
-make daemon-status
-make daemon-restart
-```
-
-`make deploy` builds a signed binary to the stable per-user path and
-restarts the user service under launchd or systemd so the supervisor owns
-the active daemon process.
-
-## Wiring up hooks
-
-The one-liner above wires hooks for all supported tools automatically.
-Templates live in [`hooks/`](hooks/) and the canonical inventory is in
-[HOOKS.md](HOOKS.md). To re-apply after a binary move or template
-change:
-
-```sh
-make install-hooks
-```
-
-To opt out of any tool, pass `--no-claude`, `--no-codex`, `--no-cursor`,
-`--no-gemini`, or `--no-copilot` (combinable). Hook updates preserve unrelated
-settings. Codex updates a marked TOML block and ensures `[features] hooks = true`;
-JSON-based tools update only their hook key.
-
-## Hook event reference
-
-Full JSON payload schemas for Claude, Cursor, Codex, and Gemini CLI are documented in [docs/hook-schemas.md](docs/hook-schemas.md).
-
-**Sources:**
-- Claude Code hooks: https://code.claude.com/docs/en/hooks
-- Cursor hooks: https://cursor.com/docs/hooks
-- Codex hooks: see repository docs / local integration contract
-- Gemini CLI hooks: see repository docs / local integration contract
-
-## Configuration
-
-Config lives at the XDG config path:
-
-```
-$XDG_CONFIG_HOME/agent-gate/config.toml
-~/.config/agent-gate/config.toml  (default)
-```
-
-See [config.toml.example](config.toml.example) for a complete annotated example.
-
-Fresh installs write a canonical config file when none exists. Re-running
-`install.sh` preserves existing config and adds the `[update]` table when it
-is missing.
-
-### Auto-Update
-
-Direct installs use the daemon-owned updater by default.
+The smallest useful rule names provider events, selects payload fields, and
+matches them with PCRE2. This example blocks direct `go build` calls across the
+five installed providers:
 
 ```toml
-[update]
-enabled = true
-mode = "apply"
-interval = "24h"
-repo = "agoodkind/agent-gate"
-allow_prerelease = true
+[[rules]]
+name = "build-through-make"
+description = "Require the repository build target"
+events = ["PreToolUse", "preToolUse", "beforeShellExecution", "BeforeTool"]
+field_paths = ["tool_input.command", "command"]
+pattern = '''(?:^|\s)go\s+build(?:\s|$)'''
+action = "block"
+violation_message = "Run the repository build target instead of go build directly."
 ```
 
-Useful local commands:
+`field_paths` uses the first non-empty selected value. `not_pattern` can exempt
+values. `action = "audit"` records a match without blocking. The annotated
+[config.toml.example](config.toml.example) covers condition kinds, named
+inference points, evaluator roles, validator timeouts, error policy, caching,
+and unresolved path behavior.
+
+## Reload and validate config
+
+The daemon watches the directory containing `config.toml` and debounces file
+events for 200 milliseconds. A valid replacement creates a new runtime snapshot
+and writes `config reloaded` to the operational log. An invalid replacement
+writes `config reload rejected` and leaves the active snapshot unchanged.
+
+Validate the same load, compile, and schema checks before saving:
+
+```sh
+agent-gate config check
+```
+
+Config-only edits do not require a daemon restart.
+
+## Inspect operational and durable state
+
+`agent-gate.jsonl` is the rotated operational log for daemon startup, reload,
+validator, inference, update, and service diagnostics. It is not the audit
+record.
+
+`sqlite/audit.db` is the durable state store. Intake rows prove that the daemon
+received an event and track deferred replay. Audit rows hold derived allow,
+block, and audit-only outcomes. Evaluation rows hold deterministic and inference
+layers for rules that use evaluator matrices. The same database remains the
+source for query and export commands.
+
+Use `query seen` for intake, `query decisions` for derived policy outcomes, and
+`query evaluations` for evaluator traces:
+
+```sh
+agent-gate query seen --today
+agent-gate query seen --state pending --limit 20
+agent-gate query seen --event-id intake_123 --json --include-normalized --include-env
+agent-gate query decisions --since 24h --decision block
+agent-gate query decisions --rule build-through-make --json
+agent-gate query evaluations --since 24h --rule build-through-make
+agent-gate query evaluations --evaluation-id eval_123 --json
+agent-gate export evaluations --since 24h --rule build-through-make
+```
+
+`query seen` omits raw payload bodies. Its optional flags expose normalized JSON
+and the environment fingerprint. `export evaluations` emits one JSONL row per
+evaluation with ordered typed layers and labels.
+
+## Operate the daemon and updater
+
+Check the daemon identity and socket:
+
+```sh
+agent-gate daemon status
+```
+
+Reinstall the managed service around the current binary when its service file
+needs repair:
+
+```sh
+agent-gate install service --bin-path "$(command -v agent-gate)"
+```
+
+Inspect or apply release updates through the daemon-owned updater:
 
 ```sh
 agent-gate update check
 agent-gate update apply --dry-run
+agent-gate update apply
 agent-gate update status
 ```
 
-### Rules
+An applied update signals the supervised daemon and waits for the service owner
+to start the new binary. Direct release installs enable apply mode by default;
+`[update]` in the config controls the interval, repository, mode, and prerelease
+policy.
 
-Each `[[rules]]` block defines one enforcement rule. Agent-gate evaluates every applicable rule and reports every concrete match in the block message.
+## Build from source
 
-```toml
-[[rules]]
-name        = "no-shell-redirection"
-description = "Block direct shell output/error redirections that suppress, buffer, or truncate command output"
-events      = ["PreToolUse", "beforeShellExecution"]
-field_paths = ["cmd_redirections"]
-pattern     = '.+'
-action      = "block"
-violation_message = "Direct shell output redirection is not permitted here."
-```
-
-| Field | Description |
-|-------|-------------|
-| `name` | Unique identifier for audit log and error messages. |
-| `events` | Hook events this rule applies to. Empty = all events. |
-| `claude_events` | Claude-only event filter (takes precedence over `events` for Claude). |
-| `cursor_events` | Cursor-only event filter (takes precedence over `events` for Cursor). |
-| `codex_events` | Codex-only event filter (takes precedence over `events` for Codex). |
-| `gemini_events` | Gemini-only event filter (takes precedence over `events` for Gemini). |
-| `field_paths` | Dot-paths into the JSON payload. First non-empty value is tested. |
-| `pattern` | PCRE2 regex matched against the extracted field value. |
-| `action` | `"block"` (default) stops the tool call where the protocol allows it. `"audit"` records the violation without blocking. The legacy `class` field is no longer accepted. |
-| `violation_message` | Returned to the LLM and written to the audit log. |
-| `diagnostic_format` | `"detailed"` by default. `"message_only"` returns only `violation_message`. |
-| `conditions` | Multi-condition AND rules. Each condition has a `kind`; missing `kind` means `regex` for compatibility. |
-
-### Virtual fields
-
-The rule engine supports virtual field paths for advanced matching:
-
-- `effective_cwd`: Computes the actual operation directory from the best available source. It prefers normalized operation-level cwd values such as `tool_input.workdir`, transcript function-call arguments, or an existing `effective_cwd`, then falls back to top-level `cwd` and simulates `cd` chains in the command.
-- `cmd_segments`: Splits shell commands on `&&`, `||`, `;`, and newlines for per-segment matching.
-- `cmd_comments`: Extracts unquoted shell comments from command fields so prose rules can scan comments without treating command flags or option separators as prose.
-- `cmd_double_hyphen_prose`: Extracts command tokens where ASCII double hyphen is not acting as a flag or option separator, so prose rules can still catch command arguments like `this--is` without blocking normal shell syntax.
-- `cmd_redirections`: Extracts direct shell output redirections that are unsafe for interactive agent work, while ignoring quoted script content, heredoc bodies, and standard-stream-only duplication.
-
-### Condition Kinds
-
-Rules with `[[rules.conditions]]` use AND semantics: every condition must pass.
-
-- `kind = "regex"`: matches `pattern` and optional `not_pattern` against the first non-empty value from `field_paths`. This is the default for existing configs.
-- `kind = "command"`: matches shell command segments by `argv0` and optional `subcommands`. `strip_env`, `strip_args`, and `cwd_flags` can normalize common wrappers and command-specific cwd flags.
-- `kind = "project"`: walks upward from the effective cwd, finds the nearest directory containing any `root_markers`, then applies `require_any`, `require_all`, and `forbid_any` relative to that root. When a prior `command` condition matched, project checks use the cwd active at each matched command segment, so `cd project && go test` is evaluated against `project`.
-
-Example:
-
-```toml
-[[rules]]
-name = "go-build-through-make"
-description = "Require make build for Go build in Go modules that provide a Makefile"
-claude_events = ["PreToolUse"]
-cursor_events = ["preToolUse", "beforeShellExecution"]
-codex_events = ["PreToolUse"]
-gemini_events = ["BeforeTool"]
-action = "block"
-violation_message = "Run make build instead of go build in Go modules that provide a Makefile."
-
-[[rules.conditions]]
-kind = "command"
-argv0 = "go"
-subcommands = ["build"]
-strip_env = true
-strip_args = ["env", "time", "command"]
-cwd_flags = ["-C"]
-pattern = '^build(?:\s|$)'
-
-[[rules.conditions]]
-kind = "project"
-root_markers = ["go.mod"]
-require_any = ["Makefile", "makefile", "GNUmakefile"]
-```
-
-## Audit log
-
-Each hook event is normalized into an audit event and written to the
-configured audit outputs. The default JSONL output writes:
-
-```
-$XDG_STATE_HOME/agent-gate/events/YYYY/MM/DD/events.jsonl
-$XDG_STATE_HOME/agent-gate/payloads/sha256/ab/cd/<payload-hash>.json
-~/.local/state/agent-gate/events/...     (default)
-```
-
-SQLite output is optional and writes to
-`$XDG_STATE_HOME/agent-gate/sqlite/audit.db` when enabled.
-
-The `<system>` folder is chosen by a priority chain that inspects env
-vars set by each tool, payload fingerprints, and finally the CLI
-subcommand hint. Tools that share another tool's hook config (Cursor
-copying Claude, VS Code extensions copying Claude, anyone copying
-Codex) are still classified by who actually invoked the binary, not by
-the config they came from.
-
-| Folder      | Picked when                                                                                                       |
-| ----------- | ----------------------------------------------------------------------------------------------------------------- |
-| `claude/`   | `CLAUDE_CODE_ENTRYPOINT` env set or `AI_AGENT=claude-code/...`, or payload has `transcript_path`, `permission_mode`, `agent_id`, or `agent_type` |
-| `codex/`    | `CODEX_THREAD_ID` or `CODEX_CI` env set (direct invoker wins even when claude env is also inherited)              |
-| `copilot/`  | Any `COPILOT_OTEL_*` env set. Copilot Chat uses Claude-style event names and VS Code tool argument shapes, so a Copilot adapter normalizes payload fields before rules run |
-| `cursor/`   | `CURSOR_VERSION`, `CURSOR_WORKSPACE_NAME`, or `CURSOR_MODE` env, or payload has `cursor_version`, `conversation_id`, `generation_id`, `workspace_roots`, or `user_email`, or camel-case event name |
-| `gemini/`   | `GEMINI_CLI` env, or event name in {`BeforeTool`, `AfterTool`, `BeforeAgent`, `AfterAgent`, `BeforeModel`, `AfterModel`, `BeforeToolSelection`, `PreCompress`} |
-| `vscode/`   | `VSCODE_PID` or `VSCODE_IPC_HOOK` env set and none of the above matched. Catches generic VS Code extensions that are not Copilot |
-| `unknown/`  | No fingerprint matched. Anything landing here is a detection gap to file as a follow-up                           |
-
-Mature layout on disk:
-
-```
-~/.local/state/agent-gate/
-├── events/YYYY/MM/DD/events.jsonl
-├── payloads/sha256/ab/cd/<hash>.json
-└── sqlite/audit.db
-```
-
-`CLAUDECODE=1` is intentionally not a primary Claude signal because it
-is inherited by every subprocess of a claude shell.
-`CLAUDE_CODE_ENTRYPOINT` is set fresh by the claude binary on each
-invocation and is robust against inherited env. The full priority chain
-lives in [`internal/hook/detect.go`](internal/hook/detect.go).
-
-The daemon owns the writer. It normalizes hook log entries, deduplicates
-duplicate hook fires, and fans out to independently configured outputs on
-a background goroutine. JSONL and SQLite are peer outputs; neither is used
-as recovery for the other.
-
-Each event includes normalized operation, decision, and violation details:
-
-```json
-{
-  "event_id": "evt_...",
-  "schema_version": 1,
-  "time": "2026-04-15T17:57:22Z",
-  "level": "info",
-  "message": "hook.blocked",
-  "system": "claude",
-  "event_name": "PreToolUse",
-  "session_id": "abc123",
-  "tool_use_id": "toolu_...",
-  "tool_name": "Edit",
-  "operation": {
-    "cwd": "/Users/you/project",
-    "effective_cwd": "/Users/you/project",
-    "command": "go build ./..."
-  },
-  "decision": {
-    "kind": "block",
-    "rules_checked": ["use-make-not-go-direct"],
-    "rules_matched": ["use-make-not-go-direct"]
-  },
-  "violations": [
-    {"rule": "use-make-not-go-direct", "mode": "blocking"}
-  ],
-  "raw_payload_hash": "sha256:..."
-}
-```
-
-Query recent audit state with separate durable intake visibility and derived
-audit decisions:
-
-```
-agent-gate query seen --today
-agent-gate query seen --system claude --session abc123 --event PreToolUse --tool Bash
-agent-gate query seen --state pending --event-id intake_... --limit 20
-agent-gate query seen --since 24h --json --include-normalized --include-env
-agent-gate query decisions --today
-agent-gate query decisions --system claude --decision block
-agent-gate query decisions --rule use-make-not-go-direct --since 24h --json
-agent-gate query decisions --system claude --decision block --rule use-make-not-go-direct
-```
-
-`query seen` reads durable intake records and omits raw payload bodies. It
-prints normalized hook JSON and environment fingerprints only when
-`--include-normalized` or `--include-env` is set. When a requested time range
-starts before the first intake record, the command reports the first available
-record timestamp and clamps the intake-side range dynamically. Use
-`query decisions` for the existing audit decision view, including legacy ranges
-that predate durable intake records.
-
-## Fail-open behavior
-
-`agent-gate` fails open for its own availability, transport, and internal
-hook-entrypoint failures:
-
-- Stdin read failures emit the hinted provider allow shape and exit 0.
-- Daemon unavailable and daemon RPC failures emit the hinted provider allow shape and exit 0.
-- Hook invocation panics are recovered and emit the hinted provider allow shape and exit 0.
-- Unknown providers emit empty stdout and exit 0 because no provider-specific allow schema is known.
-- Provider templates that support the field use `failClosed: false`.
-
-This fail-open behavior only covers agent-gate failures. If the daemon
-successfully evaluates a hook and returns a policy block, the hook process
-mirrors the daemon stdout, stderr, and exit code exactly.
-
-## Project layout
-
-```
-cmd/agent-gate/main.go          entry point, hook fail-open recovery, stdin read, dispatch
-internal/version/version.go     build metadata (commit, version, buildHash, dirty via ldflags)
-internal/config/config.go       TOML structs, Load(), audit path resolution
-internal/config/xdg.go          XDG path resolution
-internal/config/defaults.go     default config written on first run
-internal/audit/logger.go        audit Sink interface
-internal/audit/session.go       event logger and JSONL/SQLite audit outputs
-internal/audit/query.go         logs query backend
-internal/hook/types.go          RawPayload, HookSystem, Decision
-internal/hook/detect.go         Claude/Cursor autodetection plus provider override support
-internal/hook/claude.go         26 Claude events, payload parsing, response helpers
-internal/hook/cursor.go         20 Cursor events, payload parsing, response helpers
-internal/hook/codex.go          Codex events and response helpers
-internal/hook/gemini.go         Gemini CLI events and response helpers
-internal/hook/vscode.go         VS Code payload adapter
-internal/hook/copilot.go        Copilot payload and transcript adapter
-internal/hook/provider.go       provider-aware orchestration and dispatch
-internal/hook/response_boundary.go provider-neutral response boundary
-internal/hook/handler.go        provider-specific audit attribute extraction
-internal/runtime/*.go           provider runtime adapter scaffolding (Claude active, others stubbed)
-internal/rules/engine.go        dot-path field extraction, regex rule evaluation
-docs/hook-schemas.md            complete JSON schemas for supported providers
-config.toml.example             annotated example configuration
-```
-
-## Development
+Use the Go toolchain declared in `go.mod`, Git with submodule support, PCRE2,
+and a working C compiler. Install `pcre2` with Homebrew on macOS or
+`libpcre2-dev` on Debian and Ubuntu. The Make pipeline enables cgo, initializes
+the `gksyntax` submodule, generates required parsers, and builds with the FTS5
+SQLite tag.
 
 ```sh
-make build    # compile/sign with ldflags (version, commit, buildHash)
-make deploy   # build/sign to ~/.local/bin and restart the supervised daemon
-make proto    # regenerate protobuf/gRPC files with Buf
-make test     # go test -race ./...
-make lint     # golangci-lint
-make check    # full: vet + lint + test + govulncheck
-make clean    # remove local build artifact
-make spawn-smoke INPUT=/path/to/large.txt
-make spawn-smoke ARGS='-generate-bytes 1048576'
+git clone --recurse-submodules https://github.com/agoodkind/agent-gate
+cd agent-gate
+make build
+make test
+make lint
+make check
 ```
 
-`make spawn-smoke` runs a real subprocess harness against `agent-gate` and
-probes when launch-time argv or env padding starts failing with `E2BIG`. By
-default it targets `~/.local/bin/agent-gate`; override with
-`ARGS='-target ./dist/agent-gate -payload-kind preToolUse'`. If you do not
-want to provide an input file, use `-generate-bytes` and the harness will
-write lorem-style text to a temporary file and use that as the payload source.
+Use these repository targets for local operation and generated sources:
+
+```sh
+make deploy
+make daemon-status
+make proto
+```
+
+`make deploy` installs the current signed build to the per-user binary path,
+restarts the supervised service without overlapping daemon instances, waits for
+readiness, and prints daemon status. Run `make check` before committing.
