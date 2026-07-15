@@ -513,54 +513,6 @@ func boundedUpstreamMetadata(metadata *inferencepb.InvocationMetadata) UpstreamM
 	return bounded
 }
 
-func (runtime *InferRuntime) contextJSON(
-	ctx context.Context,
-	condition *config.Condition,
-	contextWorkspace string,
-	contextSession string,
-) (string, string) {
-	if condition.ContextSource == "" {
-		return "", ""
-	}
-	client, err := runtime.contextClient(condition.ContextEndpoint)
-	if err != nil {
-		return "", "context_unavailable"
-	}
-	turnBudget, turnBudgetValid := checkedInt32(condition.ContextTurnBudget)
-	maxCharsPerTurn, maxCharsValid := checkedInt32(condition.ContextMaxCharsPerTurn)
-	if !turnBudgetValid || !maxCharsValid {
-		return "", "context_invalid"
-	}
-	reply, err := client.GetRecentTurns(ctx, &contextpb.GetRecentTurnsRequest{
-		WorkspaceRef:    contextWorkspace,
-		SessionRef:      contextSession,
-		TurnBudget:      turnBudget,
-		MaxCharsPerTurn: maxCharsPerTurn,
-	})
-	if err != nil || reply == nil {
-		return "", "context_unavailable"
-	}
-	type opaqueTurn struct {
-		Role string `json:"role"`
-		Text string `json:"text"`
-		TS   string `json:"ts"`
-	}
-	type opaqueContext struct {
-		Turns []opaqueTurn `json:"turns"`
-	}
-	value := opaqueContext{Turns: make([]opaqueTurn, 0, len(reply.GetTurns()))}
-	for _, turn := range reply.GetTurns() {
-		if turn != nil {
-			value.Turns = append(value.Turns, opaqueTurn{Role: turn.GetRole(), Text: turn.GetText(), TS: turn.GetTs()})
-		}
-	}
-	encoded, err := json.Marshal(value)
-	if err != nil {
-		return "", "context_invalid"
-	}
-	return string(encoded), ""
-}
-
 func checkedInt32(value int) (int32, bool) {
 	if value < math.MinInt32 || value > math.MaxInt32 {
 		return 0, false
@@ -583,24 +535,6 @@ func (runtime *InferRuntime) inferenceClient(endpoint string) (inferencepb.Infer
 	runtime.inferenceConnections[endpoint] = connection
 	client := inferencepb.NewInferenceClient(connection)
 	runtime.inferenceClients[endpoint] = client
-	return client, nil
-}
-
-func (runtime *InferRuntime) contextClient(endpoint string) (contextpb.ConversationContextClient, error) {
-	endpoint = strings.TrimSpace(endpoint)
-	runtime.mu.Lock()
-	defer runtime.mu.Unlock()
-	if client := runtime.contextClients[endpoint]; client != nil {
-		return client, nil
-	}
-	connection, err := grpc.NewClient(grpcEndpoint(endpoint), grpc.WithTransportCredentials(insecure.NewCredentials()))
-	if err != nil {
-		runtime.log.Warn("create context client failed", "endpoint", endpoint, "err", err)
-		return nil, fmt.Errorf("create context client: %w", err)
-	}
-	runtime.contextConnections[endpoint] = connection
-	client := contextpb.NewConversationContextClient(connection)
-	runtime.contextClients[endpoint] = client
 	return client, nil
 }
 
