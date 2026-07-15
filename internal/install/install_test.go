@@ -3,12 +3,43 @@ package installer
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
+	"reflect"
+	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 )
+
+func TestValidateHooksOptionsRejectsInvalidTemplateWithoutWrites(t *testing.T) {
+	binPath := writeExecutable(t, filepath.Join(t.TempDir(), "agent-gate"))
+	homeDir := t.TempDir()
+	templatesDir := t.TempDir()
+	if err := os.WriteFile(
+		filepath.Join(templatesDir, "cursor.json"),
+		[]byte("not JSON"),
+		0o600,
+	); err != nil {
+		t.Fatalf("WriteFile invalid template: %v", err)
+	}
+	options := DefaultHooksOptions(binPath)
+	options.HomeDir = homeDir
+	options.TemplatesDir = templatesDir
+	options.InstallClaude = false
+	options.InstallCodex = false
+	options.InstallGemini = false
+	options.InstallCopilot = false
+
+	if err := ValidateHooksOptions(options); err == nil {
+		t.Fatal("ValidateHooksOptions returned nil")
+	}
+	if _, err := os.Stat(filepath.Join(homeDir, ".cursor", "hooks.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("cursor hook was written during validation: %v", err)
+	}
+}
 
 func TestInstallHooksUpdatesCursorJSONIdempotently(t *testing.T) {
 	binPath := writeExecutable(t, filepath.Join(t.TempDir(), "agent-gate"))
@@ -365,58 +396,71 @@ func TestInstallFromScratchCreatesExpectedFiles(t *testing.T) {
 	}
 }
 
-func TestInstallServiceUsesFakeRunner(t *testing.T) {
+func TestInstallLaunchdServiceUsesExactCommandSequence(t *testing.T) {
 	binPath := writeExecutable(t, filepath.Join(t.TempDir(), "agent-gate"))
 	homeDir := t.TempDir()
 	runner := &recordingRunner{}
+	readinessCalled := false
+	options := ServiceOptions{
+		BinPath:   binPath,
+		HomeDir:   homeDir,
+		StateHome: filepath.Join(homeDir, ".local", "state"),
+		Ready: func() error {
+			readinessCalled = true
+			return nil
+		},
+	}
+	if err := installLaunchdService(options, homeDir, io.Discard, runner); err != nil {
+		t.Fatalf("installLaunchdService: %v", err)
+	}
+
+	domain := "gui/" + strconv.Itoa(os.Getuid())
+	serviceTarget := domain + "/" + launchdLabel
+	targetPath := filepath.Join(homeDir, "Library", "LaunchAgents", launchdLabel+".plist")
+	want := []string{
+		"launchctl bootout " + serviceTarget,
+		"launchctl print " + serviceTarget,
+		"pgrep -f ^" + regexp.QuoteMeta(binPath) + " daemon$",
+		"launchctl enable " + serviceTarget,
+		"launchctl bootstrap " + domain + " " + targetPath,
+	}
+	if !reflect.DeepEqual(runner.calls, want) {
+		t.Fatalf("calls = %v, want %v", runner.calls, want)
+	}
+	if !readinessCalled {
+		t.Fatal("readiness callback was not called")
+	}
+}
+
+func TestInstallSystemdServiceUsesExactCommandSequence(t *testing.T) {
+	binPath := writeExecutable(t, filepath.Join(t.TempDir(), "agent-gate"))
+	homeDir := t.TempDir()
+	runner := &recordingRunner{}
+	readinessCalled := false
 	options := ServiceOptions{
 		BinPath:    binPath,
 		HomeDir:    homeDir,
 		ConfigHome: filepath.Join(homeDir, ".config"),
-		StateHome:  filepath.Join(homeDir, ".local", "state"),
-		Stdout:     nil,
-		Runner:     runner,
+		Ready: func() error {
+			readinessCalled = true
+			return nil
+		},
 	}
-	if err := InstallService(options); err != nil {
-		t.Fatalf("InstallService: %v", err)
+	if err := installSystemdService(options, homeDir, io.Discard, runner); err != nil {
+		t.Fatalf("installSystemdService: %v", err)
 	}
 
-	switch runtime.GOOS {
-	case "darwin":
-		targetPath := filepath.Join(homeDir, "Library", "LaunchAgents", launchdLabel+".plist")
-		content, err := os.ReadFile(targetPath)
-		if err != nil {
-			t.Fatalf("ReadFile launchd plist: %v", err)
-		}
-		if !strings.Contains(string(content), binPath) {
-			t.Fatalf("launchd plist missing bin path:\n%s", content)
-		}
-		runner.assertCalls(t, []string{
-			"launchctl bootout gui/",
-			"launchctl print gui/",
-			"pgrep -f ^",
-			"launchctl enable gui/",
-			"launchctl bootstrap gui/",
-			"launchctl kickstart -k gui/",
-		})
-	case "linux":
-		targetPath := filepath.Join(homeDir, ".config", "systemd", "user", systemdServiceName)
-		content, err := os.ReadFile(targetPath)
-		if err != nil {
-			t.Fatalf("ReadFile systemd service: %v", err)
-		}
-		if !strings.Contains(string(content), binPath) {
-			t.Fatalf("systemd service missing bin path:\n%s", content)
-		}
-		runner.assertCalls(t, []string{
-			"systemctl --user daemon-reload",
-			"systemctl --user stop agent-gate.service",
-			"pgrep -f ^",
-			"systemctl --user enable --now agent-gate.service",
-			"systemctl --user restart agent-gate.service",
-		})
-	default:
-		t.Fatalf("test did not expect runtime.GOOS = %s", runtime.GOOS)
+	want := []string{
+		"systemctl --user daemon-reload",
+		"systemctl --user stop agent-gate.service",
+		"pgrep -f ^" + regexp.QuoteMeta(binPath) + " daemon$",
+		"systemctl --user enable --now agent-gate.service",
+	}
+	if !reflect.DeepEqual(runner.calls, want) {
+		t.Fatalf("calls = %v, want %v", runner.calls, want)
+	}
+	if !readinessCalled {
+		t.Fatal("readiness callback was not called")
 	}
 }
 

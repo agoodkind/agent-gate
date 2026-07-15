@@ -124,11 +124,77 @@ type ServiceOptions struct {
 	StateHome           string
 	Stdout              io.Writer
 	Runner              CommandRunner
+	Ready               func() error
+}
+
+// ValidateHooksOptions verifies hook inputs without changing hook files.
+func ValidateHooksOptions(options HooksOptions) error {
+	if err := ValidateExecutable(options.BinPath); err != nil {
+		return err
+	}
+	jsonProviders := []struct {
+		install bool
+		name    string
+	}{
+		{install: options.InstallClaude, name: "claude"},
+		{install: options.InstallCursor, name: "cursor"},
+		{install: options.InstallGemini, name: "gemini"},
+		{install: options.InstallCopilot, name: "copilot"},
+	}
+	for _, provider := range jsonProviders {
+		if !provider.install {
+			continue
+		}
+		if _, err := renderJSONHooks(options.TemplatesDir, provider.name, options.BinPath); err != nil {
+			return err
+		}
+	}
+	if options.InstallCodex {
+		if _, err := readHookTemplate(options.TemplatesDir, "codex", "toml"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ValidateServiceOptions verifies service inputs without writing service files.
+func ValidateServiceOptions(options ServiceOptions) error {
+	if err := ValidateExecutable(options.BinPath); err != nil {
+		return err
+	}
+	homeDir, err := resolvedHomeDir(options.HomeDir)
+	if err != nil {
+		return err
+	}
+	switch servicePlatform(runtime.GOOS) {
+	case servicePlatformDarwin:
+		stateDir := defaultStateDir(homeDir, options.StateHome)
+		_, err = renderServiceTemplate(
+			options.ServiceTemplatesDir,
+			"macos",
+			launchdTemplateName,
+			map[string]string{
+				"@@BIN_PATH@@": options.BinPath,
+				"@@HOME@@":     homeDir,
+				"@@LOG_PATH@@": filepath.Join(stateDir, agentGateBinaryName+".log"),
+			},
+		)
+	case servicePlatformLinux:
+		_, err = renderServiceTemplate(
+			options.ServiceTemplatesDir,
+			"systemd",
+			systemdServiceTemplate,
+			map[string]string{"@@BIN_PATH@@": options.BinPath},
+		)
+	default:
+		return fmt.Errorf("unsupported OS for service install: %s", runtime.GOOS)
+	}
+	return err
 }
 
 // InstallHooks writes configured hook files.
 func InstallHooks(options HooksOptions) error {
-	if err := validateExecutable(options.BinPath); err != nil {
+	if err := ValidateHooksOptions(options); err != nil {
 		return err
 	}
 	homeDir, err := resolvedHomeDir(options.HomeDir)
@@ -179,7 +245,7 @@ func InstallHooks(options HooksOptions) error {
 
 // InstallService writes and starts the per-user daemon service.
 func InstallService(options ServiceOptions) error {
-	if err := validateExecutable(options.BinPath); err != nil {
+	if err := ValidateServiceOptions(options); err != nil {
 		return err
 	}
 	runner := options.Runner
@@ -236,11 +302,8 @@ func installLaunchdService(options ServiceOptions, homeDir string, writer io.Wri
 	if err := runner.Run("launchctl", "bootstrap", domain, targetPath); err != nil {
 		return logInstallError("launchctl bootstrap failed", fmt.Errorf("launchctl bootstrap failed: %s: %w", targetPath, err), slog.String("path", targetPath))
 	}
-	if err := runner.Run("launchctl", "kickstart", "-k", serviceTarget); err != nil {
-		return logInstallError("launchctl kickstart failed", fmt.Errorf("launchctl kickstart failed: %s: %w", serviceTarget, err), slog.String("service_target", serviceTarget))
-	}
 	_, _ = fmt.Fprintf(writer, "agent-gate install: installed launchd service %s\n", targetPath)
-	return nil
+	return waitForServiceReadiness(options.Ready)
 }
 
 func installSystemdService(options ServiceOptions, homeDir string, writer io.Writer, runner CommandRunner) error {
@@ -266,14 +329,22 @@ func installSystemdService(options ServiceOptions, homeDir string, writer io.Wri
 	if err := runner.Run("systemctl", "--user", "enable", "--now", systemdServiceName); err != nil {
 		return logInstallError("systemctl enable failed", fmt.Errorf("systemctl --user enable --now failed: %w", err))
 	}
-	if err := runner.Run("systemctl", "--user", "restart", systemdServiceName); err != nil {
-		return logInstallError("systemctl restart failed", fmt.Errorf("systemctl --user restart failed: %w", err))
-	}
 	_, _ = fmt.Fprintf(writer, "agent-gate install: installed systemd user service %s\n", targetPath)
+	return waitForServiceReadiness(options.Ready)
+}
+
+func waitForServiceReadiness(ready func() error) error {
+	if ready == nil {
+		return nil
+	}
+	if err := ready(); err != nil {
+		return logInstallError("service readiness failed", fmt.Errorf("readiness: %w", err))
+	}
 	return nil
 }
 
-func validateExecutable(binPath string) error {
+// ValidateExecutable verifies that binPath identifies an executable file.
+func ValidateExecutable(binPath string) error {
 	if binPath == "" {
 		return errors.New("--bin-path is required")
 	}
