@@ -348,13 +348,17 @@ func batchDecisionsForParticipants(participants []batchParticipant, parsed map[s
 }
 
 // buildBatchPrompt renders the judging instruction and the per-rule intents, each
-// tagged with a stable rule_id the model echoes in its array reply.
+// tagged with a stable rule_id the model echoes in its array reply. It states the
+// exact rule count and requires one decision per rule_id, because a smaller judge
+// model otherwise answers only the first rule and drops the rest, which reads as a
+// missing decision.
 func buildBatchPrompt(participants []batchParticipant) string {
 	var builder strings.Builder
 	builder.WriteString("You are a security guard reviewing one shell command. ")
 	builder.WriteString("Judge the command independently against each rule below. ")
-	builder.WriteString(`Return a JSON object {"decisions":[{"rule_id":"<id>","decision":"allow"|"block"}]} `)
-	builder.WriteString("with exactly one entry per rule, using the rule_id values given. ")
+	builder.WriteString(`Return a JSON object {"decisions":[{"rule_id":"<id>","decision":"allow"|"block"}]}. `)
+	fmt.Fprintf(&builder, "You MUST return exactly %d decisions, one for every rule_id listed below, and omit none. ", len(participants))
+	builder.WriteString("Use the exact rule_id values given. ")
 	builder.WriteString("Recent conversation context, when provided, tells you what the user is doing.\n\nRules:\n")
 	for _, participant := range participants {
 		builder.WriteString("- rule_id: ")

@@ -1,10 +1,30 @@
 package rules
 
 import (
+	"strings"
 	"testing"
 
 	"goodkind.io/agent-gate/internal/config"
 )
+
+// TestBuildBatchPromptStatesCount confirms the prompt names the exact rule count
+// and requires every rule_id, so a smaller judge model enumerates all rules
+// instead of answering only the first and dropping the rest.
+func TestBuildBatchPromptStatesCount(t *testing.T) {
+	participants := []batchParticipant{
+		{ruleName: "native-worktree-parser-gap-consensus", intent: "block writes"},
+		{ruleName: "native-search-parser-gap-consensus", intent: "block searches"},
+	}
+	prompt := buildBatchPrompt(participants)
+	if !strings.Contains(prompt, "exactly 2 decisions") {
+		t.Fatalf("prompt does not state the rule count: %q", prompt)
+	}
+	for _, p := range participants {
+		if !strings.Contains(prompt, "rule_id: "+p.ruleName) {
+			t.Fatalf("prompt omits rule_id %q: %q", p.ruleName, prompt)
+		}
+	}
+}
 
 func pointForTest() config.InferencePoint {
 	return config.InferencePoint{Endpoint: "endpoint", Model: "model"}
