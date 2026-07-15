@@ -196,6 +196,16 @@ func (e *evalMatrixCondition) resolveInferSingle(ctx context.Context, index int,
 	if !ok {
 		return verdictBlock
 	}
+	// A fanout=batch entry reads the decision the per-event batch call already made
+	// for this rule, so the rule adds no inference call of its own. When no batch
+	// result exists (the planner did not run for this point), it falls back to an
+	// individual call so the old path keeps working.
+	if eval.Fanout == config.FanoutBatch {
+		if verdict, found := batchInferenceMemoFromContext(ctx).verdictFor(point, e.rule.Name); found {
+			recordPointLayer(ctx, e.rule.Name, index, *verdict)
+			return applyPointVerdict(eval, *verdict)
+		}
+	}
 	runtime := inferRuntimeFromContext(ctx)
 	// CommandValue prefers ToolInputCommand, where the hook payload carries the
 	// command, over the generic Command field, which stays empty for a tool call.
@@ -203,6 +213,13 @@ func (e *evalMatrixCondition) resolveInferSingle(ctx context.Context, index int,
 	// invalid_argument, so the enforcer always errored and fell back to on_error.
 	result := runtime.evaluatePoint(ctx, point, e.rule.Intent, e.fields.CommandValue())
 	recordPointLayer(ctx, e.rule.Name, index, result)
+	return applyPointVerdict(eval, result)
+}
+
+// applyPointVerdict folds one inference verdict into the eval matrix. An errored
+// call fails open only when the entry sets on_error = open, keeping the
+// deterministic evaluators as the fail-closed backstop.
+func applyPointVerdict(eval config.RuleEval, result pointVerdict) evalVerdict {
 	if result.errored {
 		if eval.OnError == config.OnErrorOpen {
 			return verdictAllow

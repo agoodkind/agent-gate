@@ -62,6 +62,17 @@ type InferencePoint struct {
 	ConfidenceField     string  `toml:"confidence_field,omitempty"`
 	ConfidenceThreshold float64 `toml:"confidence_threshold,omitempty"`
 	TimeoutMs           int     `toml:"timeout_ms,omitempty"`
+	// Conversation-context knobs. When ContextEndpoint is set, a batch judge
+	// fetches recent turns from that context service and passes them to the model,
+	// so it can tell an intended action from an actual write. ContextOnError chooses
+	// whether a context fetch failure still judges on the command alone (open) or
+	// is treated as an inference error (closed).
+	ContextEndpoint        string `toml:"context_endpoint,omitempty"`
+	ContextWorkspaceField  string `toml:"context_workspace_field,omitempty"`
+	ContextSessionField    string `toml:"context_session_field,omitempty"`
+	ContextTurnBudget      int    `toml:"context_turn_budget,omitempty"`
+	ContextMaxCharsPerTurn int    `toml:"context_max_chars_per_turn,omitempty"`
+	ContextOnError         string `toml:"context_on_error,omitempty"`
 }
 
 // RuleEval declares one evaluator in a rule's ordered evaluation. The ordering of
@@ -112,6 +123,25 @@ func inferencePointProblem(point InferencePoint) string {
 			"confidence_threshold %v must be within [0, 1]",
 			point.ConfidenceThreshold,
 		)
+	case point.ContextTurnBudget < 0:
+		return fmt.Sprintf("context_turn_budget %d must be non-negative", point.ContextTurnBudget)
+	case point.ContextMaxCharsPerTurn < 0:
+		return fmt.Sprintf("context_max_chars_per_turn %d must be non-negative", point.ContextMaxCharsPerTurn)
+	case !validContextOnError(point.ContextOnError):
+		return fmt.Sprintf(
+			"context_on_error %q must be %q, %q, or empty",
+			point.ContextOnError, OnErrorOpen, OnErrorClosed,
+		)
+	case point.ContextEndpoint == "" && point.ContextWorkspaceField != "":
+		return "context_workspace_field is set without context_endpoint"
+	case point.ContextEndpoint == "" && point.ContextSessionField != "":
+		return "context_session_field is set without context_endpoint"
+	case point.ContextEndpoint == "" && point.ContextTurnBudget > 0:
+		return "context_turn_budget is set without context_endpoint"
+	case point.ContextEndpoint == "" && point.ContextMaxCharsPerTurn > 0:
+		return "context_max_chars_per_turn is set without context_endpoint"
+	case point.ContextEndpoint == "" && point.ContextOnError != "":
+		return "context_on_error is set without context_endpoint"
 	default:
 		return ""
 	}
@@ -119,6 +149,10 @@ func inferencePointProblem(point InferencePoint) string {
 
 func validConfidenceSource(source string) bool {
 	return source == "" || source == ConfidenceOutputField || source == ConfidenceLogprob
+}
+
+func validContextOnError(onError string) bool {
+	return onError == "" || onError == OnErrorOpen || onError == OnErrorClosed
 }
 
 // compileRuleEvalInference resolves the inference points a rule's Eval entries

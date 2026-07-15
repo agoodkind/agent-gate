@@ -5,10 +5,15 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
+	"goodkind.io/agent-gate/api/inferencepb"
 	"goodkind.io/agent-gate/internal/config"
 	"goodkind.io/agent-gate/internal/rules"
+	"goodkind.io/clyde/api/contextpb"
 )
 
 func loadRuleConfig(t *testing.T, body string) *config.Config {
@@ -246,6 +251,204 @@ on_error = "open"
 	)
 	if len(violations) != 0 {
 		t.Fatalf("expected no violation (fail open), got %d: %+v", len(violations), violations)
+	}
+}
+
+// TestEvalMatrixBatchesRulesIntoOneCallPerModel confirms two rules that opt into
+// fanout=batch on the same inference points are judged in one call per model, and
+// each rule's per-rule decision is recorded on its own layer. The judge returns
+// block for the worktree rule and allow for the search rule, so only the worktree
+// rule blocks while both rules record mini and v4 layers.
+func TestEvalMatrixBatchesRulesIntoOneCallPerModel(t *testing.T) {
+	var calls atomic.Int32
+	perModel := map[string]int{}
+	var perModelMu sync.Mutex
+	var miniPrompt atomic.Value
+	var miniSchema atomic.Value
+	inference := &inferenceFake{handler: func(_ context.Context, request *inferencepb.InferRequest) (*inferencepb.InferReply, error) {
+		calls.Add(1)
+		perModelMu.Lock()
+		perModel[request.GetModel()]++
+		perModelMu.Unlock()
+		if request.GetModel() == "gpt-5.4-mini" {
+			miniPrompt.Store(request.GetPrompt())
+			miniSchema.Store(request.GetOutputSchema())
+		}
+		return &inferencepb.InferReply{
+			OutputJson: `{"decisions":[{"rule_id":"worktree","decision":"block"},{"rule_id":"search","decision":"allow"}]}`,
+			Status:     1,
+		}, nil
+	}}
+	endpoint, _ := startInferenceServer(t, inference)
+	body := `
+[inference.mini]
+endpoint = "` + endpoint + `"
+model = "gpt-5.4-mini"
+
+[inference.v4]
+endpoint = "` + endpoint + `"
+model = "agentgate/agent-gate-judge-v4"
+
+[[rules]]
+name = "worktree"
+events = ["PreToolUse"]
+action = "block"
+violation_message = "blocked worktree"
+intent = "Block a write into the checkout at the working directory."
+[[rules.eval]]
+kind = "infer"
+role = "enforce"
+use = "mini"
+fanout = "batch"
+on_error = "open"
+[[rules.eval]]
+kind = "infer"
+role = "verify"
+use = "v4"
+fanout = "batch"
+
+[[rules]]
+name = "search"
+events = ["PreToolUse"]
+action = "block"
+violation_message = "blocked search"
+intent = "Block a content search against indexed source."
+[[rules.eval]]
+kind = "infer"
+role = "enforce"
+use = "mini"
+fanout = "batch"
+on_error = "open"
+[[rules.eval]]
+kind = "infer"
+role = "verify"
+use = "v4"
+fanout = "batch"
+`
+	cfg := loadRuleConfig(t, body)
+	runtime := rules.NewInferRuntimeWithCache(nil, nil)
+	t.Cleanup(runtime.Close)
+	ctx := rules.WithInferRuntime(context.Background(), runtime)
+	payload := map[string]any{"command": "vim config.go"}
+	detailed := rules.EvaluateAllDetailed(
+		ctx, "claude", "PreToolUse", testFields(payload), cfg.Rules, nil, nil, "test",
+	)
+
+	if calls.Load() != 2 {
+		t.Fatalf("inference calls = %d, want 2 (one per model for two batched rules)", calls.Load())
+	}
+	perModelMu.Lock()
+	miniCalls, v4Calls := perModel["gpt-5.4-mini"], perModel["agentgate/agent-gate-judge-v4"]
+	perModelMu.Unlock()
+	if miniCalls != 1 || v4Calls != 1 {
+		t.Fatalf("per-model calls mini=%d v4=%d, want 1 each", miniCalls, v4Calls)
+	}
+
+	type layerKey struct{ rule, model string }
+	layerOutcome := map[layerKey]string{}
+	for _, layer := range detailed.Trace.Layers {
+		if layer.Kind == "inference" {
+			layerOutcome[layerKey{layer.RuleName, layer.LayerName}] = layer.Outcome
+		}
+	}
+	want := map[layerKey]string{
+		{"worktree", "gpt-5.4-mini"}:                  "match",
+		{"worktree", "agentgate/agent-gate-judge-v4"}: "match",
+		{"search", "gpt-5.4-mini"}:                    "nonmatch",
+		{"search", "agentgate/agent-gate-judge-v4"}:   "nonmatch",
+	}
+	for key, wantOutcome := range want {
+		if layerOutcome[key] != wantOutcome {
+			t.Fatalf("layer %+v outcome = %q, want %q (all layers: %+v)", key, layerOutcome[key], wantOutcome, layerOutcome)
+		}
+	}
+
+	if len(detailed.Violations) != 1 || detailed.Violations[0].RuleName != "worktree" {
+		t.Fatalf("violations = %+v, want one for worktree", detailed.Violations)
+	}
+
+	prompt, _ := miniPrompt.Load().(string)
+	if !strings.Contains(prompt, "rule_id: worktree") || !strings.Contains(prompt, "rule_id: search") {
+		t.Fatalf("batch prompt does not enumerate both rule_ids: %q", prompt)
+	}
+	if schema, _ := miniSchema.Load().(string); !strings.Contains(schema, `"decisions"`) {
+		t.Fatalf("mini output schema is not the batch array schema: %q", schema)
+	}
+}
+
+// TestEvalMatrixBatchFetchesContextOncePerCommand confirms the batch judge fetches
+// the conversation context a single time and passes it to every model call, so
+// adding rules or a second model does not multiply the context fetch.
+func TestEvalMatrixBatchFetchesContextOncePerCommand(t *testing.T) {
+	clyde := &clydeFake{turns: []*contextpb.Turn{{Role: "user", Text: "clean up the worktree", Ts: "t1"}}}
+	clydeEndpoint, _ := startClydeServer(t, clyde)
+	var contexts sync.Map
+	inference := &inferenceFake{handler: func(_ context.Context, request *inferencepb.InferRequest) (*inferencepb.InferReply, error) {
+		contexts.Store(request.GetModel(), request.GetContext())
+		return &inferencepb.InferReply{
+			OutputJson: `{"decisions":[{"rule_id":"worktree","decision":"allow"}]}`,
+			Status:     1,
+		}, nil
+	}}
+	endpoint, _ := startInferenceServer(t, inference)
+	body := `
+[inference.mini]
+endpoint = "` + endpoint + `"
+model = "gpt-5.4-mini"
+context_endpoint = "` + clydeEndpoint + `"
+context_workspace_field = "cwd"
+context_session_field = "conversation_id"
+context_turn_budget = 10
+context_max_chars_per_turn = 120
+context_on_error = "open"
+
+[inference.v4]
+endpoint = "` + endpoint + `"
+model = "agentgate/agent-gate-judge-v4"
+context_endpoint = "` + clydeEndpoint + `"
+context_workspace_field = "cwd"
+context_session_field = "conversation_id"
+context_turn_budget = 10
+context_max_chars_per_turn = 120
+context_on_error = "open"
+
+[[rules]]
+name = "worktree"
+events = ["PreToolUse"]
+action = "block"
+violation_message = "blocked worktree"
+intent = "Block a write into the checkout."
+[[rules.eval]]
+kind = "infer"
+role = "enforce"
+use = "mini"
+fanout = "batch"
+on_error = "open"
+[[rules.eval]]
+kind = "infer"
+role = "verify"
+use = "v4"
+fanout = "batch"
+`
+	cfg := loadRuleConfig(t, body)
+	runtime := rules.NewInferRuntimeWithCache(nil, nil)
+	t.Cleanup(runtime.Close)
+	ctx := rules.WithInferRuntime(context.Background(), runtime)
+	fields := rules.FieldSet{CWD: "/workspace", ConversationID: "conv-1", ToolInputCommand: "git worktree remove x"}
+	rules.EvaluateAllDetailed(ctx, "claude", "PreToolUse", fields, cfg.Rules, nil, nil, "test")
+
+	if len(clyde.requests) != 1 {
+		t.Fatalf("clyde requests = %d, want 1 (context fetched once per command)", len(clyde.requests))
+	}
+	if got := clyde.requests[0]; got.GetWorkspaceRef() != "/workspace" || got.GetSessionRef() != "conv-1" {
+		t.Fatalf("context request = %+v, want workspace=/workspace session=conv-1", got)
+	}
+	wantContext := `{"turns":[{"role":"user","text":"clean up the worktree","ts":"t1"}]}`
+	for _, model := range []string{"gpt-5.4-mini", "agentgate/agent-gate-judge-v4"} {
+		got, _ := contexts.Load(model)
+		if got != wantContext {
+			t.Fatalf("model %s context = %q, want %q", model, got, wantContext)
+		}
 	}
 }
 
