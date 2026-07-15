@@ -64,7 +64,7 @@ The typed adapter recognizes these event-specific fields:
 | `MessageDisplay` | `message_id`, `index`, `final`, `delta` |
 
 Claude tool inputs expose `command`, `file_path`, `content`, `old_string`,
-`new_string`, `description`, `prompt`, `path`, `pattern`, `url`, and `query`
+`new_string`, `description`, `prompt`, `pattern`, `url`, and `query`
 when the invoking tool supplies them. Structured tool responses contribute only
 searchable text to rule fields; image bytes remain in raw intake and are not
 scanned as output text.
@@ -162,7 +162,6 @@ type CursorEnvelope = {
   generation_id: string;
   model: string;
   cursor_version: string;
-  workspace_roots: string[];
   user_email: string;
   transcript_path: string | null;
 };

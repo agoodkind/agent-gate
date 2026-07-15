@@ -212,6 +212,14 @@ func TestRunInstallAllPrevalidatesInstallerOptionsBeforeMutations(t *testing.T) 
 				mutationCount++
 				return nil
 			}
+			dependencies.installService = func(agentinstall.ServiceOptions) error {
+				mutationCount++
+				return nil
+			}
+			dependencies.applyHooks = func(*agentinstall.HookInstallationPlan) error {
+				mutationCount++
+				return nil
+			}
 			if failingStage == "service options" {
 				dependencies.validateService = func(agentinstall.ServiceOptions) error {
 					return errors.New("invalid service template")
