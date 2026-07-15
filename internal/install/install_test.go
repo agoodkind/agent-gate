@@ -49,7 +49,7 @@ func TestInstallHooksUpdatesCursorJSONIdempotently(t *testing.T) {
 		t.Fatalf("MkdirAll cursor dir: %v", err)
 	}
 	cursorPath := filepath.Join(cursorDir, "hooks.json")
-	initialContent := `{"version":7,"theme":"kept","hooks":{"oldEvent":[{"command":"old"}]}}`
+	initialContent := readInstallFixture(t, "cursor-existing.json")
 	if err := os.WriteFile(cursorPath, []byte(initialContent), 0o600); err != nil {
 		t.Fatalf("WriteFile hooks.json: %v", err)
 	}
@@ -95,18 +95,30 @@ func TestInstallHooksUpdatesCursorJSONIdempotently(t *testing.T) {
 	if payload.Theme != "kept" {
 		t.Fatalf("cursor theme = %q, want kept", payload.Theme)
 	}
-	if _, ok := payload.Hooks["oldEvent"]; ok {
-		t.Fatalf("cursor hooks preserved replaced event set: %v", payload.Hooks)
+	if _, ok := payload.Hooks["removedEvent"]; ok {
+		t.Fatalf("cursor removedEvent survived installation: %v", payload.Hooks)
+	}
+	oldEvent := payload.Hooks["oldEvent"]
+	if len(oldEvent) != 1 || oldEvent[0].Command != "old" {
+		t.Fatalf("cursor oldEvent = %v, want preserved external hook", oldEvent)
 	}
 	preToolUse := payload.Hooks["preToolUse"]
-	if len(preToolUse) != 1 {
-		t.Fatalf("preToolUse hooks = %d, want 1", len(preToolUse))
+	if len(preToolUse) != 4 {
+		t.Fatalf("preToolUse hooks = %d, want 4: %v", len(preToolUse), preToolUse)
 	}
-	if preToolUse[0].Command != binPath {
-		t.Fatalf("preToolUse command = %q, want %q", preToolUse[0].Command, binPath)
+	wantCommands := []string{
+		"external-hook --first",
+		"wrapper --delegate agent-gate",
+		"external-hook --last",
+		binPath,
 	}
-	if preToolUse[0].FailClosed {
-		t.Fatal("preToolUse failClosed = true, want false")
+	for i, wantCommand := range wantCommands {
+		if preToolUse[i].Command != wantCommand {
+			t.Fatalf("preToolUse[%d].command = %q, want %q", i, preToolUse[i].Command, wantCommand)
+		}
+	}
+	if preToolUse[len(preToolUse)-1].FailClosed {
+		t.Fatal("managed preToolUse failClosed = true, want false")
 	}
 	assertFileMode(t, cursorPath, 0o600)
 	if _, err := os.Stat(filepath.Join(homeDir, ".claude", "settings.json")); !errors.Is(err, os.ErrNotExist) {
@@ -122,14 +134,7 @@ func TestInstallHooksRemovesClaudeWorktreeFactoryHooks(t *testing.T) {
 		t.Fatalf("MkdirAll Claude directory: %v", err)
 	}
 	settingsPath := filepath.Join(claudeDir, "settings.json")
-	initialContent := `{
-  "theme": "kept",
-  "hooks": {
-    "WorktreeCreate": [{"hooks": [{"type": "command", "command": "/old/agent-gate"}]}],
-    "WorktreeRemove": [{"hooks": [{"type": "command", "command": "/old/agent-gate"}]}]
-  }
-}
-`
+	initialContent := readInstallFixture(t, "claude-existing.json")
 	if err := os.WriteFile(settingsPath, []byte(initialContent), 0o600); err != nil {
 		t.Fatalf("WriteFile Claude settings: %v", err)
 	}
@@ -159,8 +164,9 @@ func TestInstallHooksRemovesClaudeWorktreeFactoryHooks(t *testing.T) {
 	}
 
 	var settings struct {
-		Theme string                     `json:"theme"`
-		Hooks map[string]json.RawMessage `json:"hooks"`
+		Theme       string                     `json:"theme"`
+		Permissions map[string][]string        `json:"permissions"`
+		Hooks       map[string]json.RawMessage `json:"hooks"`
 	}
 	if err := json.Unmarshal(secondContent, &settings); err != nil {
 		t.Fatalf("Unmarshal Claude settings: %v\n%s", err, secondContent)
@@ -168,11 +174,11 @@ func TestInstallHooksRemovesClaudeWorktreeFactoryHooks(t *testing.T) {
 	if settings.Theme != "kept" {
 		t.Fatalf("theme = %q, want kept", settings.Theme)
 	}
+	if !reflect.DeepEqual(settings.Permissions["allow"], []string{"Read"}) {
+		t.Fatalf("permissions = %v, want preserved allow list", settings.Permissions)
+	}
 	if _, ok := settings.Hooks["WorktreeCreate"]; ok {
 		t.Fatalf("WorktreeCreate hook survived installation: %s", settings.Hooks["WorktreeCreate"])
-	}
-	if _, ok := settings.Hooks["WorktreeRemove"]; ok {
-		t.Fatalf("WorktreeRemove hook survived installation: %s", settings.Hooks["WorktreeRemove"])
 	}
 	preToolUse, ok := settings.Hooks["PreToolUse"]
 	if !ok {
@@ -181,7 +187,180 @@ func TestInstallHooksRemovesClaudeWorktreeFactoryHooks(t *testing.T) {
 	if !strings.Contains(string(preToolUse), binPath) {
 		t.Fatalf("PreToolUse hook missing agent-gate command: %s", preToolUse)
 	}
+	sessionStartCommands := eventCommands(t, settings.Hooks["SessionStart"])
+	wantSessionStartCommands := []string{
+		"/Users/example/.local/bin/clyde hook sessionstart",
+		"external-hook --first",
+		"wrapper --delegate /obsolete/bin/agent-gate",
+		"external-hook --last",
+		binPath,
+	}
+	if !reflect.DeepEqual(sessionStartCommands, wantSessionStartCommands) {
+		t.Fatalf("SessionStart commands = %v, want %v", sessionStartCommands, wantSessionStartCommands)
+	}
+	if !strings.Contains(string(settings.Hooks["SessionStart"]), "empty-external") {
+		t.Fatalf("preexisting empty external group was removed: %s", settings.Hooks["SessionStart"])
+	}
 	assertFileMode(t, settingsPath, privateFileMode)
+}
+
+func TestInstallHooksMergesGeminiJSONIdempotently(t *testing.T) {
+	binPath := writeExecutable(t, filepath.Join(t.TempDir(), "agent-gate"))
+	homeDir := t.TempDir()
+	settingsPath := filepath.Join(homeDir, ".gemini", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll Gemini directory: %v", err)
+	}
+	if err := os.WriteFile(settingsPath, readInstallFixture(t, "gemini-existing.json"), 0o600); err != nil {
+		t.Fatalf("WriteFile Gemini settings: %v", err)
+	}
+
+	options := DefaultHooksOptions(binPath)
+	options.HomeDir = homeDir
+	options.InstallClaude = false
+	options.InstallCodex = false
+	options.InstallCursor = false
+	options.InstallCopilot = false
+	if err := InstallHooks(options); err != nil {
+		t.Fatalf("InstallHooks first run: %v", err)
+	}
+	firstContent, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile first Gemini settings: %v", err)
+	}
+	if err := InstallHooks(options); err != nil {
+		t.Fatalf("InstallHooks second run: %v", err)
+	}
+	secondContent, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile second Gemini settings: %v", err)
+	}
+	if string(firstContent) != string(secondContent) {
+		t.Fatalf("Gemini hook install is not idempotent\nfirst:\n%s\nsecond:\n%s", firstContent, secondContent)
+	}
+
+	var settings struct {
+		Theme string                     `json:"theme"`
+		Hooks map[string]json.RawMessage `json:"hooks"`
+	}
+	if err := json.Unmarshal(secondContent, &settings); err != nil {
+		t.Fatalf("Unmarshal Gemini settings: %v", err)
+	}
+	if settings.Theme != "kept" {
+		t.Fatalf("theme = %q, want kept", settings.Theme)
+	}
+	if _, ok := settings.Hooks["Legacy"]; ok {
+		t.Fatalf("Legacy hook survived installation: %s", settings.Hooks["Legacy"])
+	}
+	wantCommands := []string{
+		"external-hook --first",
+		"wrapper --delegate /obsolete/bin/agent-gate",
+		"external-hook --last",
+		binPath + " gemini-hook",
+	}
+	gotCommands := eventCommands(t, settings.Hooks["BeforeTool"])
+	if !reflect.DeepEqual(gotCommands, wantCommands) {
+		t.Fatalf("BeforeTool commands = %v, want %v", gotCommands, wantCommands)
+	}
+}
+
+func TestInstallHooksRejectsMalformedExistingJSONWithoutChangingIt(t *testing.T) {
+	binPath := writeExecutable(t, filepath.Join(t.TempDir(), "agent-gate"))
+	homeDir := t.TempDir()
+	settingsPath := filepath.Join(homeDir, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll Claude directory: %v", err)
+	}
+	initialContent := readInstallFixture(t, "malformed-existing.json")
+	if err := os.WriteFile(settingsPath, initialContent, 0o600); err != nil {
+		t.Fatalf("WriteFile malformed Claude settings: %v", err)
+	}
+
+	options := DefaultHooksOptions(binPath)
+	options.HomeDir = homeDir
+	options.InstallCodex = false
+	options.InstallCursor = false
+	options.InstallGemini = false
+	options.InstallCopilot = false
+	if err := InstallHooks(options); err == nil {
+		t.Fatal("InstallHooks returned nil for malformed existing JSON")
+	}
+	got, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile malformed Claude settings: %v", err)
+	}
+	if string(got) != string(initialContent) {
+		t.Fatalf("malformed existing JSON changed\nwant: %s\ngot: %s", initialContent, got)
+	}
+}
+
+func TestInstallHooksFullyReplacesCopilotFile(t *testing.T) {
+	binPath := writeExecutable(t, filepath.Join(t.TempDir(), "agent-gate"))
+	homeDir := t.TempDir()
+	hookPath := filepath.Join(homeDir, ".copilot", "hooks", "agent-gate.json")
+	if err := os.MkdirAll(filepath.Dir(hookPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll Copilot hooks directory: %v", err)
+	}
+	initialContent := []byte(`{"external":"remove","hooks":{"Legacy":[{"command":"external-hook"}]}}`)
+	if err := os.WriteFile(hookPath, initialContent, 0o600); err != nil {
+		t.Fatalf("WriteFile Copilot hook: %v", err)
+	}
+
+	options := DefaultHooksOptions(binPath)
+	options.HomeDir = homeDir
+	options.InstallClaude = false
+	options.InstallCodex = false
+	options.InstallCursor = false
+	options.InstallGemini = false
+	if err := InstallHooks(options); err != nil {
+		t.Fatalf("InstallHooks: %v", err)
+	}
+	content, err := os.ReadFile(hookPath)
+	if err != nil {
+		t.Fatalf("ReadFile Copilot hook: %v", err)
+	}
+	var hookFile map[string]json.RawMessage
+	if err := json.Unmarshal(content, &hookFile); err != nil {
+		t.Fatalf("Unmarshal Copilot hook: %v", err)
+	}
+	if _, ok := hookFile["external"]; ok {
+		t.Fatalf("external top-level setting survived replacement: %s", content)
+	}
+	if strings.Contains(string(hookFile["hooks"]), "external-hook") {
+		t.Fatalf("external hook survived replacement: %s", hookFile["hooks"])
+	}
+}
+
+func readInstallFixture(t *testing.T, name string) []byte {
+	t.Helper()
+	content, err := os.ReadFile(filepath.Join("testdata", name))
+	if err != nil {
+		t.Fatalf("ReadFile fixture %q: %v", name, err)
+	}
+	return content
+}
+
+func eventCommands(t *testing.T, event json.RawMessage) []string {
+	t.Helper()
+	var groups []struct {
+		Command string `json:"command"`
+		Hooks   []struct {
+			Command string `json:"command"`
+		} `json:"hooks"`
+	}
+	if err := json.Unmarshal(event, &groups); err != nil {
+		t.Fatalf("Unmarshal hook event: %v\n%s", err, event)
+	}
+	var commands []string
+	for _, group := range groups {
+		if group.Command != "" {
+			commands = append(commands, group.Command)
+		}
+		for _, hook := range group.Hooks {
+			commands = append(commands, hook.Command)
+		}
+	}
+	return commands
 }
 
 func TestInstallHooksUpdatesCodexTomlIdempotently(t *testing.T) {

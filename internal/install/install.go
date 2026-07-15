@@ -235,7 +235,7 @@ func InstallHooks(options HooksOptions) error {
 	}
 	if options.InstallCopilot {
 		targetPath := filepath.Join(homeDir, ".copilot", "hooks", "agent-gate.json")
-		if err := updateJSONHooks(options.TemplatesDir, "copilot", options.BinPath, targetPath, false); err != nil {
+		if err := replaceJSONHooks(options.TemplatesDir, "copilot", options.BinPath, targetPath); err != nil {
 			return err
 		}
 		_, _ = fmt.Fprintf(writer, "agent-gate install: updated %s (copilot hooks)\n", targetPath)
@@ -387,13 +387,152 @@ func updateJSONHooks(templatesDir string, tool string, binPath string, targetPat
 			target["version"] = json.RawMessage("1")
 		}
 	}
-	target["hooks"] = renderedHooks
+	mergedHooks, err := mergeJSONHooks(target["hooks"], renderedHooks)
+	if err != nil {
+		return logInstallError("merge JSON hooks failed", fmt.Errorf("merge %s: %w", targetPath, err), slog.String("path", targetPath))
+	}
+	target["hooks"] = mergedHooks
+	return writeJSONHookConfig(targetPath, target)
+}
+
+func replaceJSONHooks(templatesDir string, tool string, binPath string, targetPath string) error {
+	renderedHooks, err := renderJSONHooks(templatesDir, tool, binPath)
+	if err != nil {
+		return err
+	}
+	target := map[string]json.RawMessage{"hooks": renderedHooks}
+	return writeJSONHookConfig(targetPath, target)
+}
+
+func writeJSONHookConfig(targetPath string, target map[string]json.RawMessage) error {
 	output, err := json.MarshalIndent(target, "", "  ")
 	if err != nil {
 		return logInstallError("render JSON hook config failed", fmt.Errorf("render %s: %w", targetPath, err), slog.String("path", targetPath))
 	}
 	output = append(output, '\n')
 	return writeFileAtomic(targetPath, output)
+}
+
+func mergeJSONHooks(existingJSON json.RawMessage, managedJSON json.RawMessage) (json.RawMessage, error) {
+	existingHooks := make(map[string][]json.RawMessage)
+	if len(existingJSON) > 0 && string(existingJSON) != "null" {
+		if err := json.Unmarshal(existingJSON, &existingHooks); err != nil {
+			return nil, logInstallError("parse existing JSON hooks failed", fmt.Errorf("parse existing hooks: %w", err))
+		}
+	}
+	managedHooks := make(map[string][]json.RawMessage)
+	if err := json.Unmarshal(managedJSON, &managedHooks); err != nil {
+		return nil, logInstallError("parse managed JSON hooks failed", fmt.Errorf("parse managed hooks: %w", err))
+	}
+
+	for eventName, groups := range existingHooks {
+		preservedGroups := make([]json.RawMessage, 0, len(groups))
+		for _, group := range groups {
+			preservedGroup, preserve, err := removeAgentGateCommands(group)
+			if err != nil {
+				return nil, logInstallError("clean JSON hook event failed", fmt.Errorf("clean event %s: %w", eventName, err), slog.String("event", eventName))
+			}
+			if preserve {
+				preservedGroups = append(preservedGroups, preservedGroup)
+			}
+		}
+		if len(preservedGroups) == 0 {
+			delete(existingHooks, eventName)
+			continue
+		}
+		existingHooks[eventName] = preservedGroups
+	}
+
+	for eventName, managedGroups := range managedHooks {
+		existingHooks[eventName] = append(existingHooks[eventName], managedGroups...)
+	}
+	output, err := json.Marshal(existingHooks)
+	if err != nil {
+		return nil, logInstallError("marshal merged JSON hooks failed", fmt.Errorf("marshal merged hooks: %w", err))
+	}
+	return json.RawMessage(output), nil
+}
+
+func removeAgentGateCommands(group json.RawMessage) (json.RawMessage, bool, error) {
+	var groupObject map[string]json.RawMessage
+	if err := json.Unmarshal(group, &groupObject); err != nil {
+		return nil, false, logInstallError("parse JSON hook group failed", fmt.Errorf("parse hook group: %w", err))
+	}
+	if isAgentGateCommandObject(groupObject) {
+		return nil, false, nil
+	}
+	nestedHooksJSON, hasNestedHooks := groupObject["hooks"]
+	if !hasNestedHooks {
+		return group, true, nil
+	}
+	var nestedHooks []json.RawMessage
+	if err := json.Unmarshal(nestedHooksJSON, &nestedHooks); err != nil {
+		return nil, false, logInstallError("parse JSON command group failed", fmt.Errorf("parse command group: %w", err))
+	}
+	if len(nestedHooks) == 0 {
+		return group, true, nil
+	}
+	preservedHooks := make([]json.RawMessage, 0, len(nestedHooks))
+	for _, hook := range nestedHooks {
+		var hookObject map[string]json.RawMessage
+		if err := json.Unmarshal(hook, &hookObject); err != nil {
+			preservedHooks = append(preservedHooks, hook)
+			continue
+		}
+		if !isAgentGateCommandObject(hookObject) {
+			preservedHooks = append(preservedHooks, hook)
+		}
+	}
+	if len(preservedHooks) == 0 {
+		return nil, false, nil
+	}
+	preservedHooksJSON, err := json.Marshal(preservedHooks)
+	if err != nil {
+		return nil, false, logInstallError("marshal JSON command group failed", fmt.Errorf("marshal command group: %w", err))
+	}
+	groupObject["hooks"] = preservedHooksJSON
+	preservedGroup, err := json.Marshal(groupObject)
+	if err != nil {
+		return nil, false, logInstallError("marshal JSON hook group failed", fmt.Errorf("marshal hook group: %w", err))
+	}
+	return json.RawMessage(preservedGroup), true, nil
+}
+
+func isAgentGateCommandObject(commandObject map[string]json.RawMessage) bool {
+	commandJSON, ok := commandObject["command"]
+	if !ok {
+		return false
+	}
+	var command string
+	if err := json.Unmarshal(commandJSON, &command); err != nil {
+		return false
+	}
+	trimmedCommand := strings.TrimSpace(command)
+	if trimmedCommand == agentGateBinaryName {
+		return true
+	}
+	executable := firstCommandToken(trimmedCommand)
+	return filepath.Base(executable) == agentGateBinaryName
+}
+
+func firstCommandToken(command string) string {
+	if command == "" {
+		return ""
+	}
+	if command[0] != '\'' && command[0] != '"' {
+		fields := strings.Fields(command)
+		if len(fields) == 0 {
+			return ""
+		}
+		return fields[0]
+	}
+	quote := command[0]
+	for i := 1; i < len(command); i++ {
+		if command[i] == quote {
+			return command[1:i]
+		}
+	}
+	return command
 }
 
 func renderJSONHooks(templatesDir string, tool string, binPath string) (json.RawMessage, error) {

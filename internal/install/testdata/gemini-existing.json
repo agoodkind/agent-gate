@@ -1,0 +1,25 @@
+{
+  "theme": "kept",
+  "hooks": {
+    "Legacy": [
+      {
+        "hooks": [
+          {"type": "command", "command": "'/obsolete/bin/agent-gate' legacy"}
+        ],
+        "failClosed": false
+      }
+    ],
+    "BeforeTool": [
+      {
+        "matcher": "external",
+        "hooks": [
+          {"type": "command", "command": "external-hook --first"},
+          {"type": "command", "command": "/obsolete/bin/agent-gate gemini-hook"},
+          {"type": "command", "command": "wrapper --delegate /obsolete/bin/agent-gate"},
+          {"type": "command", "command": "external-hook --last"}
+        ],
+        "failClosed": true
+      }
+    ]
+  }
+}
