@@ -134,6 +134,14 @@ func inferencePointProblem(point InferencePoint) string {
 		)
 	case point.ContextEndpoint == "" && point.ContextWorkspaceField != "":
 		return "context_workspace_field is set without context_endpoint"
+	case point.ContextEndpoint == "" && point.ContextSessionField != "":
+		return "context_session_field is set without context_endpoint"
+	case point.ContextEndpoint == "" && point.ContextTurnBudget > 0:
+		return "context_turn_budget is set without context_endpoint"
+	case point.ContextEndpoint == "" && point.ContextMaxCharsPerTurn > 0:
+		return "context_max_chars_per_turn is set without context_endpoint"
+	case point.ContextEndpoint == "" && point.ContextOnError != "":
+		return "context_on_error is set without context_endpoint"
 	default:
 		return ""
 	}

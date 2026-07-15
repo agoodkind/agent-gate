@@ -27,6 +27,14 @@ func TestParseBatchDecisions(t *testing.T) {
 	if _, ok := parseBatchDecisions("not json"); ok {
 		t.Fatal("expected failure for non-JSON reply")
 	}
+	// A rule answered twice is ambiguous, so it is dropped and reads as missing.
+	dup, ok := parseBatchDecisions(`{"decisions":[{"rule_id":"a","decision":"block"},{"rule_id":"a","decision":"allow"}]}`)
+	if !ok {
+		t.Fatal("expected ok for parseable duplicate reply")
+	}
+	if _, present := dup["a"]; present {
+		t.Fatalf("duplicate rule_id should be dropped, got %+v", dup)
+	}
 }
 
 // TestBatchDecisionsForParticipants confirms a participant the model omitted is
@@ -52,7 +60,7 @@ func TestBatchVerdictForFallsBackWhenAbsent(t *testing.T) {
 	if _, found := nilMemo.verdictFor(pointForTest(), "a"); found {
 		t.Fatal("nil memo should report no verdict")
 	}
-	empty := &batchInferenceMemo{groups: map[string]*batchGroupResult{}}
+	empty := &batchInferenceMemo{groups: map[config.InferencePoint]*batchGroupResult{}}
 	if _, found := empty.verdictFor(pointForTest(), "a"); found {
 		t.Fatal("empty memo should report no verdict")
 	}

@@ -38,10 +38,13 @@ type batchGroupResult struct {
 	decisions   map[string]batchRuleDecision
 }
 
-// batchInferenceMemo holds the batch results for one event, keyed by inference
-// point, so the eval matrix reads a rule's decision without issuing its own call.
+// batchInferenceMemo holds the batch results for one event, keyed by the full
+// inference-point identity, so the eval matrix reads a rule's decision without
+// issuing its own call. Keying by the whole point keeps two points that share an
+// endpoint and model but differ in timeout, reasoning, or context policy in
+// separate calls rather than silently merging them.
 type batchInferenceMemo struct {
-	groups map[string]*batchGroupResult
+	groups map[config.InferencePoint]*batchGroupResult
 }
 
 type batchInferenceMemoKey struct{}
@@ -58,12 +61,6 @@ func batchInferenceMemoFromContext(ctx context.Context) *batchInferenceMemo {
 	return memo
 }
 
-// batchGroupKey identifies one inference call target, so rules sharing an endpoint
-// and model are judged together in a single request.
-func batchGroupKey(point config.InferencePoint) string {
-	return point.Endpoint + "\x00" + point.Model
-}
-
 // verdictFor returns the recorded verdict for a rule at an inference point, plus
 // whether the batch memo carries one. A false result tells the caller to fall back
 // to an individual call.
@@ -71,7 +68,7 @@ func (memo *batchInferenceMemo) verdictFor(point config.InferencePoint, ruleName
 	if memo == nil {
 		return nil, false
 	}
-	group, ok := memo.groups[batchGroupKey(point)]
+	group, ok := memo.groups[point]
 	if !ok {
 		return nil, false
 	}
@@ -110,9 +107,10 @@ type batchGroupPlan struct {
 
 // runBatchInference issues one inference call per inference point for every
 // applicable rule whose infer entries opt into fanout=batch, and returns a memo
-// the eval matrix reads. It fetches the conversation context once and passes it to
-// every call, so the judge sees the command and the conversation a single time per
-// event no matter how many rules opt in. It returns nil when no rule opts in.
+// the eval matrix reads. It fetches the conversation context once per distinct
+// context configuration and attaches each group only the context fetched from its
+// own point, so a point never receives conversation data fetched for a different
+// endpoint. It returns nil when no rule opts in.
 func runBatchInference(
 	ctx context.Context,
 	fields *FieldSet,
@@ -125,19 +123,19 @@ func runBatchInference(
 	if runtime == nil {
 		return nil
 	}
-	groups, order, contextPoint := collectBatchGroups(rulesSlice, system, eventName, getenv)
+	groups, order := collectBatchGroups(rulesSlice, system, eventName, getenv)
 	if len(groups) == 0 {
 		return nil
 	}
-	contextJSON, contextErrored := runtime.batchContext(ctx, contextPoint, fields)
+	fetched := runtime.prefetchGroupContexts(ctx, order, fields)
 	command := fields.CommandValue()
-	memo := &batchInferenceMemo{groups: make(map[string]*batchGroupResult, len(groups))}
+	memo := &batchInferenceMemo{groups: make(map[config.InferencePoint]*batchGroupResult, len(groups))}
 	var mu sync.Mutex
 	var wg sync.WaitGroup
-	for _, key := range order {
-		plan := groups[key]
+	for _, point := range order {
+		plan := groups[point]
 		wg.Add(1)
-		go func(key string, plan *batchGroupPlan) {
+		go func(point config.InferencePoint, plan *batchGroupPlan) {
 			defer wg.Done()
 			defer func() {
 				if recovered := recover(); recovered != nil {
@@ -145,33 +143,31 @@ func runBatchInference(
 						ctx,
 						"batch inference goroutine panicked",
 						"err", fmt.Errorf("panic: %v", recovered),
-						"model", plan.point.Model,
+						"model", point.Model,
 					)
 				}
 			}()
+			contextJSON, contextErrored := groupContext(point, fields, fetched)
 			result := runtime.evaluateBatchGroup(ctx, plan, command, contextJSON, contextErrored)
 			mu.Lock()
-			memo.groups[key] = result
+			memo.groups[point] = result
 			mu.Unlock()
-		}(key, plan)
+		}(point, plan)
 	}
 	wg.Wait()
 	return memo
 }
 
 // collectBatchGroups walks the applicable rules and groups every fanout=batch infer
-// entry by its inference point. It returns the groups, a stable key order, and the
-// first point that declares a context endpoint, whose config drives the single
-// context fetch.
+// entry by its full inference point. It returns the groups and a stable point order.
 func collectBatchGroups(
 	rulesSlice []config.Rule,
 	system string,
 	eventName string,
 	getenv func(string) string,
-) (map[string]*batchGroupPlan, []string, config.InferencePoint) {
-	groups := map[string]*batchGroupPlan{}
-	var order []string
-	var contextPoint config.InferencePoint
+) (map[config.InferencePoint]*batchGroupPlan, []config.InferencePoint) {
+	groups := map[config.InferencePoint]*batchGroupPlan{}
+	var order []config.InferencePoint
 	for i := range rulesSlice {
 		rule := &rulesSlice[i]
 		if !appliesToEvent(rule, system, eventName) {
@@ -188,43 +184,83 @@ func collectBatchGroups(
 			if !ok {
 				continue
 			}
-			key := batchGroupKey(point)
-			plan := groups[key]
+			plan := groups[point]
 			if plan == nil {
 				plan = &batchGroupPlan{point: point, participants: nil, seen: map[string]bool{}}
-				groups[key] = plan
-				order = append(order, key)
+				groups[point] = plan
+				order = append(order, point)
 			}
 			if !plan.seen[rule.Name] {
 				plan.seen[rule.Name] = true
 				plan.participants = append(plan.participants, batchParticipant{ruleName: rule.Name, intent: rule.Intent})
 			}
-			if contextPoint.ContextEndpoint == "" && point.ContextEndpoint != "" {
-				contextPoint = point
-			}
 		}
 	}
-	return groups, order, contextPoint
+	return groups, order
 }
 
-// batchContext fetches the conversation context once for the event. It returns the
-// rendered JSON and whether a fetch failure should be treated as an error, which
-// happens only when the context point sets context_on_error = closed.
-func (runtime *InferRuntime) batchContext(ctx context.Context, point config.InferencePoint, fields *FieldSet) (string, bool) {
+// contextFetch is the raw result of one conversation-context fetch. errClass is
+// non-empty on a fetch failure, and each group applies its own point's on-error
+// policy to it.
+type contextFetch struct {
+	json     string
+	errClass string
+}
+
+// groupContextParams derives the context fetch inputs from a point, or reports that
+// the point requests no context. The workspace and session come from the hook
+// fields the point names.
+func groupContextParams(point config.InferencePoint, fields *FieldSet) (contextParams, bool) {
 	if point.ContextEndpoint == "" {
-		return "", false
+		var none contextParams
+		return none, false
 	}
-	contextJSON, errClass := runtime.fetchContextJSON(ctx, contextParams{
+	return contextParams{
 		endpoint:        point.ContextEndpoint,
 		workspace:       fields.String(config.CompileFieldSelector(point.ContextWorkspaceField)),
 		session:         fields.String(config.CompileFieldSelector(point.ContextSessionField)),
 		turnBudget:      point.ContextTurnBudget,
 		maxCharsPerTurn: point.ContextMaxCharsPerTurn,
-	})
-	if errClass != "" && point.ContextOnError == config.OnErrorClosed {
+	}, true
+}
+
+// prefetchGroupContexts fetches each distinct context configuration once, so
+// several points that share the same endpoint and selectors reuse one fetch while
+// points with a different endpoint fetch separately. Fetching before the group
+// goroutines run keeps the returned map read-only during the concurrent calls.
+func (runtime *InferRuntime) prefetchGroupContexts(
+	ctx context.Context,
+	order []config.InferencePoint,
+	fields *FieldSet,
+) map[contextParams]contextFetch {
+	fetched := map[contextParams]contextFetch{}
+	for _, point := range order {
+		params, wantsContext := groupContextParams(point, fields)
+		if !wantsContext {
+			continue
+		}
+		if _, done := fetched[params]; done {
+			continue
+		}
+		contextJSON, errClass := runtime.fetchContextJSON(ctx, params)
+		fetched[params] = contextFetch{json: contextJSON, errClass: errClass}
+	}
+	return fetched
+}
+
+// groupContext returns the context JSON for one point and whether a fetch failure
+// should be treated as an error, applying that point's own on-error policy to the
+// fetch made for its own endpoint.
+func groupContext(point config.InferencePoint, fields *FieldSet, fetched map[contextParams]contextFetch) (string, bool) {
+	params, wantsContext := groupContextParams(point, fields)
+	if !wantsContext {
+		return "", false
+	}
+	fetch := fetched[params]
+	if fetch.errClass != "" && point.ContextOnError == config.OnErrorClosed {
 		return "", true
 	}
-	return contextJSON, false
+	return fetch.json, false
 }
 
 // evaluateBatchGroup issues one inference call judging the command against every
@@ -372,11 +408,21 @@ func parseBatchDecisions(outputJSON string) (map[string]string, bool) {
 		return nil, false
 	}
 	out := make(map[string]string, len(decoded.Decisions))
+	seen := make(map[string]int, len(decoded.Decisions))
 	for _, decision := range decoded.Decisions {
 		if decision.Decision != "allow" && decision.Decision != "block" {
 			continue
 		}
+		seen[decision.RuleID]++
 		out[decision.RuleID] = decision.Decision
+	}
+	// A rule the model answered more than once is ambiguous (it may conflict), so
+	// drop it and let the rule read as a missing decision and apply its on_error,
+	// rather than letting the last duplicate silently win.
+	for ruleID, count := range seen {
+		if count > 1 {
+			delete(out, ruleID)
+		}
 	}
 	return out, true
 }
