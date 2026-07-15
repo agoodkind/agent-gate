@@ -108,9 +108,17 @@ func (c *Client) EvaluateHook(rawJSON []byte, providerHint, cwd string, argv []s
 func (c *Client) Status() (*daemonpb.StatusResponse, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	return c.StatusContext(ctx)
+}
+
+// StatusContext fetches daemon identity within the caller's context.
+func (c *Client) StatusContext(ctx context.Context) (*daemonpb.StatusResponse, error) {
 	log := slog.Default()
 	resp, err := c.rpc.Status(ctx, &daemonpb.StatusRequest{})
 	if err != nil {
+		if ctx.Err() != nil {
+			err = ctx.Err()
+		}
 		log.WarnContext(ctx, "daemon Status rpc failed", slog.Any("err", err))
 		return nil, fmt.Errorf("daemon Status rpc: %w", err)
 	}

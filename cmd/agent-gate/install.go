@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -319,10 +320,9 @@ func waitForDaemonReady(
 			identity.BuildHash == expectedBuildHash {
 			return nil
 		}
-		if err != nil {
-			lastErr = err
-		} else {
-			lastErr = fmt.Errorf(
+		attemptErr := err
+		if attemptErr == nil {
+			attemptErr = fmt.Errorf(
 				"daemon identity mismatch: executable=%q buildHash=%q, want executable=%q buildHash=%q",
 				identity.ExecutablePath,
 				identity.BuildHash,
@@ -330,17 +330,35 @@ func waitForDaemonReady(
 				expectedBuildHash,
 			)
 		}
+		if ctx.Err() != nil {
+			if lastErr == nil || !isContextTermination(attemptErr) {
+				lastErr = attemptErr
+			}
+			return daemonReadinessTimeout(ctx, lastErr)
+		}
+		lastErr = attemptErr
 
 		timer := time.NewTimer(pollInterval)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			wrappedErr := fmt.Errorf("daemon readiness timed out: %w", lastErr)
-			slog.WarnContext(ctx, "install daemon readiness timed out", "err", wrappedErr)
-			return wrappedErr
+			return daemonReadinessTimeout(ctx, lastErr)
 		case <-timer.C:
 		}
 	}
+}
+
+func isContextTermination(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+}
+
+func daemonReadinessTimeout(ctx context.Context, lastErr error) error {
+	if lastErr == nil {
+		lastErr = ctx.Err()
+	}
+	wrappedErr := fmt.Errorf("daemon readiness timed out: %w", lastErr)
+	slog.WarnContext(ctx, "install daemon readiness timed out", "err", wrappedErr)
+	return wrappedErr
 }
 
 func lookupDaemonIdentity(ctx context.Context) (daemonIdentity, error) {
@@ -349,35 +367,14 @@ func lookupDaemonIdentity(ctx context.Context) (daemonIdentity, error) {
 		return daemonIdentity{}, err
 	}
 	defer func() { _ = client.Close() }()
-	type statusResult struct {
-		identity daemonIdentity
-		err      error
+	status, err := client.StatusContext(ctx)
+	if err != nil {
+		return daemonIdentity{}, err
 	}
-	resultChannel := make(chan statusResult, 1)
-	go func() {
-		defer func() {
-			if recovered := recover(); recovered != nil {
-				panicErr := fmt.Errorf("daemon status panic: %v", recovered)
-				slog.ErrorContext(ctx, "install daemon status lookup panicked", "err", panicErr)
-				resultChannel <- statusResult{err: panicErr}
-			}
-		}()
-		status, statusErr := client.Status()
-		if statusErr != nil {
-			resultChannel <- statusResult{err: statusErr}
-			return
-		}
-		resultChannel <- statusResult{identity: daemonIdentity{
-			ExecutablePath: status.GetExecutablePath(),
-			BuildHash:      status.GetBuildHash(),
-		}}
-	}()
-	select {
-	case <-ctx.Done():
-		return daemonIdentity{}, ctx.Err()
-	case result := <-resultChannel:
-		return result.identity, result.err
-	}
+	return daemonIdentity{
+		ExecutablePath: status.GetExecutablePath(),
+		BuildHash:      status.GetBuildHash(),
+	}, nil
 }
 
 func executableBuildHash(path string) (string, error) {

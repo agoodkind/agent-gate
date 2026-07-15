@@ -5,15 +5,42 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"google.golang.org/grpc"
+
+	"goodkind.io/agent-gate/api/daemonpb"
+	"goodkind.io/agent-gate/internal/config"
 	agentinstall "goodkind.io/agent-gate/internal/install"
 )
+
+type readinessDaemonFake struct {
+	daemonpb.UnimplementedAgentGateDServer
+	callCount atomic.Int32
+	exited    chan struct{}
+}
+
+func (server *readinessDaemonFake) Status(
+	ctx context.Context,
+	_ *daemonpb.StatusRequest,
+) (*daemonpb.StatusResponse, error) {
+	if server.callCount.Add(1) == 1 {
+		return &daemonpb.StatusResponse{
+			ExecutablePath: "/old/agent-gate",
+			BuildHash:      "old",
+		}, nil
+	}
+	<-ctx.Done()
+	close(server.exited)
+	return nil, ctx.Err()
+}
 
 func TestRunInstallDefaultsBinPathThroughResolver(t *testing.T) {
 	binPath := writeCommandExecutable(t)
@@ -269,6 +296,52 @@ func TestWaitForDaemonReadyTimeoutIncludesLastMismatch(t *testing.T) {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("error = %q, want %q", err, want)
 		}
+	}
+}
+
+func TestWaitForDaemonReadyProductionLookupPreservesMismatchAtDeadline(t *testing.T) {
+	runtimeDir, err := os.MkdirTemp("/tmp", "agent-gate-ready.")
+	if err != nil {
+		t.Fatalf("MkdirTemp runtime dir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(runtimeDir) })
+	t.Setenv("XDG_RUNTIME_DIR", runtimeDir)
+	if err := os.MkdirAll(config.RuntimeDir(), 0o700); err != nil {
+		t.Fatalf("MkdirAll runtime dir: %v", err)
+	}
+	listener, err := net.Listen("unix", config.DaemonSocketPath())
+	if err != nil {
+		t.Fatalf("Listen daemon socket: %v", err)
+	}
+	server := grpc.NewServer()
+	fake := &readinessDaemonFake{exited: make(chan struct{})}
+	daemonpb.RegisterAgentGateDServer(server, fake)
+	go func() {
+		_ = server.Serve(listener)
+	}()
+	t.Cleanup(server.Stop)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	err = waitForDaemonReady(
+		ctx,
+		"/new/agent-gate",
+		"new",
+		time.Millisecond,
+		lookupDaemonIdentity,
+	)
+	if err == nil {
+		t.Fatal("waitForDaemonReady returned nil")
+	}
+	for _, want := range []string{"timed out", "/old/agent-gate", "old"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error = %q, want %q", err, want)
+		}
+	}
+	select {
+	case <-fake.exited:
+	case <-time.After(time.Second):
+		t.Fatal("Status RPC outlived readiness cancellation")
 	}
 }
 
