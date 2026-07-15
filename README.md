@@ -19,6 +19,8 @@ for the daemon, and installs all five hook templates.
 curl -fsSL https://raw.githubusercontent.com/agoodkind/agent-gate/main/install.sh | bash
 ```
 
+Use this public curl command when you do not have a source checkout.
+
 The default installation uses these paths:
 
 - Binary: `${XDG_BIN_HOME:-$HOME/.local/bin}/agent-gate`
@@ -28,8 +30,8 @@ The default installation uses these paths:
 - macOS service: `$HOME/Library/LaunchAgents/io.goodkind.agent-gate.plist`
 - Linux service: `${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/agent-gate.service`
 
-Use the release wrapper flags to select a version, installation directory, or
-attestation requirement:
+From a source checkout, use `./install.sh` with these release wrapper flags to
+select a version, installation directory, or attestation requirement:
 
 ```sh
 ./install.sh --version v1.2.3
