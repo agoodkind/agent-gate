@@ -4,6 +4,7 @@
     "allow": ["Read"]
   },
   "hooks": {
+    "EmptyExternal": [],
     "WorktreeCreate": [
       {
         "hooks": [

@@ -201,6 +201,9 @@ func TestInstallHooksRemovesClaudeWorktreeFactoryHooks(t *testing.T) {
 	if !strings.Contains(string(settings.Hooks["SessionStart"]), "empty-external") {
 		t.Fatalf("preexisting empty external group was removed: %s", settings.Hooks["SessionStart"])
 	}
+	if emptyExternal, ok := settings.Hooks["EmptyExternal"]; !ok || string(emptyExternal) != "[]" {
+		t.Fatalf("preexisting empty external event = %s, present = %t; want []", emptyExternal, ok)
+	}
 	assertFileMode(t, settingsPath, privateFileMode)
 }
 

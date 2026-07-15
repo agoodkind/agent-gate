@@ -426,6 +426,9 @@ func mergeJSONHooks(existingJSON json.RawMessage, managedJSON json.RawMessage) (
 	}
 
 	for eventName, groups := range existingHooks {
+		if len(groups) == 0 {
+			continue
+		}
 		preservedGroups := make([]json.RawMessage, 0, len(groups))
 		for _, group := range groups {
 			preservedGroup, preserve, err := removeAgentGateCommands(group)
