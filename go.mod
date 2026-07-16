@@ -17,7 +17,7 @@ require (
 	goodkind.io/gklog v0.4.5-0.20260704010614-fd04ab29700e
 	goodkind.io/gksyntax v0.0.0-20260618054600-30485de6d77b
 	goodkind.io/go-makefile v0.0.0-20260712071637-360d4c3d4fff
-	google.golang.org/grpc v1.82.0
+	google.golang.org/grpc v1.82.1
 	google.golang.org/protobuf v1.36.11
 )
 
