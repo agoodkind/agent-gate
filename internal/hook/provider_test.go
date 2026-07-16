@@ -116,6 +116,75 @@ func TestCursorBeforeMCPExecution_ObjectToolInput(t *testing.T) {
 	}
 }
 
+func TestCursorMCPExecution_NestedObjectToolInputAllows(t *testing.T) {
+	tests := []struct {
+		name      string
+		eventName string
+		extraJSON string
+	}{
+		{name: "before", eventName: "beforeMCPExecution", extraJSON: ""},
+		{name: "after", eventName: "afterMCPExecution", extraJSON: `,"tool_output":"ok","result_json":"{}"`},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			rawJSON := []byte(`{"hook_event_name":"` + testCase.eventName + `","session_id":"s1","tool_name":"mcp__contentful__search_entries","tool_use_id":"call_1","cwd":"/repo","tool_input":{"query":{"content_type":"blogPost"},"spaceId":"space","environmentId":"master","command":"contentful search"}` + testCase.extraJSON + `}`)
+
+			payload, err := hook.ParseHookPayload(hook.SystemCursor, rawJSON)
+			if err != nil {
+				t.Fatalf("ParseHookPayload: %v", err)
+			}
+			fields := payload.Fields()
+			if fields.HookEventName != testCase.eventName {
+				t.Fatalf("hook_event_name = %q, want %q", fields.HookEventName, testCase.eventName)
+			}
+			if fields.ToolName != "mcp__contentful__search_entries" {
+				t.Fatalf("tool_name = %q, want mcp__contentful__search_entries", fields.ToolName)
+			}
+			if fields.ToolUseID != "call_1" {
+				t.Fatalf("tool_use_id = %q, want call_1", fields.ToolUseID)
+			}
+			if fields.CWD != "/repo" {
+				t.Fatalf("cwd = %q, want /repo", fields.CWD)
+			}
+			if fields.ToolInputCommand != "contentful search" {
+				t.Fatalf("tool_input.command = %q, want contentful search", fields.ToolInputCommand)
+			}
+
+			evaluation := hook.EvaluateHot(
+				context.Background(),
+				rawJSON,
+				nil,
+				hook.SystemCursor,
+				func(string) string { return "" },
+			)
+			if evaluation.ExitCode != 0 {
+				t.Fatalf("ExitCode = %d, want 0; stderr = %q", evaluation.ExitCode, string(evaluation.Stderr))
+			}
+			if got := string(evaluation.Stdout); got != "{\"permission\":\"allow\"}\n" {
+				t.Fatalf("Stdout = %q, want Cursor allow response", got)
+			}
+			if len(evaluation.Stderr) != 0 {
+				t.Fatalf("Stderr = %q, want empty", string(evaluation.Stderr))
+			}
+		})
+	}
+}
+
+func TestCursorBeforeMCPExecution_ArrayToolInputRejected(t *testing.T) {
+	rawJSON := []byte(`{"hook_event_name":"beforeMCPExecution","session_id":"s1","tool_name":"mcp__contentful__search_entries","tool_use_id":"call_1","cwd":"/repo","tool_input":[]}`)
+	if _, err := hook.ParseHookPayload(hook.SystemCursor, rawJSON); err == nil {
+		t.Fatal("ParseHookPayload succeeded, want unsupported array tool_input error")
+	}
+}
+
+func TestCursorBeforeMCPExecution_MalformedObjectToolInputRejected(t *testing.T) {
+	rawJSON := []byte(`{"hook_event_name":"beforeMCPExecution","session_id":"s1","tool_name":"mcp__contentful__search_entries","tool_use_id":"call_1","cwd":"/repo","tool_input":{"query":}}`)
+	if _, err := hook.ParseHookPayload(hook.SystemCursor, rawJSON); err == nil {
+		t.Fatal("ParseHookPayload succeeded, want malformed object tool_input error")
+	}
+}
+
 func TestCursorBeforeMCPExecution_StringToolInput(t *testing.T) {
 	rawJSON := []byte(`{"hook_event_name":"beforeMCPExecution","session_id":"s1","tool_name":"mcp__docker__logs","tool_use_id":"call_1","cwd":"/repo","tool_input":"docker logs api"}`)
 	payload, err := hook.ParseHookPayload(hook.SystemCursor, rawJSON)
