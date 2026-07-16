@@ -58,6 +58,7 @@ const (
 type queryCommandName string
 
 const (
+	queryCommandCost        queryCommandName = "cost"
 	queryCommandDecisions   queryCommandName = "decisions"
 	queryCommandEvaluations queryCommandName = "evaluations"
 	queryCommandSeen        queryCommandName = "seen"
@@ -844,7 +845,7 @@ func openLog(component string) (*slog.Logger, func()) {
 
 func runQuery(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: agent-gate query seen|decisions|evaluations [flags]")
+		fmt.Fprintln(os.Stderr, "usage: agent-gate query seen|decisions|evaluations|cost [flags]")
 		return 2
 	}
 	switch queryCommandName(args[0]) {
@@ -854,9 +855,138 @@ func runQuery(args []string) int {
 		return runDecisionQuery(args[1:])
 	case queryCommandEvaluations:
 		return runEvaluationQuery(args[1:])
+	case queryCommandCost:
+		return runCostQuery(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "agent-gate query: unknown subcommand %q\n", args[0])
 		return 2
+	}
+}
+
+func runCostQuery(args []string) int {
+	fs := flag.NewFlagSet("agent-gate query cost", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	var shared sharedQueryFlags
+	fs.BoolVar(&shared.today, "today", false, "report on judge calls since local midnight")
+	fs.StringVar(&shared.since, "since", "", "report since duration or RFC3339 time")
+	fs.StringVar(&shared.until, "until", "", "report until duration or RFC3339 time")
+	fs.BoolVar(&shared.jsonOut, "json", false, "print the report as JSON")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	since, until, ok := parseSharedQueryRange(shared, "query cost")
+	if !ok {
+		return 2
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-gate query cost: config load failed: %v\n", err)
+		return 2
+	}
+	pricing := costPricingFromConfig(cfg)
+	result, err := evaluation.CostReport(
+		context.Background(),
+		cfg.AuditSQLitePath(),
+		pricing,
+		evaluation.CostFilter{Since: since, Until: until},
+	)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-gate query cost: %v\n", err)
+		return 1
+	}
+	if shared.jsonOut {
+		encoder := json.NewEncoder(os.Stdout)
+		encoder.SetIndent("", "  ")
+		if err := encoder.Encode(result); err != nil {
+			fmt.Fprintf(os.Stderr, "agent-gate query cost: encode: %v\n", err)
+			return 1
+		}
+		return 0
+	}
+	printCostReport(result)
+	return 0
+}
+
+func costPricingFromConfig(cfg *config.Config) map[string]evaluation.ModelPricing {
+	pricing := make(map[string]evaluation.ModelPricing)
+	for model, price := range cfg.JudgePricing() {
+		pricing[model] = evaluation.ModelPricing{
+			InputPerMillion:       price.InputPerMillion,
+			CachedInputPerMillion: price.CachedInputPerMillion,
+			OutputPerMillion:      price.OutputPerMillion,
+		}
+	}
+	return pricing
+}
+
+func costWindowLabel(value time.Time) string {
+	if value.IsZero() {
+		return "-"
+	}
+	return value.UTC().Format(time.RFC3339)
+}
+
+func microsToDollars(micros int64) float64 {
+	return float64(micros) / 1_000_000.0
+}
+
+func printCostReport(result evaluation.CostReportResult) {
+	_, _ = fmt.Fprintf(
+		os.Stdout, "source=%s since=%s until=%s window_days=%.2f\n",
+		result.Source, costWindowLabel(result.Since), costWindowLabel(result.Until), result.WindowDays,
+	)
+	if result.Note != "" {
+		_, _ = fmt.Fprintf(os.Stdout, "note=%s\n", result.Note)
+	}
+	_, _ = fmt.Fprintf(
+		os.Stdout, "%-32s  %-6s  %-13s  %-13s  %-13s  %-11s  %s\n",
+		"model", "calls", "prompt_tokens", "cached_tokens", "compl_tokens", "est_cost_$", "priced",
+	)
+	for _, model := range result.Models {
+		_, _ = fmt.Fprintf(
+			os.Stdout, "%-32s  %-6d  %-13d  %-13d  %-13d  %-11.6f  %v\n",
+			model.Model, model.Calls, model.PromptTokens, model.CachedTokens,
+			model.CompletionTokens, microsToDollars(model.EstimatedCostMicros), model.Priced,
+		)
+	}
+	_, _ = fmt.Fprintf(
+		os.Stdout, "total_billed=$%.6f  projected_monthly=$%.4f\n",
+		microsToDollars(result.TotalBilledCostMicros), microsToDollars(result.ProjectedMonthlyMicros),
+	)
+	printCostCacheLines(result)
+	printCostDailyTable(result.Daily)
+}
+
+func printCostCacheLines(result evaluation.CostReportResult) {
+	cache := result.DedupCache
+	consulted := cache.Hits + cache.Misses
+	if consulted == 0 {
+		_, _ = fmt.Fprintf(os.Stdout, "dedup_cache=no hit/miss decisions recorded\n")
+	} else {
+		_, _ = fmt.Fprintf(
+			os.Stdout, "dedup_cache=hits %d misses %d hit_rate %.1f%%\n",
+			cache.Hits, cache.Misses, cache.HitRate()*100,
+		)
+	}
+	if result.CachedTokensAvailable {
+		return
+	}
+	_, _ = fmt.Fprintf(
+		os.Stdout,
+		"openai_prompt_cache=unavailable (cached_tokens not surfaced by the inference service)\n",
+	)
+}
+
+func printCostDailyTable(daily []evaluation.DailyCost) {
+	if len(daily) == 0 {
+		return
+	}
+	_, _ = fmt.Fprintf(os.Stdout, "%-12s  %-32s  %-6s  %s\n", "day", "model", "calls", "est_cost_$")
+	for _, row := range daily {
+		_, _ = fmt.Fprintf(
+			os.Stdout, "%-12s  %-32s  %-6d  %.6f\n",
+			row.Day, row.Model, row.Calls, microsToDollars(row.EstimatedCostMicros),
+		)
 	}
 }
 

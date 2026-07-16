@@ -13,9 +13,15 @@ import (
 	"goodkind.io/agent-gate/internal/config"
 )
 
-// batchDecisionOutputSchema is the JSON Schema a batch inference call answers
-// with: an array of per-rule decisions keyed by the rule_id the prompt gives.
-const batchDecisionOutputSchema = `{"type":"object","properties":{"decisions":{"type":"array","items":{"type":"object","properties":{"rule_id":{"type":"string"},"decision":{"type":"string","enum":["allow","block"]}},"required":["rule_id","decision"],"additionalProperties":false}}},"required":["decisions"],"additionalProperties":false}`
+// blocksOnlyOutputSchema is the JSON Schema a batch inference call answers with:
+// only the rule_ids the model decides to block. A rule absent from the list is
+// an allow, so a normal command answers {"block":[]}.
+const blocksOnlyOutputSchema = `{"type":"object","properties":{"block":{"type":"array","items":{"type":"string"}}},"required":["block"],"additionalProperties":false}`
+
+// defaultJudgeTranscriptTimeout bounds the once-per-command transcript fetch when
+// the judge config leaves the timeout unset, so a hung clyde stream cannot stall
+// the gated tool call.
+const defaultJudgeTranscriptTimeout = 1500 * time.Millisecond
 
 // batchRuleDecision is one rule's outcome inside a batch reply. A rule the model
 // omitted, or a call that failed, is errored so the read site applies the entry's
@@ -107,10 +113,11 @@ type batchGroupPlan struct {
 
 // runBatchInference issues one inference call per inference point for every
 // applicable rule whose infer entries opt into fanout=batch, and returns a memo
-// the eval matrix reads. It fetches the conversation context once per distinct
-// context configuration and attaches each group only the context fetched from its
-// own point, so a point never receives conversation data fetched for a different
-// endpoint. It returns nil when no rule opts in.
+// the eval matrix reads. It fetches the conversation transcript once per command
+// under a bounded deadline, builds the judge-input panel once, and shares that one
+// input across every group so all rules of one command judge on the same
+// directory, verbatim call, structural parse, and conversation. It returns nil
+// when no rule opts in.
 func runBatchInference(
 	ctx context.Context,
 	fields *FieldSet,
@@ -127,8 +134,7 @@ func runBatchInference(
 	if len(groups) == 0 {
 		return nil
 	}
-	fetched := runtime.prefetchGroupContexts(ctx, order, fields)
-	command := fields.CommandValue()
+	judgeInput := buildJudgeInput(*fields, runtime.fetchJudgeTranscript(ctx, fields))
 	memo := &batchInferenceMemo{groups: make(map[config.InferencePoint]*batchGroupResult, len(groups))}
 	var mu sync.Mutex
 	var wg sync.WaitGroup
@@ -147,8 +153,7 @@ func runBatchInference(
 					)
 				}
 			}()
-			contextJSON, contextErrored := groupContext(point, fields, fetched)
-			result := runtime.evaluateBatchGroup(ctx, plan, command, contextJSON, contextErrored)
+			result := runtime.evaluateBatchGroup(ctx, plan, judgeInput)
 			mu.Lock()
 			memo.groups[point] = result
 			mu.Unlock()
@@ -156,6 +161,38 @@ func runBatchInference(
 	}
 	wg.Wait()
 	return memo
+}
+
+// fetchJudgeTranscript fetches the conversation transcript tail once per command
+// under a bounded deadline and fails open to an empty tail. It returns "" when the
+// judge sets no transcript endpoint, when the hook carries no conversation id, or
+// when the fetch errors, so a transcript outage never blocks or errors the judge:
+// the judge still runs on the directory, command, and structural parse.
+func (runtime *InferRuntime) fetchJudgeTranscript(ctx context.Context, fields *FieldSet) string {
+	settings := runtime.judgeTranscriptConfig()
+	if settings.endpoint == "" || settings.maxTokens <= 0 {
+		return ""
+	}
+	conversationID := strings.TrimSpace(fields.ConversationID)
+	if conversationID == "" {
+		return ""
+	}
+	timeout := settings.timeout
+	if timeout <= 0 {
+		timeout = defaultJudgeTranscriptTimeout
+	}
+	fetchCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	tail, errClass := runtime.fetchTranscriptTail(fetchCtx, transcriptParams{
+		endpoint:       settings.endpoint,
+		conversationID: conversationID,
+		tokenModel:     settings.tokenModel,
+		maxTokens:      settings.maxTokens,
+	})
+	if errClass != "" {
+		return ""
+	}
+	return tail
 }
 
 // collectBatchGroups walks the applicable rules and groups every fanout=batch infer
@@ -199,84 +236,20 @@ func collectBatchGroups(
 	return groups, order
 }
 
-// contextFetch is the raw result of one conversation-context fetch. errClass is
-// non-empty on a fetch failure, and each group applies its own point's on-error
-// policy to it.
-type contextFetch struct {
-	json     string
-	errClass string
-}
-
-// groupContextParams derives the context fetch inputs from a point, or reports that
-// the point requests no context. The workspace and session come from the hook
-// fields the point names.
-func groupContextParams(point config.InferencePoint, fields *FieldSet) (contextParams, bool) {
-	if point.ContextEndpoint == "" {
-		var none contextParams
-		return none, false
-	}
-	return contextParams{
-		endpoint:        point.ContextEndpoint,
-		workspace:       fields.String(config.CompileFieldSelector(point.ContextWorkspaceField)),
-		session:         fields.String(config.CompileFieldSelector(point.ContextSessionField)),
-		turnBudget:      point.ContextTurnBudget,
-		maxCharsPerTurn: point.ContextMaxCharsPerTurn,
-	}, true
-}
-
-// prefetchGroupContexts fetches each distinct context configuration once, so
-// several points that share the same endpoint and selectors reuse one fetch while
-// points with a different endpoint fetch separately. Fetching before the group
-// goroutines run keeps the returned map read-only during the concurrent calls.
-func (runtime *InferRuntime) prefetchGroupContexts(
-	ctx context.Context,
-	order []config.InferencePoint,
-	fields *FieldSet,
-) map[contextParams]contextFetch {
-	fetched := map[contextParams]contextFetch{}
-	for _, point := range order {
-		params, wantsContext := groupContextParams(point, fields)
-		if !wantsContext {
-			continue
-		}
-		if _, done := fetched[params]; done {
-			continue
-		}
-		contextJSON, errClass := runtime.fetchContextJSON(ctx, params)
-		fetched[params] = contextFetch{json: contextJSON, errClass: errClass}
-	}
-	return fetched
-}
-
-// groupContext returns the context JSON for one point and whether a fetch failure
-// should be treated as an error, applying that point's own on-error policy to the
-// fetch made for its own endpoint.
-func groupContext(point config.InferencePoint, fields *FieldSet, fetched map[contextParams]contextFetch) (string, bool) {
-	params, wantsContext := groupContextParams(point, fields)
-	if !wantsContext {
-		return "", false
-	}
-	fetch := fetched[params]
-	if fetch.errClass != "" && point.ContextOnError == config.OnErrorClosed {
-		return "", true
-	}
-	return fetch.json, false
-}
-
-// evaluateBatchGroup issues one inference call judging the command against every
-// participant rule and returns each rule's decision. A transport, status, or parse
-// failure, or a context error under a closed context policy, marks every
-// participant errored so the read site applies each entry's on_error.
+// evaluateBatchGroup issues one inference call judging the judge-input panel
+// against every participant rule and returns each rule's decision. The prompt is
+// the rule intents (the stable, cacheable prefix), the input is the per-command
+// judge-input panel, and the context is empty because the conversation now lives
+// inside the input. A transport, status, or parse failure marks every participant
+// errored so the read site applies each entry's on_error.
 func (runtime *InferRuntime) evaluateBatchGroup(
 	ctx context.Context,
 	plan *batchGroupPlan,
-	command string,
-	contextJSON string,
-	contextErrored bool,
+	judgeInput string,
 ) *batchGroupResult {
 	startedAt := runtime.now()
 	prompt := buildBatchPrompt(plan.participants)
-	inputJSON := marshalBatchInput(prompt, command, plan.point.Model, contextJSON)
+	inputJSON := marshalBatchInput(prompt, judgeInput, plan.point.Model)
 	fail := func(code string) *batchGroupResult {
 		decisions := make(map[string]batchRuleDecision, len(plan.participants))
 		for _, participant := range plan.participants {
@@ -291,9 +264,6 @@ func (runtime *InferRuntime) evaluateBatchGroup(
 			decisions:   decisions,
 		}
 	}
-	if contextErrored {
-		return fail("context_unavailable")
-	}
 	timeout := time.Duration(plan.point.TimeoutMs) * time.Millisecond
 	if timeout <= 0 {
 		timeout = defaultPointTimeout
@@ -306,9 +276,9 @@ func (runtime *InferRuntime) evaluateBatchGroup(
 	}
 	reply, err := client.Infer(callCtx, &inferencepb.InferRequest{
 		Prompt:            prompt,
-		Input:             command,
-		OutputSchema:      batchDecisionOutputSchema,
-		Context:           contextJSON,
+		Input:             judgeInput,
+		OutputSchema:      blocksOnlyOutputSchema,
+		Context:           "",
 		Model:             plan.point.Model,
 		GenerationOptions: pointGenerationOptions(plan.point),
 	})
@@ -318,7 +288,7 @@ func (runtime *InferRuntime) evaluateBatchGroup(
 	if reply == nil || reply.GetStatus() != inferencepb.InferenceStatus_INFERENCE_STATUS_COMPLETE {
 		return fail("non_complete")
 	}
-	parsed, ok := parseBatchDecisions(reply.GetOutputJson())
+	blockSet, ok := parseBlockList(reply.GetOutputJson())
 	if !ok {
 		return fail("invalid_response")
 	}
@@ -328,38 +298,38 @@ func (runtime *InferRuntime) evaluateBatchGroup(
 		upstream:    boundedUpstreamMetadata(reply.GetMetadata()),
 		startedAt:   startedAt,
 		completedAt: runtime.now(),
-		decisions:   batchDecisionsForParticipants(plan.participants, parsed),
+		decisions:   batchDecisionsFromBlockList(plan.participants, blockSet),
 	}
 }
 
-// batchDecisionsForParticipants maps each participant to its parsed decision,
-// marking a rule the model omitted as errored so the read site fails it per policy.
-func batchDecisionsForParticipants(participants []batchParticipant, parsed map[string]string) map[string]batchRuleDecision {
+// batchDecisionsFromBlockList maps each participant to its decision: a rule named
+// in the block set blocks, and a rule absent from the set allows. Absence means
+// allow now, so an omitted rule is never errored. Rule ids in the set that are not
+// participants are ignored, since only participants are iterated.
+func batchDecisionsFromBlockList(participants []batchParticipant, blockSet map[string]bool) map[string]batchRuleDecision {
 	decisions := make(map[string]batchRuleDecision, len(participants))
 	for _, participant := range participants {
-		decision, found := parsed[participant.ruleName]
-		if !found {
-			decisions[participant.ruleName] = batchRuleDecision{block: false, errored: true, errorCode: "missing_decision"}
-			continue
+		decisions[participant.ruleName] = batchRuleDecision{
+			block:     blockSet[participant.ruleName],
+			errored:   false,
+			errorCode: "",
 		}
-		decisions[participant.ruleName] = batchRuleDecision{block: decision == "block", errored: false, errorCode: ""}
 	}
 	return decisions
 }
 
 // buildBatchPrompt renders the judging instruction and the per-rule intents, each
-// tagged with a stable rule_id the model echoes in its array reply. It states the
-// exact rule count and requires one decision per rule_id, because a smaller judge
-// model otherwise answers only the first rule and drops the rest, which reads as a
-// missing decision.
+// tagged with a stable rule_id. It is the stable, byte-identical-across-calls
+// prefix a model provider caches, so it carries no per-command detail: the
+// directory, verbatim call, structural parse, and conversation ride in the input.
+// The model returns only the rule_ids it blocks, so a normal command answers with
+// an empty list rather than one decision per rule.
 func buildBatchPrompt(participants []batchParticipant) string {
 	var builder strings.Builder
-	builder.WriteString("You are a security guard reviewing one shell command. ")
-	builder.WriteString("Judge the command independently against each rule below. ")
-	builder.WriteString(`Return a JSON object {"decisions":[{"rule_id":"<id>","decision":"allow"|"block"}]}. `)
-	fmt.Fprintf(&builder, "You MUST return exactly %d decisions, one for every rule_id listed below, and omit none. ", len(participants))
-	builder.WriteString("Use the exact rule_id values given. ")
-	builder.WriteString("Recent conversation context, when provided, tells you what the user is doing.\n\nRules:\n")
+	builder.WriteString("You are a security guard reviewing one tool call. ")
+	builder.WriteString("Judge the tool call independently against each rule below. ")
+	builder.WriteString(`Return a JSON object {"block":["<rule_id>",...]} listing only the rule_id values you decide to block, and an empty list when nothing should be blocked. `)
+	builder.WriteString("Use the exact rule_id values given.\n\nRules:\n")
 	for _, participant := range participants {
 		builder.WriteString("- rule_id: ")
 		builder.WriteString(participant.ruleName)
@@ -370,16 +340,16 @@ func buildBatchPrompt(participants []batchParticipant) string {
 	return builder.String()
 }
 
-// marshalBatchInput records the batch prompt, the command, the model, and the
-// conversation context as the layer input, so the recorded layer shows what the
-// judge saw.
-func marshalBatchInput(prompt, command, model, contextJSON string) string {
+// marshalBatchInput records the batch prompt, the judge-input panel, and the model
+// as the layer input, so the recorded layer shows what the judge saw. The
+// conversation now rides inside the judge-input panel, so there is no separate
+// context field.
+func marshalBatchInput(prompt, input, model string) string {
 	encoded, err := json.Marshal(struct {
-		Prompt  string `json:"prompt"`
-		Input   string `json:"input"`
-		Model   string `json:"model"`
-		Context string `json:"context,omitempty"`
-	}{Prompt: prompt, Input: command, Model: model, Context: contextJSON})
+		Prompt string `json:"prompt"`
+		Input  string `json:"input"`
+		Model  string `json:"model"`
+	}{Prompt: prompt, Input: input, Model: model})
 	if err != nil {
 		return "{}"
 	}
@@ -398,35 +368,27 @@ func batchRuleOutputJSON(decision batchRuleDecision) string {
 	return `{"decision":"allow"}`
 }
 
-// parseBatchDecisions reads the array reply into a rule_id to decision map. It
-// returns ok=false only when the reply is not valid JSON; an entry with an invalid
-// decision is dropped so its rule reads as a missing decision.
-func parseBatchDecisions(outputJSON string) (map[string]string, bool) {
+// parseBlockList reads the blocks-only reply into the set of rule_ids to block. It
+// returns ok=false when the reply is not valid JSON, and also when it is valid JSON
+// that carries no present block key (a bare {} or a wrong key like
+// {"blocked":[...]}), so a reply that never states a decision errors every
+// participant and applies each entry's on_error rather than reading as a silent
+// allow-all. A present-but-empty list ({"block":[]}) still means allow-all, the
+// normal allow case. A repeated rule_id is harmless because the set already
+// collapses duplicates to one block entry.
+func parseBlockList(outputJSON string) (map[string]bool, bool) {
 	var decoded struct {
-		Decisions []struct {
-			RuleID   string `json:"rule_id"`
-			Decision string `json:"decision"`
-		} `json:"decisions"`
+		Block *[]string `json:"block"`
 	}
 	if err := json.Unmarshal([]byte(outputJSON), &decoded); err != nil {
 		return nil, false
 	}
-	out := make(map[string]string, len(decoded.Decisions))
-	seen := make(map[string]int, len(decoded.Decisions))
-	for _, decision := range decoded.Decisions {
-		if decision.Decision != "allow" && decision.Decision != "block" {
-			continue
-		}
-		seen[decision.RuleID]++
-		out[decision.RuleID] = decision.Decision
+	if decoded.Block == nil {
+		return nil, false
 	}
-	// A rule the model answered more than once is ambiguous (it may conflict), so
-	// drop it and let the rule read as a missing decision and apply its on_error,
-	// rather than letting the last duplicate silently win.
-	for ruleID, count := range seen {
-		if count > 1 {
-			delete(out, ruleID)
-		}
+	blockSet := make(map[string]bool, len(*decoded.Block))
+	for _, ruleID := range *decoded.Block {
+		blockSet[ruleID] = true
 	}
-	return out, true
+	return blockSet, true
 }

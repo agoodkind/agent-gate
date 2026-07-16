@@ -1,28 +1,99 @@
 package rules
 
 import (
+	"context"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
+	"google.golang.org/grpc"
+
+	"goodkind.io/agent-gate/api/inferencepb"
 	"goodkind.io/agent-gate/internal/config"
+	clydev1 "goodkind.io/clyde/api/clyde/v1"
 )
 
-// TestBuildBatchPromptStatesCount confirms the prompt names the exact rule count
-// and requires every rule_id, so a smaller judge model enumerates all rules
-// instead of answering only the first and dropping the rest.
-func TestBuildBatchPromptStatesCount(t *testing.T) {
-	participants := []batchParticipant{
-		{ruleName: "native-worktree-parser-gap-consensus", intent: "block writes"},
-		{ruleName: "native-search-parser-gap-consensus", intent: "block searches"},
+// fakeInferenceClient records every InferRequest and returns a fixed reply or
+// error, so a batch call can be exercised without a live inference service.
+type fakeInferenceClient struct {
+	mu          sync.Mutex
+	calls       int
+	lastRequest *inferencepb.InferRequest
+	reply       *inferencepb.InferReply
+	err         error
+}
+
+func (client *fakeInferenceClient) Infer(
+	_ context.Context,
+	in *inferencepb.InferRequest,
+	_ ...grpc.CallOption,
+) (*inferencepb.InferReply, error) {
+	client.mu.Lock()
+	client.calls++
+	client.lastRequest = in
+	client.mu.Unlock()
+	if client.err != nil {
+		return nil, client.err
 	}
-	prompt := buildBatchPrompt(participants)
-	if !strings.Contains(prompt, "exactly 2 decisions") {
-		t.Fatalf("prompt does not state the rule count: %q", prompt)
+	return client.reply, nil
+}
+
+func (client *fakeInferenceClient) count() int {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	return client.calls
+}
+
+func (client *fakeInferenceClient) request() *inferencepb.InferRequest {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	return client.lastRequest
+}
+
+// spyClydeClient counts transcript fetches and records whether the fetch context
+// carried a deadline, so a test can prove the fetch runs once per command and
+// under a bounded context. An optional stream error drives the fail-open path.
+type spyClydeClient struct {
+	clydev1.ClydeServiceClient
+	mu          sync.Mutex
+	calls       int
+	hadDeadline bool
+	body        string
+	streamErr   error
+}
+
+func (client *spyClydeClient) StreamExportTranscript(
+	ctx context.Context,
+	_ *clydev1.ExportTranscriptRequest,
+	_ ...grpc.CallOption,
+) (grpc.ServerStreamingClient[clydev1.ExportChunk], error) {
+	client.mu.Lock()
+	client.calls++
+	_, client.hadDeadline = ctx.Deadline()
+	client.mu.Unlock()
+	if client.streamErr != nil {
+		return nil, client.streamErr
 	}
-	for _, p := range participants {
-		if !strings.Contains(prompt, "rule_id: "+p.ruleName) {
-			t.Fatalf("prompt omits rule_id %q: %q", p.ruleName, prompt)
-		}
+	return &fakeExportStream{chunks: []*clydev1.ExportChunk{chunk(client.body)}}, nil
+}
+
+func (client *spyClydeClient) count() int {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	return client.calls
+}
+
+func (client *spyClydeClient) sawDeadline() bool {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	return client.hadDeadline
+}
+
+func completeReply(outputJSON string) *inferencepb.InferReply {
+	return &inferencepb.InferReply{
+		OutputJson: outputJSON,
+		Status:     inferencepb.InferenceStatus_INFERENCE_STATUS_COMPLETE,
 	}
 }
 
@@ -30,45 +101,75 @@ func pointForTest() config.InferencePoint {
 	return config.InferencePoint{Endpoint: "endpoint", Model: "model"}
 }
 
-// TestParseBatchDecisions confirms the array reply parses into a rule_id map, that
-// an entry with an unknown decision is dropped, and that a non-JSON reply reports
-// failure so the caller errors every rule.
-func TestParseBatchDecisions(t *testing.T) {
-	parsed, ok := parseBatchDecisions(`{"decisions":[{"rule_id":"a","decision":"block"},{"rule_id":"b","decision":"allow"},{"rule_id":"c","decision":"maybe"}]}`)
-	if !ok {
-		t.Fatal("expected ok for well-formed array")
+// TestBuildBatchPromptListsRulesBlocksOnly confirms the prompt leads with the
+// blocks-only instruction, enumerates each rule_id with its intent, and no longer
+// demands one decision per rule, so it stays the stable cacheable prefix.
+func TestBuildBatchPromptListsRulesBlocksOnly(t *testing.T) {
+	participants := []batchParticipant{
+		{ruleName: "native-worktree-parser-gap-consensus", intent: "block writes"},
+		{ruleName: "native-search-parser-gap-consensus", intent: "block searches"},
 	}
-	if parsed["a"] != "block" || parsed["b"] != "allow" {
-		t.Fatalf("parsed = %+v, want a=block b=allow", parsed)
+	prompt := buildBatchPrompt(participants)
+	if !strings.Contains(prompt, `{"block":`) {
+		t.Fatalf("prompt does not describe blocks-only output: %q", prompt)
 	}
-	if _, present := parsed["c"]; present {
-		t.Fatalf("invalid decision should be dropped, got %+v", parsed)
+	if strings.Contains(prompt, "exactly") || strings.Contains(prompt, "decisions") {
+		t.Fatalf("prompt still demands a decision per rule: %q", prompt)
 	}
-	if _, ok := parseBatchDecisions("not json"); ok {
-		t.Fatal("expected failure for non-JSON reply")
-	}
-	// A rule answered twice is ambiguous, so it is dropped and reads as missing.
-	dup, ok := parseBatchDecisions(`{"decisions":[{"rule_id":"a","decision":"block"},{"rule_id":"a","decision":"allow"}]}`)
-	if !ok {
-		t.Fatal("expected ok for parseable duplicate reply")
-	}
-	if _, present := dup["a"]; present {
-		t.Fatalf("duplicate rule_id should be dropped, got %+v", dup)
+	for _, participant := range participants {
+		if !strings.Contains(prompt, "rule_id: "+participant.ruleName) {
+			t.Fatalf("prompt omits rule_id %q: %q", participant.ruleName, prompt)
+		}
 	}
 }
 
-// TestBatchDecisionsForParticipants confirms a participant the model omitted is
-// marked errored with missing_decision, so the read site applies its on_error
-// rather than silently allowing.
-func TestBatchDecisionsForParticipants(t *testing.T) {
+// TestParseBlockList confirms the blocks-only reply parses into a rule_id set,
+// that a present-but-empty list parses as an empty set (allow-all), that a
+// single-rule list blocks only that rule, and that a non-JSON reply, a reply that
+// omits the block key, or a reply carrying a wrong key all report failure so the
+// caller errors every rule rather than reading a missing decision as allow-all.
+func TestParseBlockList(t *testing.T) {
+	blockSet, ok := parseBlockList(`{"block":["a","c"]}`)
+	if !ok {
+		t.Fatal("expected ok for well-formed reply")
+	}
+	if !blockSet["a"] || !blockSet["c"] || blockSet["b"] {
+		t.Fatalf("blockSet = %+v, want a and c only", blockSet)
+	}
+	single, ok := parseBlockList(`{"block":["rule-a"]}`)
+	if !ok || !single["rule-a"] || len(single) != 1 {
+		t.Fatalf("single block list = %+v ok=%v, want {rule-a} ok=true", single, ok)
+	}
+	empty, ok := parseBlockList(`{"block":[]}`)
+	if !ok || len(empty) != 0 {
+		t.Fatalf("empty block list = %+v ok=%v, want empty set ok=true", empty, ok)
+	}
+	if _, ok := parseBlockList("not json"); ok {
+		t.Fatal("expected failure for non-JSON reply")
+	}
+	if _, ok := parseBlockList(`{}`); ok {
+		t.Fatal("expected failure for a reply that omits the block key")
+	}
+	if _, ok := parseBlockList(`{"blocked":["x"]}`); ok {
+		t.Fatal("expected failure for a reply carrying a wrong key")
+	}
+}
+
+// TestBatchDecisionsFromBlockList confirms a participant in the block set blocks,
+// a participant absent from it allows without erroring, and a block-set entry that
+// is not a participant is ignored.
+func TestBatchDecisionsFromBlockList(t *testing.T) {
 	participants := []batchParticipant{{ruleName: "a"}, {ruleName: "b"}}
-	parsed := map[string]string{"a": "block"}
-	decisions := batchDecisionsForParticipants(participants, parsed)
-	if decisions["a"].errored || !decisions["a"].block {
+	blockSet := map[string]bool{"a": true, "stray": true}
+	decisions := batchDecisionsFromBlockList(participants, blockSet)
+	if !decisions["a"].block || decisions["a"].errored {
 		t.Fatalf("rule a = %+v, want block, not errored", decisions["a"])
 	}
-	if !decisions["b"].errored || decisions["b"].errorCode != "missing_decision" {
-		t.Fatalf("rule b = %+v, want errored missing_decision", decisions["b"])
+	if decisions["b"].block || decisions["b"].errored {
+		t.Fatalf("rule b = %+v, want allow, not errored", decisions["b"])
+	}
+	if _, present := decisions["stray"]; present {
+		t.Fatalf("non-participant block id leaked into decisions: %+v", decisions)
 	}
 }
 
@@ -83,5 +184,179 @@ func TestBatchVerdictForFallsBackWhenAbsent(t *testing.T) {
 	empty := &batchInferenceMemo{groups: map[config.InferencePoint]*batchGroupResult{}}
 	if _, found := empty.verdictFor(pointForTest(), "a"); found {
 		t.Fatal("empty memo should report no verdict")
+	}
+}
+
+// TestEvaluateBatchGroupSendsJudgeInputBlocksOnly confirms the call sends the
+// judge-input panel as Input, an empty Context, the blocks-only schema, and the
+// rule intents as the stable Prompt, and that a block-list reply yields per-rule
+// block and allow decisions.
+func TestEvaluateBatchGroupSendsJudgeInputBlocksOnly(t *testing.T) {
+	runtime := NewInferRuntimeWithCache(nil, nil)
+	t.Cleanup(runtime.Close)
+	fake := &fakeInferenceClient{reply: completeReply(`{"block":["a"]}`)}
+	runtime.inferenceClients["infer"] = fake
+
+	plan := &batchGroupPlan{
+		point:        config.InferencePoint{Endpoint: "infer", Model: "m"},
+		participants: []batchParticipant{{ruleName: "a", intent: "block a"}, {ruleName: "b", intent: "block b"}},
+		seen:         map[string]bool{"a": true, "b": true},
+	}
+	judgeInput := "chat working directory: /repo\n\ntool call:\nrm -rf /\n\nstructure:\n..."
+
+	result := runtime.evaluateBatchGroup(context.Background(), plan, judgeInput)
+
+	req := fake.request()
+	if req.GetInput() != judgeInput {
+		t.Fatalf("Input = %q, want the judge-input panel %q", req.GetInput(), judgeInput)
+	}
+	if req.GetContext() != "" {
+		t.Fatalf("Context = %q, want empty", req.GetContext())
+	}
+	if req.GetOutputSchema() != blocksOnlyOutputSchema {
+		t.Fatalf("OutputSchema = %q, want blocks-only schema", req.GetOutputSchema())
+	}
+	if !strings.HasPrefix(req.GetPrompt(), "You are a security guard") || !strings.Contains(req.GetPrompt(), "rule_id: a") {
+		t.Fatalf("Prompt does not lead with the rule intents: %q", req.GetPrompt())
+	}
+	if !result.decisions["a"].block || result.decisions["a"].errored {
+		t.Fatalf("rule a = %+v, want block", result.decisions["a"])
+	}
+	if result.decisions["b"].block || result.decisions["b"].errored {
+		t.Fatalf("rule b = %+v, want allow", result.decisions["b"])
+	}
+}
+
+// TestEvaluateBatchGroupInvalidReplyErrorsAll confirms an unparseable reply and a
+// valid-JSON reply that omits the block key both mark every participant errored so
+// the read site applies each entry's on_error, while a present-but-empty block list
+// allows every participant.
+func TestEvaluateBatchGroupInvalidReplyErrorsAll(t *testing.T) {
+	runtime := NewInferRuntimeWithCache(nil, nil)
+	t.Cleanup(runtime.Close)
+	fake := &fakeInferenceClient{reply: completeReply("not json")}
+	runtime.inferenceClients["infer"] = fake
+	plan := &batchGroupPlan{
+		point:        config.InferencePoint{Endpoint: "infer", Model: "m"},
+		participants: []batchParticipant{{ruleName: "a"}, {ruleName: "b"}},
+		seen:         map[string]bool{"a": true, "b": true},
+	}
+
+	errored := runtime.evaluateBatchGroup(context.Background(), plan, "input")
+	for _, name := range []string{"a", "b"} {
+		if !errored.decisions[name].errored || errored.decisions[name].errorCode != "invalid_response" {
+			t.Fatalf("rule %s = %+v, want errored invalid_response", name, errored.decisions[name])
+		}
+	}
+
+	// A reply that is valid JSON but omits the block key states no decision, so it
+	// must error every participant rather than read as a silent allow-all.
+	fake.reply = completeReply(`{}`)
+	missingKey := runtime.evaluateBatchGroup(context.Background(), plan, "input")
+	for _, name := range []string{"a", "b"} {
+		if !missingKey.decisions[name].errored || missingKey.decisions[name].errorCode != "invalid_response" {
+			t.Fatalf("rule %s = %+v, want errored invalid_response for a missing block key", name, missingKey.decisions[name])
+		}
+	}
+
+	fake.reply = completeReply(`{"block":[]}`)
+	allowed := runtime.evaluateBatchGroup(context.Background(), plan, "input")
+	for _, name := range []string{"a", "b"} {
+		if allowed.decisions[name].block || allowed.decisions[name].errored {
+			t.Fatalf("rule %s = %+v, want allow", name, allowed.decisions[name])
+		}
+	}
+}
+
+func batchRule(name, use string, point config.InferencePoint) config.Rule {
+	return config.Rule{
+		Name:   name,
+		Intent: "block " + name,
+		Eval: []config.RuleEval{
+			{Kind: config.EvalKindInfer, Role: config.RoleEnforce, Use: use, Fanout: config.FanoutBatch},
+		},
+		EvalInference: map[string]config.InferencePoint{use: point},
+	}
+}
+
+func batchRuntimeContext(t *testing.T, runtime *InferRuntime) context.Context {
+	t.Helper()
+	return WithInferRuntime(context.Background(), runtime)
+}
+
+// TestRunBatchInferenceFetchesTranscriptOnce confirms the planner fetches the
+// conversation transcript once per command even when two inference points run, and
+// that the fetch context carries a deadline (bounded context).
+func TestRunBatchInferenceFetchesTranscriptOnce(t *testing.T) {
+	runtime := NewInferRuntimeWithCache(nil, nil)
+	t.Cleanup(runtime.Close)
+	infer := &fakeInferenceClient{reply: completeReply(`{"block":[]}`)}
+	runtime.inferenceClients["infer"] = infer
+	clyde := &spyClydeClient{body: "user: do the thing"}
+	runtime.clydeServiceClients["/clyde"] = clyde
+	runtime.SetJudgeTranscript("/clyde", 2000, "", 1500*time.Millisecond, "")
+
+	fields := &FieldSet{
+		ConversationID:   "conv-1",
+		CWD:              "/repo",
+		ToolName:         "Bash",
+		ToolInputCommand: "rm -rf /",
+	}
+	rules := []config.Rule{
+		batchRule("a", "p1", config.InferencePoint{Endpoint: "infer", Model: "m1"}),
+		batchRule("b", "p2", config.InferencePoint{Endpoint: "infer", Model: "m2"}),
+	}
+
+	memo := runBatchInference(batchRuntimeContext(t, runtime), fields, rules, "claude", "PreToolUse", nil)
+	if memo == nil {
+		t.Fatal("memo is nil, want a batch result")
+	}
+	if clyde.count() != 1 {
+		t.Fatalf("transcript fetches = %d, want 1", clyde.count())
+	}
+	if infer.count() != 2 {
+		t.Fatalf("inference calls = %d, want 2 (one per point)", infer.count())
+	}
+	if !clyde.sawDeadline() {
+		t.Fatal("transcript fetch context had no deadline, want a bounded context")
+	}
+}
+
+// TestRunBatchInferenceTranscriptErrorFailsOpen confirms a transcript fetch error
+// yields an empty conversation panel while the judge still runs, so a transcript
+// outage neither blocks nor errors the judge.
+func TestRunBatchInferenceTranscriptErrorFailsOpen(t *testing.T) {
+	runtime := NewInferRuntimeWithCache(nil, nil)
+	t.Cleanup(runtime.Close)
+	infer := &fakeInferenceClient{reply: completeReply(`{"block":[]}`)}
+	runtime.inferenceClients["infer"] = infer
+	clyde := &spyClydeClient{streamErr: context.DeadlineExceeded}
+	runtime.clydeServiceClients["/clyde"] = clyde
+	runtime.SetJudgeTranscript("/clyde", 2000, "", 1500*time.Millisecond, "")
+
+	fields := &FieldSet{
+		ConversationID:   "conv-1",
+		CWD:              "/repo",
+		ToolName:         "Bash",
+		ToolInputCommand: "ls",
+	}
+	rules := []config.Rule{batchRule("a", "p1", config.InferencePoint{Endpoint: "infer", Model: "m1"})}
+
+	memo := runBatchInference(batchRuntimeContext(t, runtime), fields, rules, "claude", "PreToolUse", nil)
+	if memo == nil {
+		t.Fatal("memo is nil, want the judge to still run on an empty transcript")
+	}
+	if infer.count() != 1 {
+		t.Fatalf("inference calls = %d, want 1", infer.count())
+	}
+	verdict, found := memo.verdictFor(config.InferencePoint{Endpoint: "infer", Model: "m1"}, "a")
+	if !found {
+		t.Fatal("no verdict recorded for rule a")
+	}
+	if verdict.errored || verdict.block {
+		t.Fatalf("verdict = %+v, want a clean allow on empty transcript", verdict)
+	}
+	if strings.Contains(infer.request().GetInput(), "recent conversation") {
+		t.Fatalf("Input carries a conversation panel despite the fetch error: %q", infer.request().GetInput())
 	}
 }

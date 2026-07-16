@@ -13,7 +13,7 @@ require (
 	go.opentelemetry.io/otel/metric v1.44.0
 	go.opentelemetry.io/otel/sdk v1.44.0
 	go.opentelemetry.io/otel/sdk/metric v1.44.0
-	goodkind.io/clyde v0.0.0-20260707233802-69e919e749b2
+	goodkind.io/clyde v0.0.0-20260715020851-23020238ae53
 	goodkind.io/gklog v0.4.5-0.20260704010614-fd04ab29700e
 	goodkind.io/gksyntax v0.0.0-20260618054600-30485de6d77b
 	goodkind.io/go-makefile v0.0.0-20260712071637-360d4c3d4fff

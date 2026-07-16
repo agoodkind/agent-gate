@@ -24,6 +24,7 @@ import (
 	"goodkind.io/agent-gate/api/inferencepb"
 	"goodkind.io/agent-gate/internal/config"
 	"goodkind.io/agent-gate/internal/hotkv"
+	clydev1 "goodkind.io/clyde/api/clyde/v1"
 	"goodkind.io/clyde/api/contextpb"
 )
 
@@ -106,8 +107,48 @@ type InferRuntime struct {
 	inferenceClients     map[string]inferencepb.InferenceClient
 	contextConnections   map[string]*grpc.ClientConn
 	contextClients       map[string]contextpb.ConversationContextClient
+	clydeServiceClients  map[string]clydev1.ClydeServiceClient
 	inflight             map[string]*inferFlight
 	now                  func() time.Time
+	judgeTranscript      judgeTranscriptSettings
+}
+
+// judgeTranscriptSettings holds the resolved judge-level conversation-transcript
+// configuration the batch planner fetches once per command. It is set from the
+// loaded config when a runtime snapshot is built, so a config reload updates it
+// in place on the daemon-owned runtime.
+type judgeTranscriptSettings struct {
+	endpoint   string
+	maxTokens  int
+	tokenModel string
+	timeout    time.Duration
+	onError    string
+}
+
+// SetJudgeTranscript stores the judge-level transcript settings, so the batch
+// planner reads them once per command. It is safe to call on a live runtime
+// during a config reload because it takes the runtime mutex.
+func (runtime *InferRuntime) SetJudgeTranscript(endpoint string, maxTokens int, tokenModel string, timeout time.Duration, onError string) {
+	if runtime == nil {
+		return
+	}
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	runtime.judgeTranscript = judgeTranscriptSettings{
+		endpoint:   endpoint,
+		maxTokens:  maxTokens,
+		tokenModel: tokenModel,
+		timeout:    timeout,
+		onError:    onError,
+	}
+}
+
+// judgeTranscriptConfig returns the current judge-level transcript settings under
+// the runtime mutex, so a concurrent config reload cannot tear the read.
+func (runtime *InferRuntime) judgeTranscriptConfig() judgeTranscriptSettings {
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	return runtime.judgeTranscript
 }
 
 // NewInferRuntimeWithCache creates a reusable runtime backed by cache.
@@ -133,8 +174,10 @@ func NewInferRuntimeWithCache(log *slog.Logger, cache *hotkv.Store) *InferRuntim
 		inferenceClients:     map[string]inferencepb.InferenceClient{},
 		contextConnections:   map[string]*grpc.ClientConn{},
 		contextClients:       map[string]contextpb.ConversationContextClient{},
+		clydeServiceClients:  map[string]clydev1.ClydeServiceClient{},
 		inflight:             map[string]*inferFlight{},
 		now:                  time.Now,
+		judgeTranscript:      judgeTranscriptSettings{endpoint: "", maxTokens: 0, tokenModel: "", timeout: 0, onError: ""},
 	}
 }
 
@@ -155,6 +198,7 @@ func (runtime *InferRuntime) Close() {
 	runtime.contextConnections = map[string]*grpc.ClientConn{}
 	runtime.inferenceClients = map[string]inferencepb.InferenceClient{}
 	runtime.contextClients = map[string]contextpb.ConversationContextClient{}
+	runtime.clydeServiceClients = map[string]clydev1.ClydeServiceClient{}
 	runtime.mu.Unlock()
 	for _, connection := range connections {
 		_ = connection.Close()

@@ -121,6 +121,14 @@ func New(log *slog.Logger, cfg *config.Config) (*Server, error) {
 				AllowPrerelease: nil,
 			},
 			Telemetry: config.TelemetryConfig{OTLPEndpoint: "", SlowOpThresholdMs: 0},
+			Judge: config.Judge{
+				TranscriptEndpoint:   "",
+				TranscriptMaxTokens:  0,
+				TranscriptTokenModel: "",
+				TranscriptTimeoutMS:  0,
+				TranscriptOnError:    "",
+				Pricing:              nil,
+			},
 			Inference: nil,
 			Rules:     nil,
 		}
@@ -187,6 +195,17 @@ func newRuntimeSnapshot(ctx context.Context, cfg *config.Config, log *slog.Logge
 	if err != nil {
 		return nil, fmt.Errorf("create intake store: %w", err)
 	}
+
+	// Refresh the judge-level transcript settings on the daemon-owned runtime, so a
+	// config reload (which rebuilds the snapshot but reuses the runtime) picks up
+	// the new [judge] table.
+	inferRuntime.SetJudgeTranscript(
+		cfg.JudgeTranscriptEndpoint(),
+		cfg.JudgeTranscriptMaxTokens(),
+		cfg.JudgeTranscriptTokenModel(),
+		cfg.JudgeTranscriptTimeout(),
+		cfg.JudgeTranscriptOnError(),
+	)
 
 	eventLogger, err := audit.NewEventLoggerWithOptions(ctx, cfg, log, audit.LoggerOptions{
 		QueueLimit: 0,
