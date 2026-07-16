@@ -259,6 +259,37 @@ func TestRunEvalMatrixAllEnforceErroredNoFallback(t *testing.T) {
 	}
 }
 
+// TestRunEvalMatrixPartialEnforceErrorSkipsFallback guards the allErrored logic
+// against a future "any errored" regression. Two enforce entries share a rule and
+// exactly one errors, with a deterministic fallback present. Because the surviving
+// enforce entry can still decide, the fold must combine the enforce entries and
+// never consult the fallback. The errored entry fails open to allow and the
+// surviving entry allows, so a correct fold allows, while a regression that used
+// the fallback would block, making wantBlock=false the tight assertion.
+func TestRunEvalMatrixPartialEnforceErrorSkipsFallback(t *testing.T) {
+	// index 0: infer enforce, errored, on_error open -> allow
+	// index 1: infer enforce, up, allows
+	// index 2: deterministic fallback that would block if wrongly consulted
+	evals := []config.RuleEval{
+		inferEval(config.RoleEnforce, config.CombineUnion),
+		inferEval(config.RoleEnforce, config.CombineUnion),
+		detEval(config.RoleFallback),
+	}
+	outcomes := map[int]evalOutcome{
+		0: erroredAs(verdictAllow),
+		1: allowed(),
+		2: blocked(),
+	}
+	var ran []int
+	decision := runEvalMatrix(evals, resolverFromOutcomes(outcomes, &ran))
+	if decision.block {
+		t.Fatal("block = true, want false: a surviving enforce entry must decide, not the fallback")
+	}
+	if !equalInts(ran, []int{0, 1, 2}) {
+		t.Fatalf("resolved indices = %v, want [0 1 2]", ran)
+	}
+}
+
 func equalInts(a, b []int) bool {
 	if len(a) != len(b) {
 		return false

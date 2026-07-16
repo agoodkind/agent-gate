@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 
 	clydev1 "goodkind.io/clyde/api/clyde/v1"
 )
@@ -90,6 +91,40 @@ func TestFetchTranscriptTailConcatenatesChunks(t *testing.T) {
 	if client.lastRequest.GetFormat() != "plain_text" || client.lastRequest.GetWhitespace() != "compact" {
 		t.Fatalf("format/whitespace = %q/%q, want plain_text/compact",
 			client.lastRequest.GetFormat(), client.lastRequest.GetWhitespace())
+	}
+}
+
+// TestTranscriptClientReusesContextConnection confirms transcriptClient builds its
+// ClydeService client over the *grpc.ClientConn already cached in contextConnections
+// for the endpoint, rather than opening a second dial, so the transcript read and
+// the conversation-context read share one connection. Pre-seeding the sentinel
+// connection and asserting it survives unchanged proves the reuse path took over
+// from a fresh dial.
+func TestTranscriptClientReusesContextConnection(t *testing.T) {
+	runtime := NewInferRuntimeWithCache(nil, nil)
+	t.Cleanup(runtime.Close)
+
+	sentinel, err := grpc.NewClient(
+		"passthrough:///transcript-reuse",
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		t.Fatalf("build sentinel connection: %v", err)
+	}
+	runtime.contextConnections["/socket"] = sentinel
+
+	client, err := runtime.transcriptClient("/socket")
+	if err != nil {
+		t.Fatalf("transcriptClient error: %v", err)
+	}
+	if client == nil {
+		t.Fatal("transcriptClient returned a nil client")
+	}
+	if runtime.contextConnections["/socket"] != sentinel {
+		t.Fatal("transcriptClient replaced the cached connection, want the reused sentinel")
+	}
+	if runtime.clydeServiceClients["/socket"] == nil {
+		t.Fatal("transcriptClient did not cache a ClydeService client over the reused connection")
 	}
 }
 

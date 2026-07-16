@@ -369,18 +369,25 @@ func batchRuleOutputJSON(decision batchRuleDecision) string {
 }
 
 // parseBlockList reads the blocks-only reply into the set of rule_ids to block. It
-// returns ok=false only when the reply is not valid JSON, in which case the caller
-// errors every participant so each applies its on_error. A repeated rule_id is
-// harmless because the set already collapses duplicates to one block entry.
+// returns ok=false when the reply is not valid JSON, and also when it is valid JSON
+// that carries no present block key (a bare {} or a wrong key like
+// {"blocked":[...]}), so a reply that never states a decision errors every
+// participant and applies each entry's on_error rather than reading as a silent
+// allow-all. A present-but-empty list ({"block":[]}) still means allow-all, the
+// normal allow case. A repeated rule_id is harmless because the set already
+// collapses duplicates to one block entry.
 func parseBlockList(outputJSON string) (map[string]bool, bool) {
 	var decoded struct {
-		Block []string `json:"block"`
+		Block *[]string `json:"block"`
 	}
 	if err := json.Unmarshal([]byte(outputJSON), &decoded); err != nil {
 		return nil, false
 	}
-	blockSet := make(map[string]bool, len(decoded.Block))
-	for _, ruleID := range decoded.Block {
+	if decoded.Block == nil {
+		return nil, false
+	}
+	blockSet := make(map[string]bool, len(*decoded.Block))
+	for _, ruleID := range *decoded.Block {
 		blockSet[ruleID] = true
 	}
 	return blockSet, true

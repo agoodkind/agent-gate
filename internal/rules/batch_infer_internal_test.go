@@ -124,8 +124,10 @@ func TestBuildBatchPromptListsRulesBlocksOnly(t *testing.T) {
 }
 
 // TestParseBlockList confirms the blocks-only reply parses into a rule_id set,
-// that an empty list parses as an empty set, and that a non-JSON reply reports
-// failure so the caller errors every rule.
+// that a present-but-empty list parses as an empty set (allow-all), that a
+// single-rule list blocks only that rule, and that a non-JSON reply, a reply that
+// omits the block key, or a reply carrying a wrong key all report failure so the
+// caller errors every rule rather than reading a missing decision as allow-all.
 func TestParseBlockList(t *testing.T) {
 	blockSet, ok := parseBlockList(`{"block":["a","c"]}`)
 	if !ok {
@@ -134,12 +136,22 @@ func TestParseBlockList(t *testing.T) {
 	if !blockSet["a"] || !blockSet["c"] || blockSet["b"] {
 		t.Fatalf("blockSet = %+v, want a and c only", blockSet)
 	}
+	single, ok := parseBlockList(`{"block":["rule-a"]}`)
+	if !ok || !single["rule-a"] || len(single) != 1 {
+		t.Fatalf("single block list = %+v ok=%v, want {rule-a} ok=true", single, ok)
+	}
 	empty, ok := parseBlockList(`{"block":[]}`)
 	if !ok || len(empty) != 0 {
 		t.Fatalf("empty block list = %+v ok=%v, want empty set ok=true", empty, ok)
 	}
 	if _, ok := parseBlockList("not json"); ok {
 		t.Fatal("expected failure for non-JSON reply")
+	}
+	if _, ok := parseBlockList(`{}`); ok {
+		t.Fatal("expected failure for a reply that omits the block key")
+	}
+	if _, ok := parseBlockList(`{"blocked":["x"]}`); ok {
+		t.Fatal("expected failure for a reply carrying a wrong key")
 	}
 }
 
@@ -215,9 +227,10 @@ func TestEvaluateBatchGroupSendsJudgeInputBlocksOnly(t *testing.T) {
 	}
 }
 
-// TestEvaluateBatchGroupInvalidReplyErrorsAll confirms an unparseable reply marks
-// every participant errored so the read site applies each entry's on_error, while
-// an empty block list allows every participant.
+// TestEvaluateBatchGroupInvalidReplyErrorsAll confirms an unparseable reply and a
+// valid-JSON reply that omits the block key both mark every participant errored so
+// the read site applies each entry's on_error, while a present-but-empty block list
+// allows every participant.
 func TestEvaluateBatchGroupInvalidReplyErrorsAll(t *testing.T) {
 	runtime := NewInferRuntimeWithCache(nil, nil)
 	t.Cleanup(runtime.Close)
@@ -233,6 +246,16 @@ func TestEvaluateBatchGroupInvalidReplyErrorsAll(t *testing.T) {
 	for _, name := range []string{"a", "b"} {
 		if !errored.decisions[name].errored || errored.decisions[name].errorCode != "invalid_response" {
 			t.Fatalf("rule %s = %+v, want errored invalid_response", name, errored.decisions[name])
+		}
+	}
+
+	// A reply that is valid JSON but omits the block key states no decision, so it
+	// must error every participant rather than read as a silent allow-all.
+	fake.reply = completeReply(`{}`)
+	missingKey := runtime.evaluateBatchGroup(context.Background(), plan, "input")
+	for _, name := range []string{"a", "b"} {
+		if !missingKey.decisions[name].errored || missingKey.decisions[name].errorCode != "invalid_response" {
+			t.Fatalf("rule %s = %+v, want errored invalid_response for a missing block key", name, missingKey.decisions[name])
 		}
 	}
 
