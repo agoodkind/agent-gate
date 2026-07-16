@@ -477,6 +477,9 @@ type Config struct {
 	Performance Performance     `toml:"performance"`
 	Telemetry   TelemetryConfig `toml:"telemetry"`
 	Update      Update          `toml:"update"`
+	// Judge holds the batch LLM judge's conversation-transcript settings, fetched
+	// once per command and shared across every rule judged in that command.
+	Judge Judge `toml:"judge"`
 	// Inference holds named inference points that rules reference by name through
 	// a per-rule [RuleEval] entry.
 	Inference map[string]InferencePoint `toml:"inference,omitempty"`
@@ -561,6 +564,9 @@ func loadPath(path string, requireExisting bool) (*Config, error) {
 		return nil, err
 	}
 	if err := validateInferencePoints(log, cfg.Inference); err != nil {
+		return nil, err
+	}
+	if err := validateJudge(cfg.Judge); err != nil {
 		return nil, err
 	}
 

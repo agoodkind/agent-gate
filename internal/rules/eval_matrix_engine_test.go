@@ -13,7 +13,6 @@ import (
 	"goodkind.io/agent-gate/api/inferencepb"
 	"goodkind.io/agent-gate/internal/config"
 	"goodkind.io/agent-gate/internal/rules"
-	"goodkind.io/clyde/api/contextpb"
 )
 
 func loadRuleConfig(t *testing.T, body string) *config.Config {
@@ -265,6 +264,8 @@ func TestEvalMatrixBatchesRulesIntoOneCallPerModel(t *testing.T) {
 	var perModelMu sync.Mutex
 	var miniPrompt atomic.Value
 	var miniSchema atomic.Value
+	var miniInput atomic.Value
+	var miniContext atomic.Value
 	inference := &inferenceFake{handler: func(_ context.Context, request *inferencepb.InferRequest) (*inferencepb.InferReply, error) {
 		calls.Add(1)
 		perModelMu.Lock()
@@ -273,9 +274,11 @@ func TestEvalMatrixBatchesRulesIntoOneCallPerModel(t *testing.T) {
 		if request.GetModel() == "gpt-5.4-mini" {
 			miniPrompt.Store(request.GetPrompt())
 			miniSchema.Store(request.GetOutputSchema())
+			miniInput.Store(request.GetInput())
+			miniContext.Store(request.GetContext())
 		}
 		return &inferencepb.InferReply{
-			OutputJson: `{"decisions":[{"rule_id":"worktree","decision":"block"},{"rule_id":"search","decision":"allow"}]}`,
+			OutputJson: `{"block":["worktree"]}`,
 			Status:     1,
 		}, nil
 	}}
@@ -371,22 +374,29 @@ fanout = "batch"
 	if !strings.Contains(prompt, "rule_id: worktree") || !strings.Contains(prompt, "rule_id: search") {
 		t.Fatalf("batch prompt does not enumerate both rule_ids: %q", prompt)
 	}
-	if schema, _ := miniSchema.Load().(string); !strings.Contains(schema, `"decisions"`) {
-		t.Fatalf("mini output schema is not the batch array schema: %q", schema)
+	if schema, _ := miniSchema.Load().(string); !strings.Contains(schema, `"block"`) {
+		t.Fatalf("mini output schema is not the blocks-only schema: %q", schema)
+	}
+	if input, _ := miniInput.Load().(string); !strings.Contains(input, "vim config.go") {
+		t.Fatalf("mini input is not the judge-input panel with the verbatim call: %q", input)
+	}
+	if gotContext, _ := miniContext.Load().(string); gotContext != "" {
+		t.Fatalf("mini context = %q, want empty (transcript now rides inside the input)", gotContext)
 	}
 }
 
-// TestEvalMatrixBatchFetchesContextOncePerCommand confirms the batch judge fetches
-// the conversation context a single time and passes it to every model call, so
-// adding rules or a second model does not multiply the context fetch.
-func TestEvalMatrixBatchFetchesContextOncePerCommand(t *testing.T) {
-	clyde := &clydeFake{turns: []*contextpb.Turn{{Role: "user", Text: "clean up the worktree", Ts: "t1"}}}
-	clydeEndpoint, _ := startClydeServer(t, clyde)
+// TestEvalMatrixBatchSendsEmptyContextAndJudgeInput confirms the batch judge sends
+// an empty Context to every model call and the judge-input panel as Input, so the
+// conversation rides inside the input rather than a separate GetRecentTurns context
+// field. It exercises two models to confirm both calls carry the same input shape.
+func TestEvalMatrixBatchSendsEmptyContextAndJudgeInput(t *testing.T) {
 	var contexts sync.Map
+	var inputs sync.Map
 	inference := &inferenceFake{handler: func(_ context.Context, request *inferencepb.InferRequest) (*inferencepb.InferReply, error) {
 		contexts.Store(request.GetModel(), request.GetContext())
+		inputs.Store(request.GetModel(), request.GetInput())
 		return &inferencepb.InferReply{
-			OutputJson: `{"decisions":[{"rule_id":"worktree","decision":"allow"}]}`,
+			OutputJson: `{"block":[]}`,
 			Status:     1,
 		}, nil
 	}}
@@ -395,22 +405,10 @@ func TestEvalMatrixBatchFetchesContextOncePerCommand(t *testing.T) {
 [inference.mini]
 endpoint = "` + endpoint + `"
 model = "gpt-5.4-mini"
-context_endpoint = "` + clydeEndpoint + `"
-context_workspace_field = "cwd"
-context_session_field = "conversation_id"
-context_turn_budget = 10
-context_max_chars_per_turn = 120
-context_on_error = "open"
 
 [inference.v4]
 endpoint = "` + endpoint + `"
 model = "agentgate/agent-gate-judge-v4"
-context_endpoint = "` + clydeEndpoint + `"
-context_workspace_field = "cwd"
-context_session_field = "conversation_id"
-context_turn_budget = 10
-context_max_chars_per_turn = 120
-context_on_error = "open"
 
 [[rules]]
 name = "worktree"
@@ -437,17 +435,15 @@ fanout = "batch"
 	fields := rules.FieldSet{CWD: "/workspace", ConversationID: "conv-1", ToolInputCommand: "git worktree remove x"}
 	rules.EvaluateAllDetailed(ctx, "claude", "PreToolUse", fields, cfg.Rules, nil, nil, "test")
 
-	if len(clyde.requests) != 1 {
-		t.Fatalf("clyde requests = %d, want 1 (context fetched once per command)", len(clyde.requests))
-	}
-	if got := clyde.requests[0]; got.GetWorkspaceRef() != "/workspace" || got.GetSessionRef() != "conv-1" {
-		t.Fatalf("context request = %+v, want workspace=/workspace session=conv-1", got)
-	}
-	wantContext := `{"turns":[{"role":"user","text":"clean up the worktree","ts":"t1"}]}`
 	for _, model := range []string{"gpt-5.4-mini", "agentgate/agent-gate-judge-v4"} {
-		got, _ := contexts.Load(model)
-		if got != wantContext {
-			t.Fatalf("model %s context = %q, want %q", model, got, wantContext)
+		gotContext, _ := contexts.Load(model)
+		if gotContext != "" {
+			t.Fatalf("model %s context = %q, want empty", model, gotContext)
+		}
+		gotInput, _ := inputs.Load(model)
+		input, _ := gotInput.(string)
+		if !strings.Contains(input, "git worktree remove x") {
+			t.Fatalf("model %s input is not the judge-input panel with the verbatim call: %q", model, input)
 		}
 	}
 }
