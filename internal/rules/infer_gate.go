@@ -24,6 +24,7 @@ import (
 	"goodkind.io/agent-gate/api/inferencepb"
 	"goodkind.io/agent-gate/internal/config"
 	"goodkind.io/agent-gate/internal/hotkv"
+	clydev1 "goodkind.io/clyde/api/clyde/v1"
 	"goodkind.io/clyde/api/contextpb"
 )
 
@@ -106,6 +107,7 @@ type InferRuntime struct {
 	inferenceClients     map[string]inferencepb.InferenceClient
 	contextConnections   map[string]*grpc.ClientConn
 	contextClients       map[string]contextpb.ConversationContextClient
+	clydeServiceClients  map[string]clydev1.ClydeServiceClient
 	inflight             map[string]*inferFlight
 	now                  func() time.Time
 }
@@ -133,6 +135,7 @@ func NewInferRuntimeWithCache(log *slog.Logger, cache *hotkv.Store) *InferRuntim
 		inferenceClients:     map[string]inferencepb.InferenceClient{},
 		contextConnections:   map[string]*grpc.ClientConn{},
 		contextClients:       map[string]contextpb.ConversationContextClient{},
+		clydeServiceClients:  map[string]clydev1.ClydeServiceClient{},
 		inflight:             map[string]*inferFlight{},
 		now:                  time.Now,
 	}
@@ -155,6 +158,7 @@ func (runtime *InferRuntime) Close() {
 	runtime.contextConnections = map[string]*grpc.ClientConn{}
 	runtime.inferenceClients = map[string]inferencepb.InferenceClient{}
 	runtime.contextClients = map[string]contextpb.ConversationContextClient{}
+	runtime.clydeServiceClients = map[string]clydev1.ClydeServiceClient{}
 	runtime.mu.Unlock()
 	for _, connection := range connections {
 		_ = connection.Close()
