@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"maps"
 	"time"
 )
 
@@ -13,6 +14,33 @@ const (
 	// stream cannot stall the gated tool call.
 	defaultJudgeTranscriptTimeout = 1500 * time.Millisecond
 )
+
+const (
+	// defaultJudgeCloudModel names the enforcing cloud judge model priced by
+	// default so the cost report estimates spend without requiring config.
+	defaultJudgeCloudModel = "gpt-5.4-mini"
+	// defaultJudgeCloudInputPerMillion is the gpt-5.4-mini input price in US
+	// dollars per one million prompt tokens.
+	defaultJudgeCloudInputPerMillion = 0.15
+	// defaultJudgeCloudCachedPerMillion is the gpt-5.4-mini cached-input price in
+	// US dollars per one million prompt tokens served from the provider prompt cache.
+	defaultJudgeCloudCachedPerMillion = 0.015
+	// defaultJudgeCloudOutputPerMillion is the gpt-5.4-mini output price in US
+	// dollars per one million completion tokens.
+	defaultJudgeCloudOutputPerMillion = 0.60
+	// defaultJudgeLocalModel names the local record-only judge model, which runs
+	// on owned hardware and therefore bills nothing.
+	defaultJudgeLocalModel = "agentgate/agent-gate-judge-v4"
+)
+
+// ModelPrice is the billed price of one judge model in US dollars per one million
+// tokens, split into full-rate input, provider-cached input, and output. A local
+// model that runs on owned hardware sets every field to zero.
+type ModelPrice struct {
+	InputPerMillion       float64 `toml:"input_per_million"`
+	CachedInputPerMillion float64 `toml:"cached_input_per_million"`
+	OutputPerMillion      float64 `toml:"output_per_million"`
+}
 
 // Judge holds settings for the batch LLM judge decoded from the [judge] TOML
 // table. The transcript tail is fetched once per command from clyde and shared
@@ -35,6 +63,35 @@ type Judge struct {
 	// proceed with an empty tail; "closed" is reserved and currently proceeds the
 	// same way, because a transcript outage must not block or error the judge.
 	TranscriptOnError string `toml:"transcript_on_error"`
+	// Pricing overrides the built-in judge per-model price table, keyed by the
+	// model name recorded on inference layers. The cost report reads it to
+	// estimate billed spend; a model left out of both config and defaults costs
+	// nothing in the report.
+	Pricing map[string]ModelPrice `toml:"pricing,omitempty"`
+}
+
+// JudgePricing returns the judge per-model price table, built from the priced
+// defaults and overlaid with any [judge.pricing] overrides, so the cost report
+// can estimate spend even when config sets no prices. The returned map is a fresh
+// copy the caller may retain.
+func (c *Config) JudgePricing() map[string]ModelPrice {
+	pricing := map[string]ModelPrice{
+		defaultJudgeCloudModel: {
+			InputPerMillion:       defaultJudgeCloudInputPerMillion,
+			CachedInputPerMillion: defaultJudgeCloudCachedPerMillion,
+			OutputPerMillion:      defaultJudgeCloudOutputPerMillion,
+		},
+		defaultJudgeLocalModel: {
+			InputPerMillion:       0,
+			CachedInputPerMillion: 0,
+			OutputPerMillion:      0,
+		},
+	}
+	if c == nil {
+		return pricing
+	}
+	maps.Copy(pricing, c.Judge.Pricing)
+	return pricing
 }
 
 // JudgeTranscriptEndpoint returns the configured clyde transcript endpoint.
@@ -93,6 +150,13 @@ func validateJudge(judge Judge) error {
 			"judge.transcript_on_error %q must be %q, %q, or empty",
 			judge.TranscriptOnError, OnErrorOpen, OnErrorClosed,
 		)
+	}
+	for model, price := range judge.Pricing {
+		if price.InputPerMillion < 0 ||
+			price.CachedInputPerMillion < 0 ||
+			price.OutputPerMillion < 0 {
+			return fmt.Errorf("judge.pricing[%q] prices must be non-negative", model)
+		}
 	}
 	return nil
 }

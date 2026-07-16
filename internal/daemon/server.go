@@ -127,6 +127,7 @@ func New(log *slog.Logger, cfg *config.Config) (*Server, error) {
 				TranscriptTokenModel: "",
 				TranscriptTimeoutMS:  0,
 				TranscriptOnError:    "",
+				Pricing:              nil,
 			},
 			Inference: nil,
 			Rules:     nil,
