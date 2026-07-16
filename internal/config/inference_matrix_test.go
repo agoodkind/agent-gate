@@ -268,3 +268,45 @@ violation_message = "no"
 		t.Fatalf("rules = %#v", cfg.Rules)
 	}
 }
+
+// TestLoadParsesFallbackRole confirms a judge-authoritative rule loads: an infer
+// enforce evaluator plus a deterministic fallback evaluator that decides only when
+// the judge call errors.
+func TestLoadParsesFallbackRole(t *testing.T) {
+	body := `
+[inference.mini]
+endpoint = "[::1]:5401"
+model = "gpt-5.4-mini"
+
+[[rules]]
+name = "judge-authoritative"
+events = ["PreToolUse"]
+violation_message = "no"
+intent = "Do not write into a protected checkout."
+
+[[rules.conditions]]
+kind = "regex"
+field_paths = ["tool_input.command"]
+pattern = "x"
+
+[[rules.eval]]
+kind = "infer"
+role = "enforce"
+use = "mini"
+
+[[rules.eval]]
+kind = "deterministic"
+role = "fallback"
+`
+	cfg, err := config.LoadExisting(writeTempConfig(t, body))
+	if err != nil {
+		t.Fatalf("LoadExisting: %v", err)
+	}
+	if len(cfg.Rules) != 1 || len(cfg.Rules[0].Eval) != 2 {
+		t.Fatalf("rules/eval = %#v", cfg.Rules)
+	}
+	fallback := cfg.Rules[0].Eval[1]
+	if fallback.Role != config.RoleFallback || fallback.Kind != config.EvalKindDeterministic {
+		t.Fatalf("fallback eval = %#v", fallback)
+	}
+}

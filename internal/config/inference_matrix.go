@@ -20,6 +20,10 @@ const (
 	RoleEnforce = "enforce"
 	// RoleVerify means this evaluator runs and is recorded, but does not enforce.
 	RoleVerify = "verify"
+	// RoleFallback means this evaluator decides the rule only when every enforce
+	// evaluator errored. When at least one enforce evaluator did not error, a
+	// fallback evaluator neither adds nor removes a block.
+	RoleFallback = "fallback"
 )
 
 // Fan-out modes for an infer [RuleEval] entry.
@@ -250,8 +254,11 @@ func evalEntryShapeProblem(eval RuleEval) string {
 	if eval.Kind != EvalKindDeterministic && eval.Kind != EvalKindInfer {
 		return fmt.Sprintf("kind %q must be %q or %q", eval.Kind, EvalKindDeterministic, EvalKindInfer)
 	}
-	if eval.Role != RoleEnforce && eval.Role != RoleVerify {
-		return fmt.Sprintf("role %q must be %q or %q", eval.Role, RoleEnforce, RoleVerify)
+	if eval.Role != RoleEnforce && eval.Role != RoleVerify && eval.Role != RoleFallback {
+		return fmt.Sprintf(
+			"role %q must be %q, %q, or %q",
+			eval.Role, RoleEnforce, RoleVerify, RoleFallback,
+		)
 	}
 	if eval.Fanout != "" && eval.Fanout != FanoutBatch && eval.Fanout != FanoutIndividual {
 		return fmt.Sprintf("fanout %q must be %q, %q, or empty", eval.Fanout, FanoutBatch, FanoutIndividual)

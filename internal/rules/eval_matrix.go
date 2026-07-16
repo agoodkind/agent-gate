@@ -20,10 +20,20 @@ const (
 	verdictBlock
 )
 
-// evaluatorResolver runs the declared evaluator at index and returns its verdict.
+// evalOutcome is one evaluator's resolved verdict plus whether the underlying call
+// errored. verdict carries the on_error-converted verdict, the same value the fold
+// used before the fallback role existed. errored records whether the call failed,
+// which a deterministic evaluator never does, so the fold can switch to a fallback
+// evaluator only when every enforce evaluator errored.
+type evalOutcome struct {
+	verdict evalVerdict
+	errored bool
+}
+
+// evaluatorResolver runs the declared evaluator at index and returns its outcome.
 // The engine supplies this: a deterministic entry runs the rule's condition
 // block, an infer entry calls the named inference point.
-type evaluatorResolver func(index int, eval config.RuleEval) evalVerdict
+type evaluatorResolver func(index int, eval config.RuleEval) evalOutcome
 
 // matrixDecision is the enforced decision for a rule's evaluator matrix.
 type matrixDecision struct {
@@ -32,41 +42,69 @@ type matrixDecision struct {
 
 // runEvalMatrix executes a rule's declared evaluators in order and returns the
 // enforced decision. It honors each entry's role: an enforce entry participates
-// in the decision, and a verify entry runs but does not decide. Enforcing entries
-// are joined by the combine operator. Union, the default, blocks when any
-// enforcing evaluator blocks. The and operator blocks only when every enforcing
-// evaluator blocks.
+// in the decision, a verify entry runs but never decides, and a fallback entry
+// decides only when every enforce entry errored. Enforcing entries are joined by
+// the combine operator. Union, the default, blocks when any joins evaluator
+// blocks. The and operator blocks only when every joined evaluator blocks.
 func runEvalMatrix(evals []config.RuleEval, resolve evaluatorResolver) matrixDecision {
-	state := matrixRunState{enforcingCount: 0, blockingCount: 0}
+	outcomes := make([]evalOutcome, len(evals))
 	for index := range evals {
-		runMatrixEntry(index, evals[index], resolve, &state)
+		outcomes[index] = resolve(index, evals[index])
 	}
-	block := matrixBlocks(matrixCombineOperator(evals), state.enforcingCount, state.blockingCount)
-	return matrixDecision{block: block}
+	return matrixDecision{block: foldMatrixOutcomes(evals, outcomes)}
 }
 
-// matrixRunState accumulates the enforcing and blocking tallies the combine
-// operator joins across evaluator entries.
-type matrixRunState struct {
-	enforcingCount int
-	blockingCount  int
-}
-
-// runMatrixEntry resolves one evaluator entry and folds its verdict into state.
-func runMatrixEntry(index int, eval config.RuleEval, resolve evaluatorResolver, state *matrixRunState) {
-	verdict := resolve(index, eval)
-	if evaluatorEnforces(eval) {
-		state.enforcingCount++
-		if verdict == verdictBlock {
-			state.blockingCount++
+// foldMatrixOutcomes decides the rule from the resolved evaluator outcomes. The
+// enforce entries decide unless every one of them errored and a fallback entry
+// exists, in which case the deterministic fallback entries decide. With no enforce
+// entry the rule does not block. Verify entries never decide.
+func foldMatrixOutcomes(evals []config.RuleEval, outcomes []evalOutcome) bool {
+	combine := matrixCombineOperator(evals)
+	enforce := indicesForRole(evals, config.RoleEnforce)
+	if len(enforce) == 0 {
+		return false
+	}
+	if allErrored(enforce, outcomes) {
+		fallback := indicesForRole(evals, config.RoleFallback)
+		if len(fallback) > 0 {
+			return combineBlocks(combine, fallback, outcomes)
 		}
 	}
+	return combineBlocks(combine, enforce, outcomes)
 }
 
-// evaluatorEnforces reports whether an evaluator participates in the decision. An
-// enforce entry does; a verify entry never does.
-func evaluatorEnforces(eval config.RuleEval) bool {
-	return eval.Role == config.RoleEnforce
+// indicesForRole returns the evaluator indices whose role matches, preserving
+// declaration order.
+func indicesForRole(evals []config.RuleEval, role string) []int {
+	var indices []int
+	for index := range evals {
+		if evals[index].Role == role {
+			indices = append(indices, index)
+		}
+	}
+	return indices
+}
+
+// allErrored reports whether every listed evaluator errored. It is only called
+// with a non-empty index list, so it never reports true for zero evaluators.
+func allErrored(indices []int, outcomes []evalOutcome) bool {
+	for _, index := range indices {
+		if !outcomes[index].errored {
+			return false
+		}
+	}
+	return true
+}
+
+// combineBlocks applies the combine operator to the listed evaluators' verdicts.
+func combineBlocks(combine string, indices []int, outcomes []evalOutcome) bool {
+	blockingCount := 0
+	for _, index := range indices {
+		if outcomes[index].verdict == verdictBlock {
+			blockingCount++
+		}
+	}
+	return matrixBlocks(combine, len(indices), blockingCount)
 }
 
 // matrixCombineOperator returns the combine operator for the rule, taken from the
@@ -114,15 +152,15 @@ func (e *evalMatrixCondition) Profile() pipeline.Profile {
 }
 
 func (e *evalMatrixCondition) Execute(ctx context.Context, _ pipeline.Input) (pipeline.Outcome, error) {
-	inferVerdicts := e.runInferConcurrently(ctx)
-	decision := runEvalMatrix(e.rule.Eval, func(index int, eval config.RuleEval) evalVerdict {
+	inferOutcomes := e.runInferConcurrently(ctx)
+	decision := runEvalMatrix(e.rule.Eval, func(index int, eval config.RuleEval) evalOutcome {
 		if eval.Kind == config.EvalKindInfer {
-			return inferVerdicts[index]
+			return inferOutcomes[index]
 		}
 		if allConditionsMatch(ctx, *e.fields, e.rule, e.rule.Conditions) {
-			return verdictBlock
+			return evalOutcome{verdict: verdictBlock, errored: false}
 		}
-		return verdictAllow
+		return evalOutcome{verdict: verdictAllow, errored: false}
 	})
 	if !decision.block {
 		return ruleOutcome{
@@ -146,8 +184,8 @@ func (e *evalMatrixCondition) Execute(ctx context.Context, _ pipeline.Input) (pi
 // recorded-only v4 verify entry does not add to the time the enforcing mini entry
 // already takes. Each call records its own trace layer, and recordPointLayer is
 // safe to call from several goroutines.
-func (e *evalMatrixCondition) runInferConcurrently(ctx context.Context) map[int]evalVerdict {
-	verdicts := make(map[int]evalVerdict)
+func (e *evalMatrixCondition) runInferConcurrently(ctx context.Context) map[int]evalOutcome {
+	outcomes := make(map[int]evalOutcome)
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	for index := range e.rule.Eval {
@@ -158,12 +196,13 @@ func (e *evalMatrixCondition) runInferConcurrently(ctx context.Context) map[int]
 		wg.Add(1)
 		go func(index int, eval config.RuleEval) {
 			defer wg.Done()
-			// Default the verdict to the entry's on-error outcome so a panic before
-			// resolveInferSingle completes respects on_error, failing closed unless
-			// the entry opts into fail open.
-			verdict := verdictBlock
+			// Default the outcome to errored with the entry's on-error verdict so a
+			// panic before resolveInferSingle completes respects on_error, failing
+			// closed unless the entry opts into fail open, and counts as an error for
+			// the fallback fold.
+			outcome := evalOutcome{verdict: verdictBlock, errored: true}
 			if eval.OnError == config.OnErrorOpen {
-				verdict = verdictAllow
+				outcome.verdict = verdictAllow
 			}
 			defer func() {
 				if recovered := recover(); recovered != nil {
@@ -175,14 +214,14 @@ func (e *evalMatrixCondition) runInferConcurrently(ctx context.Context) map[int]
 					)
 				}
 				mu.Lock()
-				verdicts[index] = verdict
+				outcomes[index] = outcome
 				mu.Unlock()
 			}()
-			verdict = e.resolveInferSingle(ctx, index, eval)
+			outcome = e.resolveInferSingle(ctx, index, eval)
 		}(index, eval)
 	}
 	wg.Wait()
-	return verdicts
+	return outcomes
 }
 
 // resolveInferSingle routes the command to the evaluator's inference point, judges
@@ -191,10 +230,12 @@ func (e *evalMatrixCondition) runInferConcurrently(ctx context.Context) map[int]
 // closed otherwise. The deterministic evaluators stay the fail-closed backstop, so
 // a fail-open infer entry only widens coverage without dropping the guard for a
 // command a deterministic evaluator already blocks.
-func (e *evalMatrixCondition) resolveInferSingle(ctx context.Context, index int, eval config.RuleEval) evalVerdict {
+func (e *evalMatrixCondition) resolveInferSingle(ctx context.Context, index int, eval config.RuleEval) evalOutcome {
 	point, ok := e.rule.EvalInference[eval.Use]
 	if !ok {
-		return verdictBlock
+		// A missing inference point means the judge cannot run, so the call counts as
+		// an error and fails closed, keeping the deterministic backstop in charge.
+		return evalOutcome{verdict: verdictBlock, errored: true}
 	}
 	// A fanout=batch entry reads the decision the per-event batch call already made
 	// for this rule, so the rule adds no inference call of its own. When no batch
@@ -203,7 +244,7 @@ func (e *evalMatrixCondition) resolveInferSingle(ctx context.Context, index int,
 	if eval.Fanout == config.FanoutBatch {
 		if verdict, found := batchInferenceMemoFromContext(ctx).verdictFor(point, e.rule.Name); found {
 			recordPointLayer(ctx, e.rule.Name, index, *verdict)
-			return applyPointVerdict(eval, *verdict)
+			return evalOutcome{verdict: applyPointVerdict(eval, *verdict), errored: verdict.errored}
 		}
 	}
 	runtime := inferRuntimeFromContext(ctx)
@@ -213,7 +254,7 @@ func (e *evalMatrixCondition) resolveInferSingle(ctx context.Context, index int,
 	// invalid_argument, so the enforcer always errored and fell back to on_error.
 	result := runtime.evaluatePoint(ctx, point, e.rule.Intent, e.fields.CommandValue())
 	recordPointLayer(ctx, e.rule.Name, index, result)
-	return applyPointVerdict(eval, result)
+	return evalOutcome{verdict: applyPointVerdict(eval, result), errored: result.errored}
 }
 
 // applyPointVerdict folds one inference verdict into the eval matrix. An errored
