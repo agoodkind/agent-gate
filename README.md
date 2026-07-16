@@ -7,7 +7,8 @@ the payload, enriches rule fields, evaluates policy, renders the provider
 response, and records durable state.
 
 The installed hook inventory lives in [HOOKS.md](HOOKS.md). The payload and
-response contracts live in [docs/hook-schemas.md](docs/hook-schemas.md).
+response contracts live in [docs/hook-schemas.md](docs/hook-schemas.md). The LLM
+judge architecture lives in [docs/judge.md](docs/judge.md).
 
 ## Install a release
 
