@@ -26,6 +26,13 @@ internal/rules/engine.go:42:6: unreachable func: Evaluate	# deadcode:first_added
 internal/rules/fields.go:277:6: unreachable func: CmdSegments	# deadcode:first_added=2026-05-05T04:09:36Z last_seen=2026-07-16T15:43:09Z
 internal/rules/infer_transcript.go:34:30: unreachable func: InferRuntime.fetchTranscriptTail	# deadcode:first_added=2026-07-16T15:43:09Z last_seen=2026-07-16T15:43:09Z
 internal/rules/infer_transcript.go:71:30: unreachable func: InferRuntime.transcriptClient	# deadcode:first_added=2026-07-16T15:43:09Z last_seen=2026-07-16T15:43:09Z
+internal/rules/judge_input.go:103:6: unreachable func: judgeWriteContentSnippet	# deadcode:first_added=2026-07-16T16:07:03Z last_seen=2026-07-16T16:07:03Z
+internal/rules/judge_input.go:18:6: unreachable func: buildJudgeInput	# deadcode:first_added=2026-07-16T16:07:03Z last_seen=2026-07-16T16:07:03Z
+internal/rules/judge_input.go:33:6: unreachable func: renderWorkingDirectories	# deadcode:first_added=2026-07-16T16:07:03Z last_seen=2026-07-16T16:07:03Z
+internal/rules/judge_input.go:47:6: unreachable func: renderConversationPanel	# deadcode:first_added=2026-07-16T16:07:03Z last_seen=2026-07-16T16:07:03Z
+internal/rules/judge_input.go:59:6: unreachable func: renderToolPanel	# deadcode:first_added=2026-07-16T16:07:03Z last_seen=2026-07-16T16:07:03Z
+internal/rules/judge_input.go:81:6: unreachable func: renderShellCall	# deadcode:first_added=2026-07-16T16:07:03Z last_seen=2026-07-16T16:07:03Z
+internal/rules/judge_input.go:90:6: unreachable func: renderWriteCall	# deadcode:first_added=2026-07-16T16:07:03Z last_seen=2026-07-16T16:07:03Z
 pipeline/memo.go:25:6: unreachable func: NewEventCache	# deadcode:first_added=2026-05-08T20:52:00Z last_seen=2026-07-16T15:43:09Z
 pipeline/memo.go:30:22: unreachable func: EventCache.For	# deadcode:first_added=2026-05-08T20:52:00Z last_seen=2026-07-16T15:43:09Z
 pipeline/memo.go:35:22: unreachable func: EventCache.Get	# deadcode:first_added=2026-05-08T20:52:00Z last_seen=2026-07-16T15:43:09Z
