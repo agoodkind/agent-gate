@@ -27,16 +27,6 @@ type intakeStore interface {
 	Close() error
 }
 
-func closeIntakeStore(store intakeStore, log *slog.Logger) error {
-	if err := store.Close(); err != nil {
-		if log != nil {
-			log.Warn("intake store close failed", "err", err)
-		}
-		return fmt.Errorf("close intake store: %w", err)
-	}
-	return nil
-}
-
 type deferredAuditStore interface {
 	ListPendingDeferredAudit(context.Context, int) ([]int64, error)
 	ClaimDeferredAudit(

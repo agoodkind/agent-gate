@@ -234,14 +234,23 @@ func newRuntimeSnapshot(ctx context.Context, cfg *config.Config, log *slog.Logge
 		log,
 	)
 	deferredProcessor.evaluationRecorder = intakeStore.Evaluations()
-	if err := replayRuntimeSnapshotPending(deferredProcessor, ctx); err != nil {
-		deferredProcessor.Close()
-		if eventLogger != nil {
-			_ = eventLogger.Close()
+	// Replay the pending deferred backlog in the background so the daemon serves the
+	// gate socket immediately. A synchronous replay blocks Serve for as long as the
+	// backlog takes to re-run (each pending event re-runs inference), which leaves the
+	// hook fail-open for the whole startup. Replay is audit backfill, not gate
+	// enforcement, so a replay error is logged rather than aborting startup.
+	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil && log != nil {
+				log.ErrorContext(ctx, "replay pending intake panic recovered", slog.Any("err", recovered))
+			}
+		}()
+		if err := replayRuntimeSnapshotPending(deferredProcessor, ctx); err != nil {
+			if log != nil {
+				log.WarnContext(ctx, "replay pending intake failed", slog.Any("err", err))
+			}
 		}
-		_ = closeIntakeStore(intakeStore, log)
-		return nil, fmt.Errorf("replay pending intake: %w", err)
-	}
+	}()
 	return &runtimeSnapshot{
 		cfg:                cfg,
 		eventLogger:        eventLogger,
