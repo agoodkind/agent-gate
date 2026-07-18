@@ -113,7 +113,7 @@ func evaluatePayloadHot(ctx context.Context, payload Payload, rawBytes []byte, c
 	if len(blockingViolations) > 0 && canBlock {
 		decision = ResponseDecisionBlock
 		diagnostic := rules.FormatViolations(blockingViolations)
-		if footer := cfg.BlockFooter(eventID); footer != "" {
+		if footer := cfg.BlockFooter(); footer != "" {
 			diagnostic = diagnostic + "\n\n" + footer
 		}
 		response := RenderResponse(ResponseRequest{
