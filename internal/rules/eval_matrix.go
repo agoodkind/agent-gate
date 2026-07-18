@@ -8,7 +8,6 @@ import (
 
 	"goodkind.io/agent-gate/internal/config"
 	"goodkind.io/agent-gate/pipeline"
-	"goodkind.io/gksyntax/shelldecomp"
 )
 
 // evalVerdict is a single evaluator's decision within a rule's evaluation matrix.
@@ -153,15 +152,26 @@ func (e *evalMatrixCondition) Profile() pipeline.Profile {
 }
 
 func (e *evalMatrixCondition) Execute(ctx context.Context, _ pipeline.Input) (pipeline.Outcome, error) {
-	inferOutcomes := e.runInferConcurrently(ctx)
+	// A rule's deterministic conditions are its scope. The judge (an infer entry) runs
+	// only when the conditions match this command, so a rule with no conditions is in
+	// scope for every command, and a conditioned rule joins only when it matches. This
+	// is symmetric with collectBatchGroups, which excludes an out-of-scope rule from
+	// the batch call, so an out-of-scope infer entry never has a model result to read.
+	conditionsMatch := allConditionsMatch(ctx, *e.fields, e.rule, e.rule.Conditions)
+	var inferOutcomes map[int]evalOutcome
+	if conditionsMatch {
+		inferOutcomes = e.runInferConcurrently(ctx)
+	} else {
+		inferOutcomes = map[int]evalOutcome{}
+	}
 	decision := runEvalMatrix(e.rule.Eval, func(index int, eval config.RuleEval) evalOutcome {
+		if !conditionsMatch {
+			return evalOutcome{verdict: verdictAllow, errored: false}
+		}
 		if eval.Kind == config.EvalKindInfer {
 			return inferOutcomes[index]
 		}
-		if allConditionsMatch(ctx, *e.fields, e.rule, e.rule.Conditions) {
-			return evalOutcome{verdict: verdictBlock, errored: false}
-		}
-		return evalOutcome{verdict: verdictAllow, errored: false}
+		return evalOutcome{verdict: verdictBlock, errored: false}
 	})
 	if !decision.block {
 		return ruleOutcome{
@@ -179,37 +189,6 @@ func (e *evalMatrixCondition) Execute(ctx context.Context, _ pipeline.Input) (pi
 	}, nil
 }
 
-// commandTouchesFiles reports whether the command resolves to at least one file read
-// or write target, decomposed with gksyntax and including targets inside embedded
-// regions (a heredoc body, a -c script). The judge runs only when it does, so a
-// command that operates on no files (a pure pipeline, a no-file command, or an opaque
-// command with no resolvable target) never incurs the judge's latency or
-// false-positive risk. An empty command is treated as touching no files.
-func (e *evalMatrixCondition) commandTouchesFiles() bool {
-	command := e.fields.CommandValue()
-	if command == "" {
-		return false
-	}
-	return decompositionTouchesFiles(shelldecomp.Parse(command, e.fields.BaseCWD(), ""))
-}
-
-// decompositionTouchesFiles reports whether a decomposition, or any of its embedded
-// regions, carries a read or write target.
-func decompositionTouchesFiles(decomposition *shelldecomp.Decomposition) bool {
-	if decomposition == nil {
-		return false
-	}
-	if len(decomposition.ReadTargets()) > 0 || len(decomposition.WriteTargets()) > 0 {
-		return true
-	}
-	for _, region := range decomposition.EmbeddedRegions() {
-		if region.Parsed != nil && decompositionTouchesFiles(region.Parsed) {
-			return true
-		}
-	}
-	return false
-}
-
 // runInferConcurrently evaluates every infer entry against its inference point at
 // once and returns each entry's verdict by index. Running the entries together
 // keeps the hot-path latency near the slowest call rather than their sum, so the
@@ -218,22 +197,6 @@ func decompositionTouchesFiles(decomposition *shelldecomp.Decomposition) bool {
 // safe to call from several goroutines.
 func (e *evalMatrixCondition) runInferConcurrently(ctx context.Context) map[int]evalOutcome {
 	outcomes := make(map[int]evalOutcome)
-	// When the rule opts into file-scoped judging, scope the synchronous judge to
-	// commands that touch concrete files. A command with no resolved file read or
-	// write target (a pure pipeline, a no-file command, or an opaque command) is not
-	// judged: the judge would add hot-path latency and a false-positive risk to a
-	// command that does not operate on files, while still seeing the non-grep file
-	// operations (awk, cat, sed, find -exec) that the deterministic patterns miss. A
-	// skipped infer entry counts as allow, so the rule falls to its deterministic
-	// evaluators, which still run for every command.
-	if e.rule.JudgeFileScope && !e.commandTouchesFiles() {
-		for index := range e.rule.Eval {
-			if e.rule.Eval[index].Kind == config.EvalKindInfer {
-				outcomes[index] = evalOutcome{verdict: verdictAllow, errored: false}
-			}
-		}
-		return outcomes
-	}
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	for index := range e.rule.Eval {

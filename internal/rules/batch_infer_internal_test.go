@@ -123,6 +123,29 @@ func TestBuildBatchPromptListsRulesBlocksOnly(t *testing.T) {
 	}
 }
 
+// TestBuildBatchPromptIncludesDescription confirms a rule's description is written
+// under its rule_id, after the intent, so the judge reads the fuller guidance and not
+// only the one-line prohibition. A rule with no description writes only the intent.
+func TestBuildBatchPromptIncludesDescription(t *testing.T) {
+	participants := []batchParticipant{
+		{
+			ruleName:    "search-guard",
+			intent:      "block a bulk source scan",
+			description: "Blocks reading many source files at once. Allows reading one file.",
+		},
+		{ruleName: "no-desc", intent: "block a thing"},
+	}
+	prompt := buildBatchPrompt(participants)
+	if !strings.Contains(prompt, "Allows reading one file.") {
+		t.Fatalf("prompt omits the description: %q", prompt)
+	}
+	intentIndex := strings.Index(prompt, "block a bulk source scan")
+	descIndex := strings.Index(prompt, "Blocks reading many source files")
+	if intentIndex < 0 || descIndex < 0 || descIndex < intentIndex {
+		t.Fatalf("description must follow the intent: intent@%d desc@%d in %q", intentIndex, descIndex, prompt)
+	}
+}
+
 // TestParseBlockList confirms the blocks-only reply parses into a rule_id set,
 // that a present-but-empty list parses as an empty set (allow-all), that a
 // single-rule list blocks only that rule, and that a non-JSON reply, a reply that

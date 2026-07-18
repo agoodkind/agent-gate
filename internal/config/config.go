@@ -356,13 +356,6 @@ type Rule struct {
 	// infer evaluator judges a command against it, so a rule that declares an
 	// infer eval entry must set it.
 	Intent string `toml:"intent,omitempty"`
-	// JudgeFileScope, when true, runs the infer (judge) evaluators only on commands
-	// that resolve to at least one concrete file read or write target. A command that
-	// touches no files skips the judge and relies on the rule's deterministic
-	// evaluators, which keeps the synchronous judge off pipelines, no-file commands,
-	// and opaque commands that would add latency and false-positive risk. Default
-	// false judges every subscribed command.
-	JudgeFileScope bool `toml:"judge_file_scope,omitempty"`
 	// EvalInference is populated at compile time with the inference points this
 	// rule's Eval entries reference (by use and escalate_to), so the engine can
 	// resolve them without threading the whole config through evaluation.
@@ -454,7 +447,6 @@ func NewSimpleRule(name, pattern string, compiled *regex.Regexp, events, fieldPa
 		Conditions:        nil,
 		Eval:              nil,
 		Intent:            "",
-		JudgeFileScope:    false,
 		EvalInference:     nil,
 		FieldPaths:        fieldPaths,
 		Action:            action,

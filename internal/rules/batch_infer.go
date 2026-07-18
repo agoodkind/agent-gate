@@ -99,8 +99,9 @@ func (memo *batchInferenceMemo) verdictFor(point config.InferencePoint, ruleName
 // batchParticipant names one rule judged in a batch call and the intent the model
 // applies to the command for that rule.
 type batchParticipant struct {
-	ruleName string
-	intent   string
+	ruleName    string
+	intent      string
+	description string
 }
 
 // batchGroupPlan collects the rules that share one inference point for this event,
@@ -130,7 +131,7 @@ func runBatchInference(
 	if runtime == nil {
 		return nil
 	}
-	groups, order := collectBatchGroups(rulesSlice, system, eventName, getenv)
+	groups, order := collectBatchGroups(ctx, fields, rulesSlice, system, eventName, getenv)
 	if len(groups) == 0 {
 		return nil
 	}
@@ -249,7 +250,12 @@ func (runtime *InferRuntime) contextUnavailableMemo(
 
 // collectBatchGroups walks the applicable rules and groups every fanout=batch infer
 // entry by its full inference point. It returns the groups and a stable point order.
+// A rule joins the judge only when its deterministic conditions match this command, so
+// a rule with no conditions is in scope for every command and a conditioned rule joins
+// only when it matches. A rule out of scope for the command issues no model call.
 func collectBatchGroups(
+	ctx context.Context,
+	fields *FieldSet,
 	rulesSlice []config.Rule,
 	system string,
 	eventName string,
@@ -263,6 +269,9 @@ func collectBatchGroups(
 			continue
 		}
 		if envGuardFires(getenv, rule.DisableIfEnv) {
+			continue
+		}
+		if !allConditionsMatch(ctx, *fields, rule, rule.Conditions) {
 			continue
 		}
 		for _, eval := range rule.Eval {
@@ -281,7 +290,11 @@ func collectBatchGroups(
 			}
 			if !plan.seen[rule.Name] {
 				plan.seen[rule.Name] = true
-				plan.participants = append(plan.participants, batchParticipant{ruleName: rule.Name, intent: rule.Intent})
+				plan.participants = append(plan.participants, batchParticipant{
+					ruleName:    rule.Name,
+					intent:      rule.Intent,
+					description: rule.Description,
+				})
 			}
 		}
 	}
@@ -388,6 +401,11 @@ func buildBatchPrompt(participants []batchParticipant) string {
 		builder.WriteString("\n  ")
 		builder.WriteString(strings.ReplaceAll(participant.intent, "\n", " "))
 		builder.WriteString("\n")
+		if description := strings.TrimSpace(participant.description); description != "" {
+			builder.WriteString("  ")
+			builder.WriteString(strings.ReplaceAll(description, "\n", " "))
+			builder.WriteString("\n")
+		}
 	}
 	return builder.String()
 }

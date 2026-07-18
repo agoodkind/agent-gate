@@ -128,45 +128,47 @@ use = "dead"
 	}
 }
 
-// TestEvalMatrixJudgeFileScope confirms judge_file_scope runs the judge only on
-// commands that touch a concrete file. A no-file command skips the judge entirely (so
-// even a dead inference endpoint cannot block it), while a command that reads a file
-// is judged, and with the judge dead it fails closed. This scopes the synchronous
-// judge to file operations without judging pipelines or no-file commands.
-func TestEvalMatrixJudgeFileScope(t *testing.T) {
-	const cfgBody = `
+// TestEvalMatrixInferScopedByConditions confirms a rule's conditions scope its judge:
+// the infer evaluator runs only when the conditions match the command. A matching
+// command is judged, so the dead inference point fails it closed; a non-matching
+// command is out of scope, so the judge does not run and the rule does not block.
+func TestEvalMatrixInferScopedByConditions(t *testing.T) {
+	const scopedConfig = `
 [inference.dead]
 endpoint = "[::1]:1"
 model = "test-model"
 
 [[rules]]
-name = "matrix-filescope"
+name = "matrix-infer-scoped"
 events = ["Stop"]
 action = "block"
-violation_message = "blocked by matrix"
-intent = "block a source read"
-judge_file_scope = true
+violation_message = "blocked by infer"
+intent = "Do not scan source."
+[[rules.conditions]]
+kind = "regex"
+field_paths = ["tool_input.command", "command"]
+pattern = "SECRET"
 [[rules.eval]]
 kind = "infer"
 role = "enforce"
 use = "dead"
 `
-	cfg := loadRuleConfig(t, cfgBody)
+	cfg := loadRuleConfig(t, scopedConfig)
 
-	noFile := rules.EvaluateAll(
+	matched := rules.EvaluateAll(
 		context.Background(), "claude", "Stop",
-		testFields(map[string]any{"command": "echo hello world"}), cfg.Rules, nil,
+		testFields(map[string]any{"command": "echo SECRET"}), cfg.Rules, nil,
 	)
-	if len(noFile) != 0 {
-		t.Fatalf("no-file command was judged despite judge_file_scope: %+v", noFile)
+	if len(matched) == 0 || matched[0].RuleName != "matrix-infer-scoped" {
+		t.Fatalf("in-condition command was not judged/failed-closed: %+v", matched)
 	}
 
-	withFile := rules.EvaluateAll(
+	unmatched := rules.EvaluateAll(
 		context.Background(), "claude", "Stop",
-		testFields(map[string]any{"command": "cat internal/rules/engine.go"}), cfg.Rules, nil,
+		testFields(map[string]any{"command": "echo hello"}), cfg.Rules, nil,
 	)
-	if len(withFile) == 0 || withFile[0].RuleName != "matrix-filescope" {
-		t.Fatalf("file-reading command was not judged/failed-closed under judge_file_scope: %+v", withFile)
+	if len(unmatched) != 0 {
+		t.Fatalf("out-of-condition command was judged despite non-matching conditions: %+v", unmatched)
 	}
 }
 
