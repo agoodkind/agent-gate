@@ -128,6 +128,48 @@ use = "dead"
 	}
 }
 
+// TestEvalMatrixJudgeFileScope confirms judge_file_scope runs the judge only on
+// commands that touch a concrete file. A no-file command skips the judge entirely (so
+// even a dead inference endpoint cannot block it), while a command that reads a file
+// is judged, and with the judge dead it fails closed. This scopes the synchronous
+// judge to file operations without judging pipelines or no-file commands.
+func TestEvalMatrixJudgeFileScope(t *testing.T) {
+	const cfgBody = `
+[inference.dead]
+endpoint = "[::1]:1"
+model = "test-model"
+
+[[rules]]
+name = "matrix-filescope"
+events = ["Stop"]
+action = "block"
+violation_message = "blocked by matrix"
+intent = "block a source read"
+judge_file_scope = true
+[[rules.eval]]
+kind = "infer"
+role = "enforce"
+use = "dead"
+`
+	cfg := loadRuleConfig(t, cfgBody)
+
+	noFile := rules.EvaluateAll(
+		context.Background(), "claude", "Stop",
+		testFields(map[string]any{"command": "echo hello world"}), cfg.Rules, nil,
+	)
+	if len(noFile) != 0 {
+		t.Fatalf("no-file command was judged despite judge_file_scope: %+v", noFile)
+	}
+
+	withFile := rules.EvaluateAll(
+		context.Background(), "claude", "Stop",
+		testFields(map[string]any{"command": "cat internal/rules/engine.go"}), cfg.Rules, nil,
+	)
+	if len(withFile) == 0 || withFile[0].RuleName != "matrix-filescope" {
+		t.Fatalf("file-reading command was not judged/failed-closed under judge_file_scope: %+v", withFile)
+	}
+}
+
 // TestEvalMatrixInferRecordsLayer confirms an infer evaluator records an
 // inference layer in the decision trace, so the LLM verdict per rule appears in
 // gate_evaluation_layers. The point is unreachable here, so the recorded layer
