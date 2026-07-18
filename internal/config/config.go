@@ -477,6 +477,9 @@ type Config struct {
 	Performance Performance     `toml:"performance"`
 	Telemetry   TelemetryConfig `toml:"telemetry"`
 	Update      Update          `toml:"update"`
+	// Messages holds optional customizations for the text agent-gate returns to the
+	// agent, such as a footer appended to every block.
+	Messages Messages `toml:"messages"`
 	// Judge holds the batch LLM judge's conversation-transcript settings, fetched
 	// once per command and shared across every rule judged in that command.
 	Judge Judge `toml:"judge"`
@@ -486,6 +489,31 @@ type Config struct {
 	Rules     []Rule                    `toml:"rules"`
 
 	sourceIdentity string
+}
+
+// Messages customizes the text agent-gate returns to the agent.
+type Messages struct {
+	// BlockFooter is appended to every block diagnostic on its own paragraph. The
+	// tokens {event_id} and {intake_id} are replaced with the intake event id, so an
+	// operator can instruct the agent to report the id without having to prod for it.
+	// Empty (the default) appends nothing.
+	BlockFooter string `toml:"block_footer"`
+}
+
+// BlockFooter returns the configured block footer with the {event_id} and
+// {intake_id} tokens replaced by the intake event id, or "" when no footer is set or
+// the config is nil.
+func (c *Config) BlockFooter(eventID string) string {
+	if c == nil {
+		return ""
+	}
+	footer := strings.TrimSpace(c.Messages.BlockFooter)
+	if footer == "" {
+		return ""
+	}
+	footer = strings.ReplaceAll(footer, "{event_id}", eventID)
+	footer = strings.ReplaceAll(footer, "{intake_id}", eventID)
+	return footer
 }
 
 // ConversationsDir returns the resolved base directory for per-conversation

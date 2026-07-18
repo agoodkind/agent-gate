@@ -121,6 +121,7 @@ func New(log *slog.Logger, cfg *config.Config) (*Server, error) {
 				AllowPrerelease: nil,
 			},
 			Telemetry: config.TelemetryConfig{OTLPEndpoint: "", SlowOpThresholdMs: 0},
+			Messages:  config.Messages{BlockFooter: ""},
 			Judge: config.Judge{
 				TranscriptEndpoint:   "",
 				TranscriptMaxTokens:  0,
