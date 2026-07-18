@@ -134,7 +134,11 @@ func runBatchInference(
 	if len(groups) == 0 {
 		return nil
 	}
-	judgeInput := buildJudgeInput(*fields, runtime.fetchJudgeTranscript(ctx, fields))
+	judgeTail, contextStatus := runtime.fetchJudgeTranscript(ctx, fields)
+	if contextStatus == contextUnavailable {
+		return runtime.contextUnavailableMemo(groups, order)
+	}
+	judgeInput := buildJudgeInput(*fields, judgeTail)
 	memo := &batchInferenceMemo{groups: make(map[config.InferencePoint]*batchGroupResult, len(groups))}
 	var mu sync.Mutex
 	var wg sync.WaitGroup
@@ -163,19 +167,37 @@ func runBatchInference(
 	return memo
 }
 
+// judgeContextStatus reports whether the judge has the conversation context it
+// needs. contextDisabled means no transcript endpoint is configured, so the judge
+// reasons over the directory, command, and structural parse by design. contextReady
+// means the transcript loaded. contextUnavailable means an endpoint is configured
+// but the tail could not be fetched, so the judge must not enforce on missing
+// context; the batch marks every participant errored so the eval matrix routes each
+// rule to its deterministic fallback.
+type judgeContextStatus int
+
+const (
+	contextDisabled judgeContextStatus = iota
+	contextReady
+	contextUnavailable
+)
+
 // fetchJudgeTranscript fetches the conversation transcript tail once per command
-// under a bounded deadline and fails open to an empty tail. It returns "" when the
-// judge sets no transcript endpoint, when the hook carries no conversation id, or
-// when the fetch errors, so a transcript outage never blocks or errors the judge:
-// the judge still runs on the directory, command, and structural parse.
-func (runtime *InferRuntime) fetchJudgeTranscript(ctx context.Context, fields *FieldSet) string {
+// under a bounded deadline. It reports contextDisabled with an empty tail when no
+// transcript endpoint is configured, so the judge reasons over the directory,
+// command, and structural parse alone. It reports contextUnavailable when an
+// endpoint is configured but the hook carries no conversation id or the fetch
+// errors, so the judge does not enforce without the conversation that is its source
+// of intent. It reports contextReady with the tail on success.
+func (runtime *InferRuntime) fetchJudgeTranscript(ctx context.Context, fields *FieldSet) (string, judgeContextStatus) {
 	settings := runtime.judgeTranscriptConfig()
 	if settings.endpoint == "" || settings.maxTokens <= 0 {
-		return ""
+		return "", contextDisabled
 	}
 	conversationID := strings.TrimSpace(fields.ConversationID)
 	if conversationID == "" {
-		return ""
+		slog.WarnContext(ctx, "judge transcript unavailable: hook carried no conversation id", "endpoint", settings.endpoint)
+		return "", contextUnavailable
 	}
 	timeout := settings.timeout
 	if timeout <= 0 {
@@ -190,9 +212,39 @@ func (runtime *InferRuntime) fetchJudgeTranscript(ctx context.Context, fields *F
 		maxTokens:      settings.maxTokens,
 	})
 	if errClass != "" {
-		return ""
+		slog.WarnContext(ctx, "judge transcript fetch failed", "endpoint", settings.endpoint, "err_class", errClass)
+		return "", contextUnavailable
 	}
-	return tail
+	return tail, contextReady
+}
+
+// contextUnavailableMemo builds a batch memo that marks every participant errored
+// because the configured conversation transcript could not be fetched. The judge
+// does not reason without its source of intent, so each rule reads an errored
+// verdict and the eval matrix routes it to its deterministic fallback rather than
+// letting the judge enforce on missing context. It issues no inference calls.
+func (runtime *InferRuntime) contextUnavailableMemo(
+	groups map[config.InferencePoint]*batchGroupPlan,
+	order []config.InferencePoint,
+) *batchInferenceMemo {
+	stamp := runtime.now()
+	memo := &batchInferenceMemo{groups: make(map[config.InferencePoint]*batchGroupResult, len(order))}
+	for _, point := range order {
+		plan := groups[point]
+		decisions := make(map[string]batchRuleDecision, len(plan.participants))
+		for _, participant := range plan.participants {
+			decisions[participant.ruleName] = batchRuleDecision{block: false, errored: true, errorCode: "context_unavailable"}
+		}
+		memo.groups[point] = &batchGroupResult{
+			model:       point.Model,
+			inputJSON:   "",
+			upstream:    boundedUpstreamMetadata(nil),
+			startedAt:   stamp,
+			completedAt: stamp,
+			decisions:   decisions,
+		}
+	}
+	return memo
 }
 
 // collectBatchGroups walks the applicable rules and groups every fanout=batch infer

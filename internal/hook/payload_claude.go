@@ -29,6 +29,11 @@ func (e ClaudeEnvelope) baseFields() rules.FieldSet {
 	var fields rules.FieldSet
 	fields.HookEventName = string(e.HookEvent)
 	fields.SessionID = e.Session
+	// Claude's session id is the conversation identifier clyde keys its transcript
+	// by, so the judge's transcript fetch reads it as the conversation id. Without
+	// this the fetch has no id, returns an empty tail, and the judge would judge
+	// without the conversation that is its source of intent.
+	fields.ConversationID = e.Session
 	fields.TranscriptPath = e.TranscriptPath
 	fields.CWD = e.Cwd
 	fields.PermissionMode = e.PermissionMode
