@@ -69,3 +69,109 @@ func firstNonEmpty(values ...string) string {
 	}
 	return ""
 }
+
+type copilotResponse struct {
+	AdditionalContext         string          `json:"additionalContext,omitempty"`
+	ModifiedArgs              json.RawMessage `json:"modifiedArgs,omitempty"`
+	ModifiedResult            json.RawMessage `json:"modifiedResult,omitempty"`
+	ModifiedTransformedPrompt string          `json:"modifiedTransformedPrompt,omitempty"`
+}
+
+func renderCopilotResponse(request ResponseRequest) Response {
+	if request.Decision == ResponseDecisionBlock {
+		return renderClaudeResponse(request)
+	}
+	capability := LookupResponseCapability(SystemCopilot, request.EventName)
+	if request.ContextText == "" && request.MutationText == "" {
+		return Response{Stdout: ClaudeAllow(), Stderr: nil, ExitCode: 0}
+	}
+	response := copilotResponse{
+		AdditionalContext:         "",
+		ModifiedArgs:              nil,
+		ModifiedResult:            nil,
+		ModifiedTransformedPrompt: "",
+	}
+	applyCopilotInjection(&response, capability, request.ContextText, request.PromptText)
+	applyCopilotMutation(&response, capability, request.ContextText, request.MutationText)
+	if response.AdditionalContext == "" && len(response.ModifiedArgs) == 0 && len(response.ModifiedResult) == 0 && response.ModifiedTransformedPrompt == "" {
+		return Response{Stdout: ClaudeAllow(), Stderr: nil, ExitCode: 0}
+	}
+	encoded, err := json.Marshal(response)
+	if err != nil {
+		return Response{Stdout: ClaudeAllow(), Stderr: nil, ExitCode: 0}
+	}
+	return Response{Stdout: append(encoded, '\n'), Stderr: nil, ExitCode: 0}
+}
+
+func applyCopilotInjection(
+	response *copilotResponse,
+	capability ResponseCapability,
+	contextText string,
+	promptText string,
+) {
+	if contextText == "" || !capability.Supports(ResponseCapabilityInject) {
+		return
+	}
+	if capability.Supports(ResponseCapabilityPromptMutation) {
+		response.ModifiedTransformedPrompt = prependContext(contextText, promptText)
+		return
+	}
+	response.AdditionalContext = contextText
+}
+
+func applyCopilotMutation(
+	response *copilotResponse,
+	capability ResponseCapability,
+	contextText string,
+	mutationText string,
+) {
+	if mutationText == "" {
+		return
+	}
+	if capability.Supports(ResponseCapabilityPromptMutation) {
+		response.ModifiedTransformedPrompt = prependContext(contextText, mutationText)
+		return
+	}
+	mutation, ok := validStructuredMutation(mutationText)
+	if !ok {
+		return
+	}
+	if capability.Supports(ResponseCapabilityToolInputMutation) {
+		response.ModifiedArgs = mutation
+		return
+	}
+	if capability.Supports(ResponseCapabilityToolOutputMutation) {
+		toolResult, valid := validCopilotToolOutputMutation(mutationText)
+		if valid {
+			response.ModifiedResult = toolResult
+		}
+	}
+}
+
+func validCopilotToolOutputMutation(value string) (json.RawMessage, bool) {
+	mutation, ok := validStructuredMutation(value)
+	if !ok {
+		return nil, false
+	}
+	var result struct {
+		ResultType       string  `json:"resultType"`
+		TextResultForLLM *string `json:"textResultForLlm"`
+	}
+	if err := json.Unmarshal(mutation, &result); err != nil {
+		return nil, false
+	}
+	if result.ResultType != "success" || result.TextResultForLLM == nil {
+		return nil, false
+	}
+	return mutation, true
+}
+
+func prependContext(contextText string, prompt string) string {
+	if contextText == "" {
+		return prompt
+	}
+	if prompt == "" {
+		return contextText
+	}
+	return contextText + "\n\n" + prompt
+}

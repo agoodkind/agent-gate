@@ -137,6 +137,170 @@ func TestRenderResponseBlockIncludesEventID(t *testing.T) {
 	}
 }
 
+func TestRenderResponseInjectsLifecycleContext(t *testing.T) {
+	tests := []struct {
+		name      string
+		system    hook.System
+		eventName string
+		wantJSON  string
+	}{
+		{
+			name:      "claude session start",
+			system:    hook.SystemClaude,
+			eventName: "SessionStart",
+			wantJSON:  `"additionalContext":"start context"`,
+		},
+		{
+			name:      "codex prompt submit",
+			system:    hook.SystemCodex,
+			eventName: "UserPromptSubmit",
+			wantJSON:  `"additionalContext":"start context"`,
+		},
+		{
+			name:      "cursor session start",
+			system:    hook.SystemCursor,
+			eventName: "sessionStart",
+			wantJSON:  `"additional_context":"start context"`,
+		},
+		{
+			name:      "copilot session start",
+			system:    hook.SystemCopilot,
+			eventName: "SessionStart",
+			wantJSON:  `"additionalContext":"start context"`,
+		},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			response := hook.RenderResponse(hook.ResponseRequest{
+				System:      testCase.system,
+				EventName:   testCase.eventName,
+				Decision:    hook.ResponseDecisionAllow,
+				ContextText: "start context",
+			})
+			if response.ExitCode != 0 {
+				t.Fatalf("ExitCode = %d, want 0", response.ExitCode)
+			}
+			if !strings.Contains(string(response.Stdout), testCase.wantJSON) {
+				t.Fatalf("Stdout = %q, want substring %q", string(response.Stdout), testCase.wantJSON)
+			}
+		})
+	}
+}
+
+func TestRenderResponseMutatesEverySupportedTarget(t *testing.T) {
+	tests := []struct {
+		name      string
+		system    hook.System
+		eventName string
+		mutation  string
+		prompt    string
+		wantJSON  []string
+	}{
+		{
+			name: "claude tool input", system: hook.SystemClaude, eventName: "PreToolUse",
+			mutation: `{"command":"make test"}`,
+			wantJSON: []string{
+				`"permissionDecision":"allow"`,
+				`"updatedInput":{"command":"make test"}`,
+			},
+		},
+		{
+			name: "claude tool output", system: hook.SystemClaude, eventName: "PostToolUse",
+			mutation: `{"content":"safe"}`, wantJSON: []string{`"updatedToolOutput":{"content":"safe"}`},
+		},
+		{
+			name: "codex tool input", system: hook.SystemCodex, eventName: "PreToolUse",
+			mutation: `{"command":"make test"}`,
+			wantJSON: []string{
+				`"permissionDecision":"allow"`,
+				`"updatedInput":{"command":"make test"}`,
+			},
+		},
+		{
+			name: "cursor MCP output", system: hook.SystemCursor, eventName: "postToolUse",
+			mutation: `{"content":"safe"}`, wantJSON: []string{`"updated_mcp_tool_output":{"content":"safe"}`},
+		},
+		{
+			name: "copilot tool input", system: hook.SystemCopilot, eventName: "preToolUse",
+			mutation: `{"command":"make test"}`, wantJSON: []string{`"modifiedArgs":{"command":"make test"}`},
+		},
+		{
+			name: "copilot tool output", system: hook.SystemCopilot, eventName: "postToolUse",
+			mutation: `{"resultType":"success","textResultForLlm":"safe"}`,
+			wantJSON: []string{`"modifiedResult":{"resultType":"success","textResultForLlm":"safe"}`},
+		},
+		{
+			name: "copilot prompt", system: hook.SystemCopilot, eventName: "userPromptTransformed",
+			mutation: "replacement prompt", prompt: "original prompt", wantJSON: []string{`"modifiedTransformedPrompt":"replacement prompt"`},
+		},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			response := hook.RenderResponse(hook.ResponseRequest{
+				System:       testCase.system,
+				EventName:    testCase.eventName,
+				Decision:     hook.ResponseDecisionAllow,
+				MutationText: testCase.mutation,
+				PromptText:   testCase.prompt,
+			})
+			if response.ExitCode != 0 {
+				t.Fatalf("ExitCode = %d, want 0", response.ExitCode)
+			}
+			for _, wantJSON := range testCase.wantJSON {
+				if !strings.Contains(string(response.Stdout), wantJSON) {
+					t.Fatalf("Stdout = %q, want substring %q", response.Stdout, wantJSON)
+				}
+			}
+		})
+	}
+}
+
+func TestRenderResponseRejectsInvalidCopilotToolOutputMutation(t *testing.T) {
+	response := hook.RenderResponse(hook.ResponseRequest{
+		System:       hook.SystemCopilot,
+		EventName:    "postToolUse",
+		Decision:     hook.ResponseDecisionAllow,
+		MutationText: `{"content":"safe"}`,
+	})
+	if strings.Contains(string(response.Stdout), "modifiedResult") {
+		t.Fatalf("invalid Copilot tool output mutation rendered: %q", response.Stdout)
+	}
+}
+
+func TestRenderResponseComposesCopilotPromptInjection(t *testing.T) {
+	response := hook.RenderResponse(hook.ResponseRequest{
+		System:      hook.SystemCopilot,
+		EventName:   "userPromptTransformed",
+		Decision:    hook.ResponseDecisionAllow,
+		ContextText: "turn context",
+		PromptText:  "transformed prompt",
+	})
+	if !strings.Contains(string(response.Stdout), `"modifiedTransformedPrompt":"turn context\n\ntransformed prompt"`) {
+		t.Fatalf("Stdout = %q", response.Stdout)
+	}
+}
+
+func TestRenderResponseNoOpsUnsupportedOrInvalidEffects(t *testing.T) {
+	tests := []hook.ResponseRequest{
+		{
+			System: hook.SystemCursor, EventName: "beforeSubmitPrompt",
+			Decision: hook.ResponseDecisionAllow, ContextText: "not supported",
+		},
+		{
+			System: hook.SystemCodex, EventName: "PreToolUse",
+			Decision: hook.ResponseDecisionAllow, MutationText: "not JSON",
+		},
+	}
+	for _, request := range tests {
+		response := hook.RenderResponse(request)
+		if string(response.Stdout) == "" || strings.Contains(string(response.Stdout), "not supported") {
+			t.Fatalf("unsupported response = %q", response.Stdout)
+		}
+	}
+}
+
 func blockRequest(system hook.System, eventName string) hook.ResponseRequest {
 	return hook.ResponseRequest{
 		System:         system,

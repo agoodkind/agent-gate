@@ -72,8 +72,10 @@ func RenderResponse(request ResponseRequest) Response {
 		return renderCodexResponse(request)
 	case SystemGemini:
 		return renderGeminiResponse(request)
-	case SystemClaude, SystemVSCode, SystemCopilot:
+	case SystemClaude, SystemVSCode:
 		return renderClaudeResponse(request)
+	case SystemCopilot:
+		return renderCopilotResponse(request)
 	case SystemUnknown:
 		return renderUnknownResponse(request)
 	default:
