@@ -1,6 +1,9 @@
 package hook
 
-import "fmt"
+import (
+	"encoding/json"
+	"fmt"
+)
 
 // ClaudeEvent enumerates every known Claude Code hook event name (PascalCase).
 // Source: Claude Code hooks documentation, April 2026.
@@ -89,6 +92,14 @@ func ClaudeBlockText(text string) []byte {
 	return []byte(text + "\n")
 }
 
+type claudeHookSpecificOutput struct {
+	HookEventName      string          `json:"hookEventName"`
+	PermissionDecision string          `json:"permissionDecision,omitempty"`
+	AdditionalContext  string          `json:"additionalContext,omitempty"`
+	UpdatedInput       json.RawMessage `json:"updatedInput,omitempty"`
+	UpdatedToolOutput  json.RawMessage `json:"updatedToolOutput,omitempty"`
+}
+
 // renderClaudeResponse encodes a daemon decision for the Claude Code hook
 // protocol. Exit 2 is a strong signal at PreToolUse: the tool call is dropped
 // and stderr is shown to the model as the block reason.
@@ -110,5 +121,61 @@ func renderClaudeResponse(request ResponseRequest) Response {
 			ExitCode: 2,
 		}
 	}
-	return Response{Stdout: ClaudeAllow(), Stderr: nil, ExitCode: 0}
+	capability := LookupResponseCapability(SystemClaude, request.EventName)
+	if request.ContextText == "" && request.MutationText == "" {
+		return Response{Stdout: ClaudeAllow(), Stderr: nil, ExitCode: 0}
+	}
+	output := claudeHookSpecificOutput{
+		HookEventName:      request.EventName,
+		PermissionDecision: "",
+		AdditionalContext:  "",
+		UpdatedInput:       nil,
+		UpdatedToolOutput:  nil,
+	}
+	if capability.Supports(ResponseCapabilityInject) {
+		output.AdditionalContext = request.ContextText
+	}
+	applyClaudeMutation(&output, capability, request.MutationText)
+	if output.AdditionalContext == "" && len(output.UpdatedInput) == 0 && len(output.UpdatedToolOutput) == 0 {
+		return Response{Stdout: ClaudeAllow(), Stderr: nil, ExitCode: 0}
+	}
+	encoded, err := json.Marshal(struct {
+		HookSpecificOutput claudeHookSpecificOutput `json:"hookSpecificOutput"`
+	}{HookSpecificOutput: output})
+	if err != nil {
+		return Response{Stdout: ClaudeAllow(), Stderr: nil, ExitCode: 0}
+	}
+	return Response{Stdout: append(encoded, '\n'), Stderr: nil, ExitCode: 0}
+}
+
+func applyClaudeMutation(
+	output *claudeHookSpecificOutput,
+	capability ResponseCapability,
+	mutationText string,
+) {
+	if mutationText == "" {
+		return
+	}
+	mutation, ok := validStructuredMutation(mutationText)
+	if !ok {
+		return
+	}
+	if capability.Supports(ResponseCapabilityToolInputMutation) {
+		output.UpdatedInput = mutation
+		output.PermissionDecision = "allow"
+	}
+	if capability.Supports(ResponseCapabilityToolOutputMutation) {
+		output.UpdatedToolOutput = mutation
+	}
+}
+
+func validStructuredMutation(value string) (json.RawMessage, bool) {
+	var decoded json.RawMessage
+	if json.Unmarshal([]byte(value), &decoded) != nil {
+		return nil, false
+	}
+	if len(decoded) == 0 || !json.Valid(decoded) {
+		return nil, false
+	}
+	return decoded, true
 }

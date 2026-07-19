@@ -58,19 +58,23 @@ const (
 // cursorResponse is the JSON structure Cursor reads from stdout.
 // Field names are snake_case per Cursor hooks documentation.
 type cursorResponse struct {
-	Permission   string `json:"permission,omitempty"`
-	Continue     *bool  `json:"continue,omitempty"`
-	UserMessage  string `json:"user_message,omitempty"`
-	AgentMessage string `json:"agent_message,omitempty"`
+	Permission           string          `json:"permission,omitempty"`
+	Continue             *bool           `json:"continue,omitempty"`
+	UserMessage          string          `json:"user_message,omitempty"`
+	AgentMessage         string          `json:"agent_message,omitempty"`
+	AdditionalContext    string          `json:"additional_context,omitempty"`
+	UpdatedMCPToolOutput json.RawMessage `json:"updated_mcp_tool_output,omitempty"`
 }
 
 // CursorAllow returns stdout JSON bytes for an allow response (exit 0).
 func CursorAllow() []byte {
 	resp := cursorResponse{
-		Permission:   "allow",
-		Continue:     nil,
-		UserMessage:  "",
-		AgentMessage: "",
+		Permission:           "allow",
+		Continue:             nil,
+		UserMessage:          "",
+		AgentMessage:         "",
+		AdditionalContext:    "",
+		UpdatedMCPToolOutput: nil,
 	}
 	b, err := json.Marshal(resp)
 	if err != nil {
@@ -94,10 +98,12 @@ func CursorBlock(ruleName, message string) []byte {
 // carrying the given free-form text in both message channels.
 func CursorBlockText(text string) []byte {
 	resp := cursorResponse{
-		Permission:   "deny",
-		Continue:     nil,
-		UserMessage:  text,
-		AgentMessage: text,
+		Permission:           "deny",
+		Continue:             nil,
+		UserMessage:          text,
+		AgentMessage:         text,
+		AdditionalContext:    "",
+		UpdatedMCPToolOutput: nil,
 	}
 	b, err := json.Marshal(resp)
 	if err != nil {
@@ -124,5 +130,33 @@ func renderCursorResponse(request ResponseRequest) Response {
 			ExitCode: 0,
 		}
 	}
-	return Response{Stdout: CursorAllow(), Stderr: nil, ExitCode: 0}
+	capability := LookupResponseCapability(SystemCursor, request.EventName)
+	if request.ContextText == "" && request.MutationText == "" {
+		return Response{Stdout: CursorAllow(), Stderr: nil, ExitCode: 0}
+	}
+	response := cursorResponse{
+		Permission:           "allow",
+		Continue:             nil,
+		UserMessage:          "",
+		AgentMessage:         "",
+		AdditionalContext:    "",
+		UpdatedMCPToolOutput: nil,
+	}
+	if capability.Supports(ResponseCapabilityInject) {
+		response.AdditionalContext = request.ContextText
+	}
+	if capability.Supports(ResponseCapabilityToolOutputMutation) && request.MutationText != "" {
+		mutation, ok := validStructuredMutation(request.MutationText)
+		if ok {
+			response.UpdatedMCPToolOutput = mutation
+		}
+	}
+	if response.AdditionalContext == "" && len(response.UpdatedMCPToolOutput) == 0 {
+		return Response{Stdout: CursorAllow(), Stderr: nil, ExitCode: 0}
+	}
+	encoded, err := json.Marshal(response)
+	if err != nil {
+		return Response{Stdout: CursorAllow(), Stderr: nil, ExitCode: 0}
+	}
+	return Response{Stdout: append(encoded, '\n'), Stderr: nil, ExitCode: 0}
 }

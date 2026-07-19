@@ -123,6 +123,9 @@ func evaluatePayloadHot(ctx context.Context, payload Payload, rawBytes []byte, c
 			DiagnosticText: diagnostic,
 			EventID:        eventID,
 			FailOpenReason: "",
+			ContextText:    "",
+			MutationText:   "",
+			PromptText:     "",
 		})
 		return HotEvaluation{
 			Stdout:   response.Stdout,
@@ -140,6 +143,9 @@ func evaluatePayloadHot(ctx context.Context, payload Payload, rawBytes []byte, c
 		DiagnosticText: "",
 		EventID:        eventID,
 		FailOpenReason: "",
+		ContextText:    "",
+		MutationText:   "",
+		PromptText:     "",
 	})
 	return HotEvaluation{
 		Stdout:   response.Stdout,

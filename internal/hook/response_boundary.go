@@ -38,6 +38,17 @@ type ResponseRequest struct {
 	DiagnosticText string
 	EventID        string
 	FailOpenReason FailOpenReason
+	// ContextText is model-facing text supplied by matching inject rules.
+	// Provider renderers emit it only where the event contract has a native
+	// context channel.
+	ContextText string
+	// MutationText is the replacement supplied by the last matching mutate
+	// rule. Structured targets require valid JSON and are validated by the
+	// renderer before any provider response is emitted.
+	MutationText string
+	// PromptText is the current transformed prompt. Copilot uses it to compose
+	// prompt injection through modifiedTransformedPrompt.
+	PromptText string
 }
 
 // Response is the concrete process response returned by a provider
@@ -91,6 +102,9 @@ func FailOpenResponse(system System, eventName string, diagnosticText string, re
 		DiagnosticText: diagnosticText,
 		EventID:        "",
 		FailOpenReason: reason,
+		ContextText:    "",
+		MutationText:   "",
+		PromptText:     "",
 	})
 }
 
