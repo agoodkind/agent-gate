@@ -73,6 +73,13 @@ An allow response writes `{}` to standard output and exits 0. A blocking event
 writes the diagnostic to standard error and exits 2. Observe-only events are
 downgraded before response rendering.
 
+Matching `inject` rules use `hookSpecificOutput.additionalContext` on
+`SessionStart`, `Setup`, `SubagentStart`, `UserPromptSubmit`,
+`UserPromptExpansion`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, and
+`PostToolBatch`, `Stop`, and `SubagentStop`. `mutate` uses `updatedInput` with
+`permissionDecision: "allow"` for `PreToolUse` and
+`updatedToolOutput` for `PostToolUse`.
+
 ## Codex
 
 Codex payloads share this envelope:
@@ -114,19 +121,25 @@ event-specific JSON channel:
 - `UserPromptSubmit` sets `decision` to `block` and carries `reason`.
 - Lifecycle events render `{}` because they are observe-only.
 
+`inject` uses `hookSpecificOutput.additionalContext` on session, subagent,
+prompt, and pre or post tool events. `mutate` uses `permissionDecision:
+"allow"` with `updatedInput` on `PreToolUse`. Codex currently has no supported
+post-tool mutation response.
+
 ## Copilot
 
-Copilot uses Claude-style event names and a VS Code-shaped payload:
+Copilot uses lower-camel event names and a VS Code-shaped payload:
 
 ```typescript
 type CopilotPayload = {
+  // Supplied by the managed command because userPromptTransformed omits it.
   hook_event_name: string;
-  session_id: string;
-  transcript_path: string;
+  sessionId: string;
+  transcriptPath: string;
   cwd: string;
-  tool_name?: string;
-  tool_use_id?: string;
-  tool_input?: {
+  toolName?: string;
+  toolUseId?: string;
+  toolInput?: {
     command?: string;
     filePath?: string;
     content?: string;
@@ -140,15 +153,22 @@ type CopilotPayload = {
     }>;
   };
   text?: string;
-  assistant_message?: string;
-  last_assistant_message?: string;
+  assistantMessage?: string;
+  lastAssistantMessage?: string;
+  prompt?: string;
+  transformedPrompt?: string;
 };
 ```
 
-The adapter joins multi-replacement old and new strings into the corresponding
-rule fields. On `Stop`, it reads the last assistant message from the referenced
-JSONL transcript only when the payload omits assistant text. Copilot uses the
-same allow and block response shapes as Claude.
+The daemon adds `hook_event_name` from `copilot-hook <event>` and normalizes
+camelCase fields before evaluation. The adapter joins multi-replacement old and
+new strings into the corresponding rule fields. `sessionStart`, `subagentStart`,
+`postToolUse`, `postToolUseFailure`, and `notification` can return
+`additionalContext`. `preToolUse` can return `modifiedArgs`, `postToolUse` can
+return `modifiedResult` as a successful `ToolResult` object with `resultType`
+and `textResultForLlm`, and
+`userPromptTransformed` can return `modifiedTransformedPrompt`. Injection on a
+transformed prompt prepends the combined context and two newlines to the prompt.
 
 ## Cursor
 
@@ -197,6 +217,11 @@ Allow responses write `{"permission":"allow"}` and exit 0. Block responses
 write `permission: "deny"`, copy the diagnostic to `user_message` and
 `agent_message`, and exit 0. The capability layer prevents observe-only events
 from receiving a deny response.
+
+`sessionStart` and `postToolUse` accept `additional_context`. `postToolUse`
+also accepts `updated_mcp_tool_output`. Cursor `beforeSubmitPrompt` accepts
+submission control and a user-visible message only, so injection and mutation
+rules for it render an audited no-op.
 
 ## Gemini
 
