@@ -1,101 +1,59 @@
 {
-  "SessionStart": [
+  "sessionStart": [
     {
       "hooks": [
-        {
-          "type": "command",
-          "command": "__AGENT_GATE_BIN__"
-        }
+        {"type": "command", "command": "__AGENT_GATE_BIN__ copilot-hook sessionStart"}
       ],
       "failClosed": false
     }
   ],
-  "SessionEnd": [
+  "subagentStart": [
     {
       "hooks": [
-        {
-          "type": "command",
-          "command": "__AGENT_GATE_BIN__"
-        }
+        {"type": "command", "command": "__AGENT_GATE_BIN__ copilot-hook subagentStart"}
       ],
       "failClosed": false
     }
   ],
-  "UserPromptSubmit": [
+  "userPromptTransformed": [
     {
       "hooks": [
-        {
-          "type": "command",
-          "command": "__AGENT_GATE_BIN__"
-        }
+        {"type": "command", "command": "__AGENT_GATE_BIN__ copilot-hook userPromptTransformed"}
       ],
       "failClosed": false
     }
   ],
-  "PreToolUse": [
+  "preToolUse": [
     {
       "matcher": ".*",
       "hooks": [
-        {
-          "type": "command",
-          "command": "__AGENT_GATE_BIN__"
-        }
+        {"type": "command", "command": "__AGENT_GATE_BIN__ copilot-hook preToolUse"}
       ],
       "failClosed": false
     }
   ],
-  "PostToolUse": [
+  "postToolUse": [
     {
       "matcher": ".*",
       "hooks": [
-        {
-          "type": "command",
-          "command": "__AGENT_GATE_BIN__"
-        }
+        {"type": "command", "command": "__AGENT_GATE_BIN__ copilot-hook postToolUse"}
       ],
       "failClosed": false
     }
   ],
-  "PreCompact": [
+  "postToolUseFailure": [
     {
+      "matcher": ".*",
       "hooks": [
-        {
-          "type": "command",
-          "command": "__AGENT_GATE_BIN__"
-        }
+        {"type": "command", "command": "__AGENT_GATE_BIN__ copilot-hook postToolUseFailure"}
       ],
       "failClosed": false
     }
   ],
-  "PostCompact": [
+  "notification": [
     {
       "hooks": [
-        {
-          "type": "command",
-          "command": "__AGENT_GATE_BIN__"
-        }
-      ],
-      "failClosed": false
-    }
-  ],
-  "Notification": [
-    {
-      "hooks": [
-        {
-          "type": "command",
-          "command": "__AGENT_GATE_BIN__"
-        }
-      ],
-      "failClosed": false
-    }
-  ],
-  "Stop": [
-    {
-      "hooks": [
-        {
-          "type": "command",
-          "command": "__AGENT_GATE_BIN__"
-        }
+        {"type": "command", "command": "__AGENT_GATE_BIN__ copilot-hook notification"}
       ],
       "failClosed": false
     }

@@ -399,6 +399,44 @@ func TestInstallHooksFullyReplacesCopilotFile(t *testing.T) {
 	}
 }
 
+func TestInstallCopilotHooksRegistersResponseEventsWithHints(t *testing.T) {
+	binPath := writeExecutable(t, filepath.Join(t.TempDir(), "agent-gate"))
+	homeDir := t.TempDir()
+	options := DefaultHooksOptions(binPath)
+	options.HomeDir = homeDir
+	options.InstallClaude = false
+	options.InstallCodex = false
+	options.InstallCursor = false
+	options.InstallGemini = false
+	if err := installHooks(options); err != nil {
+		t.Fatalf("installHooks() error: %v", err)
+	}
+	path := filepath.Join(homeDir, ".copilot", "hooks", "agent-gate.json")
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile Copilot hooks: %v", err)
+	}
+	var envelope struct {
+		Hooks map[string]json.RawMessage `json:"hooks"`
+	}
+	if err := json.Unmarshal(content, &envelope); err != nil {
+		t.Fatalf("Unmarshal Copilot hooks: %v", err)
+	}
+	for _, eventName := range []string{
+		"sessionStart", "subagentStart", "userPromptTransformed", "preToolUse", "postToolUse", "postToolUseFailure", "notification",
+	} {
+		event, ok := envelope.Hooks[eventName]
+		if !ok {
+			t.Fatalf("Copilot hooks missing %q", eventName)
+		}
+		commands := eventCommands(t, event)
+		wantCommand := binPath + " copilot-hook " + eventName
+		if len(commands) != 1 || commands[0] != wantCommand {
+			t.Fatalf("%s commands = %#v, want %q", eventName, commands, wantCommand)
+		}
+	}
+}
+
 func readInstallFixture(t *testing.T, name string) []byte {
 	t.Helper()
 	content, err := os.ReadFile(filepath.Join("testdata", name))
@@ -482,6 +520,7 @@ old = "block"
 		"other = true",
 		"hooks = true",
 		`command = "` + binPath + ` codex-hook"`,
+		"[[hooks.SubagentStart]]",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("config missing %q:\n%s", want, got)
