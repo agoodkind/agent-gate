@@ -62,6 +62,32 @@ func TestCanBlock_NewProviders(t *testing.T) {
 	}
 }
 
+func TestEvaluateHotCopilotPromptInjectionFallsBackToPrompt(t *testing.T) {
+	cfg := &config.Config{Rules: []config.Rule{{
+		Name:          "prompt-context",
+		CopilotEvents: []string{"userPromptTransformed"},
+		Action:        config.ActionInject,
+		Output:        "turn context",
+	}}}
+	rawJSON := []byte(`{"hook_event_name":"userPromptTransformed","session_id":"s1","prompt":"original prompt"}`)
+
+	evaluation := hook.EvaluateHot(
+		context.Background(),
+		rawJSON,
+		cfg,
+		hook.SystemCopilot,
+		func(key string) string {
+			if key == "COPILOT_OTEL_ENABLED" {
+				return "true"
+			}
+			return ""
+		},
+	)
+	if !strings.Contains(string(evaluation.Stdout), `"modifiedTransformedPrompt":"turn context\n\noriginal prompt"`) {
+		t.Fatalf("response = %q", evaluation.Stdout)
+	}
+}
+
 func TestParseHookPayload_UsesToolInputWorkdir(t *testing.T) {
 	payload, err := hook.ParseHookPayload(hook.SystemCodex, []byte(`{"hook_event_name":"PreToolUse","cwd":"/chat","tool_input":{"command":"go test ./...","workdir":"/project"}}`))
 	if err != nil {
