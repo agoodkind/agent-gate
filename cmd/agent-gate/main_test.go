@@ -36,14 +36,15 @@ type fakeHookClient struct {
 }
 
 type environmentRecordingHookClient struct {
-	environment        map[string]string
-	referencedNames    []string
-	referenceRequest   []byte
+	environment      map[string]string
+	referencedNames  []string
+	referenceRequest []byte
 }
 
 func (client *environmentRecordingHookClient) ResolveHookEnvironment(
 	rawJSON []byte,
 	_ string,
+	_ []string,
 	_ map[string]string,
 ) ([]string, error) {
 	client.referenceRequest = append([]byte(nil), rawJSON...)
@@ -75,6 +76,7 @@ func (client fakeHookClient) EvaluateHook(_ []byte, _ string, _ string, _ []stri
 func (client fakeHookClient) ResolveHookEnvironment(
 	_ []byte,
 	_ string,
+	_ []string,
 	_ map[string]string,
 ) ([]string, error) {
 	return nil, nil

@@ -26,6 +26,7 @@ type ResolveHookEnvironmentRequest struct {
 	RawJson        []byte                 `protobuf:"bytes,1,opt,name=raw_json,json=rawJson,proto3" json:"raw_json,omitempty"`
 	ProviderHint   string                 `protobuf:"bytes,2,opt,name=provider_hint,json=providerHint,proto3" json:"provider_hint,omitempty"`
 	EnvFingerprint map[string]string      `protobuf:"bytes,3,rep,name=env_fingerprint,json=envFingerprint,proto3" json:"env_fingerprint,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	Argv           []string               `protobuf:"bytes,4,rep,name=argv,proto3" json:"argv,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -77,6 +78,13 @@ func (x *ResolveHookEnvironmentRequest) GetProviderHint() string {
 func (x *ResolveHookEnvironmentRequest) GetEnvFingerprint() map[string]string {
 	if x != nil {
 		return x.EnvFingerprint
+	}
+	return nil
+}
+
+func (x *ResolveHookEnvironmentRequest) GetArgv() []string {
+	if x != nil {
+		return x.Argv
 	}
 	return nil
 }
@@ -1332,11 +1340,12 @@ var File_daemon_proto protoreflect.FileDescriptor
 
 const file_daemon_proto_rawDesc = "" +
 	"\n" +
-	"\fdaemon.proto\x12\tagentgate\"\x89\x02\n" +
+	"\fdaemon.proto\x12\tagentgate\"\x9d\x02\n" +
 	"\x1dResolveHookEnvironmentRequest\x12\x19\n" +
 	"\braw_json\x18\x01 \x01(\fR\arawJson\x12#\n" +
 	"\rprovider_hint\x18\x02 \x01(\tR\fproviderHint\x12e\n" +
-	"\x0fenv_fingerprint\x18\x03 \x03(\v2<.agentgate.ResolveHookEnvironmentRequest.EnvFingerprintEntryR\x0eenvFingerprint\x1aA\n" +
+	"\x0fenv_fingerprint\x18\x03 \x03(\v2<.agentgate.ResolveHookEnvironmentRequest.EnvFingerprintEntryR\x0eenvFingerprint\x12\x12\n" +
+	"\x04argv\x18\x04 \x03(\tR\x04argv\x1aA\n" +
 	"\x13EnvFingerprintEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"K\n" +
