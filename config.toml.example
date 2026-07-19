@@ -215,6 +215,47 @@ disable_if_env = ["AGENT_GATE_MAINTENANCE"]
 # only when every enforcer blocks. Infer entries run concurrently. Their
 # `on_error` value decides the entry verdict after endpoint, timeout, status, or
 # response errors. A rule with an infer evaluator must declare `intent`.
+#
+# The judge sees a rule only when the rule's deterministic conditions match the
+# command. A rule with no conditions is judged on every command. A rule with a
+# condition joins only when the condition matches. The `description` is sent to
+# the judge under the rule's id, after the intent, so state the scope and the
+# allowances there, not only the prohibition.
+#
+# Judge rule scoped by a condition, with a full description:
+#
+# [[rules]]
+# name = "judge-source-scan"
+# claude_events = ["PreToolUse"]
+# action = "audit"
+# intent = "Block a bulk read or content search across many repository source files."
+# description = "Covers reading or searching the repository's program source in bulk, by grep -r, awk, sed, or cat over several source files, find -exec, or an interpreter that walks and reads many source files. Allows reading a single file, filtering command output through a pipe, a build, or a git operation. Blocked example: grep -r password internal/. Allowed example: cat internal/rules/engine.go."
+#
+# [[rules.conditions]]
+# kind = "regex"
+# field_paths = ["tool_input.command"]
+# pattern = '\b(grep|rg|awk|sed|find|cat|python3?)\b'
+#
+# [[rules.eval]]
+# kind = "infer"
+# role = "enforce"
+# use = "mini"
+# fanout = "batch"
+#
+# To scope a judge rule on an external liveness probe, give it an `exec`
+# condition. The rule joins the judge only while the probe reports up, and drops
+# out when the probe reports down or errors:
+#
+# [[rules.conditions]]
+# kind = "exec"
+# command = ["lm-semantic-search", "--json", "codebase", "status", "{{item}}"]
+# for_each = "cmd_read_targets"
+# search_tools = ["grep", "rg", "cat", "python3"]
+# stdout_json_field = "searchable"
+# stdout_json_equals = true
+# block_on = "match"
+# on_error = "open"
+# cache_ttl_ms = 2000
 
 # Inline `kind = "infer"` conditions remain supported for structured custom
 # schemas. They accept endpoint, layer_name, exactly one prompt declaration,

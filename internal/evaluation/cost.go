@@ -193,7 +193,7 @@ func queryCostAggregates(
 		with calls as (
 			select
 				json_extract(metadata_json, '$.upstream_metadata.raw.request_id') as request_id,
-				max(model_name) as model_name,
+				max(coalesce(nullif(model_name, ''), json_extract(metadata_json, '$.upstream_metadata.raw.requested_model'))) as model_name,
 				max(cast(json_extract(metadata_json, '$.upstream_metadata.raw.prompt_tokens') as integer)) as prompt_tokens,
 				max(cast(json_extract(metadata_json, '$.upstream_metadata.raw.completion_tokens') as integer)) as completion_tokens,
 				max(cast(coalesce(json_extract(metadata_json, '$.upstream_metadata.raw.cached_tokens'), 0) as integer)) as cached_tokens,
@@ -202,7 +202,7 @@ func queryCostAggregates(
 			where kind = 'inference'
 				and json_extract(metadata_json, '$.upstream_metadata.status') = 'present'
 				and coalesce(json_extract(metadata_json, '$.upstream_metadata.raw.request_id'), '') != ''
-				and coalesce(model_name, '') != ''
+				and coalesce(nullif(model_name, ''), json_extract(metadata_json, '$.upstream_metadata.raw.requested_model'), '') != ''
 				and (? = '' or completed_at >= ?)
 				and (? = '' or completed_at <= ?)
 			group by request_id

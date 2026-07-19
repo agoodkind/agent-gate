@@ -81,36 +81,50 @@ func TestRuntimeSnapshotsShareInferenceRuntime(t *testing.T) {
 	}
 }
 
-func TestRuntimeSnapshotReplayFailureClosesIntakeStore(t *testing.T) {
+func TestRuntimeSnapshotReplayFailureDoesNotAbortStartup(t *testing.T) {
 	setDaemonTestDirs(t)
 	originalReplay := replayRuntimeSnapshotPending
 	t.Cleanup(func() {
 		replayRuntimeSnapshotPending = originalReplay
 	})
-	var openedStore *sqliteIntakeStore
+	// Replay runs in the background so the daemon serves the gate socket immediately.
+	// A replay failure is audit backfill, not gate enforcement, so it is logged rather
+	// than aborting startup or closing the intake store.
+	storeCh := make(chan *sqliteIntakeStore, 1)
 	replayRuntimeSnapshotPending = func(
 		processor *deferredProcessor,
 		_ context.Context,
 	) error {
-		var ok bool
-		openedStore, ok = processor.store.(*sqliteIntakeStore)
+		store, ok := processor.store.(*sqliteIntakeStore)
 		if !ok {
-			t.Fatalf("processor store = %T, want *sqliteIntakeStore", processor.store)
+			t.Errorf("processor store = %T, want *sqliteIntakeStore", processor.store)
+			storeCh <- nil
+			return errors.New("replay unavailable")
 		}
+		storeCh <- store
 		return errors.New("replay unavailable")
 	}
 
 	snapshot, err := newRuntimeSnapshot(
 		context.Background(), daemonTestConfig(t), newDiscardLogger(), nil, nil,
 	)
-	if err == nil || snapshot != nil {
-		t.Fatalf("newRuntimeSnapshot = %+v, %v; want replay error", snapshot, err)
+	if err != nil || snapshot == nil {
+		t.Fatalf("newRuntimeSnapshot = %+v, %v; want startup to succeed despite replay failure", snapshot, err)
+	}
+	t.Cleanup(func() {
+		snapshot.close(context.Background(), newDiscardLogger())
+	})
+	var openedStore *sqliteIntakeStore
+	select {
+	case openedStore = <-storeCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("background replay was not invoked")
 	}
 	if openedStore == nil {
 		t.Fatal("replay hook did not capture intake store")
 	}
-	if err := openedStore.Handle().PingContext(context.Background()); err == nil {
-		t.Fatal("intake store remained open after replay failure")
+	if err := openedStore.Handle().PingContext(context.Background()); err != nil {
+		t.Fatalf("intake store should stay open after a background replay failure: %v", err)
 	}
 }
 

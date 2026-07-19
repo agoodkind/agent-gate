@@ -42,6 +42,10 @@ message InvocationMetadata {
   optional int64 completion_tokens = 10;
   optional int64 total_tokens = 11;
   string finish_reason = 12;
+  // cached_tokens is the count of prompt tokens served from the provider's prompt
+  // cache (OpenAI usage.prompt_tokens_details.cached_tokens), present only when the
+  // backend reports it. The cost report reads it to show prompt-cache engagement.
+  optional int64 cached_tokens = 19;
   int64 latency_ms = 13;
   bool output_normalized = 14;
   string normalization_kind = 15;

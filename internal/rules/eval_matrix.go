@@ -152,15 +152,26 @@ func (e *evalMatrixCondition) Profile() pipeline.Profile {
 }
 
 func (e *evalMatrixCondition) Execute(ctx context.Context, _ pipeline.Input) (pipeline.Outcome, error) {
-	inferOutcomes := e.runInferConcurrently(ctx)
+	// A rule's deterministic conditions are its scope. The judge (an infer entry) runs
+	// only when the conditions match this command, so a rule with no conditions is in
+	// scope for every command, and a conditioned rule joins only when it matches. This
+	// is symmetric with collectBatchGroups, which excludes an out-of-scope rule from
+	// the batch call, so an out-of-scope infer entry never has a model result to read.
+	conditionsMatch := allConditionsMatch(ctx, *e.fields, e.rule, e.rule.Conditions)
+	var inferOutcomes map[int]evalOutcome
+	if conditionsMatch {
+		inferOutcomes = e.runInferConcurrently(ctx)
+	} else {
+		inferOutcomes = map[int]evalOutcome{}
+	}
 	decision := runEvalMatrix(e.rule.Eval, func(index int, eval config.RuleEval) evalOutcome {
+		if !conditionsMatch {
+			return evalOutcome{verdict: verdictAllow, errored: false}
+		}
 		if eval.Kind == config.EvalKindInfer {
 			return inferOutcomes[index]
 		}
-		if allConditionsMatch(ctx, *e.fields, e.rule, e.rule.Conditions) {
-			return evalOutcome{verdict: verdictBlock, errored: false}
-		}
-		return evalOutcome{verdict: verdictAllow, errored: false}
+		return evalOutcome{verdict: verdictBlock, errored: false}
 	})
 	if !decision.block {
 		return ruleOutcome{

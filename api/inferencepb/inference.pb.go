@@ -346,11 +346,15 @@ type InvocationMetadata struct {
 	CompletionTokens   *int64                 `protobuf:"varint,10,opt,name=completion_tokens,json=completionTokens,proto3,oneof" json:"completion_tokens,omitempty"`
 	TotalTokens        *int64                 `protobuf:"varint,11,opt,name=total_tokens,json=totalTokens,proto3,oneof" json:"total_tokens,omitempty"`
 	FinishReason       string                 `protobuf:"bytes,12,opt,name=finish_reason,json=finishReason,proto3" json:"finish_reason,omitempty"`
-	LatencyMs          int64                  `protobuf:"varint,13,opt,name=latency_ms,json=latencyMs,proto3" json:"latency_ms,omitempty"`
-	OutputNormalized   bool                   `protobuf:"varint,14,opt,name=output_normalized,json=outputNormalized,proto3" json:"output_normalized,omitempty"`
-	NormalizationKind  string                 `protobuf:"bytes,15,opt,name=normalization_kind,json=normalizationKind,proto3" json:"normalization_kind,omitempty"`
-	RawOutputSha256    string                 `protobuf:"bytes,16,opt,name=raw_output_sha256,json=rawOutputSha256,proto3" json:"raw_output_sha256,omitempty"`
-	UpstreamResponseId string                 `protobuf:"bytes,17,opt,name=upstream_response_id,json=upstreamResponseId,proto3" json:"upstream_response_id,omitempty"`
+	// cached_tokens is the count of prompt tokens served from the provider's prompt
+	// cache (OpenAI usage.prompt_tokens_details.cached_tokens), present only when the
+	// backend reports it. The cost report reads it to show prompt-cache engagement.
+	CachedTokens       *int64 `protobuf:"varint,19,opt,name=cached_tokens,json=cachedTokens,proto3,oneof" json:"cached_tokens,omitempty"`
+	LatencyMs          int64  `protobuf:"varint,13,opt,name=latency_ms,json=latencyMs,proto3" json:"latency_ms,omitempty"`
+	OutputNormalized   bool   `protobuf:"varint,14,opt,name=output_normalized,json=outputNormalized,proto3" json:"output_normalized,omitempty"`
+	NormalizationKind  string `protobuf:"bytes,15,opt,name=normalization_kind,json=normalizationKind,proto3" json:"normalization_kind,omitempty"`
+	RawOutputSha256    string `protobuf:"bytes,16,opt,name=raw_output_sha256,json=rawOutputSha256,proto3" json:"raw_output_sha256,omitempty"`
+	UpstreamResponseId string `protobuf:"bytes,17,opt,name=upstream_response_id,json=upstreamResponseId,proto3" json:"upstream_response_id,omitempty"`
 	// confidence is a token-logprob-derived confidence in [0, 1] for the decision,
 	// present only when the backend returned per-token logprobs. A local backend
 	// that does not emit logprobs leaves this unset.
@@ -473,6 +477,13 @@ func (x *InvocationMetadata) GetFinishReason() string {
 	return ""
 }
 
+func (x *InvocationMetadata) GetCachedTokens() int64 {
+	if x != nil && x.CachedTokens != nil {
+		return *x.CachedTokens
+	}
+	return 0
+}
+
 func (x *InvocationMetadata) GetLatencyMs() int64 {
 	if x != nil {
 		return x.LatencyMs
@@ -538,7 +549,7 @@ const file_inferencepb_inference_proto_rawDesc = "" +
 	"\x15max_completion_tokens\x18\x02 \x01(\x03H\x00R\x13maxCompletionTokens\x88\x01\x01\x12%\n" +
 	"\vtemperature\x18\x03 \x01(\x01H\x01R\vtemperature\x88\x01\x01B\x18\n" +
 	"\x16_max_completion_tokensB\x0e\n" +
-	"\f_temperature\"\xbb\x06\n" +
+	"\f_temperature\"\xf7\x06\n" +
 	"\x12InvocationMetadata\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\tR\trequestId\x12'\n" +
@@ -553,7 +564,8 @@ const file_inferencepb_inference_proto_rawDesc = "" +
 	"\x11completion_tokens\x18\n" +
 	" \x01(\x03H\x01R\x10completionTokens\x88\x01\x01\x12&\n" +
 	"\ftotal_tokens\x18\v \x01(\x03H\x02R\vtotalTokens\x88\x01\x01\x12#\n" +
-	"\rfinish_reason\x18\f \x01(\tR\ffinishReason\x12\x1d\n" +
+	"\rfinish_reason\x18\f \x01(\tR\ffinishReason\x12(\n" +
+	"\rcached_tokens\x18\x13 \x01(\x03H\x03R\fcachedTokens\x88\x01\x01\x12\x1d\n" +
 	"\n" +
 	"latency_ms\x18\r \x01(\x03R\tlatencyMs\x12+\n" +
 	"\x11output_normalized\x18\x0e \x01(\bR\x10outputNormalized\x12-\n" +
@@ -561,11 +573,12 @@ const file_inferencepb_inference_proto_rawDesc = "" +
 	"\x11raw_output_sha256\x18\x10 \x01(\tR\x0frawOutputSha256\x120\n" +
 	"\x14upstream_response_id\x18\x11 \x01(\tR\x12upstreamResponseId\x12#\n" +
 	"\n" +
-	"confidence\x18\x12 \x01(\x01H\x03R\n" +
+	"confidence\x18\x12 \x01(\x01H\x04R\n" +
 	"confidence\x88\x01\x01B\x10\n" +
 	"\x0e_prompt_tokensB\x14\n" +
 	"\x12_completion_tokensB\x0f\n" +
-	"\r_total_tokensB\r\n" +
+	"\r_total_tokensB\x10\n" +
+	"\x0e_cached_tokensB\r\n" +
 	"\v_confidence*R\n" +
 	"\x0fInferenceStatus\x12 \n" +
 	"\x1cINFERENCE_STATUS_UNSPECIFIED\x10\x00\x12\x1d\n" +

@@ -128,6 +128,50 @@ use = "dead"
 	}
 }
 
+// TestEvalMatrixInferScopedByConditions confirms a rule's conditions scope its judge:
+// the infer evaluator runs only when the conditions match the command. A matching
+// command is judged, so the dead inference point fails it closed; a non-matching
+// command is out of scope, so the judge does not run and the rule does not block.
+func TestEvalMatrixInferScopedByConditions(t *testing.T) {
+	const scopedConfig = `
+[inference.dead]
+endpoint = "[::1]:1"
+model = "test-model"
+
+[[rules]]
+name = "matrix-infer-scoped"
+events = ["Stop"]
+action = "block"
+violation_message = "blocked by infer"
+intent = "Do not scan source."
+[[rules.conditions]]
+kind = "regex"
+field_paths = ["tool_input.command", "command"]
+pattern = "SECRET"
+[[rules.eval]]
+kind = "infer"
+role = "enforce"
+use = "dead"
+`
+	cfg := loadRuleConfig(t, scopedConfig)
+
+	matched := rules.EvaluateAll(
+		context.Background(), "claude", "Stop",
+		testFields(map[string]any{"command": "echo SECRET"}), cfg.Rules, nil,
+	)
+	if len(matched) == 0 || matched[0].RuleName != "matrix-infer-scoped" {
+		t.Fatalf("in-condition command was not judged/failed-closed: %+v", matched)
+	}
+
+	unmatched := rules.EvaluateAll(
+		context.Background(), "claude", "Stop",
+		testFields(map[string]any{"command": "echo hello"}), cfg.Rules, nil,
+	)
+	if len(unmatched) != 0 {
+		t.Fatalf("out-of-condition command was judged despite non-matching conditions: %+v", unmatched)
+	}
+}
+
 // TestEvalMatrixInferRecordsLayer confirms an infer evaluator records an
 // inference layer in the decision trace, so the LLM verdict per rule appears in
 // gate_evaluation_layers. The point is unreachable here, so the recorded layer

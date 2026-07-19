@@ -123,6 +123,29 @@ func TestBuildBatchPromptListsRulesBlocksOnly(t *testing.T) {
 	}
 }
 
+// TestBuildBatchPromptIncludesDescription confirms a rule's description is written
+// under its rule_id, after the intent, so the judge reads the fuller guidance and not
+// only the one-line prohibition. A rule with no description writes only the intent.
+func TestBuildBatchPromptIncludesDescription(t *testing.T) {
+	participants := []batchParticipant{
+		{
+			ruleName:    "search-guard",
+			intent:      "block a bulk source scan",
+			description: "Blocks reading many source files at once. Allows reading one file.",
+		},
+		{ruleName: "no-desc", intent: "block a thing"},
+	}
+	prompt := buildBatchPrompt(participants)
+	if !strings.Contains(prompt, "Allows reading one file.") {
+		t.Fatalf("prompt omits the description: %q", prompt)
+	}
+	intentIndex := strings.Index(prompt, "block a bulk source scan")
+	descIndex := strings.Index(prompt, "Blocks reading many source files")
+	if intentIndex < 0 || descIndex < 0 || descIndex < intentIndex {
+		t.Fatalf("description must follow the intent: intent@%d desc@%d in %q", intentIndex, descIndex, prompt)
+	}
+}
+
 // TestParseBlockList confirms the blocks-only reply parses into a rule_id set,
 // that a present-but-empty list parses as an empty set (allow-all), that a
 // single-rule list blocks only that rule, and that a non-JSON reply, a reply that
@@ -322,10 +345,14 @@ func TestRunBatchInferenceFetchesTranscriptOnce(t *testing.T) {
 	}
 }
 
-// TestRunBatchInferenceTranscriptErrorFailsOpen confirms a transcript fetch error
-// yields an empty conversation panel while the judge still runs, so a transcript
-// outage neither blocks nor errors the judge.
-func TestRunBatchInferenceTranscriptErrorFailsOpen(t *testing.T) {
+// TestRunBatchInferenceContextUnavailableSkipsJudge confirms that when a transcript
+// endpoint is configured but the fetch fails, the judge does not enforce on the
+// missing conversation. It issues no inference call and marks the rule errored with
+// context_unavailable, so the eval matrix routes the rule to its deterministic
+// fallback rather than letting the judge decide blind. This is the corrected
+// behavior: the conversation is the judge's source of intent, so a configured-but-
+// unavailable context must fall back, not run the judge on an empty panel.
+func TestRunBatchInferenceContextUnavailableSkipsJudge(t *testing.T) {
 	runtime := NewInferRuntimeWithCache(nil, nil)
 	t.Cleanup(runtime.Close)
 	infer := &fakeInferenceClient{reply: completeReply(`{"block":[]}`)}
@@ -344,19 +371,52 @@ func TestRunBatchInferenceTranscriptErrorFailsOpen(t *testing.T) {
 
 	memo := runBatchInference(batchRuntimeContext(t, runtime), fields, rules, "claude", "PreToolUse", nil)
 	if memo == nil {
-		t.Fatal("memo is nil, want the judge to still run on an empty transcript")
+		t.Fatal("memo is nil, want an errored memo that routes to the deterministic fallback")
 	}
-	if infer.count() != 1 {
-		t.Fatalf("inference calls = %d, want 1", infer.count())
+	if infer.count() != 0 {
+		t.Fatalf("inference calls = %d, want 0 (the judge must not enforce without its conversation context)", infer.count())
 	}
 	verdict, found := memo.verdictFor(config.InferencePoint{Endpoint: "infer", Model: "m1"}, "a")
 	if !found {
 		t.Fatal("no verdict recorded for rule a")
 	}
-	if verdict.errored || verdict.block {
-		t.Fatalf("verdict = %+v, want a clean allow on empty transcript", verdict)
+	if !verdict.errored || verdict.errorCode != "context_unavailable" {
+		t.Fatalf("verdict = %+v, want errored context_unavailable so the eval matrix uses the deterministic fallback", verdict)
+	}
+}
+
+// TestRunBatchInferenceNoEndpointJudgesContextless confirms that when no transcript
+// endpoint is configured, contextless judging is intended: the judge still runs on
+// the directory, command, and structural parse, and does not error. This keeps the
+// operator's explicit choice to run the judge without a transcript distinct from a
+// configured transcript that is merely unavailable.
+func TestRunBatchInferenceNoEndpointJudgesContextless(t *testing.T) {
+	runtime := NewInferRuntimeWithCache(nil, nil)
+	t.Cleanup(runtime.Close)
+	infer := &fakeInferenceClient{reply: completeReply(`{"block":[]}`)}
+	runtime.inferenceClients["infer"] = infer
+	// No SetJudgeTranscript, so the endpoint stays unset and contextless judging is
+	// the configured intent.
+	fields := &FieldSet{
+		ConversationID:   "conv-1",
+		CWD:              "/repo",
+		ToolName:         "Bash",
+		ToolInputCommand: "ls",
+	}
+	rules := []config.Rule{batchRule("a", "p1", config.InferencePoint{Endpoint: "infer", Model: "m1"})}
+
+	memo := runBatchInference(batchRuntimeContext(t, runtime), fields, rules, "claude", "PreToolUse", nil)
+	if memo == nil {
+		t.Fatal("memo is nil, want the judge to run contextless when no endpoint is configured")
+	}
+	if infer.count() != 1 {
+		t.Fatalf("inference calls = %d, want 1 (contextless judging is intended when no endpoint is set)", infer.count())
+	}
+	verdict, found := memo.verdictFor(config.InferencePoint{Endpoint: "infer", Model: "m1"}, "a")
+	if !found || verdict.errored || verdict.block {
+		t.Fatalf("verdict = %+v found=%v, want a clean non-errored allow", verdict, found)
 	}
 	if strings.Contains(infer.request().GetInput(), "recent conversation") {
-		t.Fatalf("Input carries a conversation panel despite the fetch error: %q", infer.request().GetInput())
+		t.Fatalf("Input carries a conversation panel despite no configured endpoint: %q", infer.request().GetInput())
 	}
 }
