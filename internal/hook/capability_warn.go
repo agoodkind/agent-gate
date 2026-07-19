@@ -34,12 +34,9 @@ func WarnCapabilityDowngrades(ctx context.Context, log *slog.Logger, cfg *config
 	var downgrades []CapabilityDowngrade
 	for i := range cfg.Rules {
 		rule := &cfg.Rules[i]
-		if rule.Action != config.ActionBlock {
-			continue
-		}
 		for _, pair := range ruleSubscriptions(rule) {
-			c := LookupCapability(pair.system, pair.event)
-			if c == CapabilityBlock || c == CapabilitySubstitute {
+			effect, capability, unsupported := unsupportedRuleEffect(rule, pair)
+			if !unsupported {
 				continue
 			}
 			d := CapabilityDowngrade{
@@ -47,20 +44,46 @@ func WarnCapabilityDowngrades(ctx context.Context, log *slog.Logger, cfg *config
 				System:   pair.system,
 				Event:    pair.event,
 				Declared: rule.Action,
-				Effect:   "audit",
+				Effect:   effect,
 			}
-			log.WarnContext(ctx, "rule subscribes to non-blockable event; effective behavior is audit",
+			log.WarnContext(
+				ctx, "rule subscribes to an unsupported hook response capability",
 				slog.String("rule", d.Rule),
 				slog.String("provider", d.System.String()),
 				slog.String("event", d.Event),
 				slog.String("declared", d.Declared),
 				slog.String("effect", d.Effect),
-				slog.String("capability", c.String()),
+				slog.String("capability", capability),
 			)
 			downgrades = append(downgrades, d)
 		}
 	}
 	return downgrades
+}
+
+func unsupportedRuleEffect(rule *config.Rule, pair ruleSubscription) (string, string, bool) {
+	switch rule.Action {
+	case config.ActionBlock:
+		capability := LookupCapability(pair.system, pair.event)
+		if capability == CapabilityBlock || capability == CapabilitySubstitute {
+			return "", capability.String(), false
+		}
+		return "audit", capability.String(), true
+	case config.ActionInject:
+		capability := LookupResponseCapability(pair.system, pair.event)
+		if capability.Supports(ResponseCapabilityInject) {
+			return "", "inject", false
+		}
+		return "noop", "none", true
+	case config.ActionMutate:
+		capability := LookupResponseCapability(pair.system, pair.event)
+		if responseTarget, _ := responseMutationTarget(capability); responseTarget != "" {
+			return "", responseTarget, false
+		}
+		return "noop", "none", true
+	default:
+		return "", "", false
+	}
 }
 
 type ruleSubscription struct {
@@ -80,6 +103,9 @@ func ruleSubscriptions(rule *config.Rule) []ruleSubscription {
 	for _, e := range rule.CodexEvents {
 		out = append(out, ruleSubscription{SystemCodex, e})
 	}
+	for _, e := range rule.CopilotEvents {
+		out = append(out, ruleSubscription{SystemCopilot, e})
+	}
 	for _, e := range rule.CursorEvents {
 		out = append(out, ruleSubscription{SystemCursor, e})
 	}
@@ -90,7 +116,7 @@ func ruleSubscriptions(rule *config.Rule) []ruleSubscription {
 		// Events without a provider prefix: the daemon routes the same event
 		// name to whichever provider sent the hook payload. To warn
 		// accurately, look the event up under every system that has it.
-		for _, sys := range []System{SystemClaude, SystemCodex, SystemCursor, SystemGemini} {
+		for _, sys := range []System{SystemClaude, SystemCodex, SystemCopilot, SystemCursor, SystemGemini} {
 			if _, ok := capabilityTable[capabilityKey{sys, e}]; ok {
 				out = append(out, ruleSubscription{sys, e})
 			}
