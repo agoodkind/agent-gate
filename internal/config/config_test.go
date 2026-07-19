@@ -256,6 +256,75 @@ violation_message = "blocked"
 	}
 }
 
+func TestLoadResponseActionAllowsUnconditionalEventMatch(t *testing.T) {
+	setConfigHome(t, `[[rules]]
+name = "session-context"
+events = ["SessionStart"]
+action = "inject"
+output = "start context"
+`)
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	rule := cfg.Rules[0]
+	if !rule.IsResponseAction() {
+		t.Fatal("rule is not a response action")
+	}
+	if rule.Compiled() != nil {
+		t.Fatal("unconditional response rule compiled a pattern")
+	}
+	if rule.OutputText() != "start context" {
+		t.Fatalf("OutputText() = %q", rule.OutputText())
+	}
+}
+
+func TestLoadResponseOutputFileIsRelativeToConfig(t *testing.T) {
+	dir := t.TempDir()
+	configDir := filepath.Join(dir, "agent-gate")
+	contextDir := filepath.Join(configDir, "context")
+	if err := os.MkdirAll(contextDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll context: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(contextDir, "session.txt"), []byte("file context"), 0o600); err != nil {
+		t.Fatalf("WriteFile context: %v", err)
+	}
+	configPath := filepath.Join(configDir, "config.toml")
+	contents := `[[rules]]
+name = "session-context"
+events = ["SessionStart"]
+action = "inject"
+output_file = "context/session.txt"
+`
+	if err := os.WriteFile(configPath, []byte(contents), 0o600); err != nil {
+		t.Fatalf("WriteFile config: %v", err)
+	}
+
+	cfg, err := config.LoadExisting(configPath)
+	if err != nil {
+		t.Fatalf("LoadExisting() error: %v", err)
+	}
+	if cfg.Rules[0].OutputText() != "file context" {
+		t.Fatalf("OutputText() = %q", cfg.Rules[0].OutputText())
+	}
+}
+
+func TestLoadResponseActionRejectsAmbiguousOutputSources(t *testing.T) {
+	setConfigHome(t, `[[rules]]
+name = "session-context"
+events = ["SessionStart"]
+action = "inject"
+output = "inline"
+output_file = "context/session.txt"
+`)
+
+	_, err := config.Load()
+	if err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Fatalf("Load() error = %v, want mutually exclusive output sources", err)
+	}
+}
+
 func TestLoadRejectsUnknownAction(t *testing.T) {
 	setConfigHome(t, `[[rules]]
 name = "unknown-action-rule"
