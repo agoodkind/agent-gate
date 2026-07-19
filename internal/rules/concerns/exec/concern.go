@@ -70,6 +70,10 @@ type Runner interface {
 type Verdict struct {
 	Block   bool
 	Message string
+	// Output is the complete stdout from a clean matching validator run. Rule
+	// evaluation retains Message for enforcement diagnostics and uses Output
+	// for response actions.
+	Output  string
 	Errored bool
 }
 
@@ -144,6 +148,7 @@ func Interpret(c *config.Condition, res RunResult, runErr error) Verdict {
 		return Verdict{
 			Block:   c.OnError == config.OnErrorClosed,
 			Message: "",
+			Output:  "",
 			Errored: true,
 		}
 	}
@@ -152,6 +157,7 @@ func Interpret(c *config.Condition, res RunResult, runErr error) Verdict {
 			return Verdict{
 				Block:   c.OnError == config.OnErrorClosed,
 				Message: "",
+				Output:  "",
 				Errored: true,
 			}
 		}
@@ -160,17 +166,18 @@ func Interpret(c *config.Condition, res RunResult, runErr error) Verdict {
 			return Verdict{
 				Block:   c.OnError == config.OnErrorClosed,
 				Message: "",
+				Output:  "",
 				Errored: true,
 			}
 		}
-		return Verdict{Block: matched, Message: "", Errored: false}
+		return Verdict{Block: matched, Message: "", Output: res.Stdout, Errored: false}
 	}
 	block := exitBlocks(c.BlockOn, res.ExitCode)
 	message := ""
 	if block {
 		message = firstLine(res.Stdout)
 	}
-	return Verdict{Block: block, Message: message, Errored: false}
+	return Verdict{Block: block, Message: message, Output: res.Stdout, Errored: false}
 }
 
 // exitBlocks reports whether exitCode blocks under policy. The nonzero policy

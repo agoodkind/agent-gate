@@ -65,6 +65,7 @@ type validatorFlight struct {
 type cachedExecVerdict struct {
 	Block   bool   `json:"block"`
 	Message string `json:"message"`
+	Output  string `json:"output"`
 }
 
 type validatorRunResult struct {
@@ -329,18 +330,19 @@ func (r *ExecRuntime) runValidatorSingleflight(
 			return execconcern.Verdict{
 				Block:   c.OnError == config.OnErrorClosed,
 				Message: "",
+				Output:  "",
 				Errored: true,
 			}
 		}
 	}
 	flight = &validatorFlight{
 		done:    make(chan struct{}),
-		verdict: execconcern.Verdict{Block: false, Message: "", Errored: false},
+		verdict: execconcern.Verdict{Block: false, Message: "", Output: "", Errored: false},
 	}
 	r.inflight[cacheKey] = flight
 	r.mu.Unlock()
 
-	verdict := execconcern.Verdict{Block: false, Message: "", Errored: false}
+	verdict := execconcern.Verdict{Block: false, Message: "", Output: "", Errored: false}
 	backgroundManaged := false
 	defer func() {
 		if recovered := recover(); recovered != nil {
@@ -349,6 +351,7 @@ func (r *ExecRuntime) runValidatorSingleflight(
 			verdict = execconcern.Verdict{
 				Block:   c.OnError == config.OnErrorClosed,
 				Message: "",
+				Output:  "",
 				Errored: true,
 			}
 		}
@@ -374,6 +377,7 @@ func (r *ExecRuntime) runValidatorSingleflight(
 					r.finishValidatorFlight(cacheKey, flight, execconcern.Verdict{
 						Block:   c.OnError == config.OnErrorClosed,
 						Message: "",
+						Output:  "",
 						Errored: true,
 					})
 				}
@@ -415,14 +419,14 @@ func (r *ExecRuntime) runValidator(
 		r.log.WarnContext(ctx, "exec validator request build failed",
 			"rule", rule.Name, "on_error", c.OnError, "err", err)
 		return validatorRunResult{
-			verdict:    execconcern.Verdict{Block: c.OnError == config.OnErrorClosed, Message: "", Errored: true},
+			verdict:    execconcern.Verdict{Block: c.OnError == config.OnErrorClosed, Message: "", Output: "", Errored: true},
 			background: nil,
 		}
 	}
 	commands := r.expandExecCommands(fields, c)
 	if len(commands) == 0 {
 		return validatorRunResult{
-			verdict:    execconcern.Verdict{Block: false, Message: "", Errored: false},
+			verdict:    execconcern.Verdict{Block: false, Message: "", Output: "", Errored: false},
 			background: nil,
 		}
 	}
@@ -434,7 +438,7 @@ func (r *ExecRuntime) runValidator(
 			if rec := recover(); rec != nil {
 				r.log.ErrorContext(bgCtx, "exec validator panic",
 					"rule", rule.Name, "err", fmt.Errorf("panic: %v", rec))
-				done <- execconcern.Verdict{Block: c.OnError == config.OnErrorClosed, Message: "", Errored: true}
+				done <- execconcern.Verdict{Block: c.OnError == config.OnErrorClosed, Message: "", Output: "", Errored: true}
 			}
 		}()
 		verdict := r.runExpandedCommands(bgCtx, rule.Name, c, commands, stdin, env)
@@ -458,7 +462,7 @@ func (r *ExecRuntime) runValidator(
 		r.log.WarnContext(ctx, "exec validator exceeded synchronous budget; continuing in background",
 			"rule", rule.Name, "on_error", c.OnError, "budget_ms", c.TimeoutMs)
 		return validatorRunResult{
-			verdict:    execconcern.Verdict{Block: c.OnError == config.OnErrorClosed, Message: "", Errored: true},
+			verdict:    execconcern.Verdict{Block: c.OnError == config.OnErrorClosed, Message: "", Output: "", Errored: true},
 			background: done,
 		}
 	}
@@ -473,7 +477,7 @@ func (r *ExecRuntime) runExpandedCommands(
 	env []string,
 ) execconcern.Verdict {
 	if len(commands) == 0 {
-		return execconcern.Verdict{Block: false, Message: "", Errored: false}
+		return execconcern.Verdict{Block: false, Message: "", Output: "", Errored: false}
 	}
 
 	forEach := c.ForEachSelector().Selector != config.FieldSelectorInvalid
@@ -496,13 +500,13 @@ func (r *ExecRuntime) runExpandedCommands(
 			return verdict
 		}
 		if matchAll && !verdict.Block {
-			return execconcern.Verdict{Block: false, Message: "", Errored: false}
+			return execconcern.Verdict{Block: false, Message: "", Output: "", Errored: false}
 		}
 	}
 	if matchAll {
-		return execconcern.Verdict{Block: true, Message: firstBlockMessage, Errored: false}
+		return execconcern.Verdict{Block: true, Message: firstBlockMessage, Output: "", Errored: false}
 	}
-	return execconcern.Verdict{Block: false, Message: "", Errored: false}
+	return execconcern.Verdict{Block: false, Message: "", Output: "", Errored: false}
 }
 
 func (r *ExecRuntime) logExpandedCommandError(
@@ -629,26 +633,27 @@ func diskFileResolver() shelldecomp.FileResolver {
 
 func (r *ExecRuntime) cacheLookup(ctx context.Context, cacheKey string) (execconcern.Verdict, bool) {
 	if r.cache == nil {
-		return execconcern.Verdict{Block: false, Message: "", Errored: false}, false
+		return execconcern.Verdict{Block: false, Message: "", Output: "", Errored: false}, false
 	}
 	entry, found, err := r.cache.Get(execValidatorCacheNamespace, cacheKey)
 	if err != nil {
 		r.log.WarnContext(ctx, "exec validator hot cache get failed", "err", err)
-		return execconcern.Verdict{Block: false, Message: "", Errored: false}, false
+		return execconcern.Verdict{Block: false, Message: "", Output: "", Errored: false}, false
 	}
 	if !found {
-		return execconcern.Verdict{Block: false, Message: "", Errored: false}, false
+		return execconcern.Verdict{Block: false, Message: "", Output: "", Errored: false}, false
 	}
 
 	var cached cachedExecVerdict
 	if err := json.Unmarshal(entry.Value, &cached); err != nil {
 		r.log.WarnContext(ctx, "exec validator hot cache decode failed", "err", err)
 		_, _ = r.cache.Delete(execValidatorCacheNamespace, cacheKey)
-		return execconcern.Verdict{Block: false, Message: "", Errored: false}, false
+		return execconcern.Verdict{Block: false, Message: "", Output: "", Errored: false}, false
 	}
 	return execconcern.Verdict{
 		Block:   cached.Block,
 		Message: cached.Message,
+		Output:  cached.Output,
 		Errored: false,
 	}, true
 }
@@ -660,6 +665,7 @@ func (r *ExecRuntime) cacheStore(ctx context.Context, cacheKey string, ttlMs int
 	cached := cachedExecVerdict{
 		Block:   verdict.Block,
 		Message: verdict.Message,
+		Output:  verdict.Output,
 	}
 	value, err := json.Marshal(cached)
 	if err != nil {
