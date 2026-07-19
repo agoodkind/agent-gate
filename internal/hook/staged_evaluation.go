@@ -15,6 +15,7 @@ import (
 
 type stagedRuleEvaluation struct {
 	violations []rules.Violation
+	effects    []rules.ResponseEffect
 	trace      rules.DecisionTrace
 }
 
@@ -29,11 +30,10 @@ func evaluateStagedRules(
 	normalizedJSON json.RawMessage,
 ) stagedRuleEvaluation {
 	if len(ruleSet) == 0 {
-		violations := rules.EvaluateAll(ctx, system, eventName, fields, ruleSet, getenv)
 		detailed := rules.EvaluateAllDetailed(
 			ctx, system, eventName, fields, ruleSet, getenv, normalizedJSON, gkversion.Version,
 		)
-		return stagedRuleEvaluation{violations: violations, trace: detailed.Trace}
+		return stagedRuleEvaluation{violations: detailed.Violations, effects: detailed.Effects, trace: detailed.Trace}
 	}
 	deterministicRules, inferenceRules := partitionInferenceRules(ruleSet)
 	deterministic := rules.EvaluateAllDetailed(
@@ -47,6 +47,7 @@ func evaluateStagedRules(
 		gkversion.Version,
 	)
 	violations := deterministic.Violations
+	effects := deterministic.Effects
 	detailedResults := []rules.DetailedEvaluation{deterministic}
 	if len(blockingMatches(violations)) > 0 || len(inferenceRules) == 0 {
 		trace := mergeStagedDecisionTrace(
@@ -65,7 +66,7 @@ func evaluateStagedRules(
 				)...,
 			)
 		}
-		return stagedRuleEvaluation{violations: violations, trace: trace}
+		return stagedRuleEvaluation{violations: violations, effects: effects, trace: trace}
 	}
 
 	inferenceCtx, cancel := context.WithTimeout(ctx, cfg.HookInferencePhaseTimeout())
@@ -88,6 +89,7 @@ func evaluateStagedRules(
 		)
 		detailedResults = append(detailedResults, inference)
 		violations = append(violations, inference.Violations...)
+		effects = append(effects, inference.Effects...)
 	}
 	trace := mergeStagedDecisionTrace(
 		deterministic.Trace,
@@ -111,6 +113,7 @@ func evaluateStagedRules(
 	}
 	return stagedRuleEvaluation{
 		violations: violations,
+		effects:    effects,
 		trace:      trace,
 	}
 }

@@ -151,6 +151,8 @@ type execEventMemo struct {
 	mu        sync.Mutex
 	verdicts  map[*config.Condition]execconcern.Verdict
 	overrides map[string]string
+	outputs   map[string]string
+	errors    map[string]bool
 }
 
 func newExecEventMemo(system string, eventName string) *execEventMemo {
@@ -160,6 +162,8 @@ func newExecEventMemo(system string, eventName string) *execEventMemo {
 		mu:        sync.Mutex{},
 		verdicts:  make(map[*config.Condition]execconcern.Verdict),
 		overrides: make(map[string]string),
+		outputs:   make(map[string]string),
+		errors:    make(map[string]bool),
 	}
 }
 
@@ -177,6 +181,25 @@ func (m *execEventMemo) record(c *config.Condition, ruleName string, v execconce
 	if v.Block && v.Message != "" {
 		m.overrides[ruleName] = v.Message
 	}
+	if v.Block {
+		m.outputs[ruleName] = v.Output
+	}
+	if v.Errored {
+		m.errors[ruleName] = true
+	}
+}
+
+func (m *execEventMemo) outputFor(ruleName string) (string, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	output, ok := m.outputs[ruleName]
+	return output, ok
+}
+
+func (m *execEventMemo) erroredFor(ruleName string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.errors[ruleName]
 }
 
 func (m *execEventMemo) overrideFor(ruleName string) (string, bool) {
