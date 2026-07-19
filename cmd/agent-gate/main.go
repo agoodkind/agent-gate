@@ -37,16 +37,17 @@ func writeUserLine(writer io.Writer, line string) {
 type commandName string
 
 const (
-	commandConfig     commandName = "config"
-	commandCodexHook  commandName = "codex-hook"
-	commandDaemon     commandName = "daemon"
-	commandExport     commandName = "export"
-	commandGeminiHook commandName = "gemini-hook"
-	commandInstall    commandName = "install"
-	commandKV         commandName = "kv"
-	commandQuery      commandName = "query"
-	commandUpdate     commandName = "update"
-	commandVersion    commandName = "version"
+	commandConfig      commandName = "config"
+	commandCopilotHook commandName = "copilot-hook"
+	commandCodexHook   commandName = "codex-hook"
+	commandDaemon      commandName = "daemon"
+	commandExport      commandName = "export"
+	commandGeminiHook  commandName = "gemini-hook"
+	commandInstall     commandName = "install"
+	commandKV          commandName = "kv"
+	commandQuery       commandName = "query"
+	commandUpdate      commandName = "update"
+	commandVersion     commandName = "version"
 )
 
 type daemonCommandName string
@@ -138,6 +139,8 @@ func main() {
 			}
 		case commandCodexHook:
 			os.Exit(runHook(hook.SystemCodex))
+		case commandCopilotHook:
+			os.Exit(runHook(hook.SystemCopilot))
 		case commandGeminiHook:
 			os.Exit(runHook(hook.SystemGemini))
 		case commandKV:
@@ -1267,7 +1270,8 @@ func printEventTable(source string, events []audit.Event) {
 		if len(cmd) > 80 {
 			cmd = cmd[:77] + "..."
 		}
-		_, _ = fmt.Fprintf(os.Stdout, "%-25s  %-8s  %-12s  %-12s  %-9s  %-24s  %s\n",
+		_, _ = fmt.Fprintf(
+			os.Stdout, "%-25s  %-8s  %-12s  %-12s  %-9s  %-24s  %s\n",
 			event.Time,
 			event.System,
 			event.Decision.Kind,
@@ -1290,7 +1294,8 @@ func printSeenTable(result intake.QueryResult) {
 		if len(cmd) > 80 {
 			cmd = cmd[:77] + "..."
 		}
-		_, _ = fmt.Fprintf(os.Stdout, "%-25s  %-8s  %-12s  %-12s  %-9s  %-10s  %s\n",
+		_, _ = fmt.Fprintf(
+			os.Stdout, "%-25s  %-8s  %-12s  %-12s  %-9s  %-10s  %s\n",
 			record.RecordedAt,
 			record.System,
 			record.Deferred.State,

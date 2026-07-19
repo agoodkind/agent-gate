@@ -267,5 +267,38 @@
       ],
       "failClosed": false
     }
+  ],
+  "UserPromptExpansion": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "__AGENT_GATE_BIN__"
+        }
+      ],
+      "failClosed": false
+    }
+  ],
+  "Setup": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "__AGENT_GATE_BIN__"
+        }
+      ],
+      "failClosed": false
+    }
+  ],
+  "PostToolBatch": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "__AGENT_GATE_BIN__"
+        }
+      ],
+      "failClosed": false
+    }
   ]
 }
