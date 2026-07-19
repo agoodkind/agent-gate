@@ -17,7 +17,7 @@ func TestBuildJudgeInputBashCall(t *testing.T) {
 	}
 	tail := "user: please read go.mod\nassistant: on it"
 
-	out := buildJudgeInput(fields, tail)
+	out := buildJudgeInput(fields, tail, nil)
 
 	for _, want := range []string{
 		"/repo",              // chat working directory
@@ -43,7 +43,7 @@ func TestBuildJudgeInputEffectiveCwdDiffers(t *testing.T) {
 		CWD:              "/repo",
 	}
 
-	out := buildJudgeInput(fields, "")
+	out := buildJudgeInput(fields, "", nil)
 
 	if !strings.Contains(out, "/repo") {
 		t.Fatalf("output missing session cwd /repo:\n%s", out)
@@ -65,7 +65,7 @@ func TestBuildJudgeInputWriteCall(t *testing.T) {
 		CWD:               "/repo",
 	}
 
-	out := buildJudgeInput(fields, "")
+	out := buildJudgeInput(fields, "", nil)
 
 	if !strings.Contains(out, "/repo/foo.go") {
 		t.Fatalf("output missing write target path:\n%s", out)
@@ -94,7 +94,7 @@ func TestBuildJudgeInputEmptyTranscript(t *testing.T) {
 		CWD:              "/repo",
 	}
 
-	out := buildJudgeInput(fields, "")
+	out := buildJudgeInput(fields, "", nil)
 
 	if strings.Contains(out, "recent conversation") {
 		t.Fatalf("empty transcript should drop the conversation panel:\n%s", out)

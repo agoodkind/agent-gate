@@ -15,14 +15,54 @@ import "strings"
 // call, structural parse). It never labels anything safe or dangerous; it only
 // renders directory, call, structure, and conversation so a downstream general
 // judge can reason.
-func buildJudgeInput(fields FieldSet, transcriptTail string) string {
+func buildJudgeInput(fields FieldSet, transcriptTail string, facts []judgeContextFact) string {
 	var builder strings.Builder
 
-	renderWorkingDirectories(&builder, fields)
+	// When a rule requests checkout_status, the resolved fact already labels the
+	// command's directory as the primary checkout, a linked worktree, or outside a
+	// repository, so the raw directory lines are redundant. A small judge model
+	// over-anchors on the raw "chat working directory" line and blocks a read or
+	// build purely for sitting in the primary checkout, so suppress the raw lines
+	// when the labeled fact is present and let the judge decide from the fact.
+	if !factsIncludeCheckoutStatus(facts) {
+		renderWorkingDirectories(&builder, fields)
+	}
+	renderResolvedFacts(&builder, facts)
 	renderConversationPanel(&builder, transcriptTail)
 	renderToolPanel(&builder, fields)
 
 	return strings.TrimSpace(builder.String())
+}
+
+// factsIncludeCheckoutStatus reports whether any resolved fact came from the
+// checkout_status key. It drives suppression of the raw working-directory lines
+// so a rule that opts into the labeled directory classification does not also
+// expose the raw path the small judge model over-weights.
+func factsIncludeCheckoutStatus(facts []judgeContextFact) bool {
+	for _, fact := range facts {
+		if fact.FromCheckoutStatus {
+			return true
+		}
+	}
+	return false
+}
+
+// renderResolvedFacts writes the resolved judge_context facts a rule requested,
+// one labeled line each, under a clear heading. It renders nothing when no rule
+// requested facts. An empty value shows a placeholder so the judge sees the fact
+// was requested and resolved to nothing.
+func renderResolvedFacts(builder *strings.Builder, facts []judgeContextFact) {
+	if len(facts) == 0 {
+		return
+	}
+	builder.WriteString("\nresolved facts:\n")
+	for _, fact := range facts {
+		value := strings.TrimSpace(fact.Value)
+		if value == "" {
+			value = "(none)"
+		}
+		builder.WriteString("  " + fact.Label + ": " + strings.ReplaceAll(value, "\n", ", ") + "\n")
+	}
 }
 
 // renderWorkingDirectories writes the chat working directory (the project the

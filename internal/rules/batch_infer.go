@@ -99,9 +99,10 @@ func (memo *batchInferenceMemo) verdictFor(point config.InferencePoint, ruleName
 // batchParticipant names one rule judged in a batch call and the intent the model
 // applies to the command for that rule.
 type batchParticipant struct {
-	ruleName    string
-	intent      string
-	description string
+	ruleName     string
+	intent       string
+	description  string
+	judgeContext []string
 }
 
 // batchGroupPlan collects the rules that share one inference point for this event,
@@ -139,7 +140,8 @@ func runBatchInference(
 	if contextStatus == contextUnavailable {
 		return runtime.contextUnavailableMemo(groups, order)
 	}
-	judgeInput := buildJudgeInput(*fields, judgeTail)
+	facts := resolveJudgeContext(ctx, *fields, unionJudgeContextKeys(groups))
+	judgeInput := buildJudgeInput(*fields, judgeTail, facts)
 	memo := &batchInferenceMemo{groups: make(map[config.InferencePoint]*batchGroupResult, len(groups))}
 	var mu sync.Mutex
 	var wg sync.WaitGroup
@@ -291,14 +293,36 @@ func collectBatchGroups(
 			if !plan.seen[rule.Name] {
 				plan.seen[rule.Name] = true
 				plan.participants = append(plan.participants, batchParticipant{
-					ruleName:    rule.Name,
-					intent:      rule.Intent,
-					description: rule.Description,
+					ruleName:     rule.Name,
+					intent:       rule.Intent,
+					description:  rule.Description,
+					judgeContext: rule.JudgeContext,
 				})
 			}
 		}
 	}
 	return groups, order
+}
+
+// unionJudgeContextKeys returns the deduplicated judge_context keys every
+// participating rule requested, preserving first-seen order. One judge panel
+// serves every rule and model in a command's batch, so the resolved facts are
+// the union of what those rules asked for.
+func unionJudgeContextKeys(groups map[config.InferencePoint]*batchGroupPlan) []string {
+	seen := map[string]bool{}
+	var keys []string
+	for _, plan := range groups {
+		for _, participant := range plan.participants {
+			for _, key := range participant.judgeContext {
+				if key == "" || seen[key] {
+					continue
+				}
+				seen[key] = true
+				keys = append(keys, key)
+			}
+		}
+	}
+	return keys
 }
 
 // evaluateBatchGroup issues one inference call judging the judge-input panel
