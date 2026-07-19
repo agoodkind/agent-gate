@@ -145,6 +145,7 @@ func emptyUpstreamMetadata() UpstreamMetadata {
 // DetailedEvaluation returns compatibility violations plus the complete trace.
 type DetailedEvaluation struct {
 	Violations []Violation
+	Effects    []ResponseEffect
 	Trace      DecisionTrace
 }
 
@@ -169,16 +170,17 @@ func EvaluateAllDetailed(
 	evalCtx := withCommandEnvironment(ctx, getenv)
 	evalCtx = withRichTraceCollector(evalCtx, collector)
 	collectPreSkippedInferenceLayers(evalCtx, rulesSlice, system, eventName, getenv)
-	violations := evaluateAll(evalCtx, system, eventName, fields, rulesSlice, getenv)
-	decisions := deterministicRuleDecisions(rulesSlice, system, eventName, getenv, violations)
-	outputJSON := deterministicOutputJSON(system, eventName, decisions, violations)
+	result := evaluateAll(evalCtx, system, eventName, fields, rulesSlice, getenv)
+	decisions := deterministicRuleDecisions(rulesSlice, system, eventName, getenv, result.violations, result.effects)
+	outputJSON := deterministicOutputJSON(system, eventName, decisions, result.violations)
 	completedAt := decisionTraceNow().UTC()
 	inputCopy := append(json.RawMessage(nil), inputJSON...)
 	if len(inputCopy) == 0 {
 		inputCopy = json.RawMessage(`{}`)
 	}
 	return DetailedEvaluation{
-		Violations: violations,
+		Violations: result.violations,
+		Effects:    result.effects,
 		Trace: DecisionTrace{
 			Deterministic: DeterministicTrace{
 				StartedAt: startedAt, CompletedAt: completedAt,
@@ -346,10 +348,14 @@ func deterministicRuleDecisions(
 	eventName string,
 	getenv func(string) string,
 	violations []Violation,
+	effects []ResponseEffect,
 ) []RuleDecision {
 	matchedRules := make(map[string]bool)
 	for _, violation := range violations {
 		matchedRules[violation.RuleName] = true
+	}
+	for _, effect := range effects {
+		matchedRules[effect.RuleName] = true
 	}
 	decisions := make([]RuleDecision, 0, len(rulesSlice))
 	for i := range rulesSlice {

@@ -40,7 +40,9 @@ type Violation struct {
 // Evaluate iterates over all rules and returns the first Violation whose
 // pattern matches a typed field selected from payload, or nil if no rule fires.
 func Evaluate(ctx context.Context, system, eventName string, fields FieldSet, rules []config.Rule) *Violation {
-	violations := EvaluateAll(ctx, system, eventName, fields, rules, nil)
+	violations := EvaluateAllDetailed(
+		ctx, system, eventName, fields, rules, nil, nil, "",
+	).Violations
 	if len(violations) == 0 {
 		return nil
 	}
@@ -48,24 +50,15 @@ func Evaluate(ctx context.Context, system, eventName string, fields FieldSet, ru
 	return &out
 }
 
-// EvaluateAll returns every concrete match for every applicable rule across
-// all condition kinds. One pipeline.Condition is built per applicable regex
-// unit: simple rules get one Condition each; condition-based rules get one
-// Condition per regex/diff/shell-write-kind condition. Command and project
-// conditions remain inline (landings 6 and 7 will migrate those).
-//
-// getenv is consulted by the [config.Rule.DisableIfEnv] guard. Pass nil to
-// disable env-based rule skipping.
-func EvaluateAll(ctx context.Context, system, eventName string, fields FieldSet, rulesSlice []config.Rule, getenv func(string) string) []Violation {
-	return EvaluateAllDetailed(
-		ctx, system, eventName, fields, rulesSlice, getenv, nil, "",
-	).Violations
+type evaluationResult struct {
+	violations []Violation
+	effects    []ResponseEffect
 }
 
-func evaluateAll(ctx context.Context, system, eventName string, fields FieldSet, rulesSlice []config.Rule, getenv func(string) string) []Violation {
+func evaluateAll(ctx context.Context, system, eventName string, fields FieldSet, rulesSlice []config.Rule, getenv func(string) string) evaluationResult {
 	conditions := buildRuleRegexConditions(&fields, rulesSlice, system, eventName, getenv)
 	if len(conditions) == 0 {
-		return nil
+		return evaluationResult{violations: nil, effects: nil}
 	}
 	memo := newExecEventMemo(system, eventName)
 	evalCtx := withExecEventMemo(ctx, memo)
@@ -80,7 +73,9 @@ func evaluateAll(ctx context.Context, system, eventName string, fields FieldSet,
 		Sentinel:   pipeline.NoopSentinel{},
 	}
 	results, _ := orch.Run(evalCtx, pipeline.Input{})
-	return aggregateResults(results, fields, memo)
+	violations := aggregateResults(results, fields, memo)
+	filtered, effects := responseEffectsFromMatches(violations, rulesSlice, memo)
+	return evaluationResult{violations: filtered, effects: effects}
 }
 
 // envGuardFires returns true when getenv reports any of keys as non-empty.
@@ -195,6 +190,12 @@ func buildRuleRegexConditions(fields *FieldSet, rulesSlice []config.Rule, system
 			continue
 		}
 		if len(rule.Conditions) == 0 {
+			if rule.IsResponseAction() && rule.Pattern == "" && rule.NotPattern == "" {
+				conditions = append(conditions, &ruleRegexCondition{
+					name: rule.Name, fields: fields, rule: rule, condIdx: -3, budget: nil,
+				})
+				continue
+			}
 			conditions = append(conditions, &ruleRegexCondition{
 				name:    rule.Name,
 				fields:  fields,
@@ -351,32 +352,8 @@ func (r *ruleRegexCondition) Profile() pipeline.Profile {
 }
 
 func (r *ruleRegexCondition) Execute(ctx context.Context, _ pipeline.Input) (pipeline.Outcome, error) {
-	if r.condIdx == -1 {
-		return ruleOutcome{
-			violations:       evalSimpleRule(r.fields, r.rule, r.budget.Remaining()),
-			rule:             nil,
-			isConditionBased: false,
-			gateMatched:      false,
-		}, nil
-	}
-	// condIdx == -2: rule whose conditions are all non-regex (command, project).
-	// The fallback violation is returned inline when the gate passes; aggregateResults
-	// sees matchCount > 0 and does not add another fallback.
-	if r.condIdx == -2 {
-		if !allConditionsMatch(ctx, *r.fields, r.rule, r.rule.Conditions) {
-			return ruleOutcome{
-				violations:       nil,
-				rule:             r.rule,
-				isConditionBased: true,
-				gateMatched:      false,
-			}, nil
-		}
-		return ruleOutcome{
-			violations:       []Violation{conditionFallbackViolation(*r.fields, r.rule)},
-			rule:             r.rule,
-			isConditionBased: true,
-			gateMatched:      true,
-		}, nil
+	if outcome, handled := r.simpleOutcome(ctx); handled {
+		return outcome, nil
 	}
 	// condIdx >= 0: one matching-kind condition. The full gate must pass before
 	// matches are evaluated. aggregateResults adds a single fallback when all
@@ -392,70 +369,87 @@ func (r *ruleRegexCondition) Execute(ctx context.Context, _ pipeline.Input) (pip
 	c := &r.rule.Conditions[r.condIdx]
 	matchLimit := r.budget.Remaining()
 	if matchLimit == 0 {
-		return ruleOutcome{
-			violations:       nil,
-			rule:             r.rule,
-			isConditionBased: true,
-			gateMatched:      true,
-		}, nil
+		return matchedRuleOutcome(r.rule, nil), nil
 	}
 	switch conditionKind(c) {
 	case config.ConditionKindRegex:
 		accessor := conditionFieldAccessor{fields: r.fields, condition: c}
 		matches := regexconcern.EvalFieldMatches(accessor, c.Selectors(), c.CompiledPattern(), c.DiagnosticGroup, matchLimit)
 		r.budget.Consume(len(matches))
-		return ruleOutcome{
-			violations:       matchesToViolations(matches, r.rule),
-			rule:             r.rule,
-			isConditionBased: true,
-			gateMatched:      true,
-		}, nil
+		return matchedRuleOutcome(r.rule, matchesToViolations(matches, r.rule)), nil
 	case config.ConditionKindDiff:
 		violations := evalDiffCondition(r.fields, c, r.rule, matchLimit)
 		r.budget.Consume(len(violations))
-		return ruleOutcome{
-			violations:       violations,
-			rule:             r.rule,
-			isConditionBased: true,
-			gateMatched:      true,
-		}, nil
+		return matchedRuleOutcome(r.rule, violations), nil
 	case config.ConditionKindShellWrite:
-		return ruleOutcome{
-			violations:       evalShellWriteCondition(r.fields, c, r.rule),
-			rule:             r.rule,
-			isConditionBased: true,
-			gateMatched:      true,
-		}, nil
+		return matchedRuleOutcome(r.rule, evalShellWriteCondition(r.fields, c, r.rule)), nil
 	case config.ConditionKindShellRead:
 		violations := evalShellReadCondition(r.fields, c, r.rule, matchLimit)
 		r.budget.Consume(len(violations))
-		return ruleOutcome{
-			violations:       violations,
-			rule:             r.rule,
-			isConditionBased: true,
-			gateMatched:      true,
-		}, nil
+		return matchedRuleOutcome(r.rule, violations), nil
 	case config.ConditionKindCommand, config.ConditionKindProject, config.ConditionKindExec,
 		config.ConditionKindGitDefaultBranch,
 		config.ConditionKindGitPrimaryCheckout, config.ConditionKindGitRefMove,
 		config.ConditionKindInfer:
-		// Gate-only kinds are handled by [allConditionsMatch] above and
-		// produce no per-condition Condition. Reaching this arm means
-		// [buildRuleRegexConditions] mis-routed a condition; emit nothing
-		// rather than fabricating a violation.
-		return ruleOutcome{
-			violations:       nil,
-			rule:             r.rule,
-			isConditionBased: true,
-			gateMatched:      true,
-		}, nil
+		return matchedRuleOutcome(r.rule, nil), nil
 	default:
+		// Gate-only kinds are handled by allConditionsMatch. Reaching this
+		// arm means buildRuleRegexConditions mis-routed a condition, so emit
+		// no fabricated violation.
+		return matchedRuleOutcome(r.rule, nil), nil
+	}
+}
+
+func (r *ruleRegexCondition) simpleOutcome(ctx context.Context) (ruleOutcome, bool) {
+	if r.condIdx == -1 {
 		return ruleOutcome{
-			violations:       nil,
+			violations:       evalSimpleRule(r.fields, r.rule, r.budget.Remaining()),
+			rule:             nil,
+			isConditionBased: false,
+			gateMatched:      false,
+		}, true
+	}
+	if r.condIdx == -3 {
+		return ruleOutcome{
+			violations:       []Violation{conditionFallbackViolation(*r.fields, r.rule)},
+			rule:             r.rule,
+			isConditionBased: false,
+			gateMatched:      true,
+		}, true
+	}
+	// condIdx == -2: rule whose conditions are all non-regex (command, project).
+	// The fallback violation is returned inline when the gate passes; aggregateResults
+	// sees matchCount > 0 and does not add another fallback.
+	if r.condIdx == -2 {
+		if !allConditionsMatch(ctx, *r.fields, r.rule, r.rule.Conditions) {
+			return ruleOutcome{
+				violations:       nil,
+				rule:             r.rule,
+				isConditionBased: true,
+				gateMatched:      false,
+			}, true
+		}
+		return ruleOutcome{
+			violations:       []Violation{conditionFallbackViolation(*r.fields, r.rule)},
 			rule:             r.rule,
 			isConditionBased: true,
 			gateMatched:      true,
-		}, nil
+		}, true
+	}
+	return ruleOutcome{
+		violations:       nil,
+		rule:             nil,
+		isConditionBased: false,
+		gateMatched:      false,
+	}, false
+}
+
+func matchedRuleOutcome(rule *config.Rule, violations []Violation) ruleOutcome {
+	return ruleOutcome{
+		violations:       violations,
+		rule:             rule,
+		isConditionBased: true,
+		gateMatched:      true,
 	}
 }
 
@@ -920,10 +914,11 @@ func appliesToEvent(rule *config.Rule, system, eventName string) bool {
 type ruleSystem string
 
 const (
-	ruleSystemClaude ruleSystem = "claude"
-	ruleSystemCodex  ruleSystem = "codex"
-	ruleSystemCursor ruleSystem = "cursor"
-	ruleSystemGemini ruleSystem = "gemini"
+	ruleSystemClaude  ruleSystem = "claude"
+	ruleSystemCodex   ruleSystem = "codex"
+	ruleSystemCopilot ruleSystem = "copilot"
+	ruleSystemCursor  ruleSystem = "cursor"
+	ruleSystemGemini  ruleSystem = "gemini"
 )
 
 func systemSpecificEvents(rule *config.Rule, system string) []string {
@@ -934,6 +929,8 @@ func systemSpecificEvents(rule *config.Rule, system string) []string {
 		return rule.CursorEvents
 	case ruleSystemCodex:
 		return rule.CodexEvents
+	case ruleSystemCopilot:
+		return rule.CopilotEvents
 	case ruleSystemGemini:
 		return rule.GeminiEvents
 	default:
