@@ -77,7 +77,9 @@ func (p VSCodePayload) Fields() rules.FieldSet {
 // adding an explicit assistant message field.
 type CopilotPayload struct {
 	VSCodePayload
-	AssistantMessage string `json:"assistant_message"`
+	AssistantMessage  string `json:"assistant_message"`
+	Prompt            string `json:"prompt"`
+	TransformedPrompt string `json:"transformedPrompt"`
 }
 
 // Fields renders the payload as a [rules.FieldSet].
@@ -86,6 +88,11 @@ func (p CopilotPayload) Fields() rules.FieldSet {
 	fields.AssistantMessage = p.AssistantMessage
 	if fields.LastAssistantMessage == "" {
 		fields.LastAssistantMessage = p.LastAssistant
+	}
+	if p.TransformedPrompt != "" {
+		fields.Prompt = p.TransformedPrompt
+	} else if p.Prompt != "" {
+		fields.Prompt = p.Prompt
 	}
 	return fields
 }

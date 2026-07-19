@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"strings"
 	"time"
 
 	"goodkind.io/agent-gate/internal/audit"
@@ -72,6 +73,7 @@ func emptyDeferredAuditEvent(system System) DeferredAuditEvent {
 		Rules:               nil,
 		BlockingViolations:  nil,
 		AuditOnlyViolations: nil,
+		ResponseEffects:     nil,
 		InferenceTraces:     nil,
 		Trace:               emptyDecisionTrace(),
 		Decision:            ResponseDecisionAllow,
@@ -107,6 +109,12 @@ func evaluatePayloadHot(ctx context.Context, payload Payload, rawBytes []byte, c
 		auditOnlyViolations = append(auditOnlyViolations, blockingViolations...)
 		blockingViolations = nil
 	}
+	contextText, mutationText, responseEffects := composeResponseEffects(
+		payload.System,
+		eventName,
+		staged.effects,
+		len(blockingViolations) > 0 && canBlock,
+	)
 
 	decision := ResponseDecisionAllow
 	diagnostic := ""
@@ -125,13 +133,13 @@ func evaluatePayloadHot(ctx context.Context, payload Payload, rawBytes []byte, c
 			FailOpenReason: "",
 			ContextText:    "",
 			MutationText:   "",
-			PromptText:     "",
+			PromptText:     payloadPromptText(payload),
 		})
 		return HotEvaluation{
 			Stdout:   response.Stdout,
 			Stderr:   response.Stderr,
 			ExitCode: response.ExitCode,
-			Deferred: newDeferredAuditEvent(rawBytes, payload, fields, ruleSet, blockingViolations, auditOnlyViolations, staged.trace, decision, diagnostic, eventID),
+			Deferred: newDeferredAuditEvent(rawBytes, payload, fields, ruleSet, blockingViolations, auditOnlyViolations, responseEffects, staged.trace, decision, diagnostic, eventID),
 			Trace:    staged.trace,
 		}
 	}
@@ -143,15 +151,15 @@ func evaluatePayloadHot(ctx context.Context, payload Payload, rawBytes []byte, c
 		DiagnosticText: "",
 		EventID:        eventID,
 		FailOpenReason: "",
-		ContextText:    "",
-		MutationText:   "",
-		PromptText:     "",
+		ContextText:    contextText,
+		MutationText:   mutationText,
+		PromptText:     payloadPromptText(payload),
 	})
 	return HotEvaluation{
 		Stdout:   response.Stdout,
 		Stderr:   response.Stderr,
 		ExitCode: response.ExitCode,
-		Deferred: newDeferredAuditEvent(rawBytes, payload, fields, ruleSet, blockingViolations, auditOnlyViolations, staged.trace, decision, diagnostic, eventID),
+		Deferred: newDeferredAuditEvent(rawBytes, payload, fields, ruleSet, blockingViolations, auditOnlyViolations, responseEffects, staged.trace, decision, diagnostic, eventID),
 		Trace:    staged.trace,
 	}
 }
@@ -170,6 +178,7 @@ func newDeferredAuditEvent(
 	ruleSet []config.Rule,
 	blockingViolations []rules.Violation,
 	auditOnlyViolations []rules.Violation,
+	responseEffects []ResponseEffectRecord,
 	trace rules.DecisionTrace,
 	decision ResponseDecision,
 	diagnosticText string,
@@ -188,11 +197,90 @@ func newDeferredAuditEvent(
 		Rules:               ruleSet,
 		BlockingViolations:  blockingViolations,
 		AuditOnlyViolations: auditOnlyViolations,
+		ResponseEffects:     responseEffects,
 		InferenceTraces:     nil,
 		Trace:               trace,
 		Decision:            decision,
 		DiagnosticText:      diagnosticText,
 	}
+}
+
+func composeResponseEffects(
+	system System,
+	eventName string,
+	effects []rules.ResponseEffect,
+	suppressed bool,
+) (string, string, []ResponseEffectRecord) {
+	capability := LookupResponseCapability(system, eventName)
+	contextParts := make([]string, 0, len(effects))
+	var mutationText string
+	records := make([]ResponseEffectRecord, 0, len(effects))
+	for index := range effects {
+		effect := effects[index]
+		record := ResponseEffectRecord{
+			RuleName: effect.RuleName, EffectType: effect.Action, Target: "", ByteCount: len(effect.Output), Disposition: effect.Disposition,
+		}
+		target, structured := responseMutationTarget(capability)
+		switch effect.Action {
+		case config.ActionInject:
+			record.Target = "context"
+		case config.ActionMutate:
+			if target == "" {
+				record.Target = "none"
+			} else {
+				record.Target = target
+			}
+		}
+		if suppressed {
+			record.Disposition = "suppressed_by_block"
+			records = append(records, record)
+			continue
+		}
+		if effect.Output == "" {
+			records = append(records, record)
+			continue
+		}
+		switch effect.Action {
+		case config.ActionInject:
+			if !capability.Supports(ResponseCapabilityInject) {
+				record.Disposition = "unsupported_noop"
+			} else {
+				contextParts = append(contextParts, effect.Output)
+			}
+		case config.ActionMutate:
+			switch {
+			case target == "":
+				record.Disposition = "unsupported_noop"
+			case !structured:
+				mutationText = effect.Output
+			case validResponseMutation(system, target, effect.Output):
+				mutationText = effect.Output
+			default:
+				record.Disposition = "invalid_noop"
+			}
+		}
+		records = append(records, record)
+	}
+	return strings.Join(contextParts, "\n\n"), mutationText, records
+}
+
+func validResponseMutation(system System, target string, value string) bool {
+	if system == SystemCopilot && target == "tool_output" {
+		_, ok := validCopilotToolOutputMutation(value)
+		return ok
+	}
+	_, ok := validStructuredMutation(value)
+	return ok
+}
+
+func payloadPromptText(payload Payload) string {
+	if copilot, ok := payload.Event.(CopilotPayload); ok {
+		if copilot.TransformedPrompt != "" {
+			return copilot.TransformedPrompt
+		}
+		return copilot.Prompt
+	}
+	return ""
 }
 
 // WriteDeferredAudit performs audit normalization, enrichment, and logging
@@ -241,30 +329,52 @@ func writeDecisionAudit(ctx context.Context, event DeferredAuditEvent, sink audi
 	}
 
 	if event.Decision == ResponseDecisionBlock {
-		attrs := audit.AttrsFromSlog(append(base,
+		attrs := audit.AttrsFromSlog(append(
+			base,
 			slog.String("decision", "block"),
 			slog.Any("blocking_rules", matchRuleNames(event.BlockingViolations)),
 			slog.String("violation_message", event.DiagnosticText),
 		))
 		sink.Log(ctx, event.SystemString, event.SessionID, event.EventName, "info", "hook.blocked", attrs)
+		writeResponseEffectAudit(ctx, event, sink)
 		return
 	}
 
 	if len(event.AuditOnlyViolations) > 0 {
-		attrs := audit.AttrsFromSlog(append(base,
+		attrs := audit.AttrsFromSlog(append(
+			base,
 			slog.String("decision", "audit_only"),
 			slog.Any("blocking_rules", matchRuleNames(event.AuditOnlyViolations)),
 			slog.String("violation_message", rules.FormatViolations(event.AuditOnlyViolations)),
 		))
 		sink.Log(ctx, event.SystemString, event.SessionID, event.EventName, "info", "hook.audit_violation", attrs)
 	}
+	writeResponseEffectAudit(ctx, event, sink)
 
-	allowAttrs := audit.AttrsFromSlog(append(base,
+	allowAttrs := audit.AttrsFromSlog(append(
+		base,
 		slog.String("decision", "allow"),
 		slog.String("blocking_rule", ""),
 		slog.String("violation_message", ""),
 	))
 	sink.Log(ctx, event.SystemString, event.SessionID, event.EventName, "info", "hook.allowed", allowAttrs)
+}
+
+func writeResponseEffectAudit(ctx context.Context, event DeferredAuditEvent, sink audit.Sink) {
+	for index := range event.ResponseEffects {
+		effect := event.ResponseEffects[index]
+		attrs := audit.AttrsFromSlog([]slog.Attr{
+			slog.String("system", event.SystemString),
+			slog.String("event", event.EventName),
+			slog.String("session_id", event.SessionID),
+			slog.String("rule", effect.RuleName),
+			slog.String("effect_type", effect.EffectType),
+			slog.String("target", effect.Target),
+			slog.Int("byte_count", effect.ByteCount),
+			slog.String("disposition", effect.Disposition),
+		})
+		sink.Log(ctx, event.SystemString, event.SessionID, event.EventName, "info", "hook.response_effect", attrs)
+	}
 }
 
 func blockingMatches(violations []rules.Violation) []rules.Violation {
