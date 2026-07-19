@@ -481,6 +481,13 @@ func (s *Server) EvaluateHook(ctx context.Context, req *daemonpb.EvaluateHookReq
 	if cwd := req.GetCwd(); cwd != "" {
 		rawJSON = injectCWD(rawJSON, cwd)
 	}
+	if req.GetProviderHint() == hook.SystemCopilot.String() {
+		var normalizeErr error
+		rawJSON, normalizeErr = hook.NormalizeCopilotPayload(rawJSON, copilotEventHint(req.GetArgv()))
+		if normalizeErr != nil {
+			return failOpenEvaluateHookResponse(), nil
+		}
+	}
 
 	envFingerprint := req.GetEnvFingerprint()
 	getenv := func(key string) string {
@@ -518,6 +525,19 @@ func (s *Server) EvaluateHook(ctx context.Context, req *daemonpb.EvaluateHookReq
 		AppendResult: appendResult, StartedAt: evalStart, Result: result,
 		SystemError: systemError, ErrorMessage: errorMessage,
 	}), nil
+}
+
+func copilotEventHint(argv []string) string {
+	for index := range argv {
+		if argv[index] != "copilot-hook" {
+			continue
+		}
+		if index+1 < len(argv) {
+			return argv[index+1]
+		}
+		return ""
+	}
+	return ""
 }
 
 func configHasInference(cfg *config.Config) bool {
@@ -696,7 +716,8 @@ func (s *Server) logEvaluateOverload(ctx context.Context, snapshot *runtimeSnaps
 	s.lastOverloadLogTime = now
 	s.overloadLogMu.Unlock()
 
-	s.log.WarnContext(ctx, "evaluate hook overloaded; failing open",
+	s.log.WarnContext(
+		ctx, "evaluate hook overloaded; failing open",
 		"max_concurrency", cap(snapshot.evaluateSlots),
 		"queue_wait_ms", snapshot.evaluateQueueWait.Milliseconds(),
 	)
