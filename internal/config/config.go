@@ -341,14 +341,15 @@ func validateDiagnosticGroup(context string, group int, re *regex.Regexp) error 
 //     a) Conditions is non-empty and ALL conditions match, OR
 //     b) Conditions is empty and the single FieldPaths/Pattern matches.
 type Rule struct {
-	Name         string      `toml:"name"`
-	Description  string      `toml:"description"`
-	Events       []string    `toml:"events"`
-	ClaudeEvents []string    `toml:"claude_events"`
-	CursorEvents []string    `toml:"cursor_events"`
-	CodexEvents  []string    `toml:"codex_events"`
-	GeminiEvents []string    `toml:"gemini_events"`
-	Conditions   []Condition `toml:"conditions"`
+	Name          string      `toml:"name"`
+	Description   string      `toml:"description"`
+	Events        []string    `toml:"events"`
+	ClaudeEvents  []string    `toml:"claude_events"`
+	CursorEvents  []string    `toml:"cursor_events"`
+	CodexEvents   []string    `toml:"codex_events"`
+	CopilotEvents []string    `toml:"copilot_events"`
+	GeminiEvents  []string    `toml:"gemini_events"`
+	Conditions    []Condition `toml:"conditions"`
 	// Eval declares an ordered list of evaluators (deterministic and infer) and
 	// their roles. A rule with no Eval entries behaves as it does today.
 	Eval []RuleEval `toml:"eval,omitempty"`
@@ -371,7 +372,13 @@ type Rule struct {
 	// audit layer. Note that the daemon may still emit a config-load WARN if
 	// a rule with action="block" subscribes to a (provider, event) pair that
 	// the protocol cannot block at; see internal/hook/capability.go.
-	Action           string `toml:"action"`
+	Action string `toml:"action"`
+	// Output supplies the static content for inject and mutate actions. A
+	// matching exec condition may replace it with its complete stdout.
+	Output string `toml:"output"`
+	// OutputFile loads Output from a file relative to the configuration file.
+	// Output and OutputFile are mutually exclusive.
+	OutputFile       string `toml:"output_file"`
 	ViolationMessage string `toml:"violation_message"`
 	// DiagnosticGroup selects which capture group supplies diagnostic spans.
 	// Zero means the full match.
@@ -394,6 +401,7 @@ type Rule struct {
 	compiled    *regex.Regexp
 	compiledNot *regex.Regexp
 	selectors   []FieldSelectorSpec
+	output      string
 }
 
 // Rule action values.
@@ -405,6 +413,12 @@ const (
 	ActionBlock = "block"
 	// ActionAudit logs the violation to the audit layer without blocking.
 	ActionAudit = "audit"
+	// ActionInject adds model-facing context through a provider's documented
+	// response channel.
+	ActionInject = "inject"
+	// ActionMutate replaces a mutable prompt, tool input, or tool output
+	// through a provider's documented response channel.
+	ActionMutate = "mutate"
 )
 
 // Rule diagnostic format values.
@@ -417,7 +431,7 @@ const (
 )
 
 // Compiled returns the pre-compiled regex for the top-level Pattern.
-// Always non-nil after Load() when Conditions is empty.
+// Non-nil after Load() for pattern-based simple rules.
 func (r *Rule) Compiled() *regex.Regexp {
 	return r.compiled
 }
@@ -443,6 +457,7 @@ func NewSimpleRule(name, pattern string, compiled *regex.Regexp, events, fieldPa
 		ClaudeEvents:      nil,
 		CursorEvents:      nil,
 		CodexEvents:       nil,
+		CopilotEvents:     nil,
 		GeminiEvents:      nil,
 		Conditions:        nil,
 		Eval:              nil,
@@ -450,6 +465,8 @@ func NewSimpleRule(name, pattern string, compiled *regex.Regexp, events, fieldPa
 		EvalInference:     nil,
 		FieldPaths:        fieldPaths,
 		Action:            action,
+		Output:            "",
+		OutputFile:        "",
 		ViolationMessage:  violationMessage,
 		DiagnosticGroup:   0,
 		DiagnosticFormat:  DiagnosticFormatDetailed,
@@ -459,6 +476,7 @@ func NewSimpleRule(name, pattern string, compiled *regex.Regexp, events, fieldPa
 		compiled:          compiled,
 		compiledNot:       nil,
 		selectors:         CompileFieldSelectorSpecs(fieldPaths),
+		output:            "",
 	}
 }
 
@@ -615,6 +633,9 @@ func compileRule(
 	if err := normalizeRuleAction(r); err != nil {
 		return fmt.Errorf("rule %q: %w", r.Name, err)
 	}
+	if err := resolveRuleOutput(log, r, configDirectory); err != nil {
+		return fmt.Errorf("rule %q: %w", r.Name, err)
+	}
 	if err := normalizeRuleDiagnosticFormat(r); err != nil {
 		return fmt.Errorf("rule %q: %w", r.Name, err)
 	}
@@ -629,10 +650,20 @@ func compileRule(
 	}
 	if len(r.Conditions) > 0 {
 		for j := range r.Conditions {
+			if r.IsResponseAction() && ConditionKind(r.Conditions[j].Kind) == ConditionKindExec && r.Conditions[j].BlockOn == "" {
+				r.Conditions[j].BlockOn = BlockOnZero
+			}
 			if err := compileCondition(log, r.Name, j, &r.Conditions[j], meta, configDirectory); err != nil {
 				return err
 			}
 		}
+		return nil
+	}
+	if r.IsResponseAction() && r.Pattern == "" && r.NotPattern == "" {
+		if r.DiagnosticGroup != 0 {
+			return fmt.Errorf("rule %q: diagnostic_group requires a pattern", r.Name)
+		}
+		r.selectors = CompileFieldSelectorSpecs(r.FieldPaths)
 		return nil
 	}
 	r.selectors = CompileFieldSelectorSpecs(r.FieldPaths)
@@ -651,25 +682,6 @@ func compileRule(
 		r.compiledNot = notRe
 	}
 	return validateDiagnosticGroup(fmt.Sprintf("rule %q", r.Name), r.DiagnosticGroup, r.compiled)
-}
-
-// normalizeRuleAction validates the Action field and derives AuditOnly from
-// it. The action field replaces the legacy class field; the previous "sync"
-// maps to ActionBlock and "deferred" maps to ActionAudit. AuditOnly is no
-// longer a TOML-readable field; it is set here from Action.
-func normalizeRuleAction(r *Rule) error {
-	if r.Action == "" {
-		r.Action = ActionBlock
-	}
-	switch r.Action {
-	case ActionBlock:
-		r.AuditOnly = false
-	case ActionAudit:
-		r.AuditOnly = true
-	default:
-		return fmt.Errorf("unknown action %q (expected %q or %q)", r.Action, ActionBlock, ActionAudit)
-	}
-	return nil
 }
 
 func normalizeRuleDiagnosticFormat(r *Rule) error {
