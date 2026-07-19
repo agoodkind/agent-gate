@@ -28,8 +28,20 @@ type DeferredAuditEvent struct {
 	Rules               []config.Rule
 	BlockingViolations  []rules.Violation
 	AuditOnlyViolations []rules.Violation
+	ResponseEffects     []ResponseEffectRecord
 	InferenceTraces     []rules.InferenceTrace
 	Trace               rules.DecisionTrace
 	Decision            ResponseDecision
 	DiagnosticText      string
+}
+
+// ResponseEffectRecord is the non-sensitive audit view of a matched inject or
+// mutate rule. It intentionally contains no configured, file, or command
+// output content.
+type ResponseEffectRecord struct {
+	RuleName    string
+	EffectType  string
+	Target      string
+	ByteCount   int
+	Disposition string
 }
