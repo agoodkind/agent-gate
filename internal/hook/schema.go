@@ -51,10 +51,11 @@ var virtualFields = []string{
 type schemaSystem string
 
 const (
-	schemaSystemClaude schemaSystem = "claude"
-	schemaSystemCodex  schemaSystem = "codex"
-	schemaSystemCursor schemaSystem = "cursor"
-	schemaSystemGemini schemaSystem = "gemini"
+	schemaSystemClaude  schemaSystem = "claude"
+	schemaSystemCodex   schemaSystem = "codex"
+	schemaSystemCopilot schemaSystem = "copilot"
+	schemaSystemCursor  schemaSystem = "cursor"
+	schemaSystemGemini  schemaSystem = "gemini"
 )
 
 // ── Cursor ──────────────────────────────────────────────────────────────────
@@ -90,6 +91,7 @@ func init() {
 	cursorSchema = buildCursorSchema()
 	claudeSchema = buildClaudeSchema()
 	codexSchema = buildCodexSchema()
+	copilotSchema = buildCopilotSchema()
 	geminiSchema = buildGeminiSchema()
 }
 
@@ -113,12 +115,14 @@ func buildCursorSchema() map[CursorEvent]EventSchema {
 		CursorBeforeReadFile:    makeSchema(cursorEnvelope, "file_path", "cwd"),
 		CursorBeforeTabFileRead: makeSchema(cursorEnvelope, "file_path", "cwd"),
 
-		CursorAfterFileEdit: makeSchema(cursorEnvelope,
+		CursorAfterFileEdit: makeSchema(
+			cursorEnvelope,
 			"file_path",
 			"edits[*].old_string",
 			"edits[*].new_string",
 		),
-		CursorAfterTabFileEdit: makeSchema(cursorEnvelope,
+		CursorAfterTabFileEdit: makeSchema(
+			cursorEnvelope,
 			"file_path",
 			"edits[*].old_string",
 			"edits[*].new_string",
@@ -167,10 +171,31 @@ var claudeToolInputPaths = []string{
 }
 
 var (
-	claudeSchema map[ClaudeEvent]EventSchema
-	codexSchema  map[CodexEvent]EventSchema
-	geminiSchema map[GeminiEvent]EventSchema
+	claudeSchema  map[ClaudeEvent]EventSchema
+	codexSchema   map[CodexEvent]EventSchema
+	copilotSchema map[string]EventSchema
+	geminiSchema  map[GeminiEvent]EventSchema
 )
+
+func buildCopilotSchema() map[string]EventSchema {
+	envelope := []string{"hook_event_name", "session_id", "transcript_path", "cwd"}
+	toolEvent := combinePaths(envelope, toolInputPaths, []string{"tool_name", "tool_use_id"})
+	return map[string]EventSchema{
+		"sessionStart":          makeSchema(envelope),
+		"subagentStart":         makeSchema(envelope),
+		"preToolUse":            makeSchema(toolEvent),
+		"postToolUse":           makeSchema(toolEvent, "tool_output", "tool_response"),
+		"postToolUseFailure":    makeSchema(toolEvent, "error"),
+		"notification":          makeSchema(envelope, "message", "text"),
+		"userPromptTransformed": makeSchema(envelope, "prompt"),
+		"SessionStart":          makeSchema(envelope),
+		"SubagentStart":         makeSchema(envelope),
+		"PreToolUse":            makeSchema(toolEvent),
+		"PostToolUse":           makeSchema(toolEvent, "tool_output", "tool_response"),
+		"PostToolUseFailure":    makeSchema(toolEvent, "error"),
+		"Notification":          makeSchema(envelope, "message", "text"),
+	}
+}
 
 func buildClaudeSchema() map[ClaudeEvent]EventSchema {
 	claudeToolUseBase := combinePaths(claudeEnvelope, claudeToolInputPaths, []string{
@@ -199,13 +224,16 @@ func buildClaudeSchema() map[ClaudeEvent]EventSchema {
 		ClaudeStopFailure: makeSchema(claudeEnvelope, "error", "error_details", "last_assistant_message"),
 
 		ClaudeSubagentStart: makeSchema(claudeEnvelope),
-		ClaudeSubagentStop: makeSchema(claudeEnvelope,
+		ClaudeSubagentStop: makeSchema(
+			claudeEnvelope,
 			"stop_hook_active", "agent_transcript_path", "last_assistant_message",
 		),
-		ClaudeTaskCreated: makeSchema(claudeEnvelope,
+		ClaudeTaskCreated: makeSchema(
+			claudeEnvelope,
 			"task_id", "task_subject", "task_description", "teammate_name", "team_name",
 		),
-		ClaudeTaskCompleted: makeSchema(claudeEnvelope,
+		ClaudeTaskCompleted: makeSchema(
+			claudeEnvelope,
 			"task_id", "task_subject", "task_description", "teammate_name", "team_name",
 		),
 
@@ -217,7 +245,8 @@ func buildClaudeSchema() map[ClaudeEvent]EventSchema {
 
 		// memory_type: User | Project | Local | Managed
 		// load_reason: session_start | nested_traversal | path_glob_match | include | compact
-		ClaudeInstructionsLoaded: makeSchema(claudeEnvelope,
+		ClaudeInstructionsLoaded: makeSchema(
+			claudeEnvelope,
 			"file_path", "memory_type", "load_reason",
 			"globs", "trigger_file_path", "parent_file_path",
 		),
@@ -235,10 +264,12 @@ func buildClaudeSchema() map[ClaudeEvent]EventSchema {
 		ClaudeWorktreeRemove: makeSchema(claudeEnvelope, "worktree_path"),
 
 		// Elicitation is an MCP server requesting structured input from the user.
-		ClaudeElicitation: makeSchema(claudeEnvelope,
+		ClaudeElicitation: makeSchema(
+			claudeEnvelope,
 			"mcp_server_name", "message", "mode", "url", "elicitation_id",
 		),
-		ClaudeElicitationResult: makeSchema(claudeEnvelope,
+		ClaudeElicitationResult: makeSchema(
+			claudeEnvelope,
 			"mcp_server_name", "elicitation_id", "mode", "action",
 		),
 
@@ -292,7 +323,8 @@ func buildCodexSchema() map[CodexEvent]EventSchema {
 		CodexPreCompact:    makeSchema(codexEnvelope, "turn_id", "trigger"),
 		CodexPostCompact:   makeSchema(codexEnvelope, "turn_id", "trigger"),
 		CodexSubagentStart: makeSchema(codexEnvelope, "turn_id", "permission_mode", "agent_id", "agent_type"),
-		CodexSubagentStop: makeSchema(codexEnvelope,
+		CodexSubagentStop: makeSchema(
+			codexEnvelope,
 			"turn_id", "permission_mode", "agent_id", "agent_type",
 			"stop_hook_active", "agent_transcript_path", "last_assistant_message",
 		),
@@ -352,6 +384,8 @@ func ValidPaths(system, eventName string) EventSchema {
 		return claudeSchema[ClaudeEvent(eventName)]
 	case schemaSystemCodex:
 		return codexSchema[CodexEvent(eventName)]
+	case schemaSystemCopilot:
+		return copilotSchema[eventName]
 	case schemaSystemGemini:
 		return geminiSchema[GeminiEvent(eventName)]
 	default:
@@ -378,6 +412,7 @@ func ValidateConfig(cfg *config.Config) []error {
 
 func validateRuleConfig(r *config.Rule) []error {
 	errs := validateConditionKinds(r)
+	errs = append(errs, validateResponseRuleConfig(r)...)
 	allPaths := collectRuleFieldPaths(r)
 	if len(allPaths) == 0 {
 		return errs
@@ -388,6 +423,44 @@ func validateRuleConfig(r *config.Rule) []error {
 		errs = append(errs, validateFieldPathForRule(r, fieldPath, applicable)...)
 	}
 	return errs
+}
+
+func validateResponseRuleConfig(r *config.Rule) []error {
+	if !r.IsResponseAction() || r.Action != config.ActionMutate || ruleHasExecCondition(r) {
+		return nil
+	}
+	if r.OutputText() == "" {
+		return nil
+	}
+	var errs []error
+	for _, pair := range applicableEventPairs(r) {
+		system := SystemFromString(pair.system)
+		capability := LookupResponseCapability(system, pair.event)
+		target, structured := responseMutationTarget(capability)
+		if !structured {
+			continue
+		}
+		if validResponseMutation(system, target, r.OutputText()) {
+			continue
+		}
+		errs = append(errs, fmt.Errorf(
+			"rule %q: mutate output for %s %s is invalid for %s",
+			r.Name,
+			pair.system,
+			pair.event,
+			target,
+		))
+	}
+	return errs
+}
+
+func ruleHasExecCondition(r *config.Rule) bool {
+	for index := range r.Conditions {
+		if config.ConditionKind(r.Conditions[index].Kind) == config.ConditionKindExec {
+			return true
+		}
+	}
+	return false
 }
 
 func collectRuleFieldPaths(r *config.Rule) []string {
@@ -440,19 +513,22 @@ func applicableEventPairs(r *config.Rule) []schemaEventPair {
 		return allEventPairs()
 	}
 
-	applicable := make([]schemaEventPair, 0, len(r.Events)*4+
-		len(r.ClaudeEvents)+len(r.CursorEvents)+len(r.CodexEvents)+len(r.GeminiEvents))
+	applicable := make([]schemaEventPair, 0, len(r.Events)*5+
+		len(r.ClaudeEvents)+len(r.CursorEvents)+len(r.CodexEvents)+len(r.CopilotEvents)+len(r.GeminiEvents))
 	for _, ev := range r.Events {
-		applicable = append(applicable,
+		applicable = append(
+			applicable,
 			schemaEventPair{"cursor", ev},
 			schemaEventPair{"claude", ev},
 			schemaEventPair{"codex", ev},
+			schemaEventPair{"copilot", ev},
 			schemaEventPair{"gemini", ev},
 		)
 	}
 	applicable = appendEventPairs(applicable, "claude", r.ClaudeEvents)
 	applicable = appendEventPairs(applicable, "cursor", r.CursorEvents)
 	applicable = appendEventPairs(applicable, "codex", r.CodexEvents)
+	applicable = appendEventPairs(applicable, "copilot", r.CopilotEvents)
 	applicable = appendEventPairs(applicable, "gemini", r.GeminiEvents)
 	return applicable
 }
@@ -462,15 +538,17 @@ func ruleHasNoEventFilters(r *config.Rule) bool {
 		len(r.ClaudeEvents) == 0 &&
 		len(r.CursorEvents) == 0 &&
 		len(r.CodexEvents) == 0 &&
+		len(r.CopilotEvents) == 0 &&
 		len(r.GeminiEvents) == 0
 }
 
 func allEventPairs() []schemaEventPair {
 	applicable := make([]schemaEventPair, 0,
-		len(cursorSchema)+len(claudeSchema)+len(codexSchema)+len(geminiSchema))
+		len(cursorSchema)+len(claudeSchema)+len(codexSchema)+len(copilotSchema)+len(geminiSchema))
 	applicable = appendSchemaEvents(applicable, "cursor", cursorSchema)
 	applicable = appendSchemaEvents(applicable, "claude", claudeSchema)
 	applicable = appendSchemaEvents(applicable, "codex", codexSchema)
+	applicable = appendSchemaEvents(applicable, "copilot", copilotSchema)
 	applicable = appendSchemaEvents(applicable, "gemini", geminiSchema)
 	return applicable
 }
