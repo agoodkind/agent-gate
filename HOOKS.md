@@ -18,8 +18,8 @@ when a blocking rule targets an observe-only event.
 | Codex `PreToolUse`, `PermissionRequest`, `UserPromptSubmit` | block |
 | Codex `PostToolUse` | substitute the result shown to the agent |
 | Codex lifecycle events | observe |
-| Copilot `PreToolUse`, `UserPromptSubmit` | block |
-| Copilot `PostToolUse`, `Stop` | observe |
+| Copilot `preToolUse` | block |
+| Copilot `postToolUse`, `sessionStart`, `subagentStart`, `notification`, `userPromptTransformed` | observe |
 | Cursor `preToolUse`, `beforeShellExecution`, `beforeMCPExecution`, `beforeReadFile`, `beforeSubmitPrompt`, `beforeTabFileRead` | block |
 | Cursor `postToolUse` | substitute supported tool output |
 | Cursor post and agent-output events | observe |
@@ -31,6 +31,35 @@ events run after the action but can replace the result the agent sees. Observe
 events can record or add context, but cannot undo the action or hide its result.
 Pairs absent from the capability table default to observe.
 
+## Model-facing response actions
+
+`action = "inject"` and `action = "mutate"` run through the same rule
+evaluator as `block` and `audit`. They use the same event filters, provider
+filters, conditions, inference, exec gates, cache, environment guard, and
+trace. `output` supplies static text and `output_file` reads static text
+relative to the configuration file. The fields are mutually exclusive. A
+matching `exec` condition replaces that fallback with its complete stdout.
+
+Injection outputs join in configuration order with one blank line. The last
+valid mutation for a target replaces its value. A blocking decision suppresses
+all response effects. Empty, errored, invalid, and unsupported effects are
+audited as no-ops without recording their content.
+
+| Provider and event | Injection | Mutation |
+| --- | --- | --- |
+| Claude `SessionStart`, `Setup`, `SubagentStart`, `UserPromptSubmit`, `UserPromptExpansion`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PostToolBatch`, `Stop`, `SubagentStop` | `hookSpecificOutput.additionalContext` | `PreToolUse.permissionDecision = "allow"` with `updatedInput`, `PostToolUse.updatedToolOutput` |
+| Codex `SessionStart`, `SubagentStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse` | `hookSpecificOutput.additionalContext` | `PreToolUse.updatedInput` |
+| Cursor `sessionStart`, `postToolUse` | `additional_context` | `postToolUse.updated_mcp_tool_output` |
+| Copilot `sessionStart`, `subagentStart`, `postToolUse`, `postToolUseFailure`, `notification` | `additionalContext` | `preToolUse.modifiedArgs`, `postToolUse.modifiedResult` |
+| Copilot `userPromptTransformed` | prepends context through `modifiedTransformedPrompt` | replaces through `modifiedTransformedPrompt` |
+
+Cursor `beforeSubmitPrompt` remains configurable for response rules, but it
+warns and returns a no-op because Cursor does not currently expose a
+model-facing response field for that event. The provider contracts are
+[Claude Code hooks](https://code.claude.com/docs/en/hooks),
+[Codex hooks](https://learn.chatgpt.com/docs/hooks), and
+[GitHub Copilot hooks](https://docs.github.com/en/enterprise-cloud@latest/copilot/reference/hooks-reference).
+
 ## Managed installation
 
 | Provider | Installed config | Hook command | Managed ownership |
@@ -39,7 +68,7 @@ Pairs absent from the capability table default to observe.
 | Codex | `$HOME/.codex/config.toml` | installed binary plus `codex-hook` | Replaces the marked agent-gate block and sets `[features] hooks = true`; preserves content outside the block. |
 | Cursor | `$HOME/.cursor/hooks.json` | installed binary | Replaces prior agent-gate commands inside the top-level `hooks` object; preserves unrelated settings and hooks. |
 | Gemini | `$HOME/.gemini/settings.json` | installed binary plus `gemini-hook` | Replaces prior agent-gate commands inside `hooks`; preserves unrelated settings and hooks. |
-| Copilot | `$HOME/.copilot/hooks/agent-gate.json` | installed binary | Owns and replaces this dedicated file. Other files in the hooks directory remain untouched. |
+| Copilot | `$HOME/.copilot/hooks/agent-gate.json` | installed binary plus `copilot-hook <event>` | Owns and replaces this dedicated file. Other files in the hooks directory remain untouched. |
 
 Every JSON template sets `failClosed: false`. Writes are atomic, and malformed
 existing JSON stops installation before the target changes. The template
@@ -88,6 +117,7 @@ Registered events:
 | `PreToolUse` | `.*` |
 | `SessionEnd` | none |
 | `SessionStart` | none |
+| `Setup` | none |
 | `Stop` | none |
 | `StopFailure` | none |
 | `SubagentStart` | none |
@@ -118,21 +148,20 @@ Template: `hooks/codex.toml`
 
 Template: `hooks/copilot.json`
 
-Copilot uses Claude-style event names with VS Code-shaped tool inputs. The
-adapter uses the Copilot environment fingerprint and normalizes those tool
-arguments before rule evaluation.
+Copilot uses lower-camel event names and VS Code-shaped tool inputs. Each
+managed command carries the event name through `copilot-hook <event>` because
+`userPromptTransformed` does not identify itself in its payload. The daemon
+uses that hint to normalize camelCase fields before rule evaluation.
 
 | Event | Matcher |
 | --- | --- |
-| `SessionStart` | none |
-| `SessionEnd` | none |
-| `UserPromptSubmit` | none |
-| `PreToolUse` | `.*` |
-| `PostToolUse` | `.*` |
-| `PreCompact` | none |
-| `PostCompact` | none |
-| `Notification` | none |
-| `Stop` | none |
+| `sessionStart` | none |
+| `subagentStart` | none |
+| `userPromptTransformed` | none |
+| `preToolUse` | `.*` |
+| `postToolUse` | `.*` |
+| `postToolUseFailure` | `.*` |
+| `notification` | none |
 
 ## Cursor
 

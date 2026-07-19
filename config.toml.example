@@ -72,7 +72,7 @@ events = ["PreToolUse", "preToolUse", "beforeShellExecution", "BeforeTool"]
 field_paths = ["tool_input.command", "command"]
 pattern = '''(?:^|\s)go\s+build(?:\s|$)'''
 not_pattern = '''(?:^|\s)go\s+build\s+-n(?:\s|$)'''
-action = "block" # block | audit; block is the default
+action = "block" # block | audit | inject | mutate; block is the default
 violation_message = "Run the repository build target instead of go build directly."
 diagnostic_group = 0
 diagnostic_format = "detailed" # detailed | message_only
@@ -80,13 +80,35 @@ redact_diagnostics = false
 disable_if_env = ["AGENT_GATE_MAINTENANCE"]
 
 # Provider-specific filters can supplement or replace shared `events` for the
-# four providers with dedicated fields:
+# five providers with dedicated fields:
 #   claude_events = ["PreToolUse"]
 #   codex_events = ["PreToolUse"]
+#   copilot_events = ["userPromptTransformed"]
 #   cursor_events = ["preToolUse", "beforeShellExecution"]
 #   gemini_events = ["BeforeTool"]
-# Copilot uses shared `events` because it carries Claude-style event names
-# through the Copilot adapter.
+
+# Response rules use the same matching primitives as block and audit rules.
+# A rule with response action plus event filters and no pattern or conditions
+# matches every selected event. output_file is relative to this config file.
+#
+# [[rules]]
+# name = "session-context"
+# events = ["SessionStart"]
+# action = "inject"
+# output_file = "context/session.txt"
+#
+# [[rules]]
+# name = "prompt-context"
+# events = ["UserPromptSubmit"]
+# cursor_events = ["beforeSubmitPrompt"]
+# copilot_events = ["userPromptTransformed"]
+# action = "inject"
+# output = "Per-turn context"
+#
+# `mutate` replaces a prompt with text and replaces tool input or output with
+# JSON. A matching exec condition replaces output with its full stdout. Empty,
+# errored, invalid, and unsupported effects fail open and appear only as
+# content-free audit dispositions.
 
 # A conditional rule uses all-match semantics. Every [[rules.conditions]]
 # entry must match before the rule fires. Conditions run in order, so cheap

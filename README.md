@@ -95,6 +95,12 @@ values. `action = "audit"` records a match without blocking. The annotated
 inference points, evaluator roles, validator timeouts, error policy, caching,
 and unresolved path behavior.
 
+`action = "inject"` returns model-facing context through the provider event's
+native response field. `action = "mutate"` replaces a supported prompt, tool
+input, or tool output. Both actions reuse the same filters and conditions as
+enforcement rules. `output` supplies text, `output_file` reads it relative to
+the config file, and a matching exec condition replaces it with complete stdout.
+
 ## Reload and validate config
 
 The daemon watches the directory containing `config.toml` and debounces file
