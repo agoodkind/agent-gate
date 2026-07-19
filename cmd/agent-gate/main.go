@@ -197,7 +197,7 @@ func connectDaemon(ctx context.Context) (*daemon.Client, error) {
 }
 
 type hookClient interface {
-	ResolveHookEnvironment(rawJSON []byte, providerHint string, env map[string]string) ([]string, error)
+	ResolveHookEnvironment(rawJSON []byte, providerHint string, argv []string, env map[string]string) ([]string, error)
 	EvaluateHook(rawJSON []byte, providerHint, cwd string, argv []string, env map[string]string) (*daemonpb.EvaluateHookResponse, error)
 	Close() error
 }
@@ -1386,7 +1386,7 @@ func runHookWithRuntime(systemHint hook.System, runtime hookRuntime) (exitCode i
 	cwd, _ := runtime.getwd()
 	baseEnvironment := runtime.env()
 	referencedNames, err := client.ResolveHookEnvironment(
-		data, systemHint.String(), baseEnvironment,
+		data, systemHint.String(), runtime.args, baseEnvironment,
 	)
 	if err != nil {
 		diagnostic := fmt.Sprintf("agent-gate: daemon ResolveHookEnvironment failed: %v", err)

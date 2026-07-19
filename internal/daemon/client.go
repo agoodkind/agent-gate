@@ -28,7 +28,8 @@ func Connect(ctx context.Context) (*Client, error) {
 	socketPath := config.DaemonSocketPath()
 	target := "unix://" + socketPath
 
-	conn, err := grpc.NewClient(target,
+	conn, err := grpc.NewClient(
+		target,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 	)
 	if err != nil {
@@ -67,6 +68,7 @@ func (c *Client) Close() error {
 func (c *Client) ResolveHookEnvironment(
 	rawJSON []byte,
 	providerHint string,
+	argv []string,
 	env map[string]string,
 ) ([]string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), evaluateHookTimeout)
@@ -74,7 +76,7 @@ func (c *Client) ResolveHookEnvironment(
 	response, err := c.rpc.ResolveHookEnvironment(
 		ctx,
 		&daemonpb.ResolveHookEnvironmentRequest{
-			RawJson: rawJSON, ProviderHint: providerHint, EnvFingerprint: env,
+			RawJson: rawJSON, ProviderHint: providerHint, Argv: argv, EnvFingerprint: env,
 		},
 	)
 	if err != nil {
