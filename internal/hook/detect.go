@@ -59,6 +59,12 @@ func DetectWithEnv(p DetectionPayload, hint System, getenv func(string) string) 
 	if hasCopilotEnv(getenv) {
 		return SystemCopilot
 	}
+	// Copilot's lower-camel event names overlap Cursor's event fingerprint.
+	// The managed Copilot template supplies a provider hint, so honor it before
+	// considering that ambiguous payload-only Cursor signal.
+	if hint == SystemCopilot {
+		return SystemCopilot
+	}
 	if hasCursorEnv(getenv) || hasCursorPayload(p) || hasCursorEvent(p) {
 		return SystemCursor
 	}

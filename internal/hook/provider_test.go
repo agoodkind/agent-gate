@@ -88,6 +88,132 @@ func TestEvaluateHotCopilotPromptInjectionFallsBackToPrompt(t *testing.T) {
 	}
 }
 
+func TestEvaluateHot_ComposesResponseEffectsInConfigOrder(t *testing.T) {
+	cfg := &config.Config{Rules: []config.Rule{
+		{
+			Name: "first-context", CodexEvents: []string{"PreToolUse"},
+			Action: config.ActionInject, Output: "first context",
+		},
+		{
+			Name: "second-context", CodexEvents: []string{"PreToolUse"},
+			Action: config.ActionInject, Output: "second context",
+		},
+		{
+			Name: "replace-input", CodexEvents: []string{"PreToolUse"},
+			Action: config.ActionMutate, Output: `{"command":"make test"}`,
+		},
+	}}
+	rawJSON := []byte(`{"hook_event_name":"PreToolUse","session_id":"s1","tool_name":"Shell","tool_input":{"command":"go test ./..."}}`)
+
+	evaluation := hook.EvaluateHot(context.Background(), rawJSON, cfg, hook.SystemCodex, func(string) string { return "" })
+	stdout := string(evaluation.Stdout)
+	if !strings.Contains(stdout, `"additionalContext":"first context\n\nsecond context"`) {
+		t.Fatalf("response context = %q", stdout)
+	}
+	if !strings.Contains(stdout, `"updatedInput":{"command":"make test"}`) {
+		t.Fatalf("response mutation = %q", stdout)
+	}
+	if len(evaluation.Deferred.ResponseEffects) != 3 {
+		t.Fatalf("response effects = %#v", evaluation.Deferred.ResponseEffects)
+	}
+	for _, effect := range evaluation.Deferred.ResponseEffects {
+		if effect.ByteCount == 0 {
+			t.Fatalf("effect did not record output byte count: %#v", effect)
+		}
+	}
+}
+
+func TestEvaluateHotUsesLastMatchingMutationForTarget(t *testing.T) {
+	cfg := &config.Config{Rules: []config.Rule{
+		{
+			Name: "first-input", CodexEvents: []string{"PreToolUse"},
+			Action: config.ActionMutate, Output: `{"command":"first"}`,
+		},
+		{
+			Name: "last-input", CodexEvents: []string{"PreToolUse"},
+			Action: config.ActionMutate, Output: `{"command":"last"}`,
+		},
+	}}
+	rawJSON := []byte(`{"hook_event_name":"PreToolUse","session_id":"s1","tool_name":"Shell","tool_input":{"command":"original"}}`)
+
+	evaluation := hook.EvaluateHot(context.Background(), rawJSON, cfg, hook.SystemCodex, func(string) string { return "" })
+	stdout := string(evaluation.Stdout)
+	if !strings.Contains(stdout, `"updatedInput":{"command":"last"}`) || strings.Contains(stdout, `"updatedInput":{"command":"first"}`) {
+		t.Fatalf("response mutation = %q", stdout)
+	}
+}
+
+func TestEvaluateHot_BlockSuppressesResponseEffects(t *testing.T) {
+	blockingRule := testProviderRule(
+		t,
+		"block-command",
+		"blocked-command",
+		[]string{"PreToolUse"},
+		[]string{"tool_input.command"},
+		"blocked",
+	)
+	cfg := &config.Config{Rules: []config.Rule{
+		{
+			Name: "context", CodexEvents: []string{"PreToolUse"},
+			Action: config.ActionInject, Output: "must not appear",
+		},
+		blockingRule,
+	}}
+	rawJSON := []byte(`{"hook_event_name":"PreToolUse","session_id":"s1","tool_name":"Shell","tool_input":{"command":"blocked-command"}}`)
+
+	evaluation := hook.EvaluateHot(context.Background(), rawJSON, cfg, hook.SystemCodex, func(string) string { return "" })
+	if strings.Contains(string(evaluation.Stdout), "must not appear") {
+		t.Fatalf("block response retained context: %q", evaluation.Stdout)
+	}
+	if len(evaluation.Deferred.ResponseEffects) != 1 || evaluation.Deferred.ResponseEffects[0].Disposition != "suppressed_by_block" {
+		t.Fatalf("response effects = %#v", evaluation.Deferred.ResponseEffects)
+	}
+	if evaluation.Deferred.ResponseEffects[0].Target != "context" {
+		t.Fatalf("suppressed response effect target = %#v", evaluation.Deferred.ResponseEffects[0])
+	}
+}
+
+func TestEvaluateHotRecordsTargetForEmptyResponseEffect(t *testing.T) {
+	cfg := &config.Config{Rules: []config.Rule{{
+		Name: "empty-context", CodexEvents: []string{"SessionStart"}, Action: config.ActionInject,
+	}}}
+	rawJSON := []byte(`{"hook_event_name":"SessionStart","session_id":"s1"}`)
+
+	evaluation := hook.EvaluateHot(context.Background(), rawJSON, cfg, hook.SystemCodex, func(string) string { return "" })
+	if len(evaluation.Deferred.ResponseEffects) != 1 {
+		t.Fatalf("response effects = %#v", evaluation.Deferred.ResponseEffects)
+	}
+	effect := evaluation.Deferred.ResponseEffects[0]
+	if effect.Target != "context" || effect.Disposition != "empty_noop" || effect.ByteCount != 0 {
+		t.Fatalf("response effect = %#v", effect)
+	}
+}
+
+func TestEvaluateHotAuditsInvalidCopilotToolOutputAsNoOp(t *testing.T) {
+	cfg := &config.Config{Rules: []config.Rule{{
+		Name: "invalid-result", CopilotEvents: []string{"postToolUse"},
+		Action: config.ActionMutate, Output: `{"content":"not a Copilot ToolResult"}`,
+	}}}
+	rawJSON := []byte(`{"hook_event_name":"postToolUse","session_id":"s1"}`)
+
+	evaluation := hook.EvaluateHot(context.Background(), rawJSON, cfg, hook.SystemCopilot, func(string) string { return "" })
+	if strings.Contains(string(evaluation.Stdout), "modifiedResult") {
+		t.Fatalf("invalid mutation rendered: %q", evaluation.Stdout)
+	}
+	if len(evaluation.Deferred.ResponseEffects) != 1 {
+		t.Fatalf("response effects = %#v", evaluation.Deferred.ResponseEffects)
+	}
+	effect := evaluation.Deferred.ResponseEffects[0]
+	if effect.Target != "tool_output" || effect.Disposition != "invalid_noop" || effect.ByteCount == 0 {
+		t.Fatalf("response effect = %#v", effect)
+	}
+	sink := &recordingAuditSink{}
+	hook.WriteDeferredAudit(context.Background(), evaluation.Deferred, sink)
+	if got := strings.Join(sink.snapshot(), ","); got != "hook.response_effect,hook.allowed" {
+		t.Fatalf("audit messages = %q", got)
+	}
+}
+
 func TestParseHookPayload_UsesToolInputWorkdir(t *testing.T) {
 	payload, err := hook.ParseHookPayload(hook.SystemCodex, []byte(`{"hook_event_name":"PreToolUse","cwd":"/chat","tool_input":{"command":"go test ./...","workdir":"/project"}}`))
 	if err != nil {
@@ -370,7 +496,8 @@ func TestGeminiBlockResponses(t *testing.T) {
 }
 
 func TestEvaluateHot_BlocksCodexCredentialFileRead(t *testing.T) {
-	rule := testProviderRule(t,
+	rule := testProviderRule(
+		t,
 		"no-credential-file-reads",
 		`(?i)(?:(?:^|[/\\])[^/\\\n]*(?:1password|onepassword|op[ _.-]?export|app[ _.-]?store|asc[ _.-]?api|api[ _.-]?key|private[ _.-]?key|secret|credential|credentials|token|password|passwd|auth)[^/\\\n]*(?:[/\\].*)?\.(?:json|p8|pem|key|pkcs8|p12|pfx)$|(?:^|[/\\])[^/\\\n]*\.(?:p8|pem|key|pkcs8|p12|pfx)$)`,
 		[]string{"PreToolUse", "beforeReadFile"},
@@ -394,7 +521,8 @@ func TestEvaluateHot_BlocksCodexCredentialFileRead(t *testing.T) {
 }
 
 func TestEvaluateHotWithEventID_BlocksCodexWithVisibleEventID(t *testing.T) {
-	rule := testProviderRule(t,
+	rule := testProviderRule(
+		t,
 		"no-bad-command",
 		`bad-command`,
 		[]string{"PreToolUse"},
@@ -417,7 +545,8 @@ func TestEvaluateHotWithEventID_BlocksCodexWithVisibleEventID(t *testing.T) {
 }
 
 func TestEvaluateHot_BlocksCursorBeforeReadFileCredentialPath(t *testing.T) {
-	rule := testProviderRule(t,
+	rule := testProviderRule(
+		t,
 		"no-credential-file-reads",
 		`(?i)(?:(?:^|[/\\])[^/\\\n]*(?:1password|onepassword|op[ _.-]?export|app[ _.-]?store|asc[ _.-]?api|api[ _.-]?key|private[ _.-]?key|secret|credential|credentials|token|password|passwd|auth)[^/\\\n]*(?:[/\\].*)?\.(?:json|p8|pem|key|pkcs8|p12|pfx)$|(?:^|[/\\])[^/\\\n]*\.(?:p8|pem|key|pkcs8|p12|pfx)$)`,
 		[]string{"PreToolUse", "beforeReadFile"},
@@ -441,7 +570,8 @@ func TestEvaluateHot_BlocksCursorBeforeReadFileCredentialPath(t *testing.T) {
 }
 
 func TestEvaluateHot_BlocksCursorPostToolSecretOutput(t *testing.T) {
-	rule := testProviderRule(t,
+	rule := testProviderRule(
+		t,
 		"no-secrets-in-output",
 		`\x2d\x2d\x2d\x2d\x2dBEGIN (?:RSA |EC |DSA |OPENSSH |PGP |ENCRYPTED )?PRIVATE KEY\x2d\x2d\x2d\x2d\x2d|\bsk-(?:ant-|proj-)?[A-Za-z0-9_-]{20,}|\beyJ[A-Za-z0-9+/=_-]{80,}`,
 		[]string{"postToolUse"},
@@ -466,7 +596,8 @@ func TestEvaluateHot_BlocksCursorPostToolSecretOutput(t *testing.T) {
 }
 
 func TestEvaluateHot_AllowsCodexPostToolImageDataJWTShape(t *testing.T) {
-	rule := testProviderRule(t,
+	rule := testProviderRule(
+		t,
 		"no-secrets-in-output",
 		`\beyJ[A-Za-z0-9+/=_-]{80,}`,
 		[]string{"PostToolUse"},
@@ -488,7 +619,8 @@ func TestEvaluateHot_AllowsCodexPostToolImageDataJWTShape(t *testing.T) {
 }
 
 func TestEvaluateHot_BlocksCodexPostToolTextSecretInStructuredResponse(t *testing.T) {
-	rule := testProviderRule(t,
+	rule := testProviderRule(
+		t,
 		"no-secrets-in-output",
 		`\bsk-(?:ant-|proj-)?[A-Za-z0-9_-]{20,}|\beyJ[A-Za-z0-9+/=_-]{80,}`,
 		[]string{"PostToolUse"},
@@ -526,7 +658,8 @@ func TestWriteDeferredAudit_AllowSkipsReceivedAndRawPayload(t *testing.T) {
 }
 
 func TestWriteDeferredAudit_AuditOnlySkipsReceivedAndRawPayload(t *testing.T) {
-	rule := testProviderRule(t,
+	rule := testProviderRule(
+		t,
 		"audit-shell-command",
 		`echo ok`,
 		[]string{"PreToolUse"},
@@ -547,7 +680,8 @@ func TestWriteDeferredAudit_AuditOnlySkipsReceivedAndRawPayload(t *testing.T) {
 }
 
 func TestWriteDeferredAudit_CodexStopBlockingRuleDowngradesToAudit(t *testing.T) {
-	cfg := &config.Config{Rules: []config.Rule{testProviderRule(t,
+	cfg := &config.Config{Rules: []config.Rule{testProviderRule(
+		t,
 		"stop-text-rule",
 		`blocked`,
 		[]string{"Stop"},
@@ -569,7 +703,8 @@ func TestWriteDeferredAudit_CodexStopBlockingRuleDowngradesToAudit(t *testing.T)
 }
 
 func TestWriteDeferredAudit_BlockKeepsReceived(t *testing.T) {
-	cfg := &config.Config{Rules: []config.Rule{testProviderRule(t,
+	cfg := &config.Config{Rules: []config.Rule{testProviderRule(
+		t,
 		"block-shell-command",
 		`go test \./\.\.\.`,
 		[]string{"PreToolUse"},
@@ -639,6 +774,17 @@ func TestValidateConfig_ConditionKinds(t *testing.T) {
 	cfg.Rules[0].Conditions = append(cfg.Rules[0].Conditions, config.Condition{Kind: "unknown"})
 	if errs := hook.ValidateConfig(cfg); len(errs) == 0 {
 		t.Fatal("expected unknown condition kind error")
+	}
+}
+
+func TestValidateConfigRejectsInvalidCopilotToolOutputMutation(t *testing.T) {
+	cfg := &config.Config{Rules: []config.Rule{{
+		Name: "replace-result", CopilotEvents: []string{"postToolUse"},
+		Action: config.ActionMutate, Output: `{"content":"not a Copilot ToolResult"}`,
+	}}}
+	errs := hook.ValidateConfig(cfg)
+	if len(errs) != 1 || !strings.Contains(errs[0].Error(), "invalid for tool_output") {
+		t.Fatalf("ValidateConfig errors = %v", errs)
 	}
 }
 

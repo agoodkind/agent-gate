@@ -36,6 +36,9 @@ func TestSchemaPathsHaveTypedSelectors(t *testing.T) {
 	for eventName, schema := range codexSchema {
 		checkSchema("codex", string(eventName), schema)
 	}
+	for eventName, schema := range copilotSchema {
+		checkSchema("copilot", eventName, schema)
+	}
 	for eventName, schema := range geminiSchema {
 		checkSchema("gemini", string(eventName), schema)
 	}
@@ -74,6 +77,9 @@ func TestKnownEventsDecodeToConcretePayloads(t *testing.T) {
 	}
 	for eventName := range codexSchema {
 		checkEvent(SystemCodex, string(eventName))
+	}
+	for eventName := range copilotSchema {
+		checkEvent(SystemCopilot, eventName)
 	}
 	for eventName := range geminiSchema {
 		checkEvent(SystemGemini, string(eventName))
