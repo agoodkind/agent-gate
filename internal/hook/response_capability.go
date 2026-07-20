@@ -48,6 +48,7 @@ var responseCapabilityTable = map[capabilityKey]ResponseCapability{
 	{SystemCodex, "PostToolUse"}:      ResponseCapabilityInject,
 
 	{SystemCursor, "sessionStart"}: ResponseCapabilityInject,
+	{SystemCursor, "stop"}:         ResponseCapabilityInject,
 	{SystemCursor, "postToolUse"}:  ResponseCapabilityInject | ResponseCapabilityToolOutputMutation,
 
 	{SystemCopilot, "sessionStart"}:          ResponseCapabilityInject,

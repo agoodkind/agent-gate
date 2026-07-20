@@ -57,6 +57,7 @@ audited as no-ops without recording their content.
 | Claude `SessionStart`, `Setup`, `SubagentStart`, `UserPromptSubmit`, `UserPromptExpansion`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PostToolBatch`, `Stop`, `SubagentStop` | `hookSpecificOutput.additionalContext` | `PreToolUse.permissionDecision = "allow"` with `updatedInput`, `PostToolUse.updatedToolOutput` |
 | Codex `SessionStart`, `SubagentStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse` | `hookSpecificOutput.additionalContext` | `PreToolUse.updatedInput` |
 | Cursor `sessionStart`, `postToolUse` | `additional_context` | `postToolUse.updated_mcp_tool_output` |
+| Cursor `stop` | submits a new prompt through `followup_message` | none |
 | Copilot `sessionStart`, `subagentStart`, `postToolUse`, `postToolUseFailure`, `notification` | `additionalContext` | `preToolUse.modifiedArgs`, `postToolUse.modifiedResult` |
 | Copilot `userPromptTransformed` | prepends context through `modifiedTransformedPrompt` | replaces through `modifiedTransformedPrompt` |
 

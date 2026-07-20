@@ -62,6 +62,7 @@ type cursorResponse struct {
 	Continue             *bool           `json:"continue,omitempty"`
 	UserMessage          string          `json:"user_message,omitempty"`
 	AgentMessage         string          `json:"agent_message,omitempty"`
+	FollowupMessage      string          `json:"followup_message,omitempty"`
 	AdditionalContext    string          `json:"additional_context,omitempty"`
 	UpdatedMCPToolOutput json.RawMessage `json:"updated_mcp_tool_output,omitempty"`
 }
@@ -73,6 +74,7 @@ func CursorAllow() []byte {
 		Continue:             nil,
 		UserMessage:          "",
 		AgentMessage:         "",
+		FollowupMessage:      "",
 		AdditionalContext:    "",
 		UpdatedMCPToolOutput: nil,
 	}
@@ -102,6 +104,7 @@ func CursorBlockText(text string) []byte {
 		Continue:             nil,
 		UserMessage:          text,
 		AgentMessage:         text,
+		FollowupMessage:      "",
 		AdditionalContext:    "",
 		UpdatedMCPToolOutput: nil,
 	}
@@ -119,7 +122,8 @@ func CursorBlockText(text string) []byte {
 // Cursor post-events (postToolUse, afterShellExecution, afterMCPExecution,
 // afterFileEdit) cannot block. postToolUse can return updated_mcp_tool_output
 // to substitute the MCP result the model sees, or additional_context to
-// inject text. The three after* events are observe-only. See
+// inject text. stop can return followup_message to submit a new user prompt.
+// The three after* events are observe-only. See
 // internal/hook/capability.go and the Provider Capability Matrix in
 // HOOKS.md.
 func renderCursorResponse(request ResponseRequest) Response {
@@ -139,11 +143,16 @@ func renderCursorResponse(request ResponseRequest) Response {
 		Continue:             nil,
 		UserMessage:          "",
 		AgentMessage:         "",
+		FollowupMessage:      "",
 		AdditionalContext:    "",
 		UpdatedMCPToolOutput: nil,
 	}
 	if capability.Supports(ResponseCapabilityInject) {
-		response.AdditionalContext = request.ContextText
+		if request.EventName == string(CursorStop) {
+			response.FollowupMessage = request.ContextText
+		} else {
+			response.AdditionalContext = request.ContextText
+		}
 	}
 	if capability.Supports(ResponseCapabilityToolOutputMutation) && request.MutationText != "" {
 		mutation, ok := validStructuredMutation(request.MutationText)
@@ -151,7 +160,7 @@ func renderCursorResponse(request ResponseRequest) Response {
 			response.UpdatedMCPToolOutput = mutation
 		}
 	}
-	if response.AdditionalContext == "" && len(response.UpdatedMCPToolOutput) == 0 {
+	if response.FollowupMessage == "" && response.AdditionalContext == "" && len(response.UpdatedMCPToolOutput) == 0 {
 		return Response{Stdout: CursorAllow(), Stderr: nil, ExitCode: 0}
 	}
 	encoded, err := json.Marshal(response)
