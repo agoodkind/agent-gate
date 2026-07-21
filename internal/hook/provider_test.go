@@ -88,6 +88,31 @@ func TestEvaluateHotCopilotPromptInjectionFallsBackToPrompt(t *testing.T) {
 	}
 }
 
+func TestEvaluateHotCursorStopInjectsFollowupPrompt(t *testing.T) {
+	cfg := &config.Config{Rules: []config.Rule{{
+		Name:         "stop-followup",
+		CursorEvents: []string{"stop"},
+		Action:       config.ActionInject,
+		Output:       "Continue with verification.",
+	}}}
+	rawJSON := []byte(`{"hook_event_name":"stop","session_id":"s1","status":"completed","loop_count":0}`)
+
+	evaluation := hook.EvaluateHot(
+		context.Background(),
+		rawJSON,
+		cfg,
+		hook.SystemCursor,
+		func(string) string { return "" },
+	)
+	stdout := string(evaluation.Stdout)
+	if !strings.Contains(stdout, `"followup_message":"Continue with verification."`) {
+		t.Fatalf("response = %q", stdout)
+	}
+	if strings.Contains(stdout, "additional_context") {
+		t.Fatalf("stop response used additional_context: %q", stdout)
+	}
+}
+
 func TestEvaluateHot_ComposesResponseEffectsInConfigOrder(t *testing.T) {
 	cfg := &config.Config{Rules: []config.Rule{
 		{

@@ -91,6 +91,7 @@ func TestLookupResponseCapabilityKnownPairs(t *testing.T) {
 		{"Codex tool input", SystemCodex, "PreToolUse", ResponseCapabilityInject | ResponseCapabilityToolInputMutation},
 		{"Codex tool output context", SystemCodex, "PostToolUse", ResponseCapabilityInject},
 		{"Cursor session context", SystemCursor, "sessionStart", ResponseCapabilityInject},
+		{"Cursor stop follow-up", SystemCursor, "stop", ResponseCapabilityInject},
 		{"Cursor context and MCP output", SystemCursor, "postToolUse", ResponseCapabilityInject | ResponseCapabilityToolOutputMutation},
 		{"Copilot session context", SystemCopilot, "sessionStart", ResponseCapabilityInject},
 		{"Copilot subagent context", SystemCopilot, "subagentStart", ResponseCapabilityInject},
