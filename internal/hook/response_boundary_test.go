@@ -163,6 +163,12 @@ func TestRenderResponseInjectsLifecycleContext(t *testing.T) {
 			wantJSON:  `"additional_context":"start context"`,
 		},
 		{
+			name:      "cursor stop follow-up",
+			system:    hook.SystemCursor,
+			eventName: "stop",
+			wantJSON:  `"followup_message":"start context"`,
+		},
+		{
 			name:      "copilot session start",
 			system:    hook.SystemCopilot,
 			eventName: "SessionStart",

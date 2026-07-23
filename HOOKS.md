@@ -5,6 +5,13 @@ Cursor, Gemini CLI, and GitHub Copilot Chat. The files under `hooks/` are the
 installation templates. [docs/hook-schemas.md](docs/hook-schemas.md) describes
 the payload fields the daemon parses and the responses it renders.
 
+The provider contracts are
+[Claude Code hooks](https://code.claude.com/docs/en/hooks),
+[Codex hooks](https://learn.chatgpt.com/docs/hooks),
+[Cursor hooks](https://cursor.com/docs/hooks),
+[Gemini CLI hooks](https://geminicli.com/docs/hooks/reference/), and
+[GitHub Copilot hooks](https://docs.github.com/en/enterprise-cloud@latest/copilot/reference/hooks-reference).
+
 ## Provider capabilities
 
 A rule's `action = "block"` expresses policy intent. The event capability
@@ -50,15 +57,13 @@ audited as no-ops without recording their content.
 | Claude `SessionStart`, `Setup`, `SubagentStart`, `UserPromptSubmit`, `UserPromptExpansion`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PostToolBatch`, `Stop`, `SubagentStop` | `hookSpecificOutput.additionalContext` | `PreToolUse.permissionDecision = "allow"` with `updatedInput`, `PostToolUse.updatedToolOutput` |
 | Codex `SessionStart`, `SubagentStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse` | `hookSpecificOutput.additionalContext` | `PreToolUse.updatedInput` |
 | Cursor `sessionStart`, `postToolUse` | `additional_context` | `postToolUse.updated_mcp_tool_output` |
+| Cursor `stop` | submits a new prompt through `followup_message` | none |
 | Copilot `sessionStart`, `subagentStart`, `postToolUse`, `postToolUseFailure`, `notification` | `additionalContext` | `preToolUse.modifiedArgs`, `postToolUse.modifiedResult` |
 | Copilot `userPromptTransformed` | prepends context through `modifiedTransformedPrompt` | replaces through `modifiedTransformedPrompt` |
 
 Cursor `beforeSubmitPrompt` remains configurable for response rules, but it
 warns and returns a no-op because Cursor does not currently expose a
-model-facing response field for that event. The provider contracts are
-[Claude Code hooks](https://code.claude.com/docs/en/hooks),
-[Codex hooks](https://learn.chatgpt.com/docs/hooks), and
-[GitHub Copilot hooks](https://docs.github.com/en/enterprise-cloud@latest/copilot/reference/hooks-reference).
+model-facing response field for that event.
 
 ## Managed installation
 
