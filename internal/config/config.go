@@ -357,6 +357,15 @@ type Rule struct {
 	// infer evaluator judges a command against it, so a rule that declares an
 	// infer eval entry must set it.
 	Intent string `toml:"intent,omitempty"`
+	// JudgeContext names the resolved facts to inject into the judge input panel
+	// for this rule, so an infer evaluator sees the same resolved values the
+	// deterministic conditions can. Each entry is either a field path from
+	// [CompileFieldSelector] (for example "cmd_write_targets" or "cmd_segments")
+	// or the computed key "checkout_status", which labels the effective working
+	// directory and each resolved write target as the primary checkout, a linked
+	// worktree, or outside a git repository. The batch caller resolves the union
+	// of every participating rule's keys once per command.
+	JudgeContext []string `toml:"judge_context,omitempty"`
 	// EvalInference is populated at compile time with the inference points this
 	// rule's Eval entries reference (by use and escalate_to), so the engine can
 	// resolve them without threading the whole config through evaluation.
@@ -462,6 +471,7 @@ func NewSimpleRule(name, pattern string, compiled *regex.Regexp, events, fieldPa
 		Conditions:        nil,
 		Eval:              nil,
 		Intent:            "",
+		JudgeContext:      nil,
 		EvalInference:     nil,
 		FieldPaths:        fieldPaths,
 		Action:            action,
@@ -646,6 +656,9 @@ func compileRule(
 		return err
 	}
 	if err := compileRuleEvalInference(r, inference); err != nil {
+		return err
+	}
+	if err := validateRuleJudgeContext(r.Name, r.JudgeContext); err != nil {
 		return err
 	}
 	if len(r.Conditions) > 0 {

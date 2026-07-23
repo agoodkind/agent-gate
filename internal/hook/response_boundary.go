@@ -37,6 +37,10 @@ type ResponseRequest struct {
 	Decision       ResponseDecision
 	DiagnosticText string
 	EventID        string
+	// Footer is an operator-configured line appended after the event_id line on a
+	// block, so the agent reads the id first and then the instruction that refers
+	// to it. Empty appends nothing.
+	Footer         string
 	FailOpenReason FailOpenReason
 	// ContextText is model-facing text supplied by matching inject rules.
 	// Provider renderers emit it only where the event contract has a native
@@ -64,6 +68,9 @@ type Response struct {
 func RenderResponse(request ResponseRequest) Response {
 	if request.Decision == ResponseDecisionBlock {
 		request.DiagnosticText = diagnosticWithEventID(request.DiagnosticText, request.EventID)
+		if request.Footer != "" {
+			request.DiagnosticText = request.DiagnosticText + "\n" + request.Footer
+		}
 	}
 	switch request.System {
 	case SystemCursor:
@@ -103,6 +110,7 @@ func FailOpenResponse(system System, eventName string, diagnosticText string, re
 		Decision:       ResponseDecisionAllow,
 		DiagnosticText: diagnosticText,
 		EventID:        "",
+		Footer:         "",
 		FailOpenReason: reason,
 		ContextText:    "",
 		MutationText:   "",
