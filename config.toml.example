@@ -129,8 +129,9 @@ disable_if_env = ["AGENT_GATE_MAINTENANCE"]
 # shell_write
 #   field_paths, globs, write_specs
 # exec
-#   command, timeout_ms, cache_key, cache_ttl_ms, block_on, on_error,
-#   search_tools, for_each, match_mode, stdout_json_field, stdout_json_equals
+#   command, field_paths, timeout_ms, cache_key, cache_ttl_ms, block_on,
+#   on_error, search_tools, for_each, match_mode, stdout_json_field,
+#   stdout_json_equals
 # infer
 #   endpoint, layer_name, prompt or prompt_file, input_field, output_schema or
 #   output_schema_file, model, generation options, response predicate, timeout,
@@ -193,6 +194,33 @@ disable_if_env = ["AGENT_GATE_MAINTENANCE"]
 # seconds in the background. A successful background result enters the
 # process-local cache, so the next matching event can use it. Parallel misses
 # for one cache key share the in-flight run. Errors are not cached.
+#
+# `field_paths` adds selected values to the validator stdin JSON's `matched`
+# array. `loop_count` is the current event's loop count. The exec-only temporal
+# selectors are `last_user_message`, `last_response_output`, and
+# `response_output`. The first is the latest typed user prompt for the
+# conversation, the second is the previous model-facing response for the same
+# response channel, and the third is the current rule's configured output
+# fallback. Temporal selectors are valid only in exec `field_paths`.
+#
+# Every selected temporal field, and `loop_count`, appears in `matched` with an
+# explicit `available` boolean. `available = false` means the source context is
+# unavailable, so a validator must not treat its empty `value` as content.
+# Existing selected fields retain their legacy behavior: empty values are
+# omitted and their entries do not include `available`.
+#
+# Temporal context is process-local. It survives a valid config reload, but it
+# becomes unavailable after restart or eviction. It is not added to
+# validator environment variables or durable audit state. A positive
+# `cache_ttl_ms` can reuse a stale verdict from an exec condition. Config load
+# warns when a cached exec condition selects temporal context, so set
+# `cache_ttl_ms = 0` when the validator needs a fresh temporal decision.
+# The example validator sends without a prior response only when
+# `loop_count = 0`. It suppresses a later loop when prior response state is
+# unavailable after restart or eviction.
+# `examples/validators/temporal-response-gate.sh` requires `jq`; a missing
+# `jq` reports a setup error and terminates by signal, so Agent Gate treats the
+# result as an execution error instead of policy suppression.
 #
 # `cmd_read_targets` drops remote and unresolved local read paths instead of
 # inventing a target. `exec_targets` falls back from resolved read targets to a

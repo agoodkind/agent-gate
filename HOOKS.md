@@ -47,6 +47,11 @@ trace. `output` supplies static text and `output_file` reads static text
 relative to the configuration file. The fields are mutually exclusive. A
 matching `exec` condition replaces that fallback with its complete stdout.
 
+For a response rule, the existing exec condition is the caller-defined send gate.
+The script decides how unavailable context behaves and whether the
+response sends or is suppressed through its exit status. When the condition
+matches, complete stdout replaces the response body.
+
 Injection outputs join in configuration order with one blank line. The last
 valid mutation for a target replaces its value. A blocking decision suppresses
 all response effects. Empty, errored, invalid, and unsupported effects are
