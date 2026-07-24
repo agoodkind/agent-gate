@@ -6,6 +6,19 @@ import (
 	"time"
 )
 
+func TestInternalNamespaceConvention(t *testing.T) {
+	namespace := InternalNamespacePrefix + "exec-temporal"
+	if namespace != "_agent-gate-internal/exec-temporal" {
+		t.Fatalf("internal namespace = %q, want reserved namespace", namespace)
+	}
+	if !IsInternalNamespace(namespace) {
+		t.Fatalf("IsInternalNamespace(%q) = false, want true", namespace)
+	}
+	if IsInternalNamespace("exec-temporal") {
+		t.Fatal("IsInternalNamespace(public namespace) = true, want false")
+	}
+}
+
 func TestStoreSetGetAndDelete(t *testing.T) {
 	store := New(Options{})
 	defer store.Close()
