@@ -241,8 +241,17 @@ func runDaemonStatus() int {
 
 func runConfig(args []string) int {
 	if len(args) == 1 && args[0] == "check" {
-		if _, err := config.Load(); err != nil {
+		cfg, err := config.Load()
+		if err != nil {
 			fmt.Fprintf(os.Stderr, "agent-gate: config check failed: %v\n", err)
+			return 1
+		}
+		if validationErrors := hook.ValidateConfig(cfg); len(validationErrors) > 0 {
+			fmt.Fprintf(
+				os.Stderr,
+				"agent-gate: config check failed: %v\n",
+				validationErrors[0],
+			)
 			return 1
 		}
 		writeUserLine(os.Stdout, "agent-gate: config ok")

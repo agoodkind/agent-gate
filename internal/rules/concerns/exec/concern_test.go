@@ -105,6 +105,39 @@ func TestBuildRequestCarriesJSONAndEnv(t *testing.T) {
 	}
 }
 
+func TestBuildRequestAddsAvailabilityOnlyForOptInFields(t *testing.T) {
+	available := true
+	unavailable := false
+	stdin, _, err := BuildRequest(Input{Matched: []FieldValue{
+		{Field: "tool_input.command", Value: "make test", Available: nil},
+		{Field: "loop_count", Value: "0", Available: &available},
+		{Field: "last_response_output", Value: "", Available: &unavailable},
+	}})
+	if err != nil {
+		t.Fatalf("BuildRequest: %v", err)
+	}
+
+	document := string(stdin)
+	if !strings.Contains(
+		document,
+		`{"field":"tool_input.command","value":"make test"}`,
+	) {
+		t.Fatalf("legacy matched field changed shape: %s", document)
+	}
+	if !strings.Contains(
+		document,
+		`{"field":"loop_count","value":"0","available":true}`,
+	) {
+		t.Fatalf("present opt-in field missing availability: %s", document)
+	}
+	if !strings.Contains(
+		document,
+		`{"field":"last_response_output","value":"","available":false}`,
+	) {
+		t.Fatalf("unavailable opt-in field missing entry: %s", document)
+	}
+}
+
 // The shelldecomp unresolvable-cwd marker begins with a NUL byte, and os/exec
 // refuses to start a process whose environment contains one. BuildRequest must
 // therefore never emit NUL in any env value, whatever the input carries.

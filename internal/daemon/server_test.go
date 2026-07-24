@@ -3,6 +3,7 @@ package daemon
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -17,8 +18,11 @@ import (
 	"goodkind.io/agent-gate/internal/audit"
 	"goodkind.io/agent-gate/internal/config"
 	"goodkind.io/agent-gate/internal/hook"
+	"goodkind.io/agent-gate/internal/hotkv"
 	"goodkind.io/agent-gate/internal/intake"
 	"goodkind.io/agent-gate/internal/regex"
+	"goodkind.io/agent-gate/internal/rules"
+	execconcern "goodkind.io/agent-gate/internal/rules/concerns/exec"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -56,6 +60,364 @@ func daemonTestConfig(t testing.TB) *config.Config {
 				"Use make test for full project runs.",
 			),
 		},
+	}
+}
+
+type daemonInputRunner struct {
+	mu    sync.Mutex
+	input execconcern.Input
+}
+
+func (r *daemonInputRunner) Run(
+	_ context.Context,
+	_ []string,
+	_ time.Duration,
+	stdin []byte,
+	_ []string,
+) (execconcern.RunResult, error) {
+	var input execconcern.Input
+	if err := json.Unmarshal(stdin, &input); err != nil {
+		return execconcern.RunResult{}, err
+	}
+	r.mu.Lock()
+	r.input = input
+	r.mu.Unlock()
+	return execconcern.RunResult{ExitCode: 0}, nil
+}
+
+func (r *daemonInputRunner) Input() execconcern.Input {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.input
+}
+
+type daemonSequenceRunner struct {
+	mu        sync.Mutex
+	inputs    []execconcern.Input
+	responses []execconcern.RunResult
+}
+
+func (r *daemonSequenceRunner) Run(
+	_ context.Context,
+	_ []string,
+	_ time.Duration,
+	stdin []byte,
+	_ []string,
+) (execconcern.RunResult, error) {
+	var input execconcern.Input
+	if err := json.Unmarshal(stdin, &input); err != nil {
+		return execconcern.RunResult{}, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.inputs = append(r.inputs, input)
+	index := len(r.inputs) - 1
+	if index >= len(r.responses) {
+		index = len(r.responses) - 1
+	}
+	return r.responses[index], nil
+}
+
+func (r *daemonSequenceRunner) Inputs() []execconcern.Input {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]execconcern.Input(nil), r.inputs...)
+}
+
+type cursorTemporalRunner struct {
+	mu     sync.Mutex
+	inputs []execconcern.Input
+}
+
+func (r *cursorTemporalRunner) Run(
+	_ context.Context,
+	_ []string,
+	_ time.Duration,
+	stdin []byte,
+	_ []string,
+) (execconcern.RunResult, error) {
+	var input execconcern.Input
+	if err := json.Unmarshal(stdin, &input); err != nil {
+		return execconcern.RunResult{}, err
+	}
+	r.mu.Lock()
+	r.inputs = append(r.inputs, input)
+	r.mu.Unlock()
+
+	lastUserMessage, _ := matchedField(input, "last_user_message")
+	lastResponseOutput, _ := matchedField(input, "last_response_output")
+	if lastResponseOutput.Available == nil || !*lastResponseOutput.Available {
+		return execconcern.RunResult{ExitCode: 0, Stdout: "Continue"}, nil
+	}
+	if lastUserMessage.Value == lastResponseOutput.Value {
+		return execconcern.RunResult{ExitCode: 1}, nil
+	}
+	return execconcern.RunResult{
+		ExitCode: 0,
+		Stdout:   "Continue " + lastUserMessage.Value,
+	}, nil
+}
+
+func (r *cursorTemporalRunner) Inputs() []execconcern.Input {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]execconcern.Input(nil), r.inputs...)
+}
+
+func matchedField(input execconcern.Input, name string) (execconcern.FieldValue, bool) {
+	for _, field := range input.Matched {
+		if field.Field == name {
+			return field, true
+		}
+	}
+	return execconcern.FieldValue{}, false
+}
+
+func temporalDaemonConfig(t testing.TB, body string) *config.Config {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	cfg, err := config.LoadExisting(path)
+	if err != nil {
+		t.Fatalf("LoadExisting: %v", err)
+	}
+	cfg.Audit.Enabled = boolPtr(false)
+	return cfg
+}
+
+func TestEvaluateHookObservesCurrentPromptBeforeExec(t *testing.T) {
+	setDaemonTestDirs(t)
+	cfg := temporalDaemonConfig(t, `
+[[rules]]
+name = "prompt-validator"
+cursor_events = ["beforeSubmitPrompt"]
+action = "inject"
+output = "configured fallback"
+
+[[rules.conditions]]
+kind = "exec"
+command = ["/bin/validator"]
+field_paths = ["last_user_message"]
+cache_ttl_ms = 0
+`)
+	server, err := New(newDiscardLogger(), cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer server.Close()
+	runner := &daemonInputRunner{mu: sync.Mutex{}}
+	server.runtime.Load().execRuntime = rules.NewExecRuntimeWithCache(
+		runner,
+		newDiscardLogger(),
+		server.hotKV,
+	)
+
+	_, err = server.EvaluateHook(context.Background(), &daemonpb.EvaluateHookRequest{
+		RawJson: []byte(
+			`{"hook_event_name":"beforeSubmitPrompt","conversation_id":"c1",` +
+				`"prompt":"current prompt"}`,
+		),
+		ProviderHint: hook.SystemCursor.String(),
+	})
+	if err != nil {
+		t.Fatalf("EvaluateHook: %v", err)
+	}
+
+	input := runner.Input()
+	if len(input.Matched) != 1 || input.Matched[0].Value != "current prompt" ||
+		input.Matched[0].Available == nil || !*input.Matched[0].Available {
+		t.Fatalf("exec input = %#v, want current prompt available", input.Matched)
+	}
+}
+
+func TestEvaluateHookRecordsResponseAfterCommitForNextExec(t *testing.T) {
+	setDaemonTestDirs(t)
+	cfg := temporalDaemonConfig(t, `
+[[rules]]
+name = "stop-validator"
+cursor_events = ["stop"]
+action = "inject"
+output = "configured fallback"
+
+[[rules.conditions]]
+kind = "exec"
+command = ["/bin/validator"]
+field_paths = ["last_response_output"]
+cache_ttl_ms = 0
+`)
+	server, err := New(newDiscardLogger(), cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer server.Close()
+	runner := &daemonSequenceRunner{
+		mu: sync.Mutex{},
+		responses: []execconcern.RunResult{
+			{ExitCode: 0, Stdout: "first response"},
+			{ExitCode: 1},
+		},
+	}
+	server.runtime.Load().execRuntime = rules.NewExecRuntimeWithCache(
+		runner,
+		newDiscardLogger(),
+		server.hotKV,
+	)
+	request := &daemonpb.EvaluateHookRequest{
+		RawJson: []byte(
+			`{"hook_event_name":"stop","conversation_id":"c1","status":"completed"}`,
+		),
+		ProviderHint: hook.SystemCursor.String(),
+	}
+
+	first, err := server.EvaluateHook(context.Background(), request)
+	if err != nil {
+		t.Fatalf("first EvaluateHook: %v", err)
+	}
+	if !strings.Contains(string(first.StdoutData), `"followup_message":"first response"`) {
+		t.Fatalf(
+			"first response = %q; exec inputs = %#v",
+			string(first.StdoutData),
+			runner.Inputs(),
+		)
+	}
+	_, err = server.EvaluateHook(context.Background(), request)
+	if err != nil {
+		t.Fatalf("second EvaluateHook: %v", err)
+	}
+
+	inputs := runner.Inputs()
+	if len(inputs) != 2 {
+		t.Fatalf("exec inputs = %d, want 2", len(inputs))
+	}
+	previous := inputs[1].Matched[0]
+	if previous.Value != "first response" || previous.Available == nil || !*previous.Available {
+		t.Fatalf("second last_response_output = %#v", previous)
+	}
+}
+
+func TestEvaluateHookCursorTemporalResponseSequence(t *testing.T) {
+	setDaemonTestDirs(t)
+	cfg := temporalDaemonConfig(t, `
+[[rules]]
+name = "stop-validator"
+cursor_events = ["stop"]
+action = "inject"
+output = "configured fallback"
+
+[[rules.conditions]]
+kind = "exec"
+command = ["/bin/validator"]
+field_paths = [
+    "last_user_message",
+    "last_response_output",
+    "response_output",
+    "loop_count",
+]
+cache_ttl_ms = 0
+`)
+	server, err := New(newDiscardLogger(), cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer server.Close()
+	runner := &cursorTemporalRunner{mu: sync.Mutex{}, inputs: nil}
+	server.runtime.Load().execRuntime = rules.NewExecRuntimeWithCache(
+		runner,
+		newDiscardLogger(),
+		server.hotKV,
+	)
+
+	evaluate := func(rawJSON string) *daemonpb.EvaluateHookResponse {
+		t.Helper()
+		response, evaluateErr := server.EvaluateHook(
+			context.Background(),
+			&daemonpb.EvaluateHookRequest{
+				RawJson:      []byte(rawJSON),
+				ProviderHint: hook.SystemCursor.String(),
+			},
+		)
+		if evaluateErr != nil {
+			t.Fatalf("EvaluateHook: %v", evaluateErr)
+		}
+		return response
+	}
+
+	evaluate(
+		`{"hook_event_name":"beforeSubmitPrompt","conversation_id":"c1",` +
+			`"prompt":"initial request"}`,
+	)
+	firstStop := evaluate(
+		`{"hook_event_name":"stop","conversation_id":"c1",` +
+			`"status":"completed","loop_count":0}`,
+	)
+	if !strings.Contains(string(firstStop.StdoutData), `"followup_message":"Continue"`) {
+		t.Fatalf("first stop response = %q", firstStop.StdoutData)
+	}
+
+	evaluate(
+		`{"hook_event_name":"beforeSubmitPrompt","conversation_id":"c1",` +
+			`"prompt":"Continue"}`,
+	)
+	repeatedStop := evaluate(
+		`{"hook_event_name":"stop","conversation_id":"c1",` +
+			`"status":"completed","loop_count":1}`,
+	)
+	if strings.Contains(string(repeatedStop.StdoutData), "followup_message") {
+		t.Fatalf("repeated stop was not suppressed: %q", repeatedStop.StdoutData)
+	}
+
+	evaluate(
+		`{"hook_event_name":"beforeSubmitPrompt","conversation_id":"c1",` +
+			`"prompt":"different request"}`,
+	)
+	differentStop := evaluate(
+		`{"hook_event_name":"stop","conversation_id":"c1",` +
+			`"status":"completed","loop_count":2}`,
+	)
+	if !strings.Contains(
+		string(differentStop.StdoutData),
+		`"followup_message":"Continue different request"`,
+	) {
+		t.Fatalf("different stop response = %q", differentStop.StdoutData)
+	}
+
+	inputs := runner.Inputs()
+	if len(inputs) != 3 {
+		t.Fatalf("exec inputs = %d, want three stop evaluations", len(inputs))
+	}
+	assertDaemonMatchedField(t, inputs[0], "last_user_message", "initial request", true)
+	assertDaemonMatchedField(t, inputs[0], "last_response_output", "", false)
+	assertDaemonMatchedField(t, inputs[0], "response_output", "configured fallback", true)
+	assertDaemonMatchedField(t, inputs[0], "loop_count", "0", true)
+	assertDaemonMatchedField(t, inputs[1], "last_user_message", "Continue", true)
+	assertDaemonMatchedField(t, inputs[1], "last_response_output", "Continue", true)
+	assertDaemonMatchedField(t, inputs[1], "loop_count", "1", true)
+	assertDaemonMatchedField(t, inputs[2], "last_user_message", "different request", true)
+	assertDaemonMatchedField(t, inputs[2], "last_response_output", "Continue", true)
+	assertDaemonMatchedField(t, inputs[2], "loop_count", "2", true)
+}
+
+func assertDaemonMatchedField(
+	t *testing.T,
+	input execconcern.Input,
+	name string,
+	value string,
+	available bool,
+) {
+	t.Helper()
+	field, found := matchedField(input, name)
+	if !found || field.Value != value || field.Available == nil ||
+		*field.Available != available {
+		t.Fatalf(
+			"matched field %q = %#v, found=%v, want value=%q available=%v",
+			name,
+			field,
+			found,
+			value,
+			available,
+		)
 	}
 }
 
@@ -477,6 +839,221 @@ func TestKVHotStoreRPCs(t *testing.T) {
 	if missingTTL.GetTtl() != -2 {
 		t.Fatalf("KVTTL missing = %d, want -2", missingTTL.GetTtl())
 	}
+}
+
+func TestPublicKVRPCsRejectTemporalInternalNamespace(t *testing.T) {
+	setDaemonTestDirs(t)
+	cfg := temporalDaemonConfig(t, `
+[[rules]]
+name = "temporal-validator"
+cursor_events = ["stop"]
+action = "inject"
+output = "configured fallback"
+
+[[rules.conditions]]
+kind = "exec"
+command = ["/bin/validator"]
+field_paths = ["last_user_message", "last_response_output"]
+cache_ttl_ms = 0
+`)
+	server, err := New(newDiscardLogger(), cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer server.Close()
+	runner := &daemonInputRunner{mu: sync.Mutex{}}
+	runtime := rules.NewExecRuntimeWithCache(runner, newDiscardLogger(), server.hotKV)
+	fields := rules.FieldSet{ConversationID: "conversation-1"}
+	if !runtime.ObserveUserPrompt("cursor", fields, 10, "private prompt") {
+		t.Fatal("ObserveUserPrompt did not store the prompt")
+	}
+	if !runtime.ObserveResponseOutput(
+		"cursor",
+		fields,
+		"stop",
+		config.ActionInject,
+		"context",
+		9,
+		"private response",
+	) {
+		t.Fatal("ObserveResponseOutput did not store the response")
+	}
+
+	namespace := hotkv.InternalNamespacePrefix + "exec-temporal"
+	originalEntries, err := server.hotKV.List(namespace, "", 0, true)
+	if err != nil {
+		t.Fatalf("List internal temporal entries: %v", err)
+	}
+	if len(originalEntries) != 2 {
+		t.Fatalf("internal temporal entries = %d, want 2", len(originalEntries))
+	}
+	key := originalEntries[0].Key
+	keyPrefix := key[:8]
+	restoreEntries := func() {
+		t.Helper()
+		for _, entry := range originalEntries {
+			_, _, restoreErr := server.hotKV.Set(
+				namespace,
+				entry.Key,
+				entry.Value,
+				hotkv.SetOptions{},
+			)
+			if restoreErr != nil {
+				t.Fatalf("restore internal temporal entry: %v", restoreErr)
+			}
+		}
+	}
+
+	ctx := context.Background()
+	operations := []struct {
+		name string
+		call func() error
+	}{
+		{
+			name: "get",
+			call: func() error {
+				_, callErr := server.KVGet(
+					ctx,
+					&daemonpb.KVGetRequest{Namespace: namespace, Key: key},
+				)
+				return callErr
+			},
+		},
+		{
+			name: "set",
+			call: func() error {
+				_, callErr := server.KVSet(ctx, &daemonpb.KVSetRequest{
+					Namespace: namespace,
+					Key:       key,
+					Value:     []byte("corrupt"),
+				})
+				return callErr
+			},
+		},
+		{
+			name: "delete",
+			call: func() error {
+				_, callErr := server.KVDelete(
+					ctx,
+					&daemonpb.KVDeleteRequest{Namespace: namespace, Key: key},
+				)
+				return callErr
+			},
+		},
+		{
+			name: "exists",
+			call: func() error {
+				_, callErr := server.KVExists(
+					ctx,
+					&daemonpb.KVExistsRequest{Namespace: namespace, Key: key},
+				)
+				return callErr
+			},
+		},
+		{
+			name: "ttl",
+			call: func() error {
+				_, callErr := server.KVTTL(
+					ctx,
+					&daemonpb.KVGetRequest{Namespace: namespace, Key: key},
+				)
+				return callErr
+			},
+		},
+		{
+			name: "pttl",
+			call: func() error {
+				_, callErr := server.KVPTTL(
+					ctx,
+					&daemonpb.KVGetRequest{Namespace: namespace, Key: key},
+				)
+				return callErr
+			},
+		},
+		{
+			name: "expire",
+			call: func() error {
+				_, callErr := server.KVExpire(ctx, &daemonpb.KVExpireRequest{
+					Namespace: namespace,
+					Key:       key,
+					TtlMs:     1000,
+				})
+				return callErr
+			},
+		},
+		{
+			name: "get-delete",
+			call: func() error {
+				_, callErr := server.KVGetDelete(
+					ctx,
+					&daemonpb.KVGetDeleteRequest{Namespace: namespace, Key: key},
+				)
+				return callErr
+			},
+		},
+		{
+			name: "list-all-keys",
+			call: func() error {
+				_, callErr := server.KVList(ctx, &daemonpb.KVListRequest{
+					Namespace:     namespace,
+					IncludeValues: true,
+				})
+				return callErr
+			},
+		},
+		{
+			name: "list-key-prefix",
+			call: func() error {
+				_, callErr := server.KVList(ctx, &daemonpb.KVListRequest{
+					Namespace:     namespace,
+					Prefix:        keyPrefix,
+					IncludeValues: true,
+				})
+				return callErr
+			},
+		},
+	}
+	for _, operation := range operations {
+		t.Run(operation.name, func(t *testing.T) {
+			restoreEntries()
+			callErr := operation.call()
+			if status.Code(callErr) != codes.PermissionDenied {
+				t.Fatalf(
+					"status = %v, want %v",
+					status.Code(callErr),
+					codes.PermissionDenied,
+				)
+			}
+			const wantMessage = "internal namespace is not available through public KV RPCs"
+			if status.Convert(callErr).Message() != wantMessage {
+				t.Fatalf(
+					"message = %q, want %q",
+					status.Convert(callErr).Message(),
+					wantMessage,
+				)
+			}
+		})
+	}
+
+	restoreEntries()
+	evaluationContext := rules.WithExecRuntime(context.Background(), runtime)
+	evaluationContext = rules.WithExecResponseTargetResolver(
+		evaluationContext,
+		func(string) string { return "context" },
+	)
+	rules.EvaluateAllDetailed(
+		evaluationContext,
+		"cursor",
+		"stop",
+		fields,
+		cfg.Rules,
+		nil,
+		nil,
+		"",
+	)
+	input := runner.Input()
+	assertDaemonMatchedField(t, input, "last_user_message", "private prompt", true)
+	assertDaemonMatchedField(t, input, "last_response_output", "private response", true)
 }
 
 func TestKVSetRejectsInvalidMode(t *testing.T) {

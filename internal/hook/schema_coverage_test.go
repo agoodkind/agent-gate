@@ -117,3 +117,159 @@ func TestPayloadAndAuditAPIsStayStructured(t *testing.T) {
 		})
 	}
 }
+
+func TestTemporalSelectorsAreScopedToExecResponseConditions(t *testing.T) {
+	tests := []struct {
+		name      string
+		rule      config.Rule
+		wantError bool
+	}{
+		{
+			name: "last user message in exec",
+			rule: config.Rule{
+				Name: "prompt-validator", Events: []string{"Stop"}, Action: config.ActionBlock,
+				Conditions: []config.Condition{{
+					Kind: string(config.ConditionKindExec), FieldPaths: []string{"last_user_message"},
+				}},
+			},
+		},
+		{
+			name: "last response output in exec",
+			rule: config.Rule{
+				Name: "response-validator", Events: []string{"Stop"}, Action: config.ActionInject,
+				Conditions: []config.Condition{{
+					Kind: string(config.ConditionKindExec), FieldPaths: []string{"last_response_output"},
+				}},
+			},
+		},
+		{
+			name: "response output in inject exec",
+			rule: config.Rule{
+				Name: "fallback-validator", Events: []string{"Stop"}, Action: config.ActionInject,
+				Conditions: []config.Condition{{
+					Kind: string(config.ConditionKindExec), FieldPaths: []string{"response_output"},
+				}},
+			},
+		},
+		{
+			name: "last user message at rule level",
+			rule: config.Rule{
+				Name: "invalid-rule-level", Events: []string{"Stop"}, Action: config.ActionBlock,
+				FieldPaths: []string{"last_user_message"},
+			},
+			wantError: true,
+		},
+		{
+			name: "last response output in regex",
+			rule: config.Rule{
+				Name: "invalid-regex", Events: []string{"Stop"}, Action: config.ActionBlock,
+				Conditions: []config.Condition{{
+					Kind: string(config.ConditionKindRegex), FieldPaths: []string{"last_response_output"},
+				}},
+			},
+			wantError: true,
+		},
+		{
+			name: "response output in blocking exec",
+			rule: config.Rule{
+				Name: "invalid-block", Events: []string{"Stop"}, Action: config.ActionBlock,
+				Conditions: []config.Condition{{
+					Kind: string(config.ConditionKindExec), FieldPaths: []string{"response_output"},
+				}},
+			},
+			wantError: true,
+		},
+		{
+			name: "last response output in blocking exec",
+			rule: config.Rule{
+				Name: "invalid-last-response-block", Events: []string{"Stop"}, Action: config.ActionBlock,
+				Conditions: []config.Condition{{
+					Kind: string(config.ConditionKindExec), FieldPaths: []string{"last_response_output"},
+				}},
+			},
+			wantError: true,
+		},
+		{
+			name: "last response output in audit exec",
+			rule: config.Rule{
+				Name: "invalid-last-response-audit", Events: []string{"Stop"}, Action: config.ActionAudit,
+				Conditions: []config.Condition{{
+					Kind: string(config.ConditionKindExec), FieldPaths: []string{"last_response_output"},
+				}},
+			},
+			wantError: true,
+		},
+		{
+			name: "last user message in infer input",
+			rule: config.Rule{
+				Name: "invalid-infer-input", Events: []string{"Stop"}, Action: config.ActionBlock,
+				Conditions: []config.Condition{{
+					Kind: string(config.ConditionKindInfer), InputField: "last_user_message",
+				}},
+			},
+			wantError: true,
+		},
+		{
+			name: "last response output in infer cache key",
+			rule: config.Rule{
+				Name: "invalid-infer-cache", Events: []string{"Stop"}, Action: config.ActionBlock,
+				Conditions: []config.Condition{{
+					Kind: string(config.ConditionKindInfer), CacheKey: "last_response_output",
+				}},
+			},
+			wantError: true,
+		},
+		{
+			name: "response output in infer context selector",
+			rule: config.Rule{
+				Name: "invalid-infer-context", Events: []string{"Stop"}, Action: config.ActionBlock,
+				Conditions: []config.Condition{{
+					Kind:                  string(config.ConditionKindInfer),
+					ContextWorkspaceField: "response_output",
+				}},
+			},
+			wantError: true,
+		},
+		{
+			name: "last user message in judge context",
+			rule: config.Rule{
+				Name:         "invalid-judge-context",
+				Events:       []string{"Stop"},
+				Action:       config.ActionBlock,
+				JudgeContext: []string{"last_user_message"},
+			},
+			wantError: true,
+		},
+		{
+			name: "whitespace padded last user message in judge context",
+			rule: config.Rule{
+				Name:         "invalid-padded-judge-context",
+				Events:       []string{"Stop"},
+				Action:       config.ActionBlock,
+				JudgeContext: []string{" last_user_message "},
+			},
+			wantError: true,
+		},
+		{
+			name: "last response output in diff field pair",
+			rule: config.Rule{
+				Name: "invalid-diff", Events: []string{"Stop"}, Action: config.ActionBlock,
+				Conditions: []config.Condition{{
+					Kind:      string(config.ConditionKindDiff),
+					FieldPair: "last_response_output,tool_input.new_string",
+				}},
+			},
+			wantError: true,
+		},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			cfg := &config.Config{Rules: []config.Rule{testCase.rule}}
+			errs := ValidateConfig(cfg)
+			if (len(errs) > 0) != testCase.wantError {
+				t.Fatalf("ValidateConfig() errors = %v, wantError = %v", errs, testCase.wantError)
+			}
+		})
+	}
+}

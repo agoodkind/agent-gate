@@ -769,6 +769,17 @@ func compileCondition(log *slog.Logger, ruleName string, index int, c *Condition
 	if err := compileExecConfig(ruleName, index, c, meta); err != nil {
 		return err
 	}
+	if ConditionKind(c.Kind) == ConditionKindExec &&
+		c.CacheTTLMs > 0 &&
+		containsTemporalExecSelector(c.selectors) {
+		log.Warn(
+			"exec condition caches process-local temporal context",
+			"rule",
+			ruleName,
+			"condition_index",
+			index,
+		)
+	}
 	if err := compileInferConfig(log, ruleName, index, c, meta, configDirectory); err != nil {
 		return err
 	}
@@ -830,52 +841,6 @@ func compileExecConfig(ruleName string, index int, c *Condition, meta toml.MetaD
 	}
 	if err := normalizeExecBlockOn(ruleName, index, c); err != nil {
 		return err
-	}
-	return nil
-}
-
-func compileExecCacheKey(ruleName string, index int, c *Condition) error {
-	specs := CompileFieldSelectorSpecs([]string{c.CacheKey})
-	if len(specs) == 0 || specs[0].Selector == FieldSelectorInvalid {
-		return fmt.Errorf("rule %q condition %d: cache_key %q is not a valid field selector", ruleName, index, c.CacheKey)
-	}
-	c.cacheKeySelector = specs[0]
-	if c.cacheKeySelector.Selector == FieldCmdReadTargets && len(c.SearchTools) == 0 {
-		return fmt.Errorf("rule %q condition %d: cache_key %q requires search_tools to declare which commands count as code search", ruleName, index, c.CacheKey)
-	}
-	return nil
-}
-
-func compileExecForEach(ruleName string, index int, c *Condition) error {
-	commandUsesItem := strings.Contains(strings.Join(c.Command, "\x00"), "{{item}}")
-	if commandUsesItem && strings.TrimSpace(c.ForEach) == "" {
-		return fmt.Errorf("rule %q condition %d: command uses {{item}} but for_each is unset", ruleName, index)
-	}
-	if strings.TrimSpace(c.ForEach) == "" {
-		if c.MatchMode != "" {
-			return fmt.Errorf("rule %q condition %d: match_mode requires for_each", ruleName, index)
-		}
-		return nil
-	}
-
-	specs := CompileFieldSelectorSpecs([]string{c.ForEach})
-	if len(specs) == 0 || specs[0].Selector == FieldSelectorInvalid {
-		return fmt.Errorf("rule %q condition %d: for_each %q is not a valid field selector", ruleName, index, c.ForEach)
-	}
-	c.forEachSelector = specs[0]
-	if !commandUsesItem {
-		return fmt.Errorf("rule %q condition %d: for_each %q requires command to contain {{item}}", ruleName, index, c.ForEach)
-	}
-	if c.MatchMode == "" {
-		c.MatchMode = ExecMatchAny
-	}
-	switch c.MatchMode {
-	case ExecMatchAny, ExecMatchAll:
-	default:
-		return fmt.Errorf("rule %q condition %d: match_mode %q must be %q or %q", ruleName, index, c.MatchMode, ExecMatchAny, ExecMatchAll)
-	}
-	if c.forEachSelector.Selector == FieldCmdReadTargets && len(c.SearchTools) == 0 {
-		return fmt.Errorf("rule %q condition %d: for_each %q requires search_tools to declare which commands count as code search", ruleName, index, c.ForEach)
 	}
 	return nil
 }

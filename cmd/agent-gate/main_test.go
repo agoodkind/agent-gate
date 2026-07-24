@@ -604,6 +604,62 @@ func captureRunQuery(t *testing.T, args []string) (int, string, string) {
 	return exitCode, stdout, stderr
 }
 
+func TestRunConfigCheckRejectsHookSchemaViolation(t *testing.T) {
+	setupQueryEnvironment(t)
+	configPath := config.Path()
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
+		t.Fatalf("MkdirAll config: %v", err)
+	}
+	body := `
+[[rules]]
+name = "invalid-temporal-selector"
+cursor_events = ["stop"]
+action = "block"
+field_paths = ["last_user_message"]
+pattern = "blocked"
+violation_message = "blocked"
+`
+	if err := os.WriteFile(configPath, []byte(body), 0o600); err != nil {
+		t.Fatalf("WriteFile config: %v", err)
+	}
+
+	exitCode, stdout, stderr := captureRunConfig(t, []string{"check"})
+	if exitCode != 1 {
+		t.Fatalf("runConfig() exit code = %d, want 1", exitCode)
+	}
+	if stdout != "" {
+		t.Fatalf("runConfig() stdout = %q, want empty", stdout)
+	}
+	if !strings.Contains(stderr, "valid only in exec condition field_paths") {
+		t.Fatalf("runConfig() stderr = %q, want temporal selector scope error", stderr)
+	}
+}
+
+func captureRunConfig(t *testing.T, args []string) (int, string, string) {
+	t.Helper()
+	stdoutFile, err := os.CreateTemp(t.TempDir(), "stdout-*")
+	if err != nil {
+		t.Fatalf("CreateTemp stdout: %v", err)
+	}
+	stderrFile, err := os.CreateTemp(t.TempDir(), "stderr-*")
+	if err != nil {
+		t.Fatalf("CreateTemp stderr: %v", err)
+	}
+	originalStdout := os.Stdout
+	originalStderr := os.Stderr
+	os.Stdout = stdoutFile
+	os.Stderr = stderrFile
+	defer func() {
+		os.Stdout = originalStdout
+		os.Stderr = originalStderr
+	}()
+
+	exitCode := runConfig(args)
+	stdout := readCapturedFile(t, stdoutFile)
+	stderr := readCapturedFile(t, stderrFile)
+	return exitCode, stdout, stderr
+}
+
 func readCapturedFile(t *testing.T, file *os.File) string {
 	t.Helper()
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
