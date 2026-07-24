@@ -17,6 +17,7 @@ type FieldSet struct {
 	GenerationID         string
 	Model                string
 	CursorVersion        string
+	LoopCount            *int
 	UserEmail            string
 	TranscriptPath       string
 	CWD                  string
@@ -224,15 +225,6 @@ var fieldStringAccessors = map[config.FieldSelector]func(FieldSet) string{
 	config.FieldEditsNewLine:              func(f FieldSet) string { return strings.Join(f.EditsNewLine, "\n") },
 	config.FieldAttachmentsFilePath:       func(f FieldSet) string { return strings.Join(f.AttachmentsFilePath, "\n") },
 	config.FieldAttachmentsType:           func(f FieldSet) string { return strings.Join(f.AttachmentsType, "\n") },
-}
-
-// String returns the string view of fields selected by the given
-// [config.FieldSelector]. Unknown selectors yield the empty string.
-func (fields FieldSet) String(selector config.FieldSelector) string {
-	if accessor, ok := fieldStringAccessors[selector]; ok {
-		return accessor(fields)
-	}
-	return ""
 }
 
 // CommandValue returns the most specific command string available, preferring

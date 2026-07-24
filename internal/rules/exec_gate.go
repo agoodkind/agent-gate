@@ -48,10 +48,11 @@ const execValidatorCacheNamespace = "exec-validator"
 // intentionally non-durable; daemon snapshots can share it across config reloads
 // so stable rules keep their short TTL debounce window.
 type ExecRuntime struct {
-	runner execconcern.Runner
-	canon  *canonpath.Cache
-	cache  *hotkv.Store
-	log    *slog.Logger
+	runner   execconcern.Runner
+	canon    *canonpath.Cache
+	cache    *hotkv.Store
+	temporal *execTemporalStore
+	log      *slog.Logger
 
 	mu       sync.Mutex
 	inflight map[string]*validatorFlight
@@ -101,6 +102,7 @@ func NewExecRuntimeWithCache(runner execconcern.Runner, log *slog.Logger, cache 
 		runner:   runner,
 		canon:    canonpath.NewCache(canonCacheTTL),
 		cache:    cache,
+		temporal: &execTemporalStore{cache: cache, afterRead: nil},
 		log:      log,
 		mu:       sync.Mutex{},
 		inflight: make(map[string]*validatorFlight),

@@ -7,11 +7,20 @@ import (
 
 // HotEvaluation is the synchronous hook decision plus deferred audit payload.
 type HotEvaluation struct {
-	Stdout   []byte
-	Stderr   []byte
-	ExitCode int
-	Deferred DeferredAuditEvent
-	Trace    rules.DecisionTrace
+	Stdout                  []byte
+	Stderr                  []byte
+	ExitCode                int
+	Deferred                DeferredAuditEvent
+	Trace                   rules.DecisionTrace
+	TemporalResponseOutputs []TemporalResponseOutput
+}
+
+// TemporalResponseOutput is an in-memory model-facing value eligible for
+// process-local prior-response tracking after durable evaluation persistence.
+type TemporalResponseOutput struct {
+	Action string
+	Target string
+	Output string
 }
 
 // DeferredAuditEvent is the durable audit input rebuilt from stored intake.

@@ -509,6 +509,14 @@ func (s *Server) EvaluateHook(ctx context.Context, req *daemonpb.EvaluateHookReq
 		requestLog.WarnContext(ctx, "append hook intake failed; failing open", "err", err)
 		return failOpenEvaluateHookResponse(), nil
 	}
+	if intakeErr == nil {
+		observeUserPrompt(
+			snapshot.execRuntime,
+			intakeRecord.System,
+			rawJSON,
+			appendResult.ReceiptID,
+		)
+	}
 
 	syncCfg := hook.SyncConfig(snapshot.cfg)
 	result := snapshot.hotEvaluate(ctx, rawJSON, syncCfg, hook.SystemFromString(req.GetProviderHint()), getenv, appendResult.EventID)
@@ -524,6 +532,23 @@ func (s *Server) EvaluateHook(ctx context.Context, req *daemonpb.EvaluateHookReq
 		AppendResult: appendResult, StartedAt: evalStart, Result: result,
 		SystemError: systemError, ErrorMessage: errorMessage,
 	}), nil
+}
+
+func observeUserPrompt(
+	runtime *rules.ExecRuntime,
+	system string,
+	rawJSON []byte,
+	receiptID int64,
+) {
+	payload, err := hook.ParseHookPayload(hook.SystemFromString(system), rawJSON)
+	if err != nil {
+		return
+	}
+	prompt, ok := hook.UserPrompt(payload)
+	if !ok {
+		return
+	}
+	runtime.ObserveUserPrompt(system, payload.Fields(), receiptID, prompt)
 }
 
 func copilotEventHint(argv []string) string {

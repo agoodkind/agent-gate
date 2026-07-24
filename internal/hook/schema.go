@@ -135,7 +135,7 @@ func buildCursorSchema() map[CursorEvent]EventSchema {
 
 		CursorPreCompact: makeSchema(cursorEnvelope),
 
-		CursorStop: makeSchema(cursorEnvelope, "status"),
+		CursorStop: makeSchema(cursorEnvelope, "status", "loop_count"),
 
 		CursorAfterAgentResponse: makeSchema(cursorEnvelope, "text", "assistant_message"),
 		CursorAfterAgentThought:  makeSchema(cursorEnvelope, "text", "assistant_message"),

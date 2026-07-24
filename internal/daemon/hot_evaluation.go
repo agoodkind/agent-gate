@@ -81,6 +81,19 @@ func (s *Server) commitHotEvaluation(
 		)
 		return failOpenEvaluateHookResponse()
 	}
+	if systemError == "" && len(result.Stdout) > 0 {
+		for _, output := range result.TemporalResponseOutputs {
+			input.Snapshot.execRuntime.ObserveResponseOutput(
+				result.Deferred.SystemString,
+				result.Deferred.Fields,
+				result.Deferred.EventName,
+				output.Action,
+				output.Target,
+				input.AppendResult.ReceiptID,
+				output.Output,
+			)
+		}
+	}
 	if systemError == "" {
 		enqueueDeferredReplay(input.Snapshot, input.AppendResult, result.Deferred)
 	}
