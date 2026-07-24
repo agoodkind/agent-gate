@@ -11,6 +11,9 @@ import (
 )
 
 const (
+	// InternalNamespacePrefix reserves namespaces for process-internal records.
+	InternalNamespacePrefix = "_agent-gate-internal/"
+
 	// DefaultMaxEntries is the default maximum number of hot cache entries.
 	DefaultMaxEntries = 4096
 	// DefaultMaxValueBytes is the default maximum value size for one entry.
@@ -23,6 +26,11 @@ const (
 	// MaxKeyBytes is the maximum key length in bytes.
 	MaxKeyBytes = 2048
 )
+
+// IsInternalNamespace reports whether a namespace uses the reserved prefix.
+func IsInternalNamespace(namespace string) bool {
+	return strings.HasPrefix(namespace, InternalNamespacePrefix)
+}
 
 var (
 	// ErrInvalidNamespace reports an empty, oversized, or NUL-containing namespace.
