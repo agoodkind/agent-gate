@@ -91,8 +91,17 @@ func renderCopilotResponse(request ResponseRequest) Response {
 		ModifiedResult:            nil,
 		ModifiedTransformedPrompt: "",
 	}
-	applyCopilotInjection(&response, capability, request.ContextText, request.PromptText)
-	applyCopilotMutation(&response, capability, request.ContextText, request.MutationText)
+	if capability.Supports(ResponseCapabilityPromptMutation) {
+		response.ModifiedTransformedPrompt = copilotPromptResponseOutput(
+			capability,
+			request.ContextText,
+			request.MutationText,
+			request.PromptText,
+		)
+	} else {
+		applyCopilotInjection(&response, capability, request.ContextText, request.PromptText)
+		applyCopilotMutation(&response, capability, request.ContextText, request.MutationText)
+	}
 	if response.AdditionalContext == "" && len(response.ModifiedArgs) == 0 && len(response.ModifiedResult) == 0 && response.ModifiedTransformedPrompt == "" {
 		return Response{Stdout: ClaudeAllow(), Stderr: nil, ExitCode: 0}
 	}
@@ -101,6 +110,24 @@ func renderCopilotResponse(request ResponseRequest) Response {
 		return Response{Stdout: ClaudeAllow(), Stderr: nil, ExitCode: 0}
 	}
 	return Response{Stdout: append(encoded, '\n'), Stderr: nil, ExitCode: 0}
+}
+
+func copilotPromptResponseOutput(
+	capability ResponseCapability,
+	contextText string,
+	mutationText string,
+	promptText string,
+) string {
+	if !capability.Supports(ResponseCapabilityPromptMutation) {
+		return ""
+	}
+	if mutationText != "" {
+		return prependContext(contextText, mutationText)
+	}
+	if contextText == "" || !capability.Supports(ResponseCapabilityInject) {
+		return ""
+	}
+	return prependContext(contextText, promptText)
 }
 
 func applyCopilotInjection(

@@ -24,22 +24,24 @@ func EvaluateHotWithEventID(ctx context.Context, rawBytes []byte, cfg *config.Co
 	detectionPayload, err := ParseDetectionPayload(rawBytes)
 	if err != nil {
 		return HotEvaluation{
-			Stdout:   nil,
-			Stderr:   []byte("agent-gate: parse stdin JSON: " + err.Error() + "\n"),
-			ExitCode: 2,
-			Deferred: emptyDeferredAuditEvent(SystemUnknown),
-			Trace:    emptyDecisionTrace(),
+			Stdout:                  nil,
+			Stderr:                  []byte("agent-gate: parse stdin JSON: " + err.Error() + "\n"),
+			ExitCode:                2,
+			Deferred:                emptyDeferredAuditEvent(SystemUnknown),
+			Trace:                   emptyDecisionTrace(),
+			TemporalResponseOutputs: nil,
 		}
 	}
 	system := DetectWithEnv(detectionPayload, hint, getenv)
 	payload, err := ParseHookPayload(system, rawBytes)
 	if err != nil {
 		return HotEvaluation{
-			Stdout:   nil,
-			Stderr:   []byte("agent-gate: parse typed hook JSON: " + err.Error() + "\n"),
-			ExitCode: 2,
-			Deferred: emptyDeferredAuditEvent(system),
-			Trace:    emptyDecisionTrace(),
+			Stdout:                  nil,
+			Stderr:                  []byte("agent-gate: parse typed hook JSON: " + err.Error() + "\n"),
+			ExitCode:                2,
+			Deferred:                emptyDeferredAuditEvent(system),
+			Trace:                   emptyDecisionTrace(),
+			TemporalResponseOutputs: nil,
 		}
 	}
 
@@ -91,6 +93,9 @@ func evaluatePayloadHot(ctx context.Context, payload Payload, rawBytes []byte, c
 	eventName := payload.EventName()
 	fields := payload.Fields()
 	ruleSet := rulesForConfig(cfg)
+	ctx = rules.WithExecResponseTargetResolver(ctx, func(action string) string {
+		return responseTargetForAction(payload.System, eventName, action)
+	})
 	staged := evaluateStagedRules(
 		ctx,
 		cfg,
@@ -115,6 +120,7 @@ func evaluatePayloadHot(ctx context.Context, payload Payload, rawBytes []byte, c
 		staged.effects,
 		len(blockingViolations) > 0 && canBlock,
 	)
+	promptText := payloadPromptText(payload)
 
 	decision := ResponseDecisionAllow
 	diagnostic := ""
@@ -131,14 +137,15 @@ func evaluatePayloadHot(ctx context.Context, payload Payload, rawBytes []byte, c
 			FailOpenReason: "",
 			ContextText:    "",
 			MutationText:   "",
-			PromptText:     payloadPromptText(payload),
+			PromptText:     promptText,
 		})
 		return HotEvaluation{
-			Stdout:   response.Stdout,
-			Stderr:   response.Stderr,
-			ExitCode: response.ExitCode,
-			Deferred: newDeferredAuditEvent(rawBytes, payload, fields, ruleSet, blockingViolations, auditOnlyViolations, responseEffects, staged.trace, decision, diagnostic, eventID),
-			Trace:    staged.trace,
+			Stdout:                  response.Stdout,
+			Stderr:                  response.Stderr,
+			ExitCode:                response.ExitCode,
+			Deferred:                newDeferredAuditEvent(rawBytes, payload, fields, ruleSet, blockingViolations, auditOnlyViolations, responseEffects, staged.trace, decision, diagnostic, eventID),
+			Trace:                   staged.trace,
+			TemporalResponseOutputs: nil,
 		}
 	}
 
@@ -152,15 +159,78 @@ func evaluatePayloadHot(ctx context.Context, payload Payload, rawBytes []byte, c
 		FailOpenReason: "",
 		ContextText:    contextText,
 		MutationText:   mutationText,
-		PromptText:     payloadPromptText(payload),
+		PromptText:     promptText,
 	})
 	return HotEvaluation{
-		Stdout:   response.Stdout,
-		Stderr:   response.Stderr,
-		ExitCode: response.ExitCode,
-		Deferred: newDeferredAuditEvent(rawBytes, payload, fields, ruleSet, blockingViolations, auditOnlyViolations, responseEffects, staged.trace, decision, diagnostic, eventID),
-		Trace:    staged.trace,
+		Stdout:                  response.Stdout,
+		Stderr:                  response.Stderr,
+		ExitCode:                response.ExitCode,
+		Deferred:                newDeferredAuditEvent(rawBytes, payload, fields, ruleSet, blockingViolations, auditOnlyViolations, responseEffects, staged.trace, decision, diagnostic, eventID),
+		Trace:                   staged.trace,
+		TemporalResponseOutputs: temporalResponseOutputs(payload.System, eventName, contextText, mutationText, promptText),
 	}
+}
+
+func responseTargetForAction(system System, eventName string, action string) string {
+	if action == config.ActionInject {
+		capability := LookupResponseCapability(system, eventName)
+		if capability.Supports(
+			ResponseCapabilityInject | ResponseCapabilityPromptMutation,
+		) {
+			return "prompt"
+		}
+		return "context"
+	}
+	if action != config.ActionMutate {
+		return ""
+	}
+	target, _ := responseMutationTarget(LookupResponseCapability(system, eventName))
+	return target
+}
+
+func temporalResponseOutputs(
+	system System,
+	eventName string,
+	contextText string,
+	mutationText string,
+	promptText string,
+) []TemporalResponseOutput {
+	capability := LookupResponseCapability(system, eventName)
+	promptOutput := copilotPromptResponseOutput(
+		capability,
+		contextText,
+		mutationText,
+		promptText,
+	)
+	if promptOutput != "" {
+		action := config.ActionInject
+		if mutationText != "" {
+			action = config.ActionMutate
+		}
+		return []TemporalResponseOutput{{
+			Action: action,
+			Target: "prompt",
+			Output: promptOutput,
+		}}
+	}
+
+	outputs := make([]TemporalResponseOutput, 0, 2)
+	if contextText != "" && capability.Supports(ResponseCapabilityInject) {
+		outputs = append(outputs, TemporalResponseOutput{
+			Action: config.ActionInject,
+			Target: "context",
+			Output: contextText,
+		})
+	}
+	target, _ := responseMutationTarget(capability)
+	if mutationText != "" && target != "" {
+		outputs = append(outputs, TemporalResponseOutput{
+			Action: config.ActionMutate,
+			Target: target,
+			Output: mutationText,
+		})
+	}
+	return outputs
 }
 
 func rulesForConfig(cfg *config.Config) []config.Rule {

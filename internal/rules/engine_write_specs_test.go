@@ -41,3 +41,56 @@ target_mode = "all_operands"
 		t.Fatalf("violation = %#v, want target %q", got[0], wantTarget)
 	}
 }
+
+func TestEvaluateAllRegexConditionMatchesLoopCount(t *testing.T) {
+	const tomlBody = `
+[[rules]]
+name = "loop-count-regex"
+cursor_events = ["stop"]
+action = "block"
+violation_message = "loop count matched"
+
+[[rules.conditions]]
+kind = "regex"
+field_paths = ["loop_count"]
+pattern = "^(0|12)$"
+`
+	cfg := loadTOML(t, tomlBody)
+	zero := 0
+	retryCount := 12
+	for _, testCase := range []struct {
+		name      string
+		loopCount *int
+		matched   bool
+		wantValue string
+	}{
+		{name: "missing", matched: false},
+		{name: "zero", loopCount: &zero, matched: true, wantValue: "0"},
+		{name: "later retry", loopCount: &retryCount, matched: true, wantValue: "12"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			violations := rules.EvaluateAll(
+				context.Background(),
+				"cursor",
+				"stop",
+				rules.FieldSet{LoopCount: testCase.loopCount},
+				cfg.Rules,
+				nil,
+			)
+			if (len(violations) > 0) != testCase.matched {
+				t.Fatalf("violations = %#v, want matched=%v", violations, testCase.matched)
+			}
+			if !testCase.matched {
+				return
+			}
+			if violations[0].FieldPath != "loop_count" ||
+				violations[0].Value != testCase.wantValue {
+				t.Fatalf(
+					"violation = %#v, want loop_count=%q",
+					violations[0],
+					testCase.wantValue,
+				)
+			}
+		})
+	}
+}

@@ -198,7 +198,7 @@ type CursorPreCompactPayload struct {
 type CursorStopPayload struct {
 	CursorEnvelope
 	Status           string `json:"status"`
-	LoopCount        int    `json:"loop_count"`
+	LoopCount        *int   `json:"loop_count"`
 	ComposerMode     string `json:"composer_mode"`
 	InputTokens      int    `json:"input_tokens"`
 	OutputTokens     int    `json:"output_tokens"`
@@ -396,6 +396,7 @@ func (p CursorPreCompactPayload) Fields() rules.FieldSet {
 func (p CursorStopPayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.Status = p.Status
+	fields.LoopCount = p.LoopCount
 	return fields
 }
 

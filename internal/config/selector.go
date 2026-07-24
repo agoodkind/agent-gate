@@ -22,6 +22,8 @@ const (
 	FieldModel
 	// FieldCursorVersion selects the Cursor IDE version string.
 	FieldCursorVersion
+	// FieldLoopCount selects the Cursor stop loop count.
+	FieldLoopCount
 	// FieldUserEmail selects the authenticated user email.
 	FieldUserEmail
 	// FieldTranscriptPath selects the conversation transcript path.
@@ -230,6 +232,7 @@ var fieldSelectorByPath = map[string]FieldSelector{
 	"generation_id":                FieldGenerationID,
 	"model":                        FieldModel,
 	"cursor_version":               FieldCursorVersion,
+	"loop_count":                   FieldLoopCount,
 	"user_email":                   FieldUserEmail,
 	"transcript_path":              FieldTranscriptPath,
 	"cwd":                          FieldCWD,
