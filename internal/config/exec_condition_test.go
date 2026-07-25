@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -57,6 +58,40 @@ func TestExecConditionAppliesDefaults(t *testing.T) {
 	}
 	if cond.CacheKeySelector().Selector != config.FieldEffectiveCWD {
 		t.Fatalf("expected cache key selector to compile to effective_cwd")
+	}
+	if cond.RetryCount != 0 {
+		t.Fatalf("expected default retry_count 0, got %d", cond.RetryCount)
+	}
+}
+
+func TestExecConditionRetryCountPreservedWhenValid(t *testing.T) {
+	body := strings.Replace(validExecRule, `command = ["/bin/true"]`,
+		`command = ["/bin/true"]`+"\nretry_count = 1", 1)
+	cfg, err := writeExecConfig(t, body)
+	if err != nil {
+		t.Fatalf("LoadExisting: %v", err)
+	}
+	if got := cfg.Rules[0].Conditions[1].RetryCount; got != 1 {
+		t.Fatalf("expected retry_count 1 preserved, got %d", got)
+	}
+}
+
+func TestExecConditionRejectsInvalidRetryCount(t *testing.T) {
+	cases := []struct {
+		name  string
+		value string
+	}{
+		{"negative", "-1"},
+		{"over max", strconv.Itoa(config.MaxExecRetryCount + 1)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			body := strings.Replace(validExecRule, `command = ["/bin/true"]`,
+				`command = ["/bin/true"]`+"\nretry_count = "+tc.value, 1)
+			if _, err := writeExecConfig(t, body); err == nil {
+				t.Fatalf("expected retry_count %s to be rejected", tc.value)
+			}
+		})
 	}
 }
 

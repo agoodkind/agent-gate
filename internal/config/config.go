@@ -130,10 +130,12 @@ type Condition struct {
 	WriteSpecs   []ShellWriteSpec `toml:"write_specs"`
 
 	// Exec condition fields. Command is the argv executed synchronously as an
-	// external validator (no shell). TimeoutMs bounds the run. CacheKey is a
-	// field selector whose canonicalized value keys the cross-event result
-	// cache, held for CacheTTLMs. BlockOn selects which exit codes block, and
-	// OnError selects the gate behavior when the validator errors.
+	// external validator (no shell). TimeoutMs bounds the run. RetryCount is the
+	// number of extra attempts made when an attempt returns an errored verdict;
+	// the retries run in the validator goroutine, not the synchronous budget.
+	// CacheKey is a field selector whose canonicalized value keys the cross-event
+	// result cache, held for CacheTTLMs. BlockOn selects which exit codes block,
+	// and OnError selects the gate behavior when the validator errors.
 	// SearchTools declares the argv0 values this rule treats as code-content
 	// searchers when computing read targets (for example "grep", "rg",
 	// "git grep", "sed"). The tool set is rule policy with no built-in
@@ -141,6 +143,7 @@ type Condition struct {
 	// cache_key requires it.
 	Command          []string        `toml:"command"`
 	TimeoutMs        int             `toml:"timeout_ms"`
+	RetryCount       int             `toml:"retry_count"`
 	CacheKey         string          `toml:"cache_key"`
 	CacheTTLMs       int             `toml:"cache_ttl_ms"`
 	BlockOn          string          `toml:"block_on"`
@@ -245,6 +248,9 @@ const (
 	DefaultExecTimeoutMs = 1500
 	MaxExecTimeoutMs     = 4000
 	DefaultExecCacheKey  = "effective_cwd"
+	// MaxExecRetryCount bounds retry_count so a misconfigured rule cannot fork a
+	// validator without limit; retries fire only on errored verdicts.
+	MaxExecRetryCount = 5
 )
 
 // CompiledPattern returns the pre-compiled regex for Pattern.
@@ -810,6 +816,9 @@ func compileExecConfig(ruleName string, index int, c *Condition, meta toml.MetaD
 	}
 	if c.TimeoutMs > MaxExecTimeoutMs {
 		return fmt.Errorf("rule %q condition %d: timeout_ms %d exceeds max %d", ruleName, index, c.TimeoutMs, MaxExecTimeoutMs)
+	}
+	if c.RetryCount < 0 || c.RetryCount > MaxExecRetryCount {
+		return fmt.Errorf("rule %q condition %d: retry_count %d must be between 0 and %d", ruleName, index, c.RetryCount, MaxExecRetryCount)
 	}
 	if c.CacheTTLMs < 0 {
 		return fmt.Errorf("rule %q condition %d: cache_ttl_ms must be non-negative", ruleName, index)
