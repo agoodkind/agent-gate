@@ -2,22 +2,39 @@ package hook_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"goodkind.io/agent-gate/internal/audit"
 	"goodkind.io/agent-gate/internal/config"
 	"goodkind.io/agent-gate/internal/hook"
 	"goodkind.io/agent-gate/internal/regex"
+	"goodkind.io/agent-gate/internal/rules"
+	execconcern "goodkind.io/agent-gate/internal/rules/concerns/exec"
 )
 
 type recordingAuditSink struct {
 	mu       sync.Mutex
 	messages []string
+}
+
+type failedResponseExecRunner struct{}
+
+func (failedResponseExecRunner) Run(
+	_ context.Context,
+	_ []string,
+	_ time.Duration,
+	_ []byte,
+	_ []string,
+) (execconcern.RunResult, error) {
+	return execconcern.RunResult{}, errors.New("validator unavailable")
 }
 
 func (s *recordingAuditSink) Log(_ context.Context, _, _, _, _, msg string, _ audit.Attrs) {
@@ -88,6 +105,94 @@ func TestEvaluateHotCopilotPromptInjectionFallsBackToPrompt(t *testing.T) {
 	}
 }
 
+func TestEvaluateHotCopilotPromptInjectionPublishesFinalPrompt(t *testing.T) {
+	cfg := &config.Config{Rules: []config.Rule{{
+		Name:          "prompt-context",
+		CopilotEvents: []string{"userPromptTransformed"},
+		Action:        config.ActionInject,
+		Output:        "turn context",
+	}}}
+	rawJSON := []byte(
+		`{"hook_event_name":"userPromptTransformed","session_id":"s1",` +
+			`"prompt":"user-authored prompt","transformedPrompt":"provider-transformed prompt"}`,
+	)
+
+	evaluation := hook.EvaluateHot(
+		context.Background(),
+		rawJSON,
+		cfg,
+		hook.SystemCopilot,
+		func(string) string { return "" },
+	)
+	const finalPrompt = "turn context\n\nprovider-transformed prompt"
+	if !strings.Contains(
+		string(evaluation.Stdout),
+		`"modifiedTransformedPrompt":"turn context\n\nprovider-transformed prompt"`,
+	) {
+		t.Fatalf("response = %q", evaluation.Stdout)
+	}
+	want := []hook.TemporalResponseOutput{{
+		Action: config.ActionInject,
+		Target: "prompt",
+		Output: finalPrompt,
+	}}
+	if !reflect.DeepEqual(evaluation.TemporalResponseOutputs, want) {
+		t.Fatalf(
+			"temporal response outputs = %#v, want %#v",
+			evaluation.TemporalResponseOutputs,
+			want,
+		)
+	}
+}
+
+func TestEvaluateHotCopilotPromptEffectsPublishFinalComposedPromptOnce(t *testing.T) {
+	cfg := &config.Config{Rules: []config.Rule{
+		{
+			Name:          "prompt-context",
+			CopilotEvents: []string{"userPromptTransformed"},
+			Action:        config.ActionInject,
+			Output:        "turn context",
+		},
+		{
+			Name:          "prompt-mutation",
+			CopilotEvents: []string{"userPromptTransformed"},
+			Action:        config.ActionMutate,
+			Output:        "replacement prompt",
+		},
+	}}
+	rawJSON := []byte(
+		`{"hook_event_name":"userPromptTransformed","session_id":"s1",` +
+			`"prompt":"user-authored prompt","transformedPrompt":"provider-transformed prompt"}`,
+	)
+
+	evaluation := hook.EvaluateHot(
+		context.Background(),
+		rawJSON,
+		cfg,
+		hook.SystemCopilot,
+		func(string) string { return "" },
+	)
+	const finalPrompt = "turn context\n\nreplacement prompt"
+	if !strings.Contains(
+		string(evaluation.Stdout),
+		`"modifiedTransformedPrompt":"turn context\n\nreplacement prompt"`,
+	) {
+		t.Fatalf("response = %q", evaluation.Stdout)
+	}
+	want := []hook.TemporalResponseOutput{{
+		Action: config.ActionMutate,
+		Target: "prompt",
+		Output: finalPrompt,
+	}}
+	if !reflect.DeepEqual(evaluation.TemporalResponseOutputs, want) {
+		t.Fatalf(
+			"temporal response outputs = %#v, want %#v",
+			evaluation.TemporalResponseOutputs,
+			want,
+		)
+	}
+}
+
 func TestEvaluateHotCursorStopInjectsFollowupPrompt(t *testing.T) {
 	cfg := &config.Config{Rules: []config.Rule{{
 		Name:         "stop-followup",
@@ -110,6 +215,42 @@ func TestEvaluateHotCursorStopInjectsFollowupPrompt(t *testing.T) {
 	}
 	if strings.Contains(stdout, "additional_context") {
 		t.Fatalf("stop response used additional_context: %q", stdout)
+	}
+}
+
+func TestCursorStopPreservesLoopCountPresenceAndValue(t *testing.T) {
+	tests := []struct {
+		name      string
+		extraJSON string
+		wantValue string
+		wantSet   bool
+	}{
+		{name: "missing", extraJSON: "", wantValue: "", wantSet: false},
+		{name: "zero", extraJSON: `,"loop_count":0`, wantValue: "0", wantSet: true},
+		{name: "later", extraJSON: `,"loop_count":3`, wantValue: "3", wantSet: true},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			rawJSON := []byte(
+				`{"hook_event_name":"stop","conversation_id":"c1","status":"completed"` +
+					testCase.extraJSON + `}`,
+			)
+			payload, err := hook.ParseHookPayload(hook.SystemCursor, rawJSON)
+			if err != nil {
+				t.Fatalf("ParseHookPayload: %v", err)
+			}
+			value, available := payload.Fields().Value(config.FieldLoopCount)
+			if value != testCase.wantValue || available != testCase.wantSet {
+				t.Fatalf(
+					"loop_count = (%q, %v), want (%q, %v)",
+					value,
+					available,
+					testCase.wantValue,
+					testCase.wantSet,
+				)
+			}
+		})
 	}
 }
 
@@ -145,6 +286,25 @@ func TestEvaluateHot_ComposesResponseEffectsInConfigOrder(t *testing.T) {
 		if effect.ByteCount == 0 {
 			t.Fatalf("effect did not record output byte count: %#v", effect)
 		}
+	}
+	wantTemporalOutputs := []hook.TemporalResponseOutput{
+		{
+			Action: config.ActionInject,
+			Target: "context",
+			Output: "first context\n\nsecond context",
+		},
+		{
+			Action: config.ActionMutate,
+			Target: "tool_input",
+			Output: `{"command":"make test"}`,
+		},
+	}
+	if !reflect.DeepEqual(evaluation.TemporalResponseOutputs, wantTemporalOutputs) {
+		t.Fatalf(
+			"temporal response outputs = %#v, want %#v",
+			evaluation.TemporalResponseOutputs,
+			wantTemporalOutputs,
+		)
 	}
 }
 
@@ -196,6 +356,9 @@ func TestEvaluateHot_BlockSuppressesResponseEffects(t *testing.T) {
 	if evaluation.Deferred.ResponseEffects[0].Target != "context" {
 		t.Fatalf("suppressed response effect target = %#v", evaluation.Deferred.ResponseEffects[0])
 	}
+	if len(evaluation.TemporalResponseOutputs) != 0 {
+		t.Fatalf("blocked response offered temporal update: %#v", evaluation.TemporalResponseOutputs)
+	}
 }
 
 func TestEvaluateHotRecordsTargetForEmptyResponseEffect(t *testing.T) {
@@ -211,6 +374,75 @@ func TestEvaluateHotRecordsTargetForEmptyResponseEffect(t *testing.T) {
 	effect := evaluation.Deferred.ResponseEffects[0]
 	if effect.Target != "context" || effect.Disposition != "empty_noop" || effect.ByteCount != 0 {
 		t.Fatalf("response effect = %#v", effect)
+	}
+	if len(evaluation.TemporalResponseOutputs) != 0 {
+		t.Fatalf("empty response offered temporal update: %#v", evaluation.TemporalResponseOutputs)
+	}
+}
+
+func TestEvaluateHotDoesNotPublishUnsupportedResponseEffect(t *testing.T) {
+	cfg := &config.Config{Rules: []config.Rule{{
+		Name: "unsupported-context", CursorEvents: []string{"beforeSubmitPrompt"},
+		Action: config.ActionInject, Output: "unsupported response",
+	}}}
+	rawJSON := []byte(
+		`{"hook_event_name":"beforeSubmitPrompt","conversation_id":"c1",` +
+			`"prompt":"request"}`,
+	)
+
+	evaluation := hook.EvaluateHot(
+		context.Background(),
+		rawJSON,
+		cfg,
+		hook.SystemCursor,
+		func(string) string { return "" },
+	)
+	if len(evaluation.TemporalResponseOutputs) != 0 {
+		t.Fatalf(
+			"unsupported response offered temporal update: %#v",
+			evaluation.TemporalResponseOutputs,
+		)
+	}
+}
+
+func TestEvaluateHotDoesNotPublishFailedExecResponse(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte(`
+[[rules]]
+name = "failed-response"
+cursor_events = ["stop"]
+action = "inject"
+output = "configured fallback"
+
+[[rules.conditions]]
+kind = "exec"
+command = ["/bin/validator"]
+cache_ttl_ms = 0
+`), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	cfg, err := config.LoadExisting(path)
+	if err != nil {
+		t.Fatalf("LoadExisting: %v", err)
+	}
+	runtime := rules.NewExecRuntime(failedResponseExecRunner{}, nil)
+	ctx := rules.WithExecRuntime(context.Background(), runtime)
+	rawJSON := []byte(
+		`{"hook_event_name":"stop","conversation_id":"c1","status":"completed"}`,
+	)
+
+	evaluation := hook.EvaluateHot(
+		ctx,
+		rawJSON,
+		cfg,
+		hook.SystemCursor,
+		func(string) string { return "" },
+	)
+	if len(evaluation.TemporalResponseOutputs) != 0 {
+		t.Fatalf(
+			"failed exec response offered temporal update: %#v",
+			evaluation.TemporalResponseOutputs,
+		)
 	}
 }
 
@@ -236,6 +468,12 @@ func TestEvaluateHotAuditsInvalidCopilotToolOutputAsNoOp(t *testing.T) {
 	hook.WriteDeferredAudit(context.Background(), evaluation.Deferred, sink)
 	if got := strings.Join(sink.snapshot(), ","); got != "hook.response_effect,hook.allowed" {
 		t.Fatalf("audit messages = %q", got)
+	}
+	if len(evaluation.TemporalResponseOutputs) != 0 {
+		t.Fatalf(
+			"invalid response offered temporal update: %#v",
+			evaluation.TemporalResponseOutputs,
+		)
 	}
 }
 
@@ -290,6 +528,80 @@ func TestCursorBeforeMCPExecution_ObjectToolInput(t *testing.T) {
 	}
 	if fields.ToolInputQuery != "errors" {
 		t.Fatalf("tool_input.query = %#v, want errors", fields.ToolInputQuery)
+	}
+}
+
+func TestUserPromptAcceptsOnlyTypedPromptSubmissionEvents(t *testing.T) {
+	tests := []struct {
+		name   string
+		system hook.System
+		raw    string
+		want   string
+		wantOK bool
+	}{
+		{
+			name: "claude", system: hook.SystemClaude,
+			raw:  `{"hook_event_name":"UserPromptSubmit","session_id":"s1","prompt":"claude prompt"}`,
+			want: "claude prompt", wantOK: true,
+		},
+		{
+			name: "codex", system: hook.SystemCodex,
+			raw:  `{"hook_event_name":"UserPromptSubmit","session_id":"s1","prompt":"codex prompt"}`,
+			want: "codex prompt", wantOK: true,
+		},
+		{
+			name: "cursor", system: hook.SystemCursor,
+			raw:  `{"hook_event_name":"beforeSubmitPrompt","conversation_id":"c1","prompt":"cursor prompt"}`,
+			want: "cursor prompt", wantOK: true,
+		},
+		{
+			name: "copilot", system: hook.SystemCopilot,
+			raw:  `{"hook_event_name":"userPromptTransformed","session_id":"s1","prompt":"copilot prompt"}`,
+			want: "copilot prompt", wantOK: true,
+		},
+		{
+			name: "copilot user-authored prompt", system: hook.SystemCopilot,
+			raw: `{"hook_event_name":"userPromptTransformed","session_id":"s1",` +
+				`"prompt":"user-authored prompt","transformedPrompt":"provider-transformed prompt"}`,
+			want: "user-authored prompt", wantOK: true,
+		},
+		{
+			name: "copilot transformed prompt only", system: hook.SystemCopilot,
+			raw: `{"hook_event_name":"userPromptTransformed","session_id":"s1",` +
+				`"transformedPrompt":"provider-transformed prompt"}`,
+		},
+		{
+			name: "gemini", system: hook.SystemGemini,
+			raw:  `{"hook_event_name":"BeforeAgent","session_id":"s1","prompt":"gemini prompt"}`,
+			want: "gemini prompt", wantOK: true,
+		},
+		{
+			name: "tool prompt", system: hook.SystemClaude,
+			raw: `{"hook_event_name":"PreToolUse","session_id":"s1","tool_input":{"prompt":"tool prompt"}}`,
+		},
+		{
+			name: "assistant text", system: hook.SystemCursor,
+			raw: `{"hook_event_name":"afterAgentResponse","conversation_id":"c1","text":"assistant text"}`,
+		},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			payload, err := hook.ParseHookPayload(testCase.system, []byte(testCase.raw))
+			if err != nil {
+				t.Fatalf("ParseHookPayload: %v", err)
+			}
+			got, ok := hook.UserPrompt(payload)
+			if got != testCase.want || ok != testCase.wantOK {
+				t.Fatalf(
+					"UserPrompt() = (%q, %v), want (%q, %v)",
+					got,
+					ok,
+					testCase.want,
+					testCase.wantOK,
+				)
+			}
+		})
 	}
 }
 

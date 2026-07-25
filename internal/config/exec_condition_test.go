@@ -1,6 +1,8 @@
 package config_test
 
 import (
+	"bytes"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -129,6 +131,63 @@ func TestExecConditionInvalidOnErrorFails(t *testing.T) {
 	_, err := writeExecConfig(t, body)
 	if err == nil || !strings.Contains(err.Error(), "on_error") {
 		t.Fatalf("expected on_error validation error, got %v", err)
+	}
+}
+
+func TestExecConditionTemporalSelectorsRequireFieldPaths(t *testing.T) {
+	tests := []struct {
+		name  string
+		field string
+	}{
+		{name: "cache key", field: `cache_key = "last_user_message"`},
+		{name: "for each", field: `for_each = "last_response_output"`},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			body := strings.Replace(
+				validExecRule,
+				`command = ["/bin/true"]`,
+				`command = ["/bin/true"]`+"\n"+test.field,
+				1,
+			)
+			_, err := writeExecConfig(t, body)
+			if err == nil || !strings.Contains(err.Error(), "field_paths") {
+				t.Fatalf("expected temporal selector scoping error, got %v", err)
+			}
+		})
+	}
+}
+
+func TestExecConditionWarnsWhenCachingTemporalSelector(t *testing.T) {
+	var logOutput bytes.Buffer
+	previousLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logOutput, nil)))
+	t.Cleanup(func() {
+		slog.SetDefault(previousLogger)
+	})
+
+	body := strings.Replace(
+		validExecRule,
+		`command = ["/bin/true"]`,
+		`command = ["/bin/true"]`+
+			"\nfield_paths = [\"last_user_message\"]"+
+			"\ncache_ttl_ms = 1000",
+		1,
+	)
+	if _, err := writeExecConfig(t, body); err != nil {
+		t.Fatalf("LoadExisting: %v", err)
+	}
+
+	warning := logOutput.String()
+	if !strings.Contains(warning, `"level":"WARN"`) {
+		t.Fatalf("expected warning log, got %q", warning)
+	}
+	if !strings.Contains(warning, `"rule":"exec-rule"`) {
+		t.Fatalf("warning does not name rule: %q", warning)
+	}
+	if !strings.Contains(warning, `"condition_index":1`) {
+		t.Fatalf("warning does not name condition: %q", warning)
 	}
 }
 

@@ -3,6 +3,7 @@ package hook
 import (
 	"fmt"
 	"slices"
+	"strings"
 
 	"goodkind.io/agent-gate/internal/config"
 )
@@ -46,6 +47,9 @@ var virtualFields = []string{
 	"cmd_double_hyphen_prose",
 	"cmd_redirections",
 	"cmd_write_targets",
+	"last_user_message",
+	"last_response_output",
+	"response_output",
 }
 
 type schemaSystem string
@@ -413,6 +417,7 @@ func ValidateConfig(cfg *config.Config) []error {
 func validateRuleConfig(r *config.Rule) []error {
 	errs := validateConditionKinds(r)
 	errs = append(errs, validateResponseRuleConfig(r)...)
+	errs = append(errs, validateTemporalSelectorScope(r)...)
 	allPaths := collectRuleFieldPaths(r)
 	if len(allPaths) == 0 {
 		return errs
@@ -423,6 +428,111 @@ func validateRuleConfig(r *config.Rule) []error {
 		errs = append(errs, validateFieldPathForRule(r, fieldPath, applicable)...)
 	}
 	return errs
+}
+
+func validateTemporalSelectorScope(r *config.Rule) []error {
+	var errs []error
+	for _, fieldPath := range r.FieldPaths {
+		if isTemporalSelector(fieldPath) {
+			errs = append(errs, fmt.Errorf(
+				"rule %q: field_path %q is valid only in exec condition field_paths",
+				r.Name,
+				fieldPath,
+			))
+		}
+	}
+	for _, fieldPath := range r.JudgeContext {
+		errs = appendTemporalSelectorScopeError(
+			errs,
+			r.Name,
+			"judge_context",
+			fieldPath,
+		)
+	}
+	for conditionIndex := range r.Conditions {
+		condition := &r.Conditions[conditionIndex]
+		for _, fieldPath := range condition.FieldPaths {
+			if !isTemporalSelector(fieldPath) {
+				continue
+			}
+			if config.ConditionKind(condition.Kind) != config.ConditionKindExec {
+				errs = append(errs, fmt.Errorf(
+					"rule %q: condition %d field_path %q is valid only for exec conditions",
+					r.Name,
+					conditionIndex,
+					fieldPath,
+				))
+				continue
+			}
+			if (fieldPath == "last_response_output" || fieldPath == "response_output") &&
+				!r.IsResponseAction() {
+				errs = append(errs, fmt.Errorf(
+					"rule %q: condition %d field_path %q requires action=%q or action=%q",
+					r.Name,
+					conditionIndex,
+					fieldPath,
+					config.ActionInject,
+					config.ActionMutate,
+				))
+			}
+		}
+		if config.ConditionKind(condition.Kind) == config.ConditionKindInfer {
+			inferSelectors := []struct {
+				name string
+				path string
+			}{
+				{name: "input_field", path: condition.InputField},
+				{name: "cache_key", path: condition.CacheKey},
+				{name: "context_workspace_field", path: condition.ContextWorkspaceField},
+				{name: "context_session_field", path: condition.ContextSessionField},
+			}
+			for _, selector := range inferSelectors {
+				location := fmt.Sprintf("condition %d %s", conditionIndex, selector.name)
+				errs = appendTemporalSelectorScopeError(
+					errs,
+					r.Name,
+					location,
+					selector.path,
+				)
+			}
+		}
+		if config.ConditionKind(condition.Kind) == config.ConditionKindDiff {
+			pair, err := config.ParseFieldPair(condition.FieldPair)
+			if err == nil {
+				location := fmt.Sprintf("condition %d field_pair", conditionIndex)
+				errs = appendTemporalSelectorScopeError(
+					errs,
+					r.Name,
+					location,
+					pair.OldPath,
+				)
+				errs = appendTemporalSelectorScopeError(
+					errs,
+					r.Name,
+					location,
+					pair.NewPath,
+				)
+			}
+		}
+	}
+	return errs
+}
+
+func appendTemporalSelectorScopeError(errs []error, ruleName string, location string, fieldPath string) []error {
+	if !isTemporalSelector(fieldPath) {
+		return errs
+	}
+	return append(errs, fmt.Errorf(
+		"rule %q: %s %q is valid only in exec condition field_paths",
+		ruleName,
+		location,
+		fieldPath,
+	))
+}
+
+func isTemporalSelector(fieldPath string) bool {
+	trimmedPath := strings.TrimSpace(fieldPath)
+	return config.IsTemporalExecSelector(config.CompileFieldSelector(trimmedPath))
 }
 
 func validateResponseRuleConfig(r *config.Rule) []error {

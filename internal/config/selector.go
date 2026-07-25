@@ -213,6 +213,12 @@ const (
 	FieldAttachmentsFilePath
 	// FieldAttachmentsType selects attachments[*].type values.
 	FieldAttachmentsType
+	// FieldLastUserMessage selects the latest observed typed user prompt.
+	FieldLastUserMessage
+	// FieldLastResponseOutput selects the previous model-facing response output.
+	FieldLastResponseOutput
+	// FieldResponseOutput selects the current rule's configured response fallback.
+	FieldResponseOutput
 )
 
 // FieldSelectorSpec preserves the user-facing path for diagnostics while using
@@ -325,6 +331,9 @@ var fieldSelectorByPath = map[string]FieldSelector{
 	"edits[*].new_line":            FieldEditsNewLine,
 	"attachments[*].file_path":     FieldAttachmentsFilePath,
 	"attachments[*].type":          FieldAttachmentsType,
+	"last_user_message":            FieldLastUserMessage,
+	"last_response_output":         FieldLastResponseOutput,
+	"response_output":              FieldResponseOutput,
 }
 
 // CompileFieldSelector returns the [FieldSelector] enum for a dotted-path
@@ -334,6 +343,14 @@ func CompileFieldSelector(path string) FieldSelector {
 		return selector
 	}
 	return FieldSelectorInvalid
+}
+
+// IsTemporalExecSelector reports whether a selector is populated from
+// process-local temporal context during exec condition evaluation.
+func IsTemporalExecSelector(selector FieldSelector) bool {
+	return selector == FieldLastUserMessage ||
+		selector == FieldLastResponseOutput ||
+		selector == FieldResponseOutput
 }
 
 // CompileFieldSelectorSpecs compiles dotted field paths into their closed

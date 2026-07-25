@@ -33,8 +33,9 @@ type PathView struct {
 
 // FieldValue is one matched field path and its extracted value.
 type FieldValue struct {
-	Field string `json:"field"`
-	Value string `json:"value"`
+	Field     string `json:"field"`
+	Value     string `json:"value"`
+	Available *bool  `json:"available,omitempty"`
 }
 
 // Input is the decision context handed to the validator. The engine builds it
