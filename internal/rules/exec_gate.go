@@ -624,10 +624,8 @@ func (r *ExecRuntime) runExpandedCommands(
 	matchAll := forEach && c.MatchMode == config.ExecMatchAll
 	firstBlockMessage := ""
 	for _, command := range commands {
-		res, runErr := r.runner.Run(ctx, command, backgroundValidatorTimeout, stdin, env)
-		verdict := execconcern.Interpret(c, res, runErr)
+		verdict := r.runExpandedCommandWithRetry(ctx, ruleName, c, command, stdin, env)
 		if verdict.Errored {
-			r.logExpandedCommandError(ctx, ruleName, c, command, res, runErr)
 			return verdict
 		}
 		if !forEach {
@@ -906,6 +904,7 @@ func stableExecCacheEntryKey(
 	writeHashPart(c.StdoutJSONEqualsValue().CanonicalString())
 	writeHashPart(strconv.Itoa(c.CacheTTLMs))
 	writeHashPart(strconv.Itoa(c.TimeoutMs))
+	writeHashPart(strconv.Itoa(c.RetryCount))
 	writeHashPart(strings.Join(c.SearchTools, "\x1f"))
 	for _, spec := range c.WriteSpecs {
 		writeHashPart(strings.Join(spec.Argv0, "\x1f"))

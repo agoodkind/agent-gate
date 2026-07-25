@@ -1104,6 +1104,48 @@ func TestExecErrorOutcomeNotCached(t *testing.T) {
 	}
 }
 
+func TestExecRetryCountRetriesErroredAttemptWithinBudget(t *testing.T) {
+	rule := loadExecRule(t, execRuleTOML("retry_count = 1\ncache_ttl_ms = 0"))
+	runner := newCountingRunner(execconcern.RunResult{}, nil)
+	runner.responses = []runnerResponse{
+		{res: execconcern.RunResult{}, err: execconcern.ErrTimeout},
+		{res: execconcern.RunResult{ExitCode: 1}, err: nil},
+	}
+	payload := map[string]any{"tool_input": map[string]any{"command": "grepcode here"}}
+
+	violations := evalRule(runner, rule, payload)
+	if len(violations) == 0 {
+		t.Fatalf("retry should recover the block from the second attempt")
+	}
+	if runner.Calls() != 2 {
+		t.Fatalf("retry_count=1 should fork twice on a first errored attempt, got %d", runner.Calls())
+	}
+}
+
+func TestExecRetryCountExhaustsThenAppliesOnError(t *testing.T) {
+	openRule := loadExecRule(t, execRuleTOML("retry_count = 1\non_error = \"open\"\ncache_ttl_ms = 0"))
+	payload := map[string]any{"tool_input": map[string]any{"command": "grepcode here"}}
+
+	runner := newCountingRunner(execconcern.RunResult{}, execconcern.ErrTimeout)
+	if len(evalRule(runner, openRule, payload)) != 0 {
+		t.Fatalf("two errored attempts under on_error=open should allow")
+	}
+	if runner.Calls() != 2 {
+		t.Fatalf("retry_count=1 should exhaust both attempts before failing open, got %d", runner.Calls())
+	}
+}
+
+func TestExecRetryCountZeroDoesNotRetry(t *testing.T) {
+	rule := loadExecRule(t, execRuleTOML("on_error = \"open\"\ncache_ttl_ms = 0"))
+	runner := newCountingRunner(execconcern.RunResult{}, execconcern.ErrTimeout)
+	payload := map[string]any{"tool_input": map[string]any{"command": "grepcode here"}}
+
+	evalRule(runner, rule, payload)
+	if runner.Calls() != 1 {
+		t.Fatalf("default retry_count=0 must fork once, got %d", runner.Calls())
+	}
+}
+
 func TestExecCanonicalCacheKeySharedAcrossSymlinkAliases(t *testing.T) {
 	real := t.TempDir()
 	link := filepath.Join(t.TempDir(), "alias")
