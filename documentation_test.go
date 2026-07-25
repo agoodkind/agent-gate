@@ -1,11 +1,14 @@
 package agentgate_test
 
 import (
+	"bytes"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
+	"syscall"
 	"testing"
 
 	"goodkind.io/agent-gate/internal/config"
@@ -28,6 +31,171 @@ func TestConfigExampleLoadsAsProductionConfig(t *testing.T) {
 	}
 	if validationErrors := hook.ValidateConfig(loadedConfig); len(validationErrors) != 0 {
 		t.Fatalf("config.toml.example is not valid for shipped hook schemas: %v", validationErrors)
+	}
+}
+
+func TestTemporalExecContextDocumentationAndExample(t *testing.T) {
+	configReference := readFiles(t, "config.toml.example")
+	for _, want := range []string{
+		"loop_count",
+		"last_user_message",
+		"last_response_output",
+		"response_output",
+		"available",
+		"process-local",
+		"config reload",
+		"restart or eviction",
+		"stale verdict",
+	} {
+		if !strings.Contains(configReference, want) {
+			t.Errorf("config.toml.example omits temporal exec context %q", want)
+		}
+	}
+
+	hookContract := readFiles(t, "HOOKS.md")
+	for _, want := range []string{
+		"send gate",
+		"script decides",
+		"complete stdout",
+	} {
+		if !strings.Contains(hookContract, want) {
+			t.Errorf("HOOKS.md omits exec response contract %q", want)
+		}
+	}
+
+	scriptPath := filepath.Join("examples", "validators", "temporal-response-gate.sh")
+	scriptInfo, err := os.Stat(scriptPath)
+	if err != nil {
+		t.Fatalf("stat temporal exec example: %v", err)
+	}
+	if scriptInfo.Mode()&0o111 == 0 {
+		t.Errorf("%s is not executable", scriptPath)
+	}
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skipf("temporal response gate example requires jq: %v", err)
+	}
+
+	runGate := func(t *testing.T, input string) ([]byte, error) {
+		t.Helper()
+		command := exec.Command("bash", scriptPath)
+		command.Stdin = strings.NewReader(input)
+		return command.Output()
+	}
+	assertPolicySuppression := func(t *testing.T, input string) {
+		t.Helper()
+		_, err := runGate(t, input)
+		exitError, ok := err.(*exec.ExitError)
+		if !ok {
+			t.Fatalf("temporal exec example policy suppression error = %v", err)
+		}
+		if exitError.ExitCode() != 1 {
+			t.Errorf("temporal exec example policy suppression exit code = %d, want 1", exitError.ExitCode())
+		}
+	}
+
+	firstStop := `{"matched":[{"field":"last_user_message","value":"new request","available":true},{"field":"last_response_output","value":"","available":false},{"field":"response_output","value":"Continue the new request.","available":true},{"field":"loop_count","value":"0","available":true}]}`
+	output, err := runGate(t, firstStop)
+	if err != nil {
+		t.Fatalf("temporal exec example first stop: %v", err)
+	}
+	if string(output) != "Continue the new request." {
+		t.Errorf("temporal exec example first stop output = %q", output)
+	}
+
+	equalPreviousResponse := `{"matched":[{"field":"last_user_message","value":"Continue the new request.","available":true},{"field":"last_response_output","value":"Continue the new request.","available":true},{"field":"response_output","value":"Continue the new request.","available":true},{"field":"loop_count","value":"1","available":true}]}`
+	assertPolicySuppression(t, equalPreviousResponse)
+
+	laterRequest := `{"matched":[{"field":"last_user_message","value":"a different later request","available":true},{"field":"last_response_output","value":"Continue the new request.","available":true},{"field":"response_output","value":"Continue the later request.","available":true},{"field":"loop_count","value":"2","available":true}]}`
+	output, err = runGate(t, laterRequest)
+	if err != nil {
+		t.Fatalf("temporal exec example later request: %v", err)
+	}
+	if string(output) != "Continue the later request." {
+		t.Errorf("temporal exec example later request output = %q", output)
+	}
+
+	trailingNewlines := `{"matched":[{"field":"last_user_message","value":"new request\n","available":true},{"field":"last_response_output","value":"new request","available":true},{"field":"response_output","value":"line one\n\n","available":true},{"field":"loop_count","value":"2","available":true}]}`
+	output, err = runGate(t, trailingNewlines)
+	if err != nil {
+		t.Fatalf("temporal exec example trailing newlines: %v", err)
+	}
+	if string(output) != "line one\n\n" {
+		t.Errorf("temporal exec example trailing newline output = %q", output)
+	}
+
+	for _, testCase := range []struct {
+		name  string
+		input string
+	}{
+		{
+			name:  "unavailable last user message",
+			input: `{"matched":[{"field":"last_user_message","value":"","available":false},{"field":"last_response_output","value":"previous response","available":true},{"field":"response_output","value":"Continue.","available":true},{"field":"loop_count","value":"1","available":true}]}`,
+		},
+		{
+			name:  "unavailable response output",
+			input: `{"matched":[{"field":"last_user_message","value":"new request","available":true},{"field":"last_response_output","value":"previous response","available":true},{"field":"response_output","value":"","available":false},{"field":"loop_count","value":"1","available":true}]}`,
+		},
+		{
+			name:  "unavailable prior response on later loop",
+			input: `{"matched":[{"field":"last_user_message","value":"Continue.","available":true},{"field":"last_response_output","value":"","available":false},{"field":"response_output","value":"Continue.","available":true},{"field":"loop_count","value":"1","available":true}]}`,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			assertPolicySuppression(t, testCase.input)
+		})
+	}
+}
+
+func TestTemporalExecExampleReportsMissingJQ(t *testing.T) {
+	binDirectory := t.TempDir()
+
+	command := exec.Command("bash", "examples/validators/temporal-response-gate.sh")
+	command.Env = []string{"PATH=" + binDirectory}
+	command.Stdin = strings.NewReader(`{"matched":[]}`)
+	var stderr bytes.Buffer
+	command.Stderr = &stderr
+
+	err := command.Run()
+	exitError, ok := err.(*exec.ExitError)
+	if !ok {
+		t.Fatalf("temporal exec example missing jq error = %v", err)
+	}
+	waitStatus, ok := exitError.ProcessState.Sys().(syscall.WaitStatus)
+	if !ok || !waitStatus.Signaled() || waitStatus.Signal() != syscall.SIGTERM {
+		t.Errorf("temporal exec example missing jq status = %v, want SIGTERM", exitError.ProcessState)
+	}
+	if !strings.Contains(stderr.String(), "jq") {
+		t.Errorf("temporal exec example missing jq stderr = %q", stderr.String())
+	}
+}
+
+func TestTemporalExecExampleReportsJQFailure(t *testing.T) {
+	falsePath, err := exec.LookPath("false")
+	if err != nil {
+		t.Fatalf("find false: %v", err)
+	}
+	binDirectory := t.TempDir()
+	if err := os.Symlink(falsePath, filepath.Join(binDirectory, "jq")); err != nil {
+		t.Fatalf("link jq stub: %v", err)
+	}
+
+	command := exec.Command("bash", "examples/validators/temporal-response-gate.sh")
+	command.Env = []string{"PATH=" + binDirectory}
+	command.Stdin = strings.NewReader(`{"matched":[]}`)
+	var stderr bytes.Buffer
+	command.Stderr = &stderr
+
+	err = command.Run()
+	exitError, ok := err.(*exec.ExitError)
+	if !ok {
+		t.Fatalf("temporal exec example jq failure = %v", err)
+	}
+	waitStatus, ok := exitError.ProcessState.Sys().(syscall.WaitStatus)
+	if !ok || !waitStatus.Signaled() || waitStatus.Signal() != syscall.SIGTERM {
+		t.Errorf("temporal exec example jq failure status = %v, want SIGTERM", exitError.ProcessState)
+	}
+	if !strings.Contains(stderr.String(), "jq failed") {
+		t.Errorf("temporal exec example jq failure stderr = %q", stderr.String())
 	}
 }
 
