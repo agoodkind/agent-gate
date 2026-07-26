@@ -71,6 +71,21 @@ func extractEmbeddedCodeSearchInto(decomposition *shelldecomp.Decomposition, cwd
 // language whose analyzer is registered in shelldecomp (python, awk) appears
 // here; a region whose language is absent folds nothing, so adding a new
 // analyzer to shelldecomp without a matching entry leaves it inert here.
+//
+// Two limits decide how much of an interpreter body a rule actually sees, and
+// both fail quiet rather than loud.
+//
+// A rule that does not declare the language's tools folds nothing even when the
+// analyzer resolved the reads, so a search_tools list of only grep-family names
+// leaves every python body invisible. TestExtractCodeSearchTargetsPythonToolGate
+// pins that behavior.
+//
+// A language with a grammar but no read analyzer parses into a non-nil Parsed
+// that yields no read targets, so it folds nothing here no matter what a rule
+// declares. As of this writing that covers ruby and javascript, and php parses
+// to no region at all. Declaring ruby or node in search_tools therefore buys no
+// coverage of a `ruby -e` or `node -e` body; closing that needs read analyzers
+// in gksyntax, not config.
 var regionFoldTools = map[shelldecomp.Lang][]string{
 	shelldecomp.LangPython: {"python", "python3"},
 	shelldecomp.LangAwk:    {"awk", "gawk"},

@@ -2,6 +2,7 @@ package shellread
 
 import (
 	"os"
+	"strings"
 
 	"goodkind.io/agent-gate/internal/rules/concerns/shellparse"
 	"goodkind.io/gksyntax/shelldecomp"
@@ -93,12 +94,22 @@ func extractCodeSearchInto(command, cwd, home string, tools map[string]bool, add
 		add(target.Path)
 	}
 
+	// The enumerator and recursive-structure layers below split text into shell
+	// fields, so they must only see shell. An embedded program's source is not
+	// shell, and reading it as shell fabricates directories out of call syntax
+	// (a ruby body yields the directory `Dir.glob "/abs/lmd`) or resolves a glob
+	// base to cwd when a language construct like Dir[...] is mistaken for a
+	// wildcard. Each embedded region is handled on its own terms further down,
+	// by its analyzer's reads or by a recursive shell scan of an opaque body, so
+	// blanking the regions here loses nothing those layers already cover.
+	shellText := maskEmbeddedRegions(command, decomposition.EmbeddedRegions())
+
 	// Enumerator-driven code search (find/fd/git ls-files feeding a declared
 	// tool over file contents). shelldecomp surfaces find's own operands as
 	// reads, which over- and under-count the enumerated directory, so the
 	// enumerator layer computes the real target and the find/fd/git-ls-files
 	// reads above are skipped by the declared-tools filter.
-	for _, target := range resolvableTargets(enumeratorCodeSearchTargets(command, cwd, tools)) {
+	for _, target := range resolvableTargets(enumeratorCodeSearchTargets(shellText, cwd, tools)) {
 		add(target.Path)
 	}
 
@@ -106,7 +117,7 @@ func extractCodeSearchInto(command, cwd, home string, tools map[string]bool, add
 	// without a shallow -maxdepth, git ls-files, a recursive ** glob). shelldecomp
 	// models these as filename enumeration, not a content read, so the directory
 	// they walk is computed here and left for the index-aware validator to judge.
-	for _, target := range resolvableTargets(recursiveEnumerationTargets(command, cwd)) {
+	for _, target := range resolvableTargets(recursiveEnumerationTargets(shellText, cwd)) {
 		add(target.Path)
 	}
 
@@ -121,6 +132,76 @@ func parseCommand(command, cwd, home string, resolver shelldecomp.FileResolver) 
 		return shelldecomp.Parse(command, cwd, home)
 	}
 	return shelldecomp.ParseWithOptions(command, cwd, shelldecomp.Options{Home: home, FileResolver: resolver})
+}
+
+// maskEmbeddedRegions returns command with each foreign-language embedded
+// region's source blanked to spaces, so a shell-field scan of the result sees
+// only shell. Blanking preserves length, byte offsets, and field boundaries, so
+// the surrounding shell splits exactly as it did before.
+//
+// A region reports a byte span for a heredoc body but reports 0..0 for an
+// interpreter -c or -e operand, so the span is used when it is present and
+// usable and the region's text is located in the command otherwise. A region
+// whose text cannot be located is left alone rather than guessed at.
+func maskEmbeddedRegions(command string, regions []shelldecomp.EmbeddedRegion) string {
+	if len(regions) == 0 {
+		return command
+	}
+	masked := []byte(command)
+	for _, region := range regions {
+		if !isForeignLanguageRegion(region.Lang) {
+			continue
+		}
+		start, end, ok := regionSpan(command, region)
+		if !ok {
+			continue
+		}
+		for index := start; index < end; index++ {
+			masked[index] = ' '
+		}
+	}
+	return string(masked)
+}
+
+// isForeignLanguageRegion reports whether a region's body is a language other
+// than shell, and therefore must not be read as shell fields.
+//
+// A shell region stays visible because reading shell as shell is correct and
+// because the enumerator layer depends on it: `find DIR | xargs grep` and
+// `find DIR -exec grep` both carry the searcher as a nested shell region, and
+// blanking it would hide the searcher that makes the enumerated directory a
+// content-search target. An opaque region stays visible because it has no
+// grammar, so the recursive shell scan of its body is the only reading
+// available and the outer scan is a backstop for when the depth budget runs
+// out. Every other language is program source with its own analyzer.
+func isForeignLanguageRegion(lang shelldecomp.Lang) bool {
+	switch lang {
+	case shelldecomp.LangPython, shelldecomp.LangJavaScript, shelldecomp.LangRuby,
+		shelldecomp.LangPerl, shelldecomp.LangAppleScript, shelldecomp.LangSQL,
+		shelldecomp.LangAwk, shelldecomp.LangJQ, shelldecomp.LangSed,
+		shelldecomp.LangRegex:
+		return true
+	case shelldecomp.LangShell, shelldecomp.LangOpaque, shelldecomp.LangUnknown:
+		return false
+	default:
+		return false
+	}
+}
+
+// regionSpan returns the byte range of one embedded region within command, and
+// whether a usable range was found.
+func regionSpan(command string, region shelldecomp.EmbeddedRegion) (int, int, bool) {
+	if region.EndByte > region.StartByte && int(region.EndByte) <= len(command) {
+		return int(region.StartByte), int(region.EndByte), true
+	}
+	if region.Text == "" {
+		return 0, 0, false
+	}
+	offset := strings.Index(command, region.Text)
+	if offset < 0 {
+		return 0, 0, false
+	}
+	return offset, offset + len(region.Text), true
 }
 
 // resolvableTargets drops enumerator operands whose path still carries a shell
