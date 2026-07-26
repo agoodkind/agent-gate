@@ -268,7 +268,14 @@ func findIsShallow(fields []string) bool {
 // analyzer already resolves that program's real read targets, so dropping the
 // fabricated operand loses no coverage and stops a validator run against a path
 // that cannot exist.
-const nonPathOperandChars = "()\"'`,=;|&<>$ \t"
+//
+// The set is deliberately only the call parentheses. A directory name may
+// legitimately contain a space, a comma, an equals sign, or a quote, and
+// shellFields preserves those inside a quoted or escaped field, so rejecting
+// them would silently drop a real search target and let a read of an indexed
+// repository through. A $ or backtick operand is already dropped downstream by
+// resolvableTargets, which refuses a path still carrying a shell expansion.
+const nonPathOperandChars = "()"
 
 // isPlausiblePathOperand reports whether dir could be the directory part of a
 // shell path operand.

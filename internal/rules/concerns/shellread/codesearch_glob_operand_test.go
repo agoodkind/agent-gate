@@ -42,6 +42,14 @@ func TestRecursiveGlobDirsRejectsProgramSourceOperands(t *testing.T) {
 		{"shell glob at root", "cat **/*.go", []string{"/repo"}},
 		{"python call operand", `glob.glob("/abs/lmd/**/*.go", recursive=True)`, nil},
 		{"python keyword argument operand", `sorted(glob.iglob(root+"/**/*.go"))`, nil},
+
+		// A directory name may legitimately contain these characters. Rejecting
+		// them would drop the only layer that names the target for a
+		// non-searcher command, so an indexed repository would read unblocked.
+		{"quoted directory with a space", `cat "/abs/My Repo/**/*.go"`, []string{"/abs/My Repo"}},
+		{"escaped directory with a space", `cat /abs/My\ Repo/**/*.go`, []string{"/abs/My Repo"}},
+		{"directory with a comma", "cat /abs/a,b/**/*.go", []string{"/abs/a,b"}},
+		{"directory with an equals sign", "cat /abs/pkg=v1/**/*.go", []string{"/abs/pkg=v1"}},
 	}
 
 	for _, tc := range cases {
