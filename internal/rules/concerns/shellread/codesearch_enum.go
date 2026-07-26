@@ -260,6 +260,29 @@ func findIsShallow(fields []string) bool {
 	return false
 }
 
+// nonPathOperandChars are characters that cannot appear in the directory part
+// of a real shell glob operand but do appear when an embedded program's source
+// is scanned as if it were shell. A python body quote-stripped to
+// glob.glob(/repo/**/*.go, recursive=True) yields the directory
+// glob.glob(/repo, which names no directory on disk. The embedded region's own
+// analyzer already resolves that program's real read targets, so dropping the
+// fabricated operand loses no coverage and stops a validator run against a path
+// that cannot exist.
+//
+// The set is deliberately only the call parentheses. A directory name may
+// legitimately contain a space, a comma, an equals sign, or a quote, and
+// shellFields preserves those inside a quoted or escaped field, so rejecting
+// them would silently drop a real search target and let a read of an indexed
+// repository through. A $ or backtick operand is already dropped downstream by
+// resolvableTargets, which refuses a path still carrying a shell expansion.
+const nonPathOperandChars = "()"
+
+// isPlausiblePathOperand reports whether dir could be the directory part of a
+// shell path operand.
+func isPlausiblePathOperand(dir string) bool {
+	return !strings.ContainsAny(dir, nonPathOperandChars)
+}
+
 // recursiveGlobDirs returns the base directory of each recursive ** glob token in
 // the command: the literal prefix before the first wildcard, taken up to its last
 // path separator and resolved against cwd. A command reading files matched by a
@@ -283,6 +306,9 @@ func recursiveGlobDirs(command, cwd string) []string {
 			if dir == "" {
 				dir = "/"
 			}
+		}
+		if !isPlausiblePathOperand(dir) {
+			continue
 		}
 		out = append(out, resolvePath(cwd, dir))
 	}

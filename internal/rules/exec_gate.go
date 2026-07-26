@@ -623,13 +623,30 @@ func (r *ExecRuntime) runExpandedCommands(
 	forEach := c.ForEachSelector().Selector != config.FieldSelectorInvalid
 	matchAll := forEach && c.MatchMode == config.ExecMatchAll
 	firstBlockMessage := ""
+	firstErrored := execconcern.Verdict{Block: false, Message: "", Output: "", Errored: false}
+	sawErrored := false
 	for _, command := range commands {
 		verdict := r.runExpandedCommandWithRetry(ctx, ruleName, c, command, stdin, env)
-		if verdict.Errored {
-			return verdict
-		}
 		if !forEach {
 			return verdict
+		}
+		if verdict.Errored {
+			// Under match_mode = "any" one target the validator cannot classify
+			// must not veto the rest. A single unresolvable target would
+			// otherwise decide the whole expansion and every remaining target,
+			// including an indexed one that would block, is never probed. The
+			// error is remembered and only decides the condition when no target
+			// blocked. Under match_mode = "all" an errored target still returns
+			// immediately, because "every target matches" cannot be proven once
+			// one target is unknown.
+			if matchAll {
+				return verdict
+			}
+			if !sawErrored {
+				sawErrored = true
+				firstErrored = verdict
+			}
+			continue
 		}
 		if verdict.Block && firstBlockMessage == "" {
 			firstBlockMessage = verdict.Message
@@ -643,6 +660,9 @@ func (r *ExecRuntime) runExpandedCommands(
 	}
 	if matchAll {
 		return execconcern.Verdict{Block: true, Message: firstBlockMessage, Output: "", Errored: false}
+	}
+	if sawErrored {
+		return firstErrored
 	}
 	return execconcern.Verdict{Block: false, Message: "", Output: "", Errored: false}
 }
