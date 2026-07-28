@@ -380,6 +380,72 @@ func TestEvaluateHotRecordsTargetForEmptyResponseEffect(t *testing.T) {
 	}
 }
 
+func TestEvaluateHotComposesEveryPromptSubmitInjection(t *testing.T) {
+	configDir := t.TempDir()
+	if err := os.WriteFile(
+		filepath.Join(configDir, "second.txt"),
+		[]byte("second context"),
+		0o600,
+	); err != nil {
+		t.Fatalf("WriteFile output file: %v", err)
+	}
+	path := filepath.Join(configDir, "config.toml")
+	if err := os.WriteFile(path, []byte(`
+[[rules]]
+name = "first-prompt-context"
+claude_events = ["UserPromptSubmit"]
+action = "inject"
+output = "first context"
+
+[[rules]]
+name = "second-prompt-context"
+claude_events = ["UserPromptSubmit"]
+action = "inject"
+output_file = "second.txt"
+
+[[rules]]
+name = "third-prompt-context"
+claude_events = ["UserPromptSubmit"]
+action = "inject"
+output = "third context"
+`), 0o600); err != nil {
+		t.Fatalf("WriteFile config: %v", err)
+	}
+	cfg, err := config.LoadExisting(path)
+	if err != nil {
+		t.Fatalf("LoadExisting: %v", err)
+	}
+	rawJSON := []byte(
+		`{"hook_event_name":"UserPromptSubmit","session_id":"s1","prompt":"do the thing"}`,
+	)
+
+	evaluation := hook.EvaluateHot(
+		context.Background(),
+		rawJSON,
+		cfg,
+		hook.SystemClaude,
+		func(string) string { return "" },
+	)
+	if evaluation.ExitCode != 0 {
+		t.Fatalf("ExitCode = %d, want 0 (stderr %q)", evaluation.ExitCode, evaluation.Stderr)
+	}
+	const wantContext = `"additionalContext":"first context\n\nsecond context\n\nthird context"`
+	if !strings.Contains(string(evaluation.Stdout), wantContext) {
+		t.Fatalf("Stdout = %q, want substring %q", evaluation.Stdout, wantContext)
+	}
+	if len(evaluation.Deferred.ResponseEffects) != 3 {
+		t.Fatalf(
+			"ResponseEffects = %#v, want three applied effects",
+			evaluation.Deferred.ResponseEffects,
+		)
+	}
+	for _, effect := range evaluation.Deferred.ResponseEffects {
+		if effect.Target != "context" || effect.Disposition != rules.ResponseEffectApplied {
+			t.Fatalf("response effect = %#v, want applied context injection", effect)
+		}
+	}
+}
+
 func TestEvaluateHotDoesNotPublishUnsupportedResponseEffect(t *testing.T) {
 	cfg := &config.Config{Rules: []config.Rule{{
 		Name: "unsupported-context", CursorEvents: []string{"beforeSubmitPrompt"},
