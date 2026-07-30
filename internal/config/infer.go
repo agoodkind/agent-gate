@@ -12,11 +12,9 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
+// The per-condition inference deadline and its ceiling live in
+// [performance.timeouts]; see timeouts.go.
 const (
-	// DefaultInferTimeoutMs is the default per-condition inference deadline.
-	DefaultInferTimeoutMs = 1500
-	// MaxInferTimeoutMs is the maximum per-condition inference deadline.
-	MaxInferTimeoutMs = 8000
 	// DefaultContextTurnBudget is the default Clyde context turn count.
 	DefaultContextTurnBudget = 4
 	// MaxContextTurnBudget is the maximum Clyde context turn count.
@@ -53,7 +51,7 @@ func (c *Condition) ContextSessionSelector() FieldSelectorSpec { return c.contex
 // ResponseJSONEqualsValue returns the decoded infer response predicate scalar.
 func (c *Condition) ResponseJSONEqualsValue() TOMLScalarValue { return c.responseJSONValue }
 
-func compileInferConfig(log *slog.Logger, ruleName string, index int, condition *Condition, meta toml.MetaData, configDirectory string) error {
+func compileInferConfig(log *slog.Logger, ruleName string, index int, condition *Condition, meta toml.MetaData, configDirectory string, cfg *Config) error {
 	if ConditionKind(condition.Kind) != ConditionKindInfer {
 		return nil
 	}
@@ -98,10 +96,14 @@ func compileInferConfig(log *slog.Logger, ruleName string, index int, condition 
 		return fmt.Errorf("%s: %w", contextLabel, err)
 	}
 	if condition.TimeoutMs == 0 {
-		condition.TimeoutMs = DefaultInferTimeoutMs
+		condition.TimeoutMs = cfg.InferDefaultTimeoutMs()
 	}
-	if condition.TimeoutMs < 0 || condition.TimeoutMs > MaxInferTimeoutMs {
-		return fmt.Errorf("%s: timeout_ms %d exceeds max %d", contextLabel, condition.TimeoutMs, MaxInferTimeoutMs)
+	maxInferTimeoutMs := cfg.InferMaxTimeoutMs()
+	if condition.TimeoutMs < 0 || condition.TimeoutMs > maxInferTimeoutMs {
+		return fmt.Errorf(
+			"%s: timeout_ms %d exceeds performance.timeouts.infer_max_ms %d",
+			contextLabel, condition.TimeoutMs, maxInferTimeoutMs,
+		)
 	}
 	if condition.CacheTTLMs < 0 {
 		return fmt.Errorf("%s: cache_ttl_ms must be non-negative", contextLabel)

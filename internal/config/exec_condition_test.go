@@ -82,7 +82,7 @@ func TestExecConditionRejectsInvalidRetryCount(t *testing.T) {
 		value string
 	}{
 		{"negative", "-1"},
-		{"over max", strconv.Itoa(config.MaxExecRetryCount + 1)},
+		{"over max", strconv.Itoa(config.DefaultMaxExecRetryCount + 1)},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

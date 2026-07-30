@@ -36,10 +36,6 @@ const configReloadDebounce = 200 * time.Millisecond
 
 const intakeParseFailed = "intake_parse_failed"
 
-const (
-	overloadLogInterval = 5 * time.Second
-)
-
 type runtimeSnapshot struct {
 	cfg                *config.Config
 	eventLogger        *audit.EventLogger
@@ -86,6 +82,69 @@ type Server struct {
 
 	overloadLogMu       sync.Mutex
 	lastOverloadLogTime time.Time
+	overloadLogInterval time.Duration
+}
+
+// zeroConfig returns a fully-specified empty Config for a nil caller. Every
+// field is named so a new config section cannot be silently defaulted here.
+func zeroConfig() *config.Config {
+	return &config.Config{
+		Log:   config.Log{Level: ""},
+		Audit: config.Audit{Enabled: nil, Level: "", Outputs: config.AuditOutput{SQLite: config.AuditSQLiteOutput{Path: ""}}},
+		Paths: config.Paths{ConversationsDir: ""},
+		Performance: config.Performance{
+			Hook: config.HookPerformance{
+				HotConcurrency:          0,
+				HotQueueWaitMS:          0,
+				InferencePhaseTimeoutMS: 0,
+				DeferredQueueLimit:      0,
+				DeferredWorkers:         0,
+				Cache: config.HookCachePerformance{
+					MaxEntries:      0,
+					MaxValueBytes:   0,
+					PruneIntervalMS: 0,
+				},
+			},
+			Timeouts: config.TimeoutPerformance{
+				HookEvaluateMS: 0, ExecDefaultMS: 0, ExecMaxMS: 0,
+				ExecBackgroundMS: 0, ExecMaxRetryCount: 0,
+				InferDefaultMS: 0, InferMaxMS: 0,
+			},
+			Limits: config.LimitPerformance{
+				RegexMatchLimit: 0, RegexDepthLimit: 0, ShellReadMaxBytes: 0,
+				UpstreamMetadataJSONBytes: 0, LayerMetadataJSONBytes: 0,
+				LayerMetadataStringBytes: 0, AuditQueueLimit: 0,
+				AuditDedupCacheSize: 0, EvaluationQueryLimit: 0,
+				EvaluationMaxQueryLimit: 0, HookInferencePhaseMaxMs: 0,
+			},
+			Intervals: config.IntervalPerformance{
+				AuditDedupTTLMs: 0, AuditDropLogIntervalMs: 0,
+				OverloadLogIntervalMs: 0, DeferredClaimLeaseMs: 0,
+				DeferredClaimRenewMs: 0, ServiceWaitAttempts: 0,
+				ServiceWaitSleepMs: 0, InstallReadinessTimeoutMs: 0,
+				InstallReadinessIntervalMs: 0,
+			},
+		},
+		Update: config.Update{
+			Enabled:         nil,
+			Mode:            "",
+			Interval:        "",
+			Repo:            "",
+			AllowPrerelease: nil,
+		},
+		Telemetry: config.TelemetryConfig{OTLPEndpoint: "", SlowOpThresholdMs: 0},
+		Messages:  config.Messages{BlockFooter: ""},
+		Judge: config.Judge{
+			TranscriptEndpoint:   "",
+			TranscriptMaxTokens:  0,
+			TranscriptTokenModel: "",
+			TranscriptTimeoutMS:  0,
+			TranscriptOnError:    "",
+			Pricing:              nil,
+		},
+		Inference: nil,
+		Rules:     nil,
+	}
 }
 
 // New creates a new daemon Server.
@@ -94,44 +153,7 @@ func New(log *slog.Logger, cfg *config.Config) (*Server, error) {
 		log = slog.Default()
 	}
 	if cfg == nil {
-		cfg = &config.Config{
-			Log:   config.Log{Level: ""},
-			Audit: config.Audit{Enabled: nil, Level: "", Outputs: config.AuditOutput{SQLite: config.AuditSQLiteOutput{Path: ""}}},
-			Paths: config.Paths{ConversationsDir: ""},
-			Performance: config.Performance{
-				Hook: config.HookPerformance{
-					HotConcurrency:          0,
-					HotQueueWaitMS:          0,
-					InferencePhaseTimeoutMS: 0,
-					DeferredQueueLimit:      0,
-					DeferredWorkers:         0,
-					Cache: config.HookCachePerformance{
-						MaxEntries:      0,
-						MaxValueBytes:   0,
-						PruneIntervalMS: 0,
-					},
-				},
-			},
-			Update: config.Update{
-				Enabled:         nil,
-				Mode:            "",
-				Interval:        "",
-				Repo:            "",
-				AllowPrerelease: nil,
-			},
-			Telemetry: config.TelemetryConfig{OTLPEndpoint: "", SlowOpThresholdMs: 0},
-			Messages:  config.Messages{BlockFooter: ""},
-			Judge: config.Judge{
-				TranscriptEndpoint:   "",
-				TranscriptMaxTokens:  0,
-				TranscriptTokenModel: "",
-				TranscriptTimeoutMS:  0,
-				TranscriptOnError:    "",
-				Pricing:              nil,
-			},
-			Inference: nil,
-			Rules:     nil,
-		}
+		cfg = zeroConfig()
 	}
 	if errs := hook.ValidateConfig(cfg); len(errs) > 0 {
 		log.Error("invalid hook config", slog.Any("err", errs[0]))
@@ -165,6 +187,7 @@ func New(log *slog.Logger, cfg *config.Config) (*Server, error) {
 		stopDaemon:                    nil,
 		overloadLogMu:                 sync.Mutex{},
 		lastOverloadLogTime:           time.Time{},
+		overloadLogInterval:           cfg.OverloadLogInterval(),
 	}
 	s.runtime.Store(snapshot)
 	if err := s.startConfigWatcher(); err != nil {
@@ -733,7 +756,7 @@ func (s *Server) logEvaluateOverload(ctx context.Context, snapshot *runtimeSnaps
 	}
 	now := auditNow()
 	s.overloadLogMu.Lock()
-	if !s.lastOverloadLogTime.IsZero() && now.Sub(s.lastOverloadLogTime) < overloadLogInterval {
+	if !s.lastOverloadLogTime.IsZero() && now.Sub(s.lastOverloadLogTime) < s.overloadLogInterval {
 		s.overloadLogMu.Unlock()
 		return
 	}

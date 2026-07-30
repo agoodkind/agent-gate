@@ -58,13 +58,14 @@ type EventLogger struct {
 	rawHash  bool
 	enabled  bool
 
-	mu       sync.Mutex
-	cond     *sync.Cond
-	queue    []eventWrite
-	limit    int
-	dropped  uint64
-	lastDrop time.Time
-	stopping bool
+	mu              sync.Mutex
+	cond            *sync.Cond
+	queue           []eventWrite
+	limit           int
+	dropped         uint64
+	dropLogInterval time.Duration
+	lastDrop        time.Time
+	stopping        bool
 
 	wg       sync.WaitGroup
 	log      *slog.Logger
@@ -174,7 +175,7 @@ func NewEventLoggerWithOptions(ctx context.Context, cfg *config.Config, log *slo
 	}
 	queueLimit := options.QueueLimit
 	if queueLimit <= 0 {
-		queueLimit = defaultQueueLimit
+		queueLimit = cfg.AuditQueueLimit()
 	}
 	el := new(EventLogger)
 	el.minLevel = parseLevel(level)
@@ -183,7 +184,8 @@ func NewEventLoggerWithOptions(ctx context.Context, cfg *config.Config, log *slo
 	el.log = log
 	el.sharedDB = options.SharedDB
 	el.cond = sync.NewCond(&el.mu)
-	el.dedup = expirable.NewLRU[string, struct{}](dedupCacheSize, nil, dedupTTL)
+	el.dropLogInterval = cfg.AuditDropLogInterval()
+	el.dedup = expirable.NewLRU[string, struct{}](cfg.AuditDedupCacheSize(), nil, cfg.AuditDedupTTL())
 
 	if cfg != nil && !cfg.AuditEnabled() {
 		el.enabled = false
@@ -379,7 +381,7 @@ func (el *EventLogger) recordDrop(system, sessionID, eventName, msg string) {
 	el.mu.Lock()
 	el.dropped++
 	dropped := el.dropped
-	if !el.lastDrop.IsZero() && now.Sub(el.lastDrop) < dropLogInterval {
+	if !el.lastDrop.IsZero() && now.Sub(el.lastDrop) < el.dropLogInterval {
 		el.mu.Unlock()
 		return
 	}

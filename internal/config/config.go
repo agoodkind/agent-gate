@@ -47,7 +47,10 @@ type AuditSQLiteOutput struct {
 
 // Performance holds optional tuning for latency-sensitive paths.
 type Performance struct {
-	Hook HookPerformance `toml:"hook"`
+	Hook      HookPerformance     `toml:"hook"`
+	Timeouts  TimeoutPerformance  `toml:"timeouts"`
+	Limits    LimitPerformance    `toml:"limits"`
+	Intervals IntervalPerformance `toml:"intervals"`
 }
 
 // HookPerformance tunes the daemon-owned hook evaluation pipeline.
@@ -241,23 +244,10 @@ const (
 	ExecMatchAll = "all"
 )
 
-// Exec condition defaults and bounds. The timeout is capped below the hook
-// client deadline (evaluateHookTimeout in internal/daemon/client.go) so a slow
-// validator cannot stall the hook past its own timeout. The cap left 2s of head
-// room when that deadline was 5s; the deadline is now 12s, so the old 4000
-// stopped tracking it. A rule that fails open on a slow validator loses its
-// verdict entirely, which is worth more than the head room.
-//
-// A rule setting the maximum must leave retry_count at 0, since retries
-// multiply the timeout and the product has to stay inside the hook deadline.
-const (
-	DefaultExecTimeoutMs = 1500
-	MaxExecTimeoutMs     = 10000
-	DefaultExecCacheKey  = "effective_cwd"
-	// MaxExecRetryCount bounds retry_count so a misconfigured rule cannot fork a
-	// validator without limit; retries fire only on errored verdicts.
-	MaxExecRetryCount = 5
-)
+// Exec condition timeouts, their ceiling, and the retry bound all live in
+// [performance.timeouts]; see timeouts.go. They are read through Config
+// accessors rather than fixed here, so a config can never depend on a ceiling
+// that only exists in an unreleased binary.
 
 // CompiledPattern returns the pre-compiled regex for Pattern.
 func (c *Condition) CompiledPattern() *regex.Regexp { return c.compiled }
@@ -621,7 +611,13 @@ func loadPath(path string, requireExisting bool) (*Config, error) {
 		log.Error("decode config failed", "path", path, "err", err)
 		return nil, fmt.Errorf("decode config %s: %w", path, err)
 	}
-	if err := validateHookPerformance(cfg.Performance.Hook); err != nil {
+	if err := validateHookPerformance(cfg.Performance.Hook, cfg.Performance.Limits); err != nil {
+		return nil, err
+	}
+	if err := validateTimeouts(cfg.Performance.Timeouts); err != nil {
+		return nil, err
+	}
+	if err := validateLimits(cfg.Performance.Limits, cfg.Performance.Intervals); err != nil {
 		return nil, err
 	}
 	if err := validateInferencePoints(log, cfg.Inference); err != nil {
@@ -632,7 +628,7 @@ func loadPath(path string, requireExisting bool) (*Config, error) {
 	}
 
 	for i := range cfg.Rules {
-		if err := compileRule(log, &cfg.Rules[i], cfg.Inference, meta, filepath.Dir(path)); err != nil {
+		if err := compileRule(log, &cfg.Rules[i], cfg.Inference, meta, filepath.Dir(path), &cfg); err != nil {
 			return nil, err
 		}
 	}
@@ -651,6 +647,7 @@ func compileRule(
 	inference map[string]InferencePoint,
 	meta toml.MetaData,
 	configDirectory string,
+	cfg *Config,
 ) error {
 	if err := normalizeRuleAction(r); err != nil {
 		return fmt.Errorf("rule %q: %w", r.Name, err)
@@ -678,7 +675,7 @@ func compileRule(
 			if r.IsResponseAction() && ConditionKind(r.Conditions[j].Kind) == ConditionKindExec && r.Conditions[j].BlockOn == "" {
 				r.Conditions[j].BlockOn = BlockOnZero
 			}
-			if err := compileCondition(log, r.Name, j, &r.Conditions[j], meta, configDirectory); err != nil {
+			if err := compileCondition(log, r.Name, j, &r.Conditions[j], meta, configDirectory, cfg); err != nil {
 				return err
 			}
 		}
@@ -728,7 +725,7 @@ func normalizeRuleDiagnosticFormat(r *Rule) error {
 
 // compileCondition fills in compiled regex and selector state for one
 // condition, validates the kind, and parses any field_pair value.
-func compileCondition(log *slog.Logger, ruleName string, index int, c *Condition, meta toml.MetaData, configDirectory string) error {
+func compileCondition(log *slog.Logger, ruleName string, index int, c *Condition, meta toml.MetaData, configDirectory string, cfg *Config) error {
 	c.selectors = CompileFieldSelectorSpecs(c.FieldPaths)
 	if c.Kind == "" {
 		c.Kind = "regex"
@@ -778,7 +775,7 @@ func compileCondition(log *slog.Logger, ruleName string, index int, c *Condition
 	if err := validateShellReadSpecConfig(ruleName, index, c); err != nil {
 		return err
 	}
-	if err := compileExecConfig(ruleName, index, c, meta); err != nil {
+	if err := compileExecConfig(ruleName, index, c, meta, cfg); err != nil {
 		return err
 	}
 	if ConditionKind(c.Kind) == ConditionKindExec &&
@@ -792,7 +789,7 @@ func compileCondition(log *slog.Logger, ruleName string, index int, c *Condition
 			index,
 		)
 	}
-	if err := compileInferConfig(log, ruleName, index, c, meta, configDirectory); err != nil {
+	if err := compileInferConfig(log, ruleName, index, c, meta, configDirectory, cfg); err != nil {
 		return err
 	}
 	if err := validateShellWriteSpecConfig(ruleName, index, c); err != nil {
@@ -807,24 +804,29 @@ func compileCondition(log *slog.Logger, ruleName string, index int, c *Condition
 // compileExecConfig validates the exec condition fields, applies defaults, and
 // compiles the cache-key field selector. Non-exec conditions are left
 // untouched.
-func compileExecConfig(ruleName string, index int, c *Condition, meta toml.MetaData) error {
+func compileExecConfig(ruleName string, index int, c *Condition, meta toml.MetaData, cfg *Config) error {
 	if ConditionKind(c.Kind) != ConditionKindExec {
 		return nil
 	}
 	if len(c.Command) == 0 || strings.TrimSpace(c.Command[0]) == "" {
 		return fmt.Errorf("rule %q condition %d: exec requires a non-empty command", ruleName, index)
 	}
+	maxTimeoutMs := cfg.ExecMaxTimeoutMs()
+	maxRetryCount := cfg.ExecMaxRetryCount()
 	if c.TimeoutMs == 0 {
-		c.TimeoutMs = DefaultExecTimeoutMs
+		c.TimeoutMs = cfg.ExecDefaultTimeoutMs()
 	}
 	if c.TimeoutMs < 0 {
 		return fmt.Errorf("rule %q condition %d: timeout_ms must be non-negative", ruleName, index)
 	}
-	if c.TimeoutMs > MaxExecTimeoutMs {
-		return fmt.Errorf("rule %q condition %d: timeout_ms %d exceeds max %d", ruleName, index, c.TimeoutMs, MaxExecTimeoutMs)
+	if c.TimeoutMs > maxTimeoutMs {
+		return fmt.Errorf(
+			"rule %q condition %d: timeout_ms %d exceeds performance.timeouts.exec_max_ms %d",
+			ruleName, index, c.TimeoutMs, maxTimeoutMs,
+		)
 	}
-	if c.RetryCount < 0 || c.RetryCount > MaxExecRetryCount {
-		return fmt.Errorf("rule %q condition %d: retry_count %d must be between 0 and %d", ruleName, index, c.RetryCount, MaxExecRetryCount)
+	if c.RetryCount < 0 || c.RetryCount > maxRetryCount {
+		return fmt.Errorf("rule %q condition %d: retry_count %d must be between 0 and %d", ruleName, index, c.RetryCount, maxRetryCount)
 	}
 	if c.CacheTTLMs < 0 {
 		return fmt.Errorf("rule %q condition %d: cache_ttl_ms must be non-negative", ruleName, index)

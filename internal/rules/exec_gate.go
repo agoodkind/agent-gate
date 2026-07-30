@@ -28,12 +28,6 @@ import (
 // stale result long enough to matter.
 const canonCacheTTL = 5 * time.Second
 
-// backgroundValidatorTimeout bounds a validator run that outlived its event's
-// synchronous budget. The run continues detached so its verdict can land in
-// the cache and decide the next event for the same target; 30s rides out a
-// busy lm-semantic-search daemon while still reclaiming the process.
-const backgroundValidatorTimeout = 30 * time.Second
-
 // maxResolvedScriptBytes caps the size of an interpreter script the disk
 // resolver reads off disk for code-search read analysis. A program file larger
 // than this is refused so a pathological input cannot pull an unbounded read

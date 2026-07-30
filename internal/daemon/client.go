@@ -14,7 +14,16 @@ import (
 	"goodkind.io/agent-gate/internal/config"
 )
 
-const evaluateHookTimeout = 12 * time.Second
+// evaluateHookTimeout reads the deadline from config so it is not fixed at
+// build time. The hook process loads config already, and a failure to load
+// falls back to the documented default rather than leaving the call unbounded.
+func evaluateHookTimeout() time.Duration {
+	cfg, err := config.Load()
+	if err != nil {
+		return config.DefaultHookEvaluateMs * time.Millisecond
+	}
+	return cfg.HookEvaluateTimeout()
+}
 
 // Client is a gRPC client for the agent-gate daemon.
 type Client struct {
@@ -71,7 +80,7 @@ func (c *Client) ResolveHookEnvironment(
 	argv []string,
 	env map[string]string,
 ) ([]string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), evaluateHookTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), evaluateHookTimeout())
 	defer cancel()
 	response, err := c.rpc.ResolveHookEnvironment(
 		ctx,
@@ -88,7 +97,7 @@ func (c *Client) ResolveHookEnvironment(
 
 // EvaluateHook forwards raw hook input to daemon-owned enforcement.
 func (c *Client) EvaluateHook(rawJSON []byte, providerHint, cwd string, argv []string, env map[string]string) (*daemonpb.EvaluateHookResponse, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), evaluateHookTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), evaluateHookTimeout())
 	defer cancel()
 	log := slog.Default()
 
