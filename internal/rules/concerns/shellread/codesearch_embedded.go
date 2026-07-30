@@ -66,16 +66,19 @@ func extractEmbeddedCodeSearchInto(decomposition *shelldecomp.Decomposition, cwd
 	}
 }
 
-// regionFoldTools maps an analyzed embedded language to the tool names that, when
-// declared by a rule, enable folding that region's analyzer-derived reads. A
-// language whose analyzer is registered in shelldecomp (python, awk) appears
-// here; a region whose language is absent folds nothing, so adding a new
-// analyzer to shelldecomp without a matching entry leaves it inert here.
+// regionFoldTools maps an analyzed embedded language to the tool names that,
+// when declared by a rule, enable folding that region's analyzer-derived reads.
+// A rule that does not declare a language's tools folds nothing even when the
+// analyzer resolved the reads. TestExtractCodeSearchTargetsPythonToolGate pins
+// that behavior.
 var regionFoldTools = map[shelldecomp.Lang][]string{
-	shelldecomp.LangPython: {"python", "python3"},
-	shelldecomp.LangAwk:    {"awk", "gawk"},
-	shelldecomp.LangSed:    {"sed"},
-	shelldecomp.LangPerl:   {"perl"},
+	shelldecomp.LangPython:     {"python", "python3"},
+	shelldecomp.LangAwk:        {"awk", "gawk"},
+	shelldecomp.LangSed:        {"sed"},
+	shelldecomp.LangPerl:       {"perl"},
+	shelldecomp.LangRuby:       {"ruby"},
+	shelldecomp.LangJavaScript: {"node", "nodejs"},
+	shelldecomp.LangPHP:        {"php"},
 }
 
 // foldRegionReads folds the read targets an embedded region's analyzer derived
