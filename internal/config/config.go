@@ -241,12 +241,18 @@ const (
 	ExecMatchAll = "all"
 )
 
-// Exec condition defaults and bounds. The timeout is capped well below the 5s
-// hook client deadline at internal/daemon/client.go so a slow validator cannot
-// stall the hook past its own timeout.
+// Exec condition defaults and bounds. The timeout is capped below the hook
+// client deadline (evaluateHookTimeout in internal/daemon/client.go) so a slow
+// validator cannot stall the hook past its own timeout. The cap left 2s of head
+// room when that deadline was 5s; the deadline is now 12s, so the old 4000
+// stopped tracking it. A rule that fails open on a slow validator loses its
+// verdict entirely, which is worth more than the head room.
+//
+// A rule setting the maximum must leave retry_count at 0, since retries
+// multiply the timeout and the product has to stay inside the hook deadline.
 const (
 	DefaultExecTimeoutMs = 1500
-	MaxExecTimeoutMs     = 4000
+	MaxExecTimeoutMs     = 10000
 	DefaultExecCacheKey  = "effective_cwd"
 	// MaxExecRetryCount bounds retry_count so a misconfigured rule cannot fork a
 	// validator without limit; retries fire only on errored verdicts.
