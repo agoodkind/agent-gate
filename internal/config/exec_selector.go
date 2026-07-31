@@ -33,10 +33,13 @@ func compileExecCacheKey(ruleName string, index int, condition *Condition) error
 			condition.CacheKey,
 		)
 	}
+	// cmd_read_targets draws from two rule-declared sources, so either one
+	// satisfies it: search_tools names argv0 values shelldecomp treats as
+	// readers, and read_specs names a command shape positionally.
 	if condition.cacheKeySelector.Selector == FieldCmdReadTargets &&
-		len(condition.SearchTools) == 0 {
+		len(condition.SearchTools) == 0 && len(condition.ReadSpecs) == 0 {
 		return fmt.Errorf(
-			"rule %q condition %d: cache_key %q requires search_tools to declare which commands count as code search",
+			"rule %q condition %d: cache_key %q requires search_tools or read_specs to declare which commands read files",
 			ruleName,
 			index,
 			condition.CacheKey,
@@ -107,9 +110,9 @@ func compileExecForEach(ruleName string, index int, condition *Condition) error 
 		)
 	}
 	if condition.forEachSelector.Selector == FieldCmdReadTargets &&
-		len(condition.SearchTools) == 0 {
+		len(condition.SearchTools) == 0 && len(condition.ReadSpecs) == 0 {
 		return fmt.Errorf(
-			"rule %q condition %d: for_each %q requires search_tools to declare which commands count as code search",
+			"rule %q condition %d: for_each %q requires search_tools or read_specs to declare which commands read files",
 			ruleName,
 			index,
 			condition.ForEach,

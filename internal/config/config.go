@@ -839,6 +839,13 @@ func compileExecConfig(ruleName string, index int, c *Condition, meta toml.MetaD
 	default:
 		return fmt.Errorf("rule %q condition %d: on_error %q must be %q or %q", ruleName, index, c.OnError, OnErrorOpen, OnErrorClosed)
 	}
+	// An exec condition may declare read_specs alongside search_tools. They are
+	// two sources for the same selector: search_tools names argv0 values
+	// shelldecomp already treats as readers, and read_specs names a command
+	// shape positionally, reaching commands shelldecomp gives no reading kind.
+	if err := validateReadSpecs(ruleName, index, c.ReadSpecs); err != nil {
+		return err
+	}
 	if strings.TrimSpace(c.CacheKey) == "" {
 		c.CacheKey = DefaultExecCacheKey
 	}
@@ -960,8 +967,15 @@ func validateShellReadSpecConfig(ruleName string, index int, c *Condition) error
 	if len(c.ReadSpecs) == 0 {
 		return fmt.Errorf("rule %q condition %d: shell_read_secret requires at least one read_specs entry", ruleName, index)
 	}
-	for specIndex := range c.ReadSpecs {
-		spec := c.ReadSpecs[specIndex]
+	return validateReadSpecs(ruleName, index, c.ReadSpecs)
+}
+
+// validateReadSpecs checks the shape of each read_specs entry. Both the
+// shell_read_secret kind and an exec condition resolving cmd_read_targets use
+// them, so the checks live here rather than in either caller.
+func validateReadSpecs(ruleName string, index int, specs []ShellReadSpec) error {
+	for specIndex := range specs {
+		spec := specs[specIndex]
 		if len(spec.Argv0) == 0 {
 			return fmt.Errorf("rule %q condition %d read_specs %d: argv0 is required", ruleName, index, specIndex)
 		}
