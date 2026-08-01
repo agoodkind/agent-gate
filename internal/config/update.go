@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/BurntSushi/toml"
+	"github.com/pelletier/go-toml/v2"
 )
 
 const (
@@ -174,12 +174,17 @@ func canonicalConfigWithUpdateOverride(mode string) string {
 func mergeUpdateDefaults(contents string, mode string) (string, bool, error) {
 	log := slog.Default()
 	var decoded Config
-	metadata, err := toml.Decode(contents, &decoded)
+	err := toml.Unmarshal([]byte(contents), &decoded)
 	if err != nil {
 		log.Warn("config update merge decode failed", "err", err)
 		return "", false, fmt.Errorf("decode config before merge: %w", err)
 	}
-	hasUpdate := metadata.IsDefined("update")
+	// Whether the file already declares an [update] table decides between
+	// merging into it and appending a fresh one, so an absent table and a table
+	// present with default values must stay distinguishable. The previous
+	// library answered this with MetaData.IsDefined; go-toml has no equivalent,
+	// so the same question is asked of a generic decode of the same bytes.
+	hasUpdate := topLevelTableDeclared(contents, "update")
 	if hasUpdate && mode == "" {
 		return contents, false, nil
 	}
@@ -289,4 +294,21 @@ func replaceTopLevelTable(contents string, tableName string, replacement string)
 		merged.WriteString(lines[i])
 	}
 	return merged.String(), true
+}
+
+// topLevelTableDeclared reports whether the TOML source declares the named
+// top-level table at all, which is a different question from whether its fields
+// hold non-zero values: a decode into a typed struct cannot tell an absent
+// table from a table of zero values.
+//
+// It scans the source text with the same rule replaceTopLevelTable uses to find
+// that table, so the two agree by construction, and it needs no generic decode.
+func topLevelTableDeclared(contents string, tableName string) bool {
+	needle := "[" + tableName + "]"
+	for line := range strings.SplitSeq(contents, "\n") {
+		if strings.TrimSpace(line) == needle {
+			return true
+		}
+	}
+	return false
 }

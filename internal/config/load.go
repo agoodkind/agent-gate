@@ -6,7 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/BurntSushi/toml"
+	"github.com/pelletier/go-toml/v2"
 
 	"goodkind.io/agent-gate/internal/regex"
 )
@@ -66,7 +66,7 @@ func loadPath(path string, requireExisting bool, strict bool) (*Config, error) {
 		return nil, fmt.Errorf("read config %s: %w", path, err)
 	}
 	cfg.sourceIdentity = hashIdentity(sourceBytes)
-	meta, err := toml.Decode(string(sourceBytes), &cfg)
+	err = toml.Unmarshal(sourceBytes, &cfg)
 	if err != nil {
 		log.Error("decode config failed", "path", path, "err", err)
 		return nil, fmt.Errorf("decode config %s: %w", path, err)
@@ -91,7 +91,7 @@ func loadPath(path string, requireExisting bool, strict bool) (*Config, error) {
 	// an unrelated reason for why no rule compiled.
 	var firstRuleErr error
 	for i := range cfg.Rules {
-		compileErr := compileRule(log, &cfg.Rules[i], cfg.Inference, meta, filepath.Dir(path), &cfg)
+		compileErr := compileRule(log, &cfg.Rules[i], cfg.Inference, filepath.Dir(path), &cfg)
 		if compileErr == nil {
 			kept = append(kept, cfg.Rules[i])
 			continue

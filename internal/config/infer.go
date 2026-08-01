@@ -8,8 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-
-	"github.com/BurntSushi/toml"
 )
 
 // The per-condition inference deadline and its ceiling live in
@@ -51,7 +49,7 @@ func (c *Condition) ContextSessionSelector() FieldSelectorSpec { return c.contex
 // ResponseJSONEqualsValue returns the decoded infer response predicate scalar.
 func (c *Condition) ResponseJSONEqualsValue() TOMLScalarValue { return c.responseJSONValue }
 
-func compileInferConfig(log *slog.Logger, ruleName string, index int, condition *Condition, meta toml.MetaData, configDirectory string, cfg *Config) error {
+func compileInferConfig(log *slog.Logger, ruleName string, index int, condition *Condition, configDirectory string, cfg *Config) error {
 	if ConditionKind(condition.Kind) != ConditionKindInfer {
 		return nil
 	}
@@ -124,10 +122,10 @@ func compileInferConfig(log *slog.Logger, ruleName string, index int, condition 
 	if err := validateStdoutJSONFieldPath(condition.ResponseJSONField); err != nil {
 		return fmt.Errorf("%s: response_json_field: %w", contextLabel, err)
 	}
-	if condition.ResponseJSONEquals == nil {
+	if condition.ResponseJSONEquals == "" {
 		return fmt.Errorf("%s: response_json_equals is required", contextLabel)
 	}
-	condition.responseJSONValue, err = decodeTOMLScalar(meta, *condition.ResponseJSONEquals)
+	condition.responseJSONValue, err = decodeTOMLScalar(condition.ResponseJSONEquals)
 	if err != nil {
 		return fmt.Errorf("%s: response_json_equals: %w", contextLabel, err)
 	}
