@@ -166,17 +166,17 @@ type ClaudeToolInput struct {
 }
 
 // NormalizedFilePath returns the file path, preferring snake_case.
-func (input ClaudeToolInput) NormalizedFilePath() string {
+func (input *ClaudeToolInput) NormalizedFilePath() string {
 	return firstNonEmpty(input.FilePath, input.FilePathCamel)
 }
 
 // NormalizedOldString returns the old string, preferring snake_case.
-func (input ClaudeToolInput) NormalizedOldString() string {
+func (input *ClaudeToolInput) NormalizedOldString() string {
 	return firstNonEmpty(input.OldString, input.OldStringCamel)
 }
 
 // NormalizedNewString returns the new string, preferring snake_case.
-func (input ClaudeToolInput) NormalizedNewString() string {
+func (input *ClaudeToolInput) NormalizedNewString() string {
 	return firstNonEmpty(input.NewString, input.NewStringCamel)
 }
 
