@@ -143,6 +143,7 @@ var fieldStringAccessors = map[config.FieldSelector]func(FieldSet) string{
 	// declared tools.
 	config.FieldCmdReadTargets:            func(f FieldSet) string { return f.CmdReadTargets(nil, nil, nil) },
 	config.FieldCmdWriteTargets:           func(f FieldSet) string { return f.CmdWriteTargets() },
+	config.FieldPatchWriteTargets:         func(f FieldSet) string { return f.PatchWriteTargets() },
 	config.FieldExecTargets:               func(f FieldSet) string { return f.ExecTargets(nil, nil, nil) },
 	config.FieldPermissionMode:            func(f FieldSet) string { return f.PermissionMode },
 	config.FieldAgentID:                   func(f FieldSet) string { return f.AgentID },

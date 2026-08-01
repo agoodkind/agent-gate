@@ -81,6 +81,12 @@ type RuleDecision struct {
 	Status     string `json:"status"`
 	SkipReason string `json:"skip_reason,omitempty"`
 	Matched    bool   `json:"matched"`
+	// PartialError reports that the rule reached this decision while at least
+	// one expanded validator target went unclassified. The decision itself is
+	// correct and unchanged; without this the record claims the whole expansion
+	// was probed, so a reader cannot tell full coverage from a run that merely
+	// reached a verdict before the unclassified target mattered.
+	PartialError bool `json:"partial_error,omitempty"`
 }
 
 // LayerTrace records one rich context or inference boundary for ledger persistence.
@@ -171,7 +177,10 @@ func EvaluateAllDetailed(
 	evalCtx = withRichTraceCollector(evalCtx, collector)
 	collectPreSkippedInferenceLayers(evalCtx, rulesSlice, system, eventName, getenv)
 	result := evaluateAll(evalCtx, system, eventName, fields, rulesSlice, getenv)
-	decisions := deterministicRuleDecisions(rulesSlice, system, eventName, getenv, result.violations, result.effects)
+	decisions := deterministicRuleDecisions(
+		rulesSlice, system, eventName, getenv,
+		result.violations, result.effects, result.partialRules,
+	)
 	outputJSON := deterministicOutputJSON(system, eventName, decisions, result.violations)
 	completedAt := decisionTraceNow().UTC()
 	inputCopy := append(json.RawMessage(nil), inputJSON...)
@@ -349,6 +358,7 @@ func deterministicRuleDecisions(
 	getenv func(string) string,
 	violations []Violation,
 	effects []ResponseEffect,
+	partialRules map[string]bool,
 ) []RuleDecision {
 	matchedRules := make(map[string]bool)
 	for _, violation := range violations {
@@ -362,6 +372,7 @@ func deterministicRuleDecisions(
 		rule := &rulesSlice[i]
 		decision := RuleDecision{
 			RuleName: rule.Name, Status: "nonmatched", SkipReason: "", Matched: false,
+			PartialError: partialRules[rule.Name],
 		}
 		switch {
 		case !appliesToEvent(rule, system, eventName):

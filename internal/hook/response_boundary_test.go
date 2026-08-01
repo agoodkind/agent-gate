@@ -7,19 +7,28 @@ import (
 	"goodkind.io/agent-gate/internal/hook"
 )
 
+// TestFailOpenResponseRendering pins the per-provider shape of an allow that
+// agent-gate never evaluated. Every provider must still exit 0, because a
+// fail-open must not break the call, and every provider must say somewhere that
+// no rule was enforced.
+//
+// This test previously asserted the opposite, that a fail-open was byte for byte
+// a normal allow. That silence is what let a ten hour outage read as a quiet
+// period, so the expectations changed with the behavior.
 func TestFailOpenResponseRendering(t *testing.T) {
 	tests := []struct {
-		name       string
-		system     hook.System
-		wantStdout string
+		name   string
+		system hook.System
+		// noticeIn names where that provider carries the warning.
+		noticeIn string
 	}{
-		{name: "claude", system: hook.SystemClaude, wantStdout: "{}\n"},
-		{name: "cursor", system: hook.SystemCursor, wantStdout: "{\"permission\":\"allow\"}\n"},
-		{name: "codex", system: hook.SystemCodex, wantStdout: "{}\n"},
-		{name: "gemini", system: hook.SystemGemini, wantStdout: "{}\n"},
-		{name: "copilot", system: hook.SystemCopilot, wantStdout: "{}\n"},
-		{name: "vscode", system: hook.SystemVSCode, wantStdout: "{}\n"},
-		{name: "unknown", system: hook.SystemUnknown, wantStdout: ""},
+		{name: "claude", system: hook.SystemClaude, noticeIn: "stdout"},
+		{name: "cursor", system: hook.SystemCursor, noticeIn: "none"},
+		{name: "codex", system: hook.SystemCodex, noticeIn: "none"},
+		{name: "gemini", system: hook.SystemGemini, noticeIn: "none"},
+		{name: "copilot", system: hook.SystemCopilot, noticeIn: "none"},
+		{name: "vscode", system: hook.SystemVSCode, noticeIn: "stdout"},
+		{name: "unknown", system: hook.SystemUnknown, noticeIn: "stderr"},
 	}
 
 	for _, testCase := range tests {
@@ -31,13 +40,24 @@ func TestFailOpenResponseRendering(t *testing.T) {
 				hook.FailOpenReasonDaemonUnavailable,
 			)
 			if response.ExitCode != 0 {
-				t.Fatalf("ExitCode = %d, want 0", response.ExitCode)
+				t.Fatalf("ExitCode = %d, want 0; a fail-open must not block", response.ExitCode)
 			}
-			if string(response.Stdout) != testCase.wantStdout {
-				t.Fatalf("Stdout = %q, want %q", string(response.Stdout), testCase.wantStdout)
-			}
-			if len(response.Stderr) != 0 {
-				t.Fatalf("Stderr = %q, want empty", string(response.Stderr))
+			switch testCase.noticeIn {
+			case "stdout":
+				if !strings.Contains(string(response.Stdout), "no rule was enforced") {
+					t.Fatalf("Stdout = %q, want the fail-open notice", response.Stdout)
+				}
+			case "stderr":
+				if !strings.Contains(string(response.Stderr), "no rule was enforced") {
+					t.Fatalf("Stderr = %q, want the fail-open notice", response.Stderr)
+				}
+			case "none":
+				// These providers have no channel for a non-blocking warning, so
+				// their fail-open stays a plain allow. The durable record in
+				// fail-open.jsonl is what makes the outage visible for them.
+				if response.ExitCode != 0 {
+					t.Fatalf("ExitCode = %d, want 0", response.ExitCode)
+				}
 			}
 		})
 	}

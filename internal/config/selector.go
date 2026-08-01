@@ -48,6 +48,11 @@ const (
 	// FieldCmdWriteTargets selects the effective filesystem targets a command
 	// writes (redirects, tee, sed -i, patch, git apply), newline-joined.
 	FieldCmdWriteTargets
+	// FieldPatchWriteTargets selects the files a patch-format tool call writes,
+	// newline-joined. Codex apply_patch carries its targets inside the patch
+	// body rather than in a path field, so a rule keyed on tool_input.file_path
+	// cannot see them and every path-based write rule is blind to those writes.
+	FieldPatchWriteTargets
 	// FieldExecTargets selects code-search read targets when available, then
 	// file path, then effective cwd. It is intended for exec validator cache keys.
 	FieldExecTargets
@@ -249,6 +254,7 @@ var fieldSelectorByPath = map[string]FieldSelector{
 	"cmd_redirections":             FieldCmdRedirections,
 	"cmd_read_targets":             FieldCmdReadTargets,
 	"cmd_write_targets":            FieldCmdWriteTargets,
+	"patch_write_targets":          FieldPatchWriteTargets,
 	"exec_targets":                 FieldExecTargets,
 	"permission_mode":              FieldPermissionMode,
 	"agent_id":                     FieldAgentID,

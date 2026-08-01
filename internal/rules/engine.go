@@ -53,12 +53,16 @@ func Evaluate(ctx context.Context, system, eventName string, fields FieldSet, ru
 type evaluationResult struct {
 	violations []Violation
 	effects    []ResponseEffect
+	// partialRules names the rules whose verdict was reached while some
+	// expanded validator target went unclassified, so the audit record can say
+	// the expansion was only partly probed.
+	partialRules map[string]bool
 }
 
 func evaluateAll(ctx context.Context, system, eventName string, fields FieldSet, rulesSlice []config.Rule, getenv func(string) string) evaluationResult {
 	conditions := buildRuleRegexConditions(&fields, rulesSlice, system, eventName, getenv)
 	if len(conditions) == 0 {
-		return evaluationResult{violations: nil, effects: nil}
+		return evaluationResult{violations: nil, effects: nil, partialRules: nil}
 	}
 	memo := newExecEventMemo(system, eventName)
 	evalCtx := withExecEventMemo(ctx, memo)
@@ -75,7 +79,9 @@ func evaluateAll(ctx context.Context, system, eventName string, fields FieldSet,
 	results, _ := orch.Run(evalCtx, pipeline.Input{})
 	violations := aggregateResults(results, fields, memo)
 	filtered, effects := responseEffectsFromMatches(violations, rulesSlice, memo)
-	return evaluationResult{violations: filtered, effects: effects}
+	return evaluationResult{
+		violations: filtered, effects: effects, partialRules: memo.partialRuleNames(),
+	}
 }
 
 // envGuardFires returns true when getenv reports any of keys as non-empty.

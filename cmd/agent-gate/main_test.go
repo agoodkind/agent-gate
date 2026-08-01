@@ -97,8 +97,11 @@ func TestRunHookFailOpenOnStdinReadFailure(t *testing.T) {
 	if got := stdout.String(); got != "{}\n" {
 		t.Fatalf("stdout = %q, want Codex allow", got)
 	}
-	if stderr.Len() != 0 {
-		t.Fatalf("stderr = %q, want empty", stderr.String())
+	// stdout above is unchanged, so the provider still reads an allow. stderr
+	// now says the call went unevaluated, because a fail-open that looks exactly
+	// like a clean allow is what let an outage pass as compliance.
+	if !strings.Contains(stderr.String(), "no rule was enforced") {
+		t.Fatalf("stderr = %q, want the fail-open notice", stderr.String())
 	}
 }
 
@@ -116,8 +119,11 @@ func TestRunHookFailOpenOnDaemonUnavailable(t *testing.T) {
 	if got := stdout.String(); got != "{\"permission\":\"allow\"}\n" {
 		t.Fatalf("stdout = %q, want Cursor allow", got)
 	}
-	if stderr.Len() != 0 {
-		t.Fatalf("stderr = %q, want empty", stderr.String())
+	// stdout above is unchanged, so the provider still reads an allow. stderr
+	// now says the call went unevaluated, because a fail-open that looks exactly
+	// like a clean allow is what let an outage pass as compliance.
+	if !strings.Contains(stderr.String(), "no rule was enforced") {
+		t.Fatalf("stderr = %q, want the fail-open notice", stderr.String())
 	}
 }
 
@@ -135,8 +141,11 @@ func TestRunHookFailOpenOnRPCFailure(t *testing.T) {
 	if got := stdout.String(); got != "{}\n" {
 		t.Fatalf("stdout = %q, want Gemini allow", got)
 	}
-	if stderr.Len() != 0 {
-		t.Fatalf("stderr = %q, want empty", stderr.String())
+	// stdout above is unchanged, so the provider still reads an allow. stderr
+	// now says the call went unevaluated, because a fail-open that looks exactly
+	// like a clean allow is what let an outage pass as compliance.
+	if !strings.Contains(stderr.String(), "no rule was enforced") {
+		t.Fatalf("stderr = %q, want the fail-open notice", stderr.String())
 	}
 }
 
@@ -148,14 +157,21 @@ func TestRunHookFailOpenOnHookPanic(t *testing.T) {
 
 	exitCode := runHookWithRuntime(hook.SystemClaude, runtime)
 
+	// A recovered panic must never block the call, and it must not be silent
+	// either: the agent is told the call went unevaluated. Asserting a bare
+	// Claude allow here was asserting that an outage looks like compliance.
 	if exitCode != 0 {
 		t.Fatalf("exitCode = %d, want 0", exitCode)
 	}
-	if got := stdout.String(); got != "{}\n" {
-		t.Fatalf("stdout = %q, want Claude allow", got)
+	got := stdout.String()
+	if !strings.Contains(got, "no rule was enforced") {
+		t.Fatalf("stdout = %q, want the fail-open notice", got)
 	}
-	if stderr.Len() != 0 {
-		t.Fatalf("stderr = %q, want empty", stderr.String())
+	if !strings.Contains(got, string(hook.FailOpenReasonPanic)) {
+		t.Fatalf("stdout = %q, want it to name the panic reason", got)
+	}
+	if !strings.Contains(stderr.String(), "no rule was enforced") {
+		t.Fatalf("stderr = %q, want the fail-open notice", stderr.String())
 	}
 }
 

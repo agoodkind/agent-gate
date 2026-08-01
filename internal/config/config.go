@@ -4,8 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
-	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -209,6 +207,12 @@ type ShellReadSpec struct {
 	NestedCommandFlag           string   `toml:"nested_command_flag"`
 	NestedRemote                bool     `toml:"nested_remote"`
 	RemoteSources               bool     `toml:"remote_sources"`
+	// RefPathOperands declares that a positional operand may join a revision
+	// and a path with a colon, as git does in `git show HEAD:go.mod`. Without
+	// it the whole operand resolves as one filename, giving a path that does
+	// not exist: the real file goes unseen and a phantom target reaches any
+	// validator keyed on read targets.
+	RefPathOperands bool `toml:"ref_path_operands"`
 }
 
 // FieldPairSpec carries the compiled selectors for a [Condition.FieldPair].
@@ -519,6 +523,9 @@ type Config struct {
 	Rules     []Rule                    `toml:"rules"`
 
 	sourceIdentity string
+	// loadFailures records the rules and settings blocks a degraded load had to
+	// drop or default. A strict load leaves it empty, because it fails instead.
+	loadFailures []LoadFailure
 }
 
 // Messages customizes the text agent-gate returns to the agent.
@@ -574,76 +581,6 @@ func (c *Config) AuditSQLitePath() string {
 		return c.Audit.Outputs.SQLite.Path
 	}
 	return DefaultAuditSQLitePath()
-}
-
-// Load reads the config file at the XDG config path.
-// If no file exists, it returns a zero-value config with default paths.
-// All rule patterns are compiled to regexes before returning.
-func Load() (*Config, error) {
-	return loadPath(Path(), false)
-}
-
-// LoadExisting reads an existing config file and compiles all rule patterns.
-func LoadExisting(path string) (*Config, error) {
-	return loadPath(path, true)
-}
-
-func loadPath(path string, requireExisting bool) (*Config, error) {
-	log := slog.Default()
-	var cfg Config
-
-	if _, err := os.Stat(path); err != nil {
-		if os.IsNotExist(err) && !requireExisting {
-			return &cfg, nil
-		}
-		log.Error("stat config failed", "path", path, "err", err)
-		return nil, fmt.Errorf("stat config %s: %w", path, err)
-	}
-
-	sourceBytes, err := os.ReadFile(path)
-	if err != nil {
-		log.Error("read config failed", "path", path, "err", err)
-		return nil, fmt.Errorf("read config %s: %w", path, err)
-	}
-	cfg.sourceIdentity = hashIdentity(sourceBytes)
-	meta, err := toml.Decode(string(sourceBytes), &cfg)
-	if err != nil {
-		log.Error("decode config failed", "path", path, "err", err)
-		return nil, fmt.Errorf("decode config %s: %w", path, err)
-	}
-	if err := validateHookPerformance(cfg.Performance.Hook, cfg.Performance.Limits); err != nil {
-		return nil, err
-	}
-	if err := validateTimeouts(cfg.Performance.Timeouts); err != nil {
-		return nil, err
-	}
-	if err := validateLimits(cfg.Performance.Limits, cfg.Performance.Intervals); err != nil {
-		return nil, err
-	}
-	if err := validateInferencePoints(log, cfg.Inference); err != nil {
-		return nil, err
-	}
-	if err := validateJudge(cfg.Judge); err != nil {
-		return nil, err
-	}
-
-	// Install the configured backtracking bounds before any rule pattern
-	// compiles, because a PCRE2 handle carries the limits it was built with.
-	// This has to happen here rather than at daemon startup: every load,
-	// including a reload, compiles its patterns in the loop below, so limits
-	// applied after Load returns would never reach a rule.
-	regex.SetLimits(cfg.RegexMatchLimit(), cfg.RegexDepthLimit())
-
-	for i := range cfg.Rules {
-		if err := compileRule(log, &cfg.Rules[i], cfg.Inference, meta, filepath.Dir(path), &cfg); err != nil {
-			return nil, err
-		}
-	}
-	if err := normalizeUpdate(&cfg.Update); err != nil {
-		return nil, err
-	}
-
-	return &cfg, nil
 }
 
 // compileRule attaches compiled regexes and selectors to rule and its

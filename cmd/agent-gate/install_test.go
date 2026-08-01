@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -28,6 +29,12 @@ type readinessDaemonFake struct {
 	executablePath string
 	buildHash      string
 	exited         chan struct{}
+	// served closes when the second Status call arrives, which proves the caller
+	// received and recorded the mismatched identity from the first. A test can
+	// then expire the wait at exactly that point rather than hoping a fixed
+	// wall-clock budget covered the round trip.
+	served     chan struct{}
+	serveOnce  sync.Once
 }
 
 func (server *readinessDaemonFake) Status(
@@ -39,6 +46,9 @@ func (server *readinessDaemonFake) Status(
 			ExecutablePath: server.executablePath,
 			BuildHash:      server.buildHash,
 		}, nil
+	}
+	if server.served != nil {
+		server.serveOnce.Do(func() { close(server.served) })
 	}
 	<-ctx.Done()
 	close(server.exited)
@@ -544,6 +554,7 @@ func TestWaitForDaemonReadyProductionLookupPreservesMismatchAtDeadline(t *testin
 		executablePath: oldPath,
 		buildHash:      "old",
 		exited:         make(chan struct{}),
+		served:         make(chan struct{}),
 	}
 	daemonpb.RegisterAgentGateDServer(server, fake)
 	go func() {
@@ -551,8 +562,19 @@ func TestWaitForDaemonReadyProductionLookupPreservesMismatchAtDeadline(t *testin
 	}()
 	t.Cleanup(server.Stop)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	// The assertion is that the deadline error still names the last identity the
+	// daemon reported, so the first Status call has to land before the wait
+	// expires. Expire it when that call has been served rather than after a
+	// fixed 50ms: under CI contention the gRPC round trip did not fit in that
+	// budget, the wait timed out having seen nothing, and the error carried a
+	// bare deadline instead of the mismatch. The long timeout is only a backstop
+	// so a hang fails the test rather than blocking the suite.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+	go func() {
+		<-fake.served
+		cancel()
+	}()
 	err = waitForDaemonReady(
 		ctx,
 		newPath,

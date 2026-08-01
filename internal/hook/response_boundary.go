@@ -72,6 +72,20 @@ func RenderResponse(request ResponseRequest) Response {
 			request.DiagnosticText = request.DiagnosticText + "\n" + request.Footer
 		}
 	}
+	rendered := renderForSystem(request)
+	// Every provider says on stderr that the call went unevaluated. Claude and
+	// the unknown renderer already carry it, and stdout keeps each provider's
+	// exact allow payload either way, so the protocol is unchanged and the
+	// warning still reaches the transcript. Without this a fail-open is silent
+	// for Cursor, Codex, Gemini, and Copilot, which is the outage-looks-like-
+	// compliance failure this whole path exists to remove.
+	if request.FailOpenReason != "" && len(rendered.Stderr) == 0 {
+		rendered.Stderr = failOpenStderr(request.FailOpenReason, request.DiagnosticText)
+	}
+	return rendered
+}
+
+func renderForSystem(request ResponseRequest) Response {
 	switch request.System {
 	case SystemCursor:
 		return renderCursorResponse(request)
@@ -130,5 +144,12 @@ func renderUnknownResponse(request ResponseRequest) Response {
 			ExitCode: 2,
 		}
 	}
-	return Response{Stdout: nil, Stderr: nil, ExitCode: 0}
+	// A provider with no known response schema still gets the fail-open warning
+	// on stderr, so a call nobody evaluated is visible in the transcript rather
+	// than indistinguishable from one that passed every rule.
+	return Response{
+		Stdout:   nil,
+		Stderr:   failOpenStderr(request.FailOpenReason, request.DiagnosticText),
+		ExitCode: 0,
+	}
 }

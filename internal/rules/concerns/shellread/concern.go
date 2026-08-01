@@ -344,13 +344,36 @@ func positionalPathTargets(fields []string, raw, cwd string, spec config.ShellRe
 			continue
 		}
 		out = append(out, ReadTarget{
-			Path:   resolvePath(cwd, field),
+			Path:   resolvePath(cwd, operandPath(field, spec)),
 			Remote: false,
 			Spec:   spec.Name,
 			Raw:    raw,
 		})
 	}
 	return out
+}
+
+// operandPath returns the filesystem part of a positional operand.
+//
+// git names a file inside a revision as REF:PATH, so `git show HEAD:go.mod`
+// reads go.mod. Resolving the whole operand yields "HEAD:go.mod", a path that
+// does not exist, which both hides the real read and hands a phantom target to
+// a validator. Only a spec that declares the shape is affected, and only when
+// the operand actually carries a colon with text on both sides.
+func operandPath(field string, spec config.ShellReadSpec) string {
+	if !spec.RefPathOperands {
+		return field
+	}
+	// An absolute path or an explicit relative prefix is a filename that merely
+	// contains a colon, not a revision.
+	if strings.HasPrefix(field, "/") || strings.HasPrefix(field, ".") {
+		return field
+	}
+	revision, path, found := strings.Cut(field, ":")
+	if !found || revision == "" || path == "" {
+		return field
+	}
+	return path
 }
 
 func startIndexForSpec(fields []string, spec config.ShellReadSpec) int {
