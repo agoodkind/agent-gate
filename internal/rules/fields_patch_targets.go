@@ -54,6 +54,13 @@ func (fields FieldSet) PatchWriteTargets() string {
 					continue
 				}
 				target = filepath.Join(base, target)
+			} else {
+				// An absolute directive can still carry .. segments, and
+				// /repo/../etc/passwd writes outside /repo while matching a rule
+				// anchored on the /repo prefix. filepath.Join already cleans the
+				// relative branch, so only this one needs it. Cleaning also
+				// makes the duplicate check see two spellings of one file as one.
+				target = filepath.Clean(target)
 			}
 			if _, duplicate := seen[target]; duplicate {
 				continue

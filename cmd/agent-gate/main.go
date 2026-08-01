@@ -255,18 +255,28 @@ func runDaemonStatus() int {
 // daemon that writes it is the one that was missing. This is the only record
 // that survives its own outage.
 func reportFailOpenHistory(out io.Writer) {
-	count, earliest, latest, err := hook.FailOpenRecordSummary()
+	summary, err := hook.FailOpenRecordSummary()
 	if err != nil {
 		_, _ = fmt.Fprintf(out, "unevaluated:      unknown (%v)\n", err)
 		return
 	}
-	if count == 0 {
+	if summary.Count == 0 && !summary.Truncated {
 		_, _ = fmt.Fprintf(out, "unevaluated:      0\n")
 		return
 	}
+	// A capped history understates the outage, so the count is labelled as a
+	// floor rather than presented as the whole story.
+	qualifier := ""
+	if summary.Truncated {
+		qualifier = "at least "
+	}
 	_, _ = fmt.Fprintf(out,
-		"unevaluated:      %d calls allowed without enforcement, %s to %s\n",
-		count, earliest, latest)
+		"unevaluated:      %s%d calls allowed without enforcement, %s to %s\n",
+		qualifier, summary.Count, summary.Earliest, summary.Latest)
+	if summary.Truncated {
+		_, _ = fmt.Fprintf(out,
+			"                  the record hit its size cap, so later calls went unrecorded\n")
+	}
 	_, _ = fmt.Fprintf(out, "                  see %s\n", hook.FailOpenRecordPath())
 }
 

@@ -46,10 +46,13 @@ func claudeFailOpenStdout(reason FailOpenReason, diagnostic string) []byte {
 // failOpenStderr renders the same warning for providers with no structured
 // channel for it. Writing it to stderr on an allow keeps the event in the
 // transcript rather than leaving the outage invisible.
+//
+// The notice already names agent-gate, so it is written as-is rather than
+// prefixed again.
 func failOpenStderr(reason FailOpenReason, diagnostic string) []byte {
 	notice := FailOpenNoticeText(reason, diagnostic)
 	if notice == "" {
 		return nil
 	}
-	return fmt.Appendf(nil, "agent-gate: %s\n", notice)
+	return fmt.Appendf(nil, "%s\n", notice)
 }

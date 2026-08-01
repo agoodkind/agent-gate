@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"goodkind.io/agent-gate/internal/config"
@@ -16,6 +17,11 @@ import (
 // hook process, never by the daemon, which is the whole point: the daemon that
 // would normally record the event is the one that is not answering.
 const failOpenRecordName = "fail-open.jsonl"
+
+// failOpenTruncatedName marks that the cap was reached and later unevaluated
+// calls went unrecorded. Its presence is what stops a summary reporting a
+// partial count as if it were the whole history.
+const failOpenTruncatedName = "fail-open.truncated"
 
 // maxFailOpenRecordBytes caps the file so a daemon that stays down for days
 // cannot fill the disk. Past the cap the hook stops appending; the earliest
@@ -59,9 +65,6 @@ func RecordFailOpen(reason FailOpenReason, system System, eventName string, tool
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return
 	}
-	if info, err := os.Stat(path); err == nil && info.Size() > maxFailOpenRecordBytes {
-		return
-	}
 	record := FailOpenRecord{
 		At:        failOpenNow().UTC().Format(time.RFC3339Nano),
 		Reason:    string(reason),
@@ -81,40 +84,93 @@ func RecordFailOpen(reason FailOpenReason, system System, eventName string, tool
 		return
 	}
 	defer func() { _ = file.Close() }()
-	_, _ = file.Write(append(encoded, '\n'))
+
+	// Hook processes are separate and concurrent, so the size check and the
+	// append have to happen under one lock or two hooks can both see room and
+	// both write past the cap. The lock is advisory and held only for this
+	// write.
+	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX); err != nil {
+		return
+	}
+	defer func() { _ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN) }()
+
+	line := string(encoded) + "\n"
+	info, err := file.Stat()
+	if err != nil {
+		return
+	}
+	// Checked against the size this record would produce, not the size before
+	// it, so a single oversized record cannot cross the cap either.
+	if info.Size()+int64(len(line)) > maxFailOpenRecordBytes {
+		markFailOpenTruncated()
+		return
+	}
+	_, _ = file.WriteString(line)
+}
+
+// markFailOpenTruncated records that the cap stopped further writes. It is a
+// marker file rather than a field, because the writer that hits the cap must
+// not rewrite the history it is capping.
+func markFailOpenTruncated() {
+	marker := filepath.Join(config.DefaultStateDir(), failOpenTruncatedName)
+	// #nosec G304 -- the path is derived from the XDG state directory, not input.
+	file, err := os.OpenFile(marker, os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return
+	}
+	_ = file.Close()
+}
+
+// FailOpenSummary describes the recorded history of unevaluated calls.
+type FailOpenSummary struct {
+	// Count is the number of records present, which is fewer than the number of
+	// unevaluated calls when Truncated is true.
+	Count int
+	// Earliest and Latest bound the recorded window. Latest is not the time of
+	// the last unevaluated call once Truncated is true.
+	Earliest string
+	Latest   string
+	// Truncated reports that the size cap stopped further writes, so the count
+	// and the window understate what happened. Reporting a capped history as
+	// complete would repeat the failure this record exists to fix.
+	Truncated bool
 }
 
 // FailOpenRecordSummary reports how many calls went unevaluated and when, for
-// an operator asking whether enforcement was ever absent. It returns zero and
-// empty strings when the file does not exist, which is the healthy case.
-func FailOpenRecordSummary() (int, string, string, error) {
+// an operator asking whether enforcement was ever absent. A missing file is the
+// healthy case and yields a zero summary.
+func FailOpenRecordSummary() (FailOpenSummary, error) {
+	summary := FailOpenSummary{Count: 0, Earliest: "", Latest: "", Truncated: false}
+
+	marker := filepath.Join(config.DefaultStateDir(), failOpenTruncatedName)
+	if _, err := os.Stat(marker); err == nil {
+		summary.Truncated = true
+	}
+
 	path := FailOpenRecordPath()
 	// #nosec G304 -- the path is derived from the XDG state directory, not input.
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return 0, "", "", nil
+			return summary, nil
 		}
 		slog.Warn("read fail-open record failed", "path", path, "err", err)
-		return 0, "", "", fmt.Errorf("read fail-open record: %w", err)
+		return summary, fmt.Errorf("read fail-open record: %w", err)
 	}
-	count := 0
-	earliest := ""
-	latest := ""
 	for _, line := range splitLines(data) {
 		var record FailOpenRecord
 		if json.Unmarshal(line, &record) != nil {
 			continue
 		}
-		count++
-		if earliest == "" || record.At < earliest {
-			earliest = record.At
+		summary.Count++
+		if summary.Earliest == "" || record.At < summary.Earliest {
+			summary.Earliest = record.At
 		}
-		if record.At > latest {
-			latest = record.At
+		if record.At > summary.Latest {
+			summary.Latest = record.At
 		}
 	}
-	return count, earliest, latest, nil
+	return summary, nil
 }
 
 // splitLines returns the non-empty lines of data without allocating a string

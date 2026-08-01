@@ -74,12 +74,16 @@ func TestFailOpenLeavesADurableRecord(t *testing.T) {
 	stateHome := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", stateHome)
 
-	count, earliest, latest, err := hook.FailOpenRecordSummary()
+	summary, err := hook.FailOpenRecordSummary()
 	if err != nil {
 		t.Fatalf("summary before any record: %v", err)
 	}
-	if count != 0 || earliest != "" || latest != "" {
-		t.Fatalf("clean state reported %d records (%s..%s)", count, earliest, latest)
+	if summary.Count != 0 || summary.Earliest != "" || summary.Latest != "" {
+		t.Fatalf("clean state reported %d records (%s..%s)",
+			summary.Count, summary.Earliest, summary.Latest)
+	}
+	if summary.Truncated {
+		t.Fatal("clean state reported a truncated history")
 	}
 
 	for range 3 {
@@ -89,15 +93,19 @@ func TestFailOpenLeavesADurableRecord(t *testing.T) {
 		)
 	}
 
-	count, earliest, latest, err = hook.FailOpenRecordSummary()
+	summary, err = hook.FailOpenRecordSummary()
 	if err != nil {
 		t.Fatalf("summary after recording: %v", err)
 	}
-	if count != 3 {
-		t.Fatalf("records = %d, want 3", count)
+	if summary.Count != 3 {
+		t.Fatalf("records = %d, want 3", summary.Count)
 	}
-	if earliest == "" || latest == "" {
-		t.Fatalf("record window = %q..%q, want both ends set", earliest, latest)
+	if summary.Earliest == "" || summary.Latest == "" {
+		t.Fatalf("record window = %q..%q, want both ends set",
+			summary.Earliest, summary.Latest)
+	}
+	if summary.Truncated {
+		t.Fatal("three small records should not have hit the size cap")
 	}
 
 	path := filepath.Join(stateHome, "agent-gate", "fail-open.jsonl")
@@ -109,11 +117,11 @@ func TestFailOpenLeavesADurableRecord(t *testing.T) {
 func TestRecordFailOpenIgnoresAnEmptyReason(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	hook.RecordFailOpen("", hook.SystemClaude, "PreToolUse", "Bash", "/repo", "")
-	count, _, _, err := hook.FailOpenRecordSummary()
+	summary, err := hook.FailOpenRecordSummary()
 	if err != nil {
 		t.Fatalf("summary: %v", err)
 	}
-	if count != 0 {
-		t.Fatalf("records = %d, want 0 for an evaluated call", count)
+	if summary.Count != 0 {
+		t.Fatalf("records = %d, want 0 for an evaluated call", summary.Count)
 	}
 }

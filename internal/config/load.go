@@ -86,11 +86,18 @@ func loadPath(path string, requireExisting bool, strict bool) (*Config, error) {
 	// the difference between losing one rule and losing enforcement entirely.
 	declaredRules := len(cfg.Rules)
 	kept := cfg.Rules[:0]
+	// Held separately from loadFailures, whose first entry may be a settings
+	// block recorded earlier by validateSections. Reporting that one would name
+	// an unrelated reason for why no rule compiled.
+	var firstRuleErr error
 	for i := range cfg.Rules {
 		compileErr := compileRule(log, &cfg.Rules[i], cfg.Inference, meta, filepath.Dir(path), &cfg)
 		if compileErr == nil {
 			kept = append(kept, cfg.Rules[i])
 			continue
+		}
+		if firstRuleErr == nil {
+			firstRuleErr = compileErr
 		}
 		if err := recordOrFail(LoadFailureRule, cfg.Rules[i].Name, compileErr, nil); err != nil {
 			return nil, err
@@ -105,8 +112,8 @@ func loadPath(path string, requireExisting bool, strict bool) (*Config, error) {
 	// just without the crash to make it visible.
 	if !strict && declaredRules > 0 && len(cfg.Rules) == 0 {
 		return nil, fmt.Errorf(
-			"config %s declared %d rules and none compiled; keeping the previous config: %s",
-			path, declaredRules, cfg.loadFailures[0].Reason,
+			"config %s declared %d rules and none compiled; keeping the previous config: %w",
+			path, declaredRules, firstRuleErr,
 		)
 	}
 
