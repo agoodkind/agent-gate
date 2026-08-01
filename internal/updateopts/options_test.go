@@ -35,8 +35,11 @@ func TestOptionsPreserveAgentGatePathsAndRollingDefault(t *testing.T) {
 	if options.Config.CurrentBuildHash != version.BuildHash() {
 		t.Fatalf("CurrentBuildHash = %q, want %q", options.Config.CurrentBuildHash, version.BuildHash())
 	}
-	if options.Config.CurrentDirty != (gkversion.Dirty == "true") {
-		t.Fatalf("CurrentDirty = %v, want %v", options.Config.CurrentDirty, gkversion.Dirty == "true")
+	// CurrentDirty now carries every local build, not only a dirty worktree,
+	// so a clean `make deploy` binary is never auto-replaced by a release.
+	wantLocal := isLocalBuild(gkversion.Version, gkversion.Dirty == "true")
+	if options.Config.CurrentDirty != wantLocal {
+		t.Fatalf("CurrentDirty = %v, want %v", options.Config.CurrentDirty, wantLocal)
 	}
 	if options.Config.AllowPrerelease == nil {
 		t.Fatal("AllowPrerelease = nil, want pointer")

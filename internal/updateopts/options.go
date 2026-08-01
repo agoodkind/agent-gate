@@ -34,10 +34,14 @@ func Options(cfg *config.Config, overrides Overrides) selfupdate.Options {
 			CurrentVersion:   gkversion.Version,
 			CurrentCommit:    gkversion.Commit,
 			CurrentBuildHash: version.BuildHash(),
-			CurrentDirty:     gkversion.Dirty == "true",
-			AllowPrerelease:  &allowPrerelease,
-			Interval:         updateInterval(cfg),
-			APIBaseURLEnv:    "AGENT_GATE_UPDATE_API_BASE_URL",
+			// CurrentDirty is the updater's never-auto-replace flag. It carries
+			// every locally built binary, not only one built from a dirty
+			// worktree, because a clean local build is equally not a release
+			// and equally must not be overwritten by one.
+			CurrentDirty:    isLocalBuild(gkversion.Version, gkversion.Dirty == "true"),
+			AllowPrerelease: &allowPrerelease,
+			Interval:        updateInterval(cfg),
+			APIBaseURLEnv:   "AGENT_GATE_UPDATE_API_BASE_URL",
 		},
 		Client:      overrides.Client,
 		InstallPath: overrides.InstallPath,
