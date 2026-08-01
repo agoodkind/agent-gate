@@ -130,5 +130,12 @@ func renderUnknownResponse(request ResponseRequest) Response {
 			ExitCode: 2,
 		}
 	}
-	return Response{Stdout: nil, Stderr: nil, ExitCode: 0}
+	// A provider with no known response schema still gets the fail-open warning
+	// on stderr, so a call nobody evaluated is visible in the transcript rather
+	// than indistinguishable from one that passed every rule.
+	return Response{
+		Stdout:   nil,
+		Stderr:   failOpenStderr(request.FailOpenReason, request.DiagnosticText),
+		ExitCode: 0,
+	}
 }

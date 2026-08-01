@@ -121,6 +121,16 @@ func renderClaudeResponse(request ResponseRequest) Response {
 			ExitCode: 2,
 		}
 	}
+	// An allow that agent-gate never evaluated says so. Without this the hook
+	// exits 0 with an empty body, which is indistinguishable from a call that
+	// passed every rule, so a daemon outage looks exactly like compliance.
+	if request.FailOpenReason != "" {
+		return Response{
+			Stdout:   claudeFailOpenStdout(request.FailOpenReason, request.DiagnosticText),
+			Stderr:   failOpenStderr(request.FailOpenReason, request.DiagnosticText),
+			ExitCode: 0,
+		}
+	}
 	capability := LookupResponseCapability(SystemClaude, request.EventName)
 	if request.ContextText == "" && request.MutationText == "" {
 		return Response{Stdout: ClaudeAllow(), Stderr: nil, ExitCode: 0}

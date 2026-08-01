@@ -428,10 +428,19 @@ func resetTimer(timer *time.Timer, duration time.Duration) {
 }
 
 func (s *Server) reloadConfig(ctx context.Context) error {
-	candidate, err := config.LoadExisting(s.configPath)
+	// Reload degraded, for the same reason the daemon starts degraded: a rule
+	// that will not compile costs that rule, not the whole rule set. A reload
+	// that refuses the file leaves the previous snapshot in place, which is
+	// safe, but an edit that drops one rule should still deliver the other
+	// seventy-two rather than silently keeping a stale set.
+	candidate, err := config.LoadDegradedPath(s.configPath)
 	if err != nil {
 		s.log.WarnContext(ctx, "config load or compile failed", "path", s.configPath, "err", err)
 		return fmt.Errorf("config load or compile failed: %w", err)
+	}
+	for _, failure := range candidate.Failures() {
+		s.log.ErrorContext(ctx, "config degraded on reload", "path", s.configPath,
+			"kind", failure.Kind, "scope", failure.Scope, "err", failure.Reason)
 	}
 	if errs := hook.ValidateConfig(candidate); len(errs) > 0 {
 		s.log.WarnContext(ctx, "hook config validation failed", "path", s.configPath, "err", errs[0])
