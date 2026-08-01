@@ -2,8 +2,40 @@ package config
 
 import (
 	"fmt"
+	"os"
+	"sync"
 	"time"
+
+	"github.com/BurntSushi/toml"
 )
+
+// HookEvaluateTimeoutFromFile returns the hook client's per-call deadline,
+// reading only the performance table from the config file.
+//
+// The hook process is transport-only: it forwards an event to the daemon and
+// prints the answer. Calling Load here would decode the whole file and compile
+// every rule pattern through PCRE2 on the hook's critical path, for one
+// integer, which is work the daemon already owns. This decodes into a struct
+// carrying just the timeouts instead.
+//
+// The result is resolved once per process. A hook process handles one event, so
+// that is one read rather than one per RPC. Any read or decode failure yields
+// the documented default rather than an unbounded call.
+var HookEvaluateTimeoutFromFile = sync.OnceValue(func() time.Duration {
+	milliseconds := DefaultHookEvaluateMs
+	sourceBytes, err := os.ReadFile(Path())
+	if err == nil {
+		var probe struct {
+			Performance struct {
+				Timeouts TimeoutPerformance `toml:"timeouts"`
+			} `toml:"performance"`
+		}
+		if _, decodeErr := toml.Decode(string(sourceBytes), &probe); decodeErr == nil {
+			milliseconds = positiveOr(probe.Performance.Timeouts.HookEvaluateMS, DefaultHookEvaluateMs)
+		}
+	}
+	return time.Duration(milliseconds) * time.Millisecond
+})
 
 // Enforcement-path timeout defaults. Each is the value applied when config
 // leaves the matching key unset, and each is reachable through

@@ -14,15 +14,11 @@ import (
 	"goodkind.io/agent-gate/internal/config"
 )
 
-// evaluateHookTimeout reads the deadline from config so it is not fixed at
-// build time. The hook process loads config already, and a failure to load
-// falls back to the documented default rather than leaving the call unbounded.
+// evaluateHookTimeout returns the deadline this client applies to one daemon
+// call, so it is not fixed at build time. It reads only the performance table,
+// because the hook stays transport-only and must not compile rules.
 func evaluateHookTimeout() time.Duration {
-	cfg, err := config.Load()
-	if err != nil {
-		return config.DefaultHookEvaluateMs * time.Millisecond
-	}
-	return cfg.HookEvaluateTimeout()
+	return config.HookEvaluateTimeoutFromFile()
 }
 
 // Client is a gRPC client for the agent-gate daemon.
