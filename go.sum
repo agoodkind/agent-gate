@@ -487,6 +487,8 @@ goodkind.io/gklog v0.4.5-0.20260704010614-fd04ab29700e h1:rc0g9PskdABDDhsXsL9rlf
 goodkind.io/gklog v0.4.5-0.20260704010614-fd04ab29700e/go.mod h1:6QHBKQ4ylZgScAMpaQkDaPvHHh41UYlVUXPUDgxlQFU=
 goodkind.io/gksyntax v0.0.0-20260730162328-9c8cf559c4d6 h1:xkGg/OwN0ZCKy6zfLtmMAnPvdJPl+Ad70EipZiXI2OI=
 goodkind.io/gksyntax v0.0.0-20260730162328-9c8cf559c4d6/go.mod h1:1+xF/gHcBwdoQzPuMwtz2YOe6b14kd083kv73dzDG+E=
+goodkind.io/gksyntax v0.0.0-20260801172749-57c5352a8c01 h1:gFRtkhabz/zWy/sMmHMndXGjALD8PbWZ1Vc8YL8VHJU=
+goodkind.io/gksyntax v0.0.0-20260801172749-57c5352a8c01/go.mod h1:1+xF/gHcBwdoQzPuMwtz2YOe6b14kd083kv73dzDG+E=
 goodkind.io/go-makefile v0.0.0-20260712071637-360d4c3d4fff h1:uqBBjh4/xitu+nfZus2c4zYcmsGdDJmJuAOeb6iJr+Y=
 goodkind.io/go-makefile v0.0.0-20260712071637-360d4c3d4fff/go.mod h1:l2eATlORO5AuJNJHn1fT8dRcG92CUXTxYmKjZrhhyn0=
 google.golang.org/api v0.283.0 h1:0lkp8u0MPwJVHqRL+nJlMAoZVVzbmiXmFHXMOTmSPik=
