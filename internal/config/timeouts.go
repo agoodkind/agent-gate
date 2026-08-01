@@ -87,13 +87,6 @@ func (c *Config) timeouts() TimeoutPerformance {
 	return c.Performance.Timeouts
 }
 
-// HookEvaluateTimeout returns the deadline the hook client applies to one
-// daemon evaluation. Every per-condition timeout must fit inside it.
-func (c *Config) HookEvaluateTimeout() time.Duration {
-	milliseconds := positiveOr(c.timeouts().HookEvaluateMS, DefaultHookEvaluateMs)
-	return time.Duration(milliseconds) * time.Millisecond
-}
-
 // ExecDefaultTimeoutMs returns the timeout an exec condition takes when it sets
 // none.
 func (c *Config) ExecDefaultTimeoutMs() int {

@@ -1,6 +1,7 @@
 package config_test
 
 import (
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -98,7 +99,7 @@ func TestTimeoutsRejectNegative(t *testing.T) {
 // TestLimitsAndIntervalsAreConfigurable covers that the size and period knobs
 // reach their accessors rather than staying fixed at build time.
 func TestLimitsAndIntervalsAreConfigurable(t *testing.T) {
-	body := "[performance.limits]\nregex_match_limit = 123\nshell_read_max_bytes = 456\n" +
+	body := "[performance.limits]\nregex_match_limit = 123\naudit_queue_limit = 456\n" +
 		"[performance.intervals]\noverload_log_interval_ms = 789\n" + validExecRule
 	cfg, err := writeExecConfig(t, body)
 	if err != nil {
@@ -107,11 +108,28 @@ func TestLimitsAndIntervalsAreConfigurable(t *testing.T) {
 	if got := cfg.RegexMatchLimit(); got != 123 {
 		t.Fatalf("RegexMatchLimit = %d, want 123", got)
 	}
-	if got := cfg.ShellReadMaxBytes(); got != 456 {
-		t.Fatalf("ShellReadMaxBytes = %d, want 456", got)
+	if got := cfg.AuditQueueLimit(); got != 456 {
+		t.Fatalf("AuditQueueLimit = %d, want 456", got)
 	}
 	if got := cfg.OverloadLogInterval().Milliseconds(); got != 789 {
 		t.Fatalf("OverloadLogInterval = %dms, want 789ms", got)
+	}
+}
+
+// TestEveryDeclaredKnobHasAConsumer keeps [performance.limits] and
+// [performance.intervals] honest. A key that decodes but that nothing reads is
+// worse than no key, because setting it looks like it worked. This asserts the
+// declared field count, so adding a knob without wiring it fails here.
+func TestEveryDeclaredKnobHasAConsumer(t *testing.T) {
+	limitFields := reflect.TypeOf(config.LimitPerformance{}).NumField()
+	if limitFields != 5 {
+		t.Fatalf("LimitPerformance has %d fields, want 5; wire a new knob to its "+
+			"consumer and update this count, or drop it", limitFields)
+	}
+	intervalFields := reflect.TypeOf(config.IntervalPerformance{}).NumField()
+	if intervalFields != 5 {
+		t.Fatalf("IntervalPerformance has %d fields, want 5; wire a new knob to its "+
+			"consumer and update this count, or drop it", intervalFields)
 	}
 }
 
@@ -139,7 +157,8 @@ func TestUnsetKnobsTakeDefaults(t *testing.T) {
 			t.Fatalf("%s = %d, want default %d", check.name, check.got, check.want)
 		}
 	}
-	if got := cfg.HookEvaluateTimeout().Milliseconds(); got != config.DefaultHookEvaluateMs {
-		t.Fatalf("HookEvaluateTimeout = %dms, want %dms", got, config.DefaultHookEvaluateMs)
-	}
+	// hook_evaluate_ms has no Config accessor, because the hook reads it through
+	// HookEvaluateTimeoutFromFile without loading rules. Its other role is the
+	// bound the per-condition ceilings are validated against, covered by
+	// TestExecCeilingMustStayUnderHookDeadline.
 }

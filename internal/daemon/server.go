@@ -110,18 +110,13 @@ func zeroConfig() *config.Config {
 				InferDefaultMS: 0, InferMaxMS: 0,
 			},
 			Limits: config.LimitPerformance{
-				RegexMatchLimit: 0, RegexDepthLimit: 0, ShellReadMaxBytes: 0,
-				UpstreamMetadataJSONBytes: 0, LayerMetadataJSONBytes: 0,
-				LayerMetadataStringBytes: 0, AuditQueueLimit: 0,
-				AuditDedupCacheSize: 0, EvaluationQueryLimit: 0,
-				EvaluationMaxQueryLimit: 0, HookInferencePhaseMaxMs: 0,
+				RegexMatchLimit: 0, RegexDepthLimit: 0, AuditQueueLimit: 0,
+				AuditDedupCacheSize: 0, HookInferencePhaseMaxMs: 0,
 			},
 			Intervals: config.IntervalPerformance{
 				AuditDedupTTLMs: 0, AuditDropLogIntervalMs: 0,
 				OverloadLogIntervalMs: 0, DeferredClaimLeaseMs: 0,
-				DeferredClaimRenewMs: 0, ServiceWaitAttempts: 0,
-				ServiceWaitSleepMs: 0, InstallReadinessTimeoutMs: 0,
-				InstallReadinessIntervalMs: 0,
+				DeferredClaimRenewMs: 0,
 			},
 		},
 		Update: config.Update{
