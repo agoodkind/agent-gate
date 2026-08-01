@@ -28,12 +28,6 @@ import (
 // stale result long enough to matter.
 const canonCacheTTL = 5 * time.Second
 
-// backgroundValidatorTimeout bounds a validator run that outlived its event's
-// synchronous budget. The run continues detached so its verdict can land in
-// the cache and decide the next event for the same target; 30s rides out a
-// busy lm-semantic-search daemon while still reclaiming the process.
-const backgroundValidatorTimeout = 30 * time.Second
-
 // maxResolvedScriptBytes caps the size of an interpreter script the disk
 // resolver reads off disk for code-search read analysis. A program file larger
 // than this is refused so a pathological input cannot pull an unbounded read
@@ -56,6 +50,10 @@ type ExecRuntime struct {
 
 	mu       sync.Mutex
 	inflight map[string]*validatorFlight
+	// backgroundTimeoutValue bounds a detached validator run. The daemon sets it
+	// from config when a runtime snapshot is built, so a reload updates it in
+	// place. It is read under mu because the retry loop reads it per attempt.
+	backgroundTimeoutValue time.Duration
 }
 
 type validatorFlight struct {
@@ -106,6 +104,9 @@ func NewExecRuntimeWithCache(runner execconcern.Runner, log *slog.Logger, cache 
 		log:      log,
 		mu:       sync.Mutex{},
 		inflight: make(map[string]*validatorFlight),
+		// Left unset so a runtime built outside the daemon takes the documented
+		// default; SetBackgroundTimeout supplies the configured value.
+		backgroundTimeoutValue: 0,
 	}
 }
 
@@ -374,10 +375,10 @@ func execCacheKeyValue(fields FieldSet, c *config.Condition) string {
 
 func execSelectorValue(fields FieldSet, selector config.FieldSelector, c *config.Condition) string {
 	if selector == config.FieldCmdReadTargets {
-		return fields.CmdReadTargets(c.SearchTools, diskFileResolver())
+		return fields.CmdReadTargets(c.SearchTools, c.ReadSpecs, diskFileResolver())
 	}
 	if selector == config.FieldExecTargets {
-		return fields.ExecTargets(c.SearchTools, diskFileResolver())
+		return fields.ExecTargets(c.SearchTools, c.ReadSpecs, diskFileResolver())
 	}
 	return fields.StringForCondition(selector, c)
 }

@@ -4,16 +4,48 @@
 package regex
 
 import (
+	"math"
 	"runtime"
 	"sync"
 	"unicode/utf8"
 	"unsafe"
 )
 
+// Fallback backtracking bounds, applied until SetLimits supplies the
+// configured values. They are duplicated as config defaults rather than read
+// from that package, because config imports this one.
 const (
 	defaultMatchLimit = 100000
 	defaultDepthLimit = 4096
 )
+
+// limits holds the bounds every later Compile applies. A caller that owns
+// config calls SetLimits once at startup; everything compiled before that, such
+// as a package-level MustCompile, uses the fallbacks above.
+var limits = struct {
+	mu    sync.RWMutex
+	match uint32
+	depth uint32
+}{mu: sync.RWMutex{}, match: defaultMatchLimit, depth: defaultDepthLimit}
+
+// SetLimits installs the backtracking match and depth bounds for patterns
+// compiled from this point on. A non-positive value leaves that bound alone.
+func SetLimits(matchLimit int, depthLimit int) {
+	limits.mu.Lock()
+	defer limits.mu.Unlock()
+	if matchLimit > 0 && matchLimit <= math.MaxUint32 {
+		limits.match = uint32(matchLimit)
+	}
+	if depthLimit > 0 && depthLimit <= math.MaxUint32 {
+		limits.depth = uint32(depthLimit)
+	}
+}
+
+func currentLimits() (uint32, uint32) {
+	limits.mu.RLock()
+	defer limits.mu.RUnlock()
+	return limits.match, limits.depth
+}
 
 // Regexp is a small PCRE2-backed wrapper for the subset of regex APIs used by
 // agent-gate's rule engine.
@@ -25,7 +57,8 @@ type Regexp struct {
 
 // Compile compiles a pattern for use in rules.
 func Compile(pattern string) (*Regexp, error) {
-	handle, err := HandleCompile(pattern, defaultMatchLimit, defaultDepthLimit)
+	matchLimit, depthLimit := currentLimits()
+	handle, err := HandleCompile(pattern, matchLimit, depthLimit)
 	if err != nil {
 		return nil, err
 	}

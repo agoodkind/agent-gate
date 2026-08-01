@@ -36,10 +36,6 @@ const configReloadDebounce = 200 * time.Millisecond
 
 const intakeParseFailed = "intake_parse_failed"
 
-const (
-	overloadLogInterval = 5 * time.Second
-)
-
 type runtimeSnapshot struct {
 	cfg                *config.Config
 	eventLogger        *audit.EventLogger
@@ -88,50 +84,70 @@ type Server struct {
 	lastOverloadLogTime time.Time
 }
 
+// zeroConfig returns a fully-specified empty Config for a nil caller. Every
+// field is named so a new config section cannot be silently defaulted here.
+func zeroConfig() *config.Config {
+	return &config.Config{
+		Log:   config.Log{Level: ""},
+		Audit: config.Audit{Enabled: nil, Level: "", Outputs: config.AuditOutput{SQLite: config.AuditSQLiteOutput{Path: ""}}},
+		Paths: config.Paths{ConversationsDir: ""},
+		Performance: config.Performance{
+			Hook: config.HookPerformance{
+				HotConcurrency:          0,
+				HotQueueWaitMS:          0,
+				InferencePhaseTimeoutMS: 0,
+				DeferredQueueLimit:      0,
+				DeferredWorkers:         0,
+				Cache: config.HookCachePerformance{
+					MaxEntries:      0,
+					MaxValueBytes:   0,
+					PruneIntervalMS: 0,
+				},
+			},
+			Timeouts: config.TimeoutPerformance{
+				HookEvaluateMS: 0, ExecDefaultMS: 0, ExecMaxMS: 0,
+				ExecBackgroundMS: 0, ExecMaxRetryCount: 0,
+				InferDefaultMS: 0, InferMaxMS: 0,
+			},
+			Limits: config.LimitPerformance{
+				RegexMatchLimit: 0, RegexDepthLimit: 0, AuditQueueLimit: 0,
+				AuditDedupCacheSize: 0, HookInferencePhaseMaxMs: 0,
+			},
+			Intervals: config.IntervalPerformance{
+				AuditDedupTTLMs: 0, AuditDropLogIntervalMs: 0,
+				OverloadLogIntervalMs: 0, DeferredClaimLeaseMs: 0,
+				DeferredClaimRenewMs: 0,
+			},
+		},
+		Update: config.Update{
+			Enabled:         nil,
+			Mode:            "",
+			Interval:        "",
+			Repo:            "",
+			AllowPrerelease: nil,
+		},
+		Telemetry: config.TelemetryConfig{OTLPEndpoint: "", SlowOpThresholdMs: 0},
+		Messages:  config.Messages{BlockFooter: ""},
+		Judge: config.Judge{
+			TranscriptEndpoint:   "",
+			TranscriptMaxTokens:  0,
+			TranscriptTokenModel: "",
+			TranscriptTimeoutMS:  0,
+			TranscriptOnError:    "",
+			Pricing:              nil,
+		},
+		Inference: nil,
+		Rules:     nil,
+	}
+}
+
 // New creates a new daemon Server.
 func New(log *slog.Logger, cfg *config.Config) (*Server, error) {
 	if log == nil {
 		log = slog.Default()
 	}
 	if cfg == nil {
-		cfg = &config.Config{
-			Log:   config.Log{Level: ""},
-			Audit: config.Audit{Enabled: nil, Level: "", Outputs: config.AuditOutput{SQLite: config.AuditSQLiteOutput{Path: ""}}},
-			Paths: config.Paths{ConversationsDir: ""},
-			Performance: config.Performance{
-				Hook: config.HookPerformance{
-					HotConcurrency:          0,
-					HotQueueWaitMS:          0,
-					InferencePhaseTimeoutMS: 0,
-					DeferredQueueLimit:      0,
-					DeferredWorkers:         0,
-					Cache: config.HookCachePerformance{
-						MaxEntries:      0,
-						MaxValueBytes:   0,
-						PruneIntervalMS: 0,
-					},
-				},
-			},
-			Update: config.Update{
-				Enabled:         nil,
-				Mode:            "",
-				Interval:        "",
-				Repo:            "",
-				AllowPrerelease: nil,
-			},
-			Telemetry: config.TelemetryConfig{OTLPEndpoint: "", SlowOpThresholdMs: 0},
-			Messages:  config.Messages{BlockFooter: ""},
-			Judge: config.Judge{
-				TranscriptEndpoint:   "",
-				TranscriptMaxTokens:  0,
-				TranscriptTokenModel: "",
-				TranscriptTimeoutMS:  0,
-				TranscriptOnError:    "",
-				Pricing:              nil,
-			},
-			Inference: nil,
-			Rules:     nil,
-		}
+		cfg = zeroConfig()
 	}
 	if errs := hook.ValidateConfig(cfg); len(errs) > 0 {
 		log.Error("invalid hook config", slog.Any("err", errs[0]))
@@ -250,6 +266,13 @@ func newRuntimeSnapshot(ctx context.Context, cfg *config.Config, log *slog.Logge
 			}
 		}
 	}()
+	// The detached-validator deadline is pushed onto the runtime here rather
+	// than read from config at the call site, because that call site is a retry
+	// loop and would otherwise reload and recompile the config once per attempt.
+	// A reload rebuilds the snapshot, so the new value takes effect with it.
+	execRuntime := rules.NewExecRuntimeWithCache(nil, log, hotStore)
+	execRuntime.SetBackgroundTimeout(cfg.ExecBackgroundTimeout())
+
 	return &runtimeSnapshot{
 		cfg:                cfg,
 		eventLogger:        eventLogger,
@@ -259,7 +282,7 @@ func newRuntimeSnapshot(ctx context.Context, cfg *config.Config, log *slog.Logge
 		evaluateSlots:      make(chan struct{}, cfg.HookHotConcurrency()),
 		evaluateQueueWait:  cfg.HookHotQueueWait(),
 		hotEvaluate:        defaultHotEvaluate,
-		execRuntime:        rules.NewExecRuntimeWithCache(nil, log, hotStore),
+		execRuntime:        execRuntime,
 		inferRuntime:       inferRuntime,
 	}, nil
 }
@@ -732,8 +755,12 @@ func (s *Server) logEvaluateOverload(ctx context.Context, snapshot *runtimeSnaps
 		return
 	}
 	now := auditNow()
+	// Read the interval from the snapshot rather than a field captured at
+	// construction, so a config reload takes effect. The snapshot is replaced
+	// on reload, and its other tuning values below are read the same way.
+	interval := snapshot.cfg.OverloadLogInterval()
 	s.overloadLogMu.Lock()
-	if !s.lastOverloadLogTime.IsZero() && now.Sub(s.lastOverloadLogTime) < overloadLogInterval {
+	if !s.lastOverloadLogTime.IsZero() && now.Sub(s.lastOverloadLogTime) < interval {
 		s.overloadLogMu.Unlock()
 		return
 	}

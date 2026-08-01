@@ -35,11 +35,6 @@ type deferredProcessor struct {
 	claimRenewInterval time.Duration
 }
 
-const (
-	deferredClaimLease         = 30 * time.Second
-	deferredClaimRenewInterval = 10 * time.Second
-)
-
 var deferredProcessorSequence atomic.Uint64
 
 type deferredWork struct {
@@ -79,8 +74,8 @@ func newDeferredProcessor(
 		claimOwner: fmt.Sprintf(
 			"agent-gate-%d-%d", os.Getpid(), deferredProcessorSequence.Add(1),
 		),
-		claimLease:         deferredClaimLease,
-		claimRenewInterval: deferredClaimRenewInterval,
+		claimLease:         cfg.DeferredClaimLease(),
+		claimRenewInterval: cfg.DeferredClaimRenewInterval(),
 	}
 
 	for range workers {
@@ -172,7 +167,7 @@ func (p *deferredProcessor) Close() {
 }
 
 func (p *deferredProcessor) worker(ctx context.Context) {
-	replayTicker := time.NewTicker(deferredClaimLease)
+	replayTicker := time.NewTicker(p.claimLease)
 	defer replayTicker.Stop()
 	for {
 		select {

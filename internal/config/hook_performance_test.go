@@ -41,7 +41,7 @@ inference_phase_timeout_ms = 9001
 	if err == nil {
 		t.Fatal("Load() returned nil error for inference phase timeout above 9000ms")
 	}
-	if !strings.Contains(err.Error(), "inference_phase_timeout_ms must not exceed 9000") {
+	if !strings.Contains(err.Error(), "inference_phase_timeout_ms must not exceed performance.limits.hook_inference_phase_max_ms 9000") {
 		t.Fatalf("Load() error = %v", err)
 	}
 }

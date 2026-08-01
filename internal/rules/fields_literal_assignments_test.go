@@ -14,7 +14,7 @@ func TestCmdReadTargetsExpandsLiteralAssignments(t *testing.T) {
 		ToolInputCommand: `R=/repo/main; grep -rn todo "$R/internal"`,
 	}
 
-	if got, want := fields.CmdReadTargets([]string{"grep"}, nil), "/repo/main/internal"; got != want {
+	if got, want := fields.CmdReadTargets([]string{"grep"}, nil, nil), "/repo/main/internal"; got != want {
 		t.Fatalf("CmdReadTargets() = %q, want %q", got, want)
 	}
 }
@@ -26,7 +26,7 @@ func TestCmdReadTargetsLeavesUnsafeAssignmentsUnresolved(t *testing.T) {
 	}
 	for _, command := range tests {
 		fields := rules.FieldSet{CWD: "/tmp", ToolName: "Bash", ToolInputCommand: command}
-		if got := fields.CmdReadTargets([]string{"grep"}, nil); got != "" {
+		if got := fields.CmdReadTargets([]string{"grep"}, nil, nil); got != "" {
 			t.Fatalf("CmdReadTargets(%q) = %q, want empty", command, got)
 		}
 	}
@@ -37,7 +37,7 @@ func TestCmdReadTargetsUsesFinalSafeLiteralAssignment(t *testing.T) {
 		CWD: "/tmp", ToolName: "Bash",
 		ToolInputCommand: `R=/tmp; R=/repo/main; grep -rn todo "$R/internal"`,
 	}
-	if got, want := fields.CmdReadTargets([]string{"grep"}, nil), "/repo/main/internal"; got != want {
+	if got, want := fields.CmdReadTargets([]string{"grep"}, nil, nil), "/repo/main/internal"; got != want {
 		t.Fatalf("CmdReadTargets() = %q, want %q", got, want)
 	}
 }
@@ -47,7 +47,7 @@ func TestCmdReadTargetsPreservesEarlierSafeLiteralAssignment(t *testing.T) {
 		CWD: "/tmp", ToolName: "Bash",
 		ToolInputCommand: `R=/repo/main; grep todo "$R/a"; R=/tmp; grep todo "$R/b"`,
 	}
-	if got, want := fields.CmdReadTargets([]string{"grep"}, nil), "/repo/main/a\n/tmp/b"; got != want {
+	if got, want := fields.CmdReadTargets([]string{"grep"}, nil, nil), "/repo/main/a\n/tmp/b"; got != want {
 		t.Fatalf("CmdReadTargets() = %q, want %q", got, want)
 	}
 }

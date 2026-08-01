@@ -16,7 +16,6 @@ const (
 	defaultHookInferencePhaseTimeout = 4 * time.Second
 	defaultHookDeferredQueueLimit    = 8192
 	defaultHookDeferredWorkers       = 1
-	maxHookInferencePhaseTimeoutMS   = 9000
 )
 
 // HookHotConcurrency returns the daemon admission limit for synchronous hook
@@ -45,7 +44,7 @@ func (c *Config) HookInferencePhaseTimeout() time.Duration {
 	if c != nil && c.Performance.Hook.InferencePhaseTimeoutMS > 0 {
 		milliseconds := min(
 			c.Performance.Hook.InferencePhaseTimeoutMS,
-			maxHookInferencePhaseTimeoutMS,
+			c.HookInferencePhaseMaxMs(),
 		)
 		return time.Duration(milliseconds) * time.Millisecond
 	}
@@ -92,14 +91,15 @@ func (c *Config) HookCachePruneInterval() time.Duration {
 	return hotkv.DefaultPruneInterval
 }
 
-func validateHookPerformance(performance HookPerformance) error {
+func validateHookPerformance(performance HookPerformance, limits LimitPerformance) error {
 	if performance.InferencePhaseTimeoutMS < 0 {
 		return errors.New("performance.hook.inference_phase_timeout_ms must be non-negative")
 	}
-	if performance.InferencePhaseTimeoutMS > maxHookInferencePhaseTimeoutMS {
+	ceiling := positiveOr(limits.HookInferencePhaseMaxMs, DefaultHookInferencePhaseMaxMs)
+	if performance.InferencePhaseTimeoutMS > ceiling {
 		return fmt.Errorf(
-			"performance.hook.inference_phase_timeout_ms must not exceed %d",
-			maxHookInferencePhaseTimeoutMS,
+			"performance.hook.inference_phase_timeout_ms must not exceed performance.limits.hook_inference_phase_max_ms %d",
+			ceiling,
 		)
 	}
 	return nil
