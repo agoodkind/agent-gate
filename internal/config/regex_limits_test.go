@@ -114,6 +114,38 @@ func TestRegexLimitsApplyOnEveryLoad(t *testing.T) {
 	}
 }
 
+// TestRegexLimitsRejectValuesPCRE2CannotHold covers a config that would load
+// while doing nothing. SetLimits passes these bounds to PCRE2 as uint32 and
+// ignores a value that does not fit, so without this check a config could ask
+// for a huge match limit, load cleanly, and silently keep the fallback.
+func TestRegexLimitsRejectValuesPCRE2CannotHold(t *testing.T) {
+	restoreRegexDefaults(t)
+
+	for _, key := range []string{"regex_match_limit", "regex_depth_limit"} {
+		t.Run(key, func(t *testing.T) {
+			body := "[performance.limits]\n" + key + " = 4294967296\n" + backtrackingRule
+			_, err := config.LoadExisting(writeConfig(t, body))
+			if err == nil {
+				t.Fatalf("%s above uint32 should be rejected", key)
+			}
+			if !strings.Contains(err.Error(), "largest value PCRE2 accepts") {
+				t.Fatalf("error = %v, want the PCRE2 range complaint", err)
+			}
+		})
+	}
+
+	// The largest accepted value must still load, so the check bounds a high
+	// limit rather than forbidding one.
+	body := "[performance.limits]\nregex_match_limit = 4294967295\n" + backtrackingRule
+	loaded, err := config.LoadExisting(writeConfig(t, body))
+	if err != nil {
+		t.Fatalf("the maximum accepted value should load: %v", err)
+	}
+	if loaded.RegexMatchLimit() != 4294967295 {
+		t.Fatalf("RegexMatchLimit = %d, want 4294967295", loaded.RegexMatchLimit())
+	}
+}
+
 // TestRegexLimitsRejectNegative keeps the sign check alongside the other bounds.
 func TestRegexLimitsRejectNegative(t *testing.T) {
 	restoreRegexDefaults(t)

@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"math"
 	"time"
 )
 
@@ -149,6 +150,25 @@ func validateLimits(limits LimitPerformance, intervals IntervalPerformance) erro
 	for _, field := range numbered {
 		if field.value < 0 {
 			return fmt.Errorf("performance.%s must be non-negative", field.name)
+		}
+	}
+
+	// The regex bounds reach PCRE2 as uint32, and regex.SetLimits ignores a
+	// value that does not fit. Rejecting it here is the difference between a
+	// config that fails loudly and one that loads while the bound it asked for
+	// silently stays at the fallback.
+	for _, field := range []struct {
+		name  string
+		value int
+	}{
+		{"limits.regex_match_limit", limits.RegexMatchLimit},
+		{"limits.regex_depth_limit", limits.RegexDepthLimit},
+	} {
+		if field.value > math.MaxUint32 {
+			return fmt.Errorf(
+				"performance.%s %d exceeds the largest value PCRE2 accepts, %d",
+				field.name, field.value, uint32(math.MaxUint32),
+			)
 		}
 	}
 
