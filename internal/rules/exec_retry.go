@@ -26,7 +26,7 @@ func (r *ExecRuntime) runExpandedCommandWithRetry(
 	attempts := c.RetryCount + 1
 	verdict := execconcern.Verdict{Block: false, Message: "", Output: "", Errored: false}
 	for range attempts {
-		res, runErr := r.runner.Run(ctx, command, backgroundValidatorTimeout(), stdin, env)
+		res, runErr := r.runner.Run(ctx, command, r.backgroundTimeout(), stdin, env)
 		verdict = execconcern.Interpret(c, res, runErr)
 		if !verdict.Errored {
 			return verdict

@@ -82,7 +82,6 @@ type Server struct {
 
 	overloadLogMu       sync.Mutex
 	lastOverloadLogTime time.Time
-	overloadLogInterval time.Duration
 }
 
 // zeroConfig returns a fully-specified empty Config for a nil caller. Every
@@ -187,7 +186,6 @@ func New(log *slog.Logger, cfg *config.Config) (*Server, error) {
 		stopDaemon:                    nil,
 		overloadLogMu:                 sync.Mutex{},
 		lastOverloadLogTime:           time.Time{},
-		overloadLogInterval:           cfg.OverloadLogInterval(),
 	}
 	s.runtime.Store(snapshot)
 	if err := s.startConfigWatcher(); err != nil {
@@ -273,6 +271,13 @@ func newRuntimeSnapshot(ctx context.Context, cfg *config.Config, log *slog.Logge
 			}
 		}
 	}()
+	// The detached-validator deadline is pushed onto the runtime here rather
+	// than read from config at the call site, because that call site is a retry
+	// loop and would otherwise reload and recompile the config once per attempt.
+	// A reload rebuilds the snapshot, so the new value takes effect with it.
+	execRuntime := rules.NewExecRuntimeWithCache(nil, log, hotStore)
+	execRuntime.SetBackgroundTimeout(cfg.ExecBackgroundTimeout())
+
 	return &runtimeSnapshot{
 		cfg:                cfg,
 		eventLogger:        eventLogger,
@@ -282,7 +287,7 @@ func newRuntimeSnapshot(ctx context.Context, cfg *config.Config, log *slog.Logge
 		evaluateSlots:      make(chan struct{}, cfg.HookHotConcurrency()),
 		evaluateQueueWait:  cfg.HookHotQueueWait(),
 		hotEvaluate:        defaultHotEvaluate,
-		execRuntime:        rules.NewExecRuntimeWithCache(nil, log, hotStore),
+		execRuntime:        execRuntime,
 		inferRuntime:       inferRuntime,
 	}, nil
 }
@@ -755,8 +760,12 @@ func (s *Server) logEvaluateOverload(ctx context.Context, snapshot *runtimeSnaps
 		return
 	}
 	now := auditNow()
+	// Read the interval from the snapshot rather than a field captured at
+	// construction, so a config reload takes effect. The snapshot is replaced
+	// on reload, and its other tuning values below are read the same way.
+	interval := snapshot.cfg.OverloadLogInterval()
 	s.overloadLogMu.Lock()
-	if !s.lastOverloadLogTime.IsZero() && now.Sub(s.lastOverloadLogTime) < s.overloadLogInterval {
+	if !s.lastOverloadLogTime.IsZero() && now.Sub(s.lastOverloadLogTime) < interval {
 		s.overloadLogMu.Unlock()
 		return
 	}

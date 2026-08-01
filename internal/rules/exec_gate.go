@@ -50,6 +50,10 @@ type ExecRuntime struct {
 
 	mu       sync.Mutex
 	inflight map[string]*validatorFlight
+	// backgroundTimeoutValue bounds a detached validator run. The daemon sets it
+	// from config when a runtime snapshot is built, so a reload updates it in
+	// place. It is read under mu because the retry loop reads it per attempt.
+	backgroundTimeoutValue time.Duration
 }
 
 type validatorFlight struct {
@@ -100,6 +104,9 @@ func NewExecRuntimeWithCache(runner execconcern.Runner, log *slog.Logger, cache 
 		log:      log,
 		mu:       sync.Mutex{},
 		inflight: make(map[string]*validatorFlight),
+		// Left unset so a runtime built outside the daemon takes the documented
+		// default; SetBackgroundTimeout supplies the configured value.
+		backgroundTimeoutValue: 0,
 	}
 }
 
