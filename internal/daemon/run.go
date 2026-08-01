@@ -14,7 +14,6 @@ import (
 
 	"goodkind.io/agent-gate/api/daemonpb"
 	"goodkind.io/agent-gate/internal/config"
-	"goodkind.io/agent-gate/internal/regex"
 )
 
 // Run starts the daemon gRPC server on the XDG runtime Unix socket.
@@ -22,10 +21,6 @@ import (
 // case the daemon falls back to default XDG paths.
 func Run(log *slog.Logger, cfg *config.Config) error {
 	ctx := context.Background()
-	// The regex package cannot read config, because config imports it, so the
-	// configured backtracking bounds are pushed in here before any rule
-	// pattern compiles.
-	regex.SetLimits(cfg.RegexMatchLimit(), cfg.RegexDepthLimit())
 	if err := config.EnsureRuntimeDir(); err != nil {
 		log.ErrorContext(ctx, "ensure runtime dir failed", "err", err)
 		return fmt.Errorf("ensure runtime dir: %w", err)

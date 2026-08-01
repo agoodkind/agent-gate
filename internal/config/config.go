@@ -627,6 +627,13 @@ func loadPath(path string, requireExisting bool) (*Config, error) {
 		return nil, err
 	}
 
+	// Install the configured backtracking bounds before any rule pattern
+	// compiles, because a PCRE2 handle carries the limits it was built with.
+	// This has to happen here rather than at daemon startup: every load,
+	// including a reload, compiles its patterns in the loop below, so limits
+	// applied after Load returns would never reach a rule.
+	regex.SetLimits(cfg.RegexMatchLimit(), cfg.RegexDepthLimit())
+
 	for i := range cfg.Rules {
 		if err := compileRule(log, &cfg.Rules[i], cfg.Inference, meta, filepath.Dir(path), &cfg); err != nil {
 			return nil, err
