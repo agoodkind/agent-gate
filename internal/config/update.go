@@ -183,7 +183,8 @@ func mergeUpdateDefaults(contents string, mode string) (string, bool, error) {
 	// merging into it and appending a fresh one, so an absent table and a table
 	// present with default values must stay distinguishable. The previous
 	// library answered this with MetaData.IsDefined; go-toml has no equivalent,
-	// so the same question is asked of a generic decode of the same bytes.
+	// so the source text is scanned for the table header instead, using the same
+	// matcher the rewrite below uses to find it.
 	hasUpdate := topLevelTableDeclared(contents, "update")
 	if hasUpdate && mode == "" {
 		return contents, false, nil
@@ -267,14 +268,12 @@ func replaceTopLevelTable(contents string, tableName string, replacement string)
 	lines := strings.SplitAfter(contents, "\n")
 	start := -1
 	end := len(lines)
-	needle := "[" + tableName + "]"
 	for i := range lines {
-		trimmed := strings.TrimSpace(lines[i])
-		if trimmed == needle {
+		if isTopLevelTableHeader(lines[i], tableName) {
 			start = i
 			continue
 		}
-		if start >= 0 && i > start && strings.HasPrefix(trimmed, "[") {
+		if start >= 0 && i > start && strings.HasPrefix(strings.TrimSpace(lines[i]), "[") {
 			end = i
 			break
 		}
@@ -300,15 +299,44 @@ func replaceTopLevelTable(contents string, tableName string, replacement string)
 // top-level table at all, which is a different question from whether its fields
 // hold non-zero values: a decode into a typed struct cannot tell an absent
 // table from a table of zero values.
-//
-// It scans the source text with the same rule replaceTopLevelTable uses to find
-// that table, so the two agree by construction, and it needs no generic decode.
 func topLevelTableDeclared(contents string, tableName string) bool {
-	needle := "[" + tableName + "]"
 	for line := range strings.SplitSeq(contents, "\n") {
-		if strings.TrimSpace(line) == needle {
+		if isTopLevelTableHeader(line, tableName) {
 			return true
 		}
 	}
 	return false
+}
+
+// isTopLevelTableHeader reports whether one source line opens the named
+// top-level table.
+//
+// TOML allows whitespace inside the brackets and a trailing comment, and a key
+// may be quoted, so an exact string comparison against "[update]" misses
+// "[update] # managed", "[ update ]", and "[\"update\"]". Missing the header
+// made mergeUpdateDefaults append a second [update] table and produce a config
+// that no longer parses. Both the presence check and the rewrite use this, so
+// they cannot disagree about which line is the header.
+func isTopLevelTableHeader(line string, tableName string) bool {
+	trimmed := strings.TrimSpace(line)
+	if !strings.HasPrefix(trimmed, "[") {
+		return false
+	}
+	// An array-of-tables header opens with [[ and is a different construct.
+	if strings.HasPrefix(trimmed, "[[") {
+		return false
+	}
+	closing := strings.Index(trimmed, "]")
+	if closing < 0 {
+		return false
+	}
+	// Only a comment may follow the closing bracket; anything else is not a
+	// bare table header.
+	rest := strings.TrimSpace(trimmed[closing+1:])
+	if rest != "" && !strings.HasPrefix(rest, "#") {
+		return false
+	}
+	key := strings.TrimSpace(trimmed[1:closing])
+	key = strings.Trim(key, `"'`)
+	return key == tableName
 }
