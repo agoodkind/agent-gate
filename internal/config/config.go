@@ -207,6 +207,12 @@ type ShellReadSpec struct {
 	NestedCommandFlag           string   `toml:"nested_command_flag"`
 	NestedRemote                bool     `toml:"nested_remote"`
 	RemoteSources               bool     `toml:"remote_sources"`
+	// RefPathOperands declares that a positional operand may join a revision
+	// and a path with a colon, as git does in `git show HEAD:go.mod`. Without
+	// it the whole operand resolves as one filename, giving a path that does
+	// not exist: the real file goes unseen and a phantom target reaches any
+	// validator keyed on read targets.
+	RefPathOperands bool `toml:"ref_path_operands"`
 }
 
 // FieldPairSpec carries the compiled selectors for a [Condition.FieldPair].
