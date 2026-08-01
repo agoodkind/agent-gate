@@ -4,7 +4,6 @@ import (
 	"slices"
 	"testing"
 
-	"goodkind.io/agent-gate/internal/config"
 	"goodkind.io/agent-gate/internal/rules/concerns/shellread"
 )
 
@@ -22,9 +21,10 @@ func searchPaths(t *testing.T, command string, tools []string) []string {
 }
 
 // TestPinnedAnalyzerDoesNotFabricateJqPaths proves the read-analyzer fixes
-// reach agent-gate through the gksyntax pin, not merely that they exist
-// upstream. A pin moved in go.mod but not in the submodule, or the reverse,
-// leaves this failing while the upstream tests all pass.
+// reach agent-gate, not merely that they exist upstream. It asserts on whichever
+// gksyntax source the build actually resolves, which is the workspace copy in a
+// worktree and the go.mod version in CI, so a stale source fails here whichever
+// one is selected. It does not check the two pins independently.
 //
 // Each case fabricated a path before the pin moved: jq's --arg shifted every
 // later operand, and jq's -e was misread as supplying the program.
@@ -99,7 +99,3 @@ func TestPinnedAnalyzerRespectsTheJavaScriptModule(t *testing.T) {
 		t.Fatalf("read targets = %v, want /abs/a.js", got)
 	}
 }
-
-// unusedConfigImport keeps the config import honest if the cases above ever
-// need a spec-driven variant.
-var _ = config.ShellReadSpec{}
