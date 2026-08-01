@@ -76,6 +76,11 @@ type Verdict struct {
 	// for response actions.
 	Output  string
 	Errored bool
+	// PartialError reports that at least one expanded target could not be
+	// classified, even though this verdict was decided by a target that could.
+	// It never changes enforcement; it exists so the audit record does not claim
+	// full coverage of an expansion that was only partly probed.
+	PartialError bool
 }
 
 // ErrSignaled reports that the validator process was killed by a signal rather
@@ -147,38 +152,41 @@ func readTargetsEnv(targets []PathView) string {
 func Interpret(c *config.Condition, res RunResult, runErr error) Verdict {
 	if runErr != nil {
 		return Verdict{
-			Block:   c.OnError == config.OnErrorClosed,
-			Message: "",
-			Output:  "",
-			Errored: true,
+			Block:        c.OnError == config.OnErrorClosed,
+			Message:      "",
+			Output:       "",
+			Errored:      true,
+			PartialError: false,
 		}
 	}
 	if c.BlockOn == config.BlockOnMatch {
 		if res.ExitCode != 0 {
 			return Verdict{
-				Block:   c.OnError == config.OnErrorClosed,
-				Message: "",
-				Output:  "",
-				Errored: true,
+				Block:        c.OnError == config.OnErrorClosed,
+				Message:      "",
+				Output:       "",
+				Errored:      true,
+				PartialError: false,
 			}
 		}
 		matched, err := decodeStdoutJSONMatch(c, res.Stdout)
 		if err != nil {
 			return Verdict{
-				Block:   c.OnError == config.OnErrorClosed,
-				Message: "",
-				Output:  "",
-				Errored: true,
+				Block:        c.OnError == config.OnErrorClosed,
+				Message:      "",
+				Output:       "",
+				Errored:      true,
+				PartialError: false,
 			}
 		}
-		return Verdict{Block: matched, Message: "", Output: res.Stdout, Errored: false}
+		return Verdict{Block: matched, Message: "", Output: res.Stdout, Errored: false, PartialError: false}
 	}
 	block := exitBlocks(c.BlockOn, res.ExitCode)
 	message := ""
 	if block {
 		message = firstLine(res.Stdout)
 	}
-	return Verdict{Block: block, Message: message, Output: res.Stdout, Errored: false}
+	return Verdict{Block: block, Message: message, Output: res.Stdout, Errored: false, PartialError: false}
 }
 
 // exitBlocks reports whether exitCode blocks under policy. The nonzero policy

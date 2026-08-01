@@ -143,75 +143,6 @@ func execRuntimeFromContext(ctx context.Context) *ExecRuntime {
 	return runtime
 }
 
-// execEventMemo guarantees one validator fork per event per condition and
-// carries the per-rule message overrides emitted by blocking validators. It is
-// created once per EvaluateAll call. Conditions run sequentially within one
-// event (single scheduler slot), but the mutex keeps it safe regardless.
-type execEventMemo struct {
-	system    string
-	eventName string
-
-	mu        sync.Mutex
-	verdicts  map[*config.Condition]execconcern.Verdict
-	overrides map[string]string
-	outputs   map[string]string
-	errors    map[string]bool
-}
-
-func newExecEventMemo(system string, eventName string) *execEventMemo {
-	return &execEventMemo{
-		system:    system,
-		eventName: eventName,
-		mu:        sync.Mutex{},
-		verdicts:  make(map[*config.Condition]execconcern.Verdict),
-		overrides: make(map[string]string),
-		outputs:   make(map[string]string),
-		errors:    make(map[string]bool),
-	}
-}
-
-func (m *execEventMemo) lookup(c *config.Condition) (execconcern.Verdict, bool) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	v, ok := m.verdicts[c]
-	return v, ok
-}
-
-func (m *execEventMemo) record(c *config.Condition, ruleName string, v execconcern.Verdict) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.verdicts[c] = v
-	if v.Block && v.Message != "" {
-		m.overrides[ruleName] = v.Message
-	}
-	if v.Block {
-		m.outputs[ruleName] = v.Output
-	}
-	if v.Errored {
-		m.errors[ruleName] = true
-	}
-}
-
-func (m *execEventMemo) outputFor(ruleName string) (string, bool) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	output, ok := m.outputs[ruleName]
-	return output, ok
-}
-
-func (m *execEventMemo) erroredFor(ruleName string) bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.errors[ruleName]
-}
-
-func (m *execEventMemo) overrideFor(ruleName string) (string, bool) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	msg, ok := m.overrides[ruleName]
-	return msg, ok
-}
-
 func withExecEventMemo(ctx context.Context, memo *execEventMemo) context.Context {
 	return context.WithValue(ctx, execEventMemoKey{}, memo)
 }
@@ -462,31 +393,33 @@ func (r *ExecRuntime) runValidatorSingleflight(
 			return flight.verdict
 		case <-ctx.Done():
 			return execconcern.Verdict{
-				Block:   c.OnError == config.OnErrorClosed,
-				Message: "",
-				Output:  "",
-				Errored: true,
+				Block:        c.OnError == config.OnErrorClosed,
+				Message:      "",
+				Output:       "",
+				Errored:      true,
+				PartialError: false,
 			}
 		}
 	}
 	flight = &validatorFlight{
 		done:    make(chan struct{}),
-		verdict: execconcern.Verdict{Block: false, Message: "", Output: "", Errored: false},
+		verdict: execconcern.Verdict{Block: false, Message: "", Output: "", Errored: false, PartialError: false},
 	}
 	r.inflight[cacheKey] = flight
 	r.mu.Unlock()
 
-	verdict := execconcern.Verdict{Block: false, Message: "", Output: "", Errored: false}
+	verdict := execconcern.Verdict{Block: false, Message: "", Output: "", Errored: false, PartialError: false}
 	backgroundManaged := false
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			r.log.ErrorContext(ctx, "exec validator singleflight panic",
 				"rule", rule.Name, "err", fmt.Errorf("panic: %v", recovered))
 			verdict = execconcern.Verdict{
-				Block:   c.OnError == config.OnErrorClosed,
-				Message: "",
-				Output:  "",
-				Errored: true,
+				Block:        c.OnError == config.OnErrorClosed,
+				Message:      "",
+				Output:       "",
+				Errored:      true,
+				PartialError: false,
 			}
 		}
 		if backgroundManaged {
@@ -509,10 +442,11 @@ func (r *ExecRuntime) runValidatorSingleflight(
 					r.log.ErrorContext(backgroundCtx, "exec validator background completion panic",
 						"rule", rule.Name, "err", fmt.Errorf("panic: %v", recovered))
 					r.finishValidatorFlight(cacheKey, flight, execconcern.Verdict{
-						Block:   c.OnError == config.OnErrorClosed,
-						Message: "",
-						Output:  "",
-						Errored: true,
+						Block:        c.OnError == config.OnErrorClosed,
+						Message:      "",
+						Output:       "",
+						Errored:      true,
+						PartialError: false,
 					})
 				}
 			}()
@@ -560,14 +494,14 @@ func (r *ExecRuntime) runValidator(
 		r.log.WarnContext(ctx, "exec validator request build failed",
 			"rule", rule.Name, "on_error", c.OnError, "err", err)
 		return validatorRunResult{
-			verdict:    execconcern.Verdict{Block: c.OnError == config.OnErrorClosed, Message: "", Output: "", Errored: true},
+			verdict:    execconcern.Verdict{Block: c.OnError == config.OnErrorClosed, Message: "", Output: "", Errored: true, PartialError: false},
 			background: nil,
 		}
 	}
 	commands := r.expandExecCommands(fields, c)
 	if len(commands) == 0 {
 		return validatorRunResult{
-			verdict:    execconcern.Verdict{Block: false, Message: "", Output: "", Errored: false},
+			verdict:    execconcern.Verdict{Block: false, Message: "", Output: "", Errored: false, PartialError: false},
 			background: nil,
 		}
 	}
@@ -579,7 +513,7 @@ func (r *ExecRuntime) runValidator(
 			if rec := recover(); rec != nil {
 				r.log.ErrorContext(bgCtx, "exec validator panic",
 					"rule", rule.Name, "err", fmt.Errorf("panic: %v", rec))
-				done <- execconcern.Verdict{Block: c.OnError == config.OnErrorClosed, Message: "", Output: "", Errored: true}
+				done <- execconcern.Verdict{Block: c.OnError == config.OnErrorClosed, Message: "", Output: "", Errored: true, PartialError: false}
 			}
 		}()
 		verdict := r.runExpandedCommands(bgCtx, rule.Name, c, commands, stdin, env)
@@ -603,7 +537,7 @@ func (r *ExecRuntime) runValidator(
 		r.log.WarnContext(ctx, "exec validator exceeded synchronous budget; continuing in background",
 			"rule", rule.Name, "on_error", c.OnError, "budget_ms", c.TimeoutMs)
 		return validatorRunResult{
-			verdict:    execconcern.Verdict{Block: c.OnError == config.OnErrorClosed, Message: "", Output: "", Errored: true},
+			verdict:    execconcern.Verdict{Block: c.OnError == config.OnErrorClosed, Message: "", Output: "", Errored: true, PartialError: false},
 			background: done,
 		}
 	}
@@ -618,13 +552,13 @@ func (r *ExecRuntime) runExpandedCommands(
 	env []string,
 ) execconcern.Verdict {
 	if len(commands) == 0 {
-		return execconcern.Verdict{Block: false, Message: "", Output: "", Errored: false}
+		return execconcern.Verdict{Block: false, Message: "", Output: "", Errored: false, PartialError: false}
 	}
 
 	forEach := c.ForEachSelector().Selector != config.FieldSelectorInvalid
 	matchAll := forEach && c.MatchMode == config.ExecMatchAll
 	firstBlockMessage := ""
-	firstErrored := execconcern.Verdict{Block: false, Message: "", Output: "", Errored: false}
+	firstErrored := execconcern.Verdict{Block: false, Message: "", Output: "", Errored: false, PartialError: false}
 	sawErrored := false
 	for _, command := range commands {
 		verdict := r.runExpandedCommandWithRetry(ctx, ruleName, c, command, stdin, env)
@@ -653,19 +587,27 @@ func (r *ExecRuntime) runExpandedCommands(
 			firstBlockMessage = verdict.Message
 		}
 		if !matchAll && verdict.Block {
+			// The block stands, but if an earlier target could not be classified
+			// then the expansion was only partly probed. Say so, or the audit
+			// records full coverage of a run that never finished.
+			verdict.PartialError = sawErrored
 			return verdict
 		}
 		if matchAll && !verdict.Block {
-			return execconcern.Verdict{Block: false, Message: "", Output: "", Errored: false}
+			return execconcern.Verdict{
+				Block: false, Message: "", Output: "", Errored: false, PartialError: false,
+			}
 		}
 	}
 	if matchAll {
-		return execconcern.Verdict{Block: true, Message: firstBlockMessage, Output: "", Errored: false}
+		return execconcern.Verdict{
+			Block: true, Message: firstBlockMessage, Output: "", Errored: false, PartialError: false,
+		}
 	}
 	if sawErrored {
 		return firstErrored
 	}
-	return execconcern.Verdict{Block: false, Message: "", Output: "", Errored: false}
+	return execconcern.Verdict{Block: false, Message: "", Output: "", Errored: false, PartialError: false}
 }
 
 func (r *ExecRuntime) logExpandedCommandError(
@@ -840,28 +782,32 @@ func (r *ExecRuntime) cacheLookup(
 	cacheKey string,
 ) (execconcern.Verdict, bool) {
 	if r.cache == nil {
-		return execconcern.Verdict{Block: false, Message: "", Output: "", Errored: false}, false
+		return execconcern.Verdict{Block: false, Message: "", Output: "", Errored: false, PartialError: false}, false
 	}
 	entry, found, err := r.cache.Get(cacheNamespace, cacheKey)
 	if err != nil {
 		r.log.WarnContext(ctx, "exec validator hot cache get failed", "err", err)
-		return execconcern.Verdict{Block: false, Message: "", Output: "", Errored: false}, false
+		return execconcern.Verdict{Block: false, Message: "", Output: "", Errored: false, PartialError: false}, false
 	}
 	if !found {
-		return execconcern.Verdict{Block: false, Message: "", Output: "", Errored: false}, false
+		return execconcern.Verdict{Block: false, Message: "", Output: "", Errored: false, PartialError: false}, false
 	}
 
 	var cached cachedExecVerdict
 	if err := json.Unmarshal(entry.Value, &cached); err != nil {
 		r.log.WarnContext(ctx, "exec validator hot cache decode failed", "err", err)
 		_, _ = r.cache.Delete(cacheNamespace, cacheKey)
-		return execconcern.Verdict{Block: false, Message: "", Output: "", Errored: false}, false
+		return execconcern.Verdict{Block: false, Message: "", Output: "", Errored: false, PartialError: false}, false
 	}
 	return execconcern.Verdict{
 		Block:   cached.Block,
 		Message: cached.Message,
 		Output:  cached.Output,
 		Errored: false,
+		// Only a clean verdict is cached, and the cached entry says nothing
+		// about the expansion that produced it, so a cache hit never claims a
+		// partial failure it cannot substantiate.
+		PartialError: false,
 	}, true
 }
 

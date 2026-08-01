@@ -160,6 +160,9 @@ func mergeStagedDecisionTrace(
 		decisions = append(decisions, rules.RuleDecision{
 			RuleName: ruleSet[i].Name, Status: "skipped",
 			SkipReason: "prior_condition_nonmatch", Matched: false,
+			// A rule skipped before its conditions ran probed nothing, so it
+			// cannot have partially probed an expansion.
+			PartialError: false,
 		})
 	}
 	deterministic.Deterministic.CheckedRules = decisions
