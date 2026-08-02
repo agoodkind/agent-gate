@@ -1,4 +1,4 @@
-package hook
+package daemon
 
 import (
 	"encoding/json"
@@ -12,10 +12,16 @@ import (
 	"goodkind.io/agent-gate/internal/config"
 )
 
-// failOpenRecordName is the file the hook appends to when it lets a call
-// through unevaluated. It sits beside the audit database but is written by the
-// hook process, never by the daemon, which is the whole point: the daemon that
-// would normally record the event is the one that is not answering.
+// failOpenRecordName is the file written when a call is allowed without being
+// evaluated. It sits beside the audit database and is deliberately not written
+// through it: the daemon that owns the audit database is the one that is not
+// answering, so a record kept there would not exist for the outage it is meant
+// to prove.
+//
+// This is daemon-owned audit code, per the rule that audit logging belongs to
+// the daemon. The hook process calls it only on the paths where no daemon
+// verdict exists, because on every other path the daemon records the event
+// itself.
 const failOpenRecordName = "fail-open.jsonl"
 
 // failOpenTruncatedName marks that the cap was reached and later unevaluated
@@ -57,7 +63,7 @@ func FailOpenRecordPath() string {
 // reads as "nothing was violated" when it means "nothing was checked". Every
 // error here is swallowed on purpose: failing to write a record must never
 // break the tool call the hook already decided to allow.
-func RecordFailOpen(reason FailOpenReason, system System, eventName string, toolName string, cwd string, detail string) {
+func RecordFailOpen(reason string, system string, eventName string, toolName string, cwd string, detail string) {
 	if reason == "" {
 		return
 	}
@@ -67,8 +73,8 @@ func RecordFailOpen(reason FailOpenReason, system System, eventName string, tool
 	}
 	record := FailOpenRecord{
 		At:        failOpenNow().UTC().Format(time.RFC3339Nano),
-		Reason:    string(reason),
-		System:    system.String(),
+		Reason:    reason,
+		System:    system,
 		EventName: eventName,
 		ToolName:  toolName,
 		CWD:       cwd,

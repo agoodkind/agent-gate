@@ -47,6 +47,7 @@ var virtualFields = []string{
 	"cmd_double_hyphen_prose",
 	"cmd_redirections",
 	"cmd_write_targets",
+	"patch_write_targets",
 	"last_user_message",
 	"last_response_output",
 	"response_output",

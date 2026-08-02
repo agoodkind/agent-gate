@@ -15,7 +15,7 @@ require (
 	go.opentelemetry.io/otel/sdk/metric v1.44.0
 	goodkind.io/clyde v0.0.0-20260715020851-23020238ae53
 	goodkind.io/gklog v0.4.5-0.20260704010614-fd04ab29700e
-	goodkind.io/gksyntax v0.0.0-20260730162328-9c8cf559c4d6
+	goodkind.io/gksyntax v0.0.0-20260801172749-57c5352a8c01
 	goodkind.io/go-makefile v0.0.0-20260712071637-360d4c3d4fff
 	google.golang.org/grpc v1.83.0
 	google.golang.org/protobuf v1.36.11

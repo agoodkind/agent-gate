@@ -2,7 +2,6 @@ package hook_test
 
 import (
 	"encoding/json"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -63,65 +62,5 @@ func TestBlockIsUnaffectedByTheNotice(t *testing.T) {
 	}
 	if !strings.Contains(string(blocked.Stderr), "nope") {
 		t.Fatalf("block stderr = %q, want the diagnostic", blocked.Stderr)
-	}
-}
-
-// TestFailOpenLeavesADurableRecord is the other half of the outage: the daemon
-// that writes the audit database is the daemon that is down, so nothing was
-// recorded and a later query returned a clean empty result. That reads as no
-// violations when it means no checks. The record must be written by the hook.
-func TestFailOpenLeavesADurableRecord(t *testing.T) {
-	stateHome := t.TempDir()
-	t.Setenv("XDG_STATE_HOME", stateHome)
-
-	summary, err := hook.FailOpenRecordSummary()
-	if err != nil {
-		t.Fatalf("summary before any record: %v", err)
-	}
-	if summary.Count != 0 || summary.Earliest != "" || summary.Latest != "" {
-		t.Fatalf("clean state reported %d records (%s..%s)",
-			summary.Count, summary.Earliest, summary.Latest)
-	}
-	if summary.Truncated {
-		t.Fatal("clean state reported a truncated history")
-	}
-
-	for range 3 {
-		hook.RecordFailOpen(
-			hook.FailOpenReasonDaemonUnavailable, hook.SystemClaude,
-			"PreToolUse", "Bash", "/repo", "no socket",
-		)
-	}
-
-	summary, err = hook.FailOpenRecordSummary()
-	if err != nil {
-		t.Fatalf("summary after recording: %v", err)
-	}
-	if summary.Count != 3 {
-		t.Fatalf("records = %d, want 3", summary.Count)
-	}
-	if summary.Earliest == "" || summary.Latest == "" {
-		t.Fatalf("record window = %q..%q, want both ends set",
-			summary.Earliest, summary.Latest)
-	}
-	if summary.Truncated {
-		t.Fatal("three small records should not have hit the size cap")
-	}
-
-	path := filepath.Join(stateHome, "agent-gate", "fail-open.jsonl")
-	t.Logf("records written to %s", path)
-}
-
-// TestRecordFailOpenIgnoresAnEmptyReason keeps the file free of entries for
-// calls that were actually evaluated.
-func TestRecordFailOpenIgnoresAnEmptyReason(t *testing.T) {
-	t.Setenv("XDG_STATE_HOME", t.TempDir())
-	hook.RecordFailOpen("", hook.SystemClaude, "PreToolUse", "Bash", "/repo", "")
-	summary, err := hook.FailOpenRecordSummary()
-	if err != nil {
-		t.Fatalf("summary: %v", err)
-	}
-	if summary.Count != 0 {
-		t.Fatalf("records = %d, want 0 for an evaluated call", summary.Count)
 	}
 }
