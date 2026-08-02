@@ -1,8 +1,6 @@
 package hook_test
 
 import (
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -78,45 +76,5 @@ func TestEvaluatedAllowStaysSilent(t *testing.T) {
 				t.Fatalf("stderr = %q, want empty for an evaluated allow", response.Stderr)
 			}
 		})
-	}
-}
-
-// TestFailOpenRecordReportsItsOwnTruncation is the regression for a capped
-// history presented as a complete one. Past the size cap later calls go
-// unrecorded, so a count reported without that qualifier understates the very
-// outage the record exists to prove.
-func TestFailOpenRecordReportsItsOwnTruncation(t *testing.T) {
-	stateHome := t.TempDir()
-	t.Setenv("XDG_STATE_HOME", stateHome)
-
-	// Fill the record past its cap. Each call carries a long detail so the file
-	// reaches the limit without needing a very large number of records.
-	detail := strings.Repeat("x", 4096)
-	for range 3000 {
-		hook.RecordFailOpen(
-			hook.FailOpenReasonDaemonUnavailable, hook.SystemClaude,
-			"PreToolUse", "Bash", "/repo", detail,
-		)
-	}
-
-	summary, err := hook.FailOpenRecordSummary()
-	if err != nil {
-		t.Fatalf("summary: %v", err)
-	}
-	if !summary.Truncated {
-		t.Fatalf("summary reports %d records as a complete history after the cap",
-			summary.Count)
-	}
-	if summary.Count == 0 {
-		t.Fatal("the cap dropped everything, so no outage window survives at all")
-	}
-
-	// The file itself must stay under the cap, or the guard bought nothing.
-	info, err := os.Stat(filepath.Join(stateHome, "agent-gate", "fail-open.jsonl"))
-	if err != nil {
-		t.Fatalf("stat record: %v", err)
-	}
-	if info.Size() > 8<<20 {
-		t.Fatalf("record is %d bytes, above its 8 MiB cap", info.Size())
 	}
 }

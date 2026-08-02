@@ -255,7 +255,7 @@ func runDaemonStatus() int {
 // daemon that writes it is the one that was missing. This is the only record
 // that survives its own outage.
 func reportFailOpenHistory(out io.Writer) {
-	summary, err := hook.FailOpenRecordSummary()
+	summary, err := daemon.FailOpenRecordSummary()
 	if err != nil {
 		_, _ = fmt.Fprintf(out, "unevaluated:      unknown (%v)\n", err)
 		return
@@ -277,7 +277,7 @@ func reportFailOpenHistory(out io.Writer) {
 		_, _ = fmt.Fprintf(out,
 			"                  the record hit its size cap, so later calls went unrecorded\n")
 	}
-	_, _ = fmt.Fprintf(out, "                  see %s\n", hook.FailOpenRecordPath())
+	_, _ = fmt.Fprintf(out, "                  see %s\n", daemon.FailOpenRecordPath())
 }
 
 func runConfig(args []string) int {
@@ -1416,7 +1416,7 @@ func runHookWithRuntime(systemHint hook.System, runtime hookRuntime) (exitCode i
 		if recovered := recover(); recovered != nil {
 			diagnostic := fmt.Sprintf("agent-gate: panic: %v", recovered)
 			response := hook.FailOpenResponse(systemHint, "", diagnostic, hook.FailOpenReasonPanic)
-			hook.RecordFailOpen(hook.FailOpenReasonPanic, systemHint, "", "", "", diagnostic)
+			daemon.RecordFailOpen(string(hook.FailOpenReasonPanic), systemHint.String(), "", "", "", diagnostic)
 			writeResponse(runtime.stdout, runtime.stderr, response)
 			exitCode = response.ExitCode
 		}
@@ -1426,7 +1426,7 @@ func runHookWithRuntime(systemHint hook.System, runtime hookRuntime) (exitCode i
 	if err != nil {
 		diagnostic := fmt.Sprintf("agent-gate: read stdin: %v", err)
 		response := hook.FailOpenResponse(systemHint, "", diagnostic, hook.FailOpenReasonStdinRead)
-		hook.RecordFailOpen(hook.FailOpenReasonStdinRead, systemHint, "", "", "", diagnostic)
+		daemon.RecordFailOpen(string(hook.FailOpenReasonStdinRead), systemHint.String(), "", "", "", diagnostic)
 		writeResponse(runtime.stdout, runtime.stderr, response)
 		return response.ExitCode
 	}
@@ -1435,7 +1435,7 @@ func runHookWithRuntime(systemHint hook.System, runtime hookRuntime) (exitCode i
 	if err != nil {
 		diagnostic := fmt.Sprintf("agent-gate: daemon unavailable: %v", err)
 		response := hook.FailOpenResponse(systemHint, "", diagnostic, hook.FailOpenReasonDaemonUnavailable)
-		hook.RecordFailOpen(hook.FailOpenReasonDaemonUnavailable, systemHint, "", "", "", diagnostic)
+		daemon.RecordFailOpen(string(hook.FailOpenReasonDaemonUnavailable), systemHint.String(), "", "", "", diagnostic)
 		writeResponse(runtime.stdout, runtime.stderr, response)
 		return response.ExitCode
 	}
@@ -1449,7 +1449,7 @@ func runHookWithRuntime(systemHint hook.System, runtime hookRuntime) (exitCode i
 	if err != nil {
 		diagnostic := fmt.Sprintf("agent-gate: daemon ResolveHookEnvironment failed: %v", err)
 		response := hook.FailOpenResponse(systemHint, "", diagnostic, hook.FailOpenReasonRPCFailed)
-		hook.RecordFailOpen(hook.FailOpenReasonRPCFailed, systemHint, "", "", "", diagnostic)
+		daemon.RecordFailOpen(string(hook.FailOpenReasonRPCFailed), systemHint.String(), "", "", "", diagnostic)
 		writeResponse(runtime.stdout, runtime.stderr, response)
 		return response.ExitCode
 	}
@@ -1460,7 +1460,7 @@ func runHookWithRuntime(systemHint hook.System, runtime hookRuntime) (exitCode i
 	if err != nil {
 		diagnostic := fmt.Sprintf("agent-gate: daemon EvaluateHook failed: %v", err)
 		response := hook.FailOpenResponse(systemHint, "", diagnostic, hook.FailOpenReasonRPCFailed)
-		hook.RecordFailOpen(hook.FailOpenReasonRPCFailed, systemHint, "", "", "", diagnostic)
+		daemon.RecordFailOpen(string(hook.FailOpenReasonRPCFailed), systemHint.String(), "", "", "", diagnostic)
 		writeResponse(runtime.stdout, runtime.stderr, response)
 		return response.ExitCode
 	}
