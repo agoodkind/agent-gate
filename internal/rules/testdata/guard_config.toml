@@ -24,7 +24,7 @@ timeout_ms = 1500
 block_on = "match"
 on_error = "open"
 stdout_json_field = "searchable"
-stdout_json_equals = true
+stdout_json_equals = "true"
 
 [[rules]]
 name = "guard-worktree-primary-write"

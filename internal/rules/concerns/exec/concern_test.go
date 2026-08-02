@@ -287,7 +287,7 @@ command = ["/bin/true"]
 block_on = "match"
 on_error = "` + onError + `"
 stdout_json_field = "searchable"
-stdout_json_equals = true
+stdout_json_equals = "true"
 `
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatalf("WriteFile: %v", err)

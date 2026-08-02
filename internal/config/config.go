@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -9,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/BurntSushi/toml"
 	"goodkind.io/agent-gate/internal/regex"
 )
 
@@ -142,18 +142,18 @@ type Condition struct {
 	// "git grep", "sed"). The tool set is rule policy with no built-in
 	// default: read targets are empty without it, and a cmd_read_targets
 	// cache_key requires it.
-	Command          []string        `toml:"command"`
-	TimeoutMs        int             `toml:"timeout_ms"`
-	RetryCount       int             `toml:"retry_count"`
-	CacheKey         string          `toml:"cache_key"`
-	CacheTTLMs       int             `toml:"cache_ttl_ms"`
-	BlockOn          string          `toml:"block_on"`
-	OnError          string          `toml:"on_error"`
-	SearchTools      []string        `toml:"search_tools"`
-	ForEach          string          `toml:"for_each"`
-	MatchMode        string          `toml:"match_mode"`
-	StdoutJSONField  string          `toml:"stdout_json_field"`
-	StdoutJSONEquals *toml.Primitive `toml:"stdout_json_equals"`
+	Command          []string `toml:"command"`
+	TimeoutMs        int      `toml:"timeout_ms"`
+	RetryCount       int      `toml:"retry_count"`
+	CacheKey         string   `toml:"cache_key"`
+	CacheTTLMs       int      `toml:"cache_ttl_ms"`
+	BlockOn          string   `toml:"block_on"`
+	OnError          string   `toml:"on_error"`
+	SearchTools      []string `toml:"search_tools"`
+	ForEach          string   `toml:"for_each"`
+	MatchMode        string   `toml:"match_mode"`
+	StdoutJSONField  string   `toml:"stdout_json_field"`
+	StdoutJSONEquals string   `toml:"stdout_json_equals"`
 
 	// Infer condition fields. Inline and file declarations are resolved during
 	// config compilation, so runtime evaluation never reads configuration files.
@@ -169,7 +169,7 @@ type Condition struct {
 	MaxCompletionTokens    *int64          `toml:"max_completion_tokens"`
 	Temperature            *float64        `toml:"temperature"`
 	ResponseJSONField      string          `toml:"response_json_field"`
-	ResponseJSONEquals     *toml.Primitive `toml:"response_json_equals"`
+	ResponseJSONEquals     string          `toml:"response_json_equals"`
 	ContextSource          string          `toml:"context_source"`
 	ContextEndpoint        string          `toml:"context_endpoint"`
 	ContextWorkspaceField  string          `toml:"context_workspace_field"`
@@ -589,7 +589,6 @@ func compileRule(
 	log *slog.Logger,
 	r *Rule,
 	inference map[string]InferencePoint,
-	meta toml.MetaData,
 	configDirectory string,
 	cfg *Config,
 ) error {
@@ -619,7 +618,7 @@ func compileRule(
 			if r.IsResponseAction() && ConditionKind(r.Conditions[j].Kind) == ConditionKindExec && r.Conditions[j].BlockOn == "" {
 				r.Conditions[j].BlockOn = BlockOnZero
 			}
-			if err := compileCondition(log, r.Name, j, &r.Conditions[j], meta, configDirectory, cfg); err != nil {
+			if err := compileCondition(log, r.Name, j, &r.Conditions[j], configDirectory, cfg); err != nil {
 				return err
 			}
 		}
@@ -669,7 +668,7 @@ func normalizeRuleDiagnosticFormat(r *Rule) error {
 
 // compileCondition fills in compiled regex and selector state for one
 // condition, validates the kind, and parses any field_pair value.
-func compileCondition(log *slog.Logger, ruleName string, index int, c *Condition, meta toml.MetaData, configDirectory string, cfg *Config) error {
+func compileCondition(log *slog.Logger, ruleName string, index int, c *Condition, configDirectory string, cfg *Config) error {
 	c.selectors = CompileFieldSelectorSpecs(c.FieldPaths)
 	if c.Kind == "" {
 		c.Kind = "regex"
@@ -719,7 +718,7 @@ func compileCondition(log *slog.Logger, ruleName string, index int, c *Condition
 	if err := validateShellReadSpecConfig(ruleName, index, c); err != nil {
 		return err
 	}
-	if err := compileExecConfig(ruleName, index, c, meta, cfg); err != nil {
+	if err := compileExecConfig(ruleName, index, c, cfg); err != nil {
 		return err
 	}
 	if ConditionKind(c.Kind) == ConditionKindExec &&
@@ -733,7 +732,7 @@ func compileCondition(log *slog.Logger, ruleName string, index int, c *Condition
 			index,
 		)
 	}
-	if err := compileInferConfig(log, ruleName, index, c, meta, configDirectory, cfg); err != nil {
+	if err := compileInferConfig(log, ruleName, index, c, configDirectory, cfg); err != nil {
 		return err
 	}
 	if err := validateShellWriteSpecConfig(ruleName, index, c); err != nil {
@@ -748,7 +747,7 @@ func compileCondition(log *slog.Logger, ruleName string, index int, c *Condition
 // compileExecConfig validates the exec condition fields, applies defaults, and
 // compiles the cache-key field selector. Non-exec conditions are left
 // untouched.
-func compileExecConfig(ruleName string, index int, c *Condition, meta toml.MetaData, cfg *Config) error {
+func compileExecConfig(ruleName string, index int, c *Condition, cfg *Config) error {
 	if ConditionKind(c.Kind) != ConditionKindExec {
 		return nil
 	}
@@ -804,7 +803,7 @@ func compileExecConfig(ruleName string, index int, c *Condition, meta toml.MetaD
 	if err := compileExecForEach(ruleName, index, c); err != nil {
 		return err
 	}
-	if err := compileExecStdoutJSON(ruleName, index, c, meta); err != nil {
+	if err := compileExecStdoutJSON(ruleName, index, c); err != nil {
 		return err
 	}
 	if err := normalizeExecBlockOn(ruleName, index, c); err != nil {
@@ -813,10 +812,10 @@ func compileExecConfig(ruleName string, index int, c *Condition, meta toml.MetaD
 	return nil
 }
 
-func compileExecStdoutJSON(ruleName string, index int, c *Condition, meta toml.MetaData) error {
+func compileExecStdoutJSON(ruleName string, index int, c *Condition) error {
 	c.StdoutJSONField = strings.TrimSpace(c.StdoutJSONField)
 	hasJSONField := c.StdoutJSONField != ""
-	hasJSONValue := c.StdoutJSONEquals != nil
+	hasJSONValue := c.StdoutJSONEquals != ""
 	if !hasJSONField && !hasJSONValue {
 		var zeroScalar TOMLScalarValue
 		c.stdoutJSONValue = zeroScalar
@@ -832,7 +831,7 @@ func compileExecStdoutJSON(ruleName string, index int, c *Condition, meta toml.M
 				": stdout_json_field: " + err.Error(),
 		)
 	}
-	value, err := decodeTOMLScalar(meta, *c.StdoutJSONEquals)
+	value, err := decodeTOMLScalar(c.StdoutJSONEquals)
 	if err != nil {
 		return errors.New(
 			"rule " + strconv.Quote(ruleName) +
@@ -875,24 +874,59 @@ func normalizeExecBlockOn(ruleName string, index int, c *Condition) error {
 	return nil
 }
 
-func decodeTOMLScalar(meta toml.MetaData, primitive toml.Primitive) (TOMLScalarValue, error) {
-	var boolValue bool
-	if err := meta.PrimitiveDecode(primitive, &boolValue); err == nil {
-		return NewBoolScalar(boolValue), nil
+// decodeTOMLScalar parses the JSON value a condition compares against.
+//
+// The value is written as a TOML string, which keeps the field a plain Go
+// string needing no deferred decode and no empty interface:
+//
+//	stdout_json_equals = "true"      the JSON boolean true
+//	stdout_json_equals = "42"        the JSON number 42
+//	response_json_equals = "block"   the JSON string "block"
+//
+// The text is parsed as JSON first. Text that is not valid JSON is taken as a
+// JSON string, so an ordinary word keeps meaning the obvious thing and only a
+// value that used to be written unquoted has to change. A literal string that
+// would otherwise read as JSON is written JSON-quoted, as "\"true\"".
+func decodeTOMLScalar(encoded string) (TOMLScalarValue, error) {
+	trimmed := strings.TrimSpace(encoded)
+	if trimmed == "" {
+		return TOMLScalarValue{}, errors.New("expected a value, got an empty string")
 	}
-	var stringValue string
-	if err := meta.PrimitiveDecode(primitive, &stringValue); err == nil {
-		return NewStringScalar(stringValue), nil
+	// Text that is not valid JSON is the plain-word case, taken as a JSON
+	// string. Checking validity up front keeps that from looking like a
+	// swallowed decode error.
+	if !json.Valid([]byte(trimmed)) {
+		return NewStringScalar(encoded), nil
 	}
-	var intValue int64
-	if err := meta.PrimitiveDecode(primitive, &intValue); err == nil {
-		return NewIntScalar(intValue), nil
+
+	decoder := json.NewDecoder(strings.NewReader(trimmed))
+	decoder.UseNumber()
+	decoded, tokenErr := decoder.Token()
+	if tokenErr != nil {
+		// Unreachable for a document json.Valid accepted, kept so a future
+		// change to that guard cannot turn into a silent misparse.
+		return TOMLScalarValue{}, errors.New("expected a JSON scalar")
 	}
-	var floatValue float64
-	if err := meta.PrimitiveDecode(primitive, &floatValue); err == nil {
+	switch typed := decoded.(type) {
+	case bool:
+		return NewBoolScalar(typed), nil
+	case string:
+		return NewStringScalar(typed), nil
+	case json.Number:
+		if intValue, intErr := typed.Int64(); intErr == nil {
+			return NewIntScalar(intValue), nil
+		}
+		floatValue, floatErr := typed.Float64()
+		if floatErr != nil {
+			return TOMLScalarValue{}, errors.New("expected a JSON number")
+		}
 		return NewFloatScalar(floatValue), nil
+	default:
+		// A JSON array or object opens with a delimiter token rather than a
+		// scalar. The predicate compares one scalar, so this is the operator
+		// asking for something the comparison cannot express.
+		return TOMLScalarValue{}, errors.New("expected bool, string, integer, or float")
 	}
-	return TOMLScalarValue{}, fmt.Errorf("expected bool, string, integer, or float")
 }
 
 func validateShellReadSpecConfig(ruleName string, index int, c *Condition) error {

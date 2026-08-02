@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/BurntSushi/toml"
+	"github.com/pelletier/go-toml/v2"
 )
 
 // HookEvaluateTimeoutFromFile returns the hook client's per-call deadline,
@@ -30,7 +30,7 @@ var HookEvaluateTimeoutFromFile = sync.OnceValue(func() time.Duration {
 				Timeouts TimeoutPerformance `toml:"timeouts"`
 			} `toml:"performance"`
 		}
-		if _, decodeErr := toml.Decode(string(sourceBytes), &probe); decodeErr == nil {
+		if decodeErr := toml.Unmarshal(sourceBytes, &probe); decodeErr == nil {
 			milliseconds = positiveOr(probe.Performance.Timeouts.HookEvaluateMS, DefaultHookEvaluateMs)
 		}
 	}

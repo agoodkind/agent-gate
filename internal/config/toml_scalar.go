@@ -18,7 +18,8 @@ const (
 )
 
 // TOMLScalarValue holds one scalar value decoded from TOML. Exec rules use it
-// for JSON output predicates such as stdout_json_equals = true.
+// for JSON output predicates such as stdout_json_equals = "true", where the
+// TOML string holds the JSON value being compared against.
 type TOMLScalarValue struct {
 	kind        TOMLScalarKind
 	boolValue   bool

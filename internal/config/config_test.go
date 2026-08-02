@@ -522,7 +522,7 @@ violation_message = "blocked"
 kind = "exec"
 command = ["/bin/true"]
 stdout_json_field = "   "
-stdout_json_equals = true
+stdout_json_equals = "true"
 `)
 
 	_, err := config.Load()
@@ -545,7 +545,7 @@ violation_message = "blocked"
 kind = "exec"
 command = ["/bin/true"]
 stdout_json_field = "a..b"
-stdout_json_equals = true
+stdout_json_equals = "true"
 `)
 
 	_, err := config.Load()

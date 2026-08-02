@@ -427,7 +427,7 @@ func TestInferBooleanScalarPredicate(t *testing.T) {
 	endpoint, _ := startInferenceServer(t, fake)
 	runtime := rules.NewInferRuntimeWithCache(nil, nil)
 	t.Cleanup(runtime.Close)
-	rule := loadInferRule(t, endpoint, "response_json_equals = true")
+	rule := loadInferRule(t, endpoint, `response_json_equals = "true"`)
 	if got := evaluateInfer(t, rules.WithInferRuntime(context.Background(), runtime), rule, "input"); len(got) != 1 {
 		t.Fatalf("violations = %d, want boolean match to block", len(got))
 	}
@@ -450,7 +450,7 @@ func TestInferNumericScalarPredicatesUseExecSemantics(t *testing.T) {
 			endpoint, _ := startInferenceServer(t, fake)
 			runtime := rules.NewInferRuntimeWithCache(nil, nil)
 			t.Cleanup(runtime.Close)
-			rule := loadInferRule(t, endpoint, "response_json_equals = "+test.expected)
+			rule := loadInferRule(t, endpoint, `response_json_equals = "`+test.expected+`"`)
 			if got := evaluateInfer(t, rules.WithInferRuntime(context.Background(), runtime), rule, "input"); len(got) != 1 {
 				t.Fatalf("violations = %d, want numeric match to block", len(got))
 			}
