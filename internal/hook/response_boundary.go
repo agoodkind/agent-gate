@@ -26,6 +26,26 @@ const (
 	FailOpenReasonRPCFailed FailOpenReason = "rpc_failed"
 	// FailOpenReasonPanic means the hook entrypoint recovered a panic.
 	FailOpenReasonPanic FailOpenReason = "panic_recovered"
+	// FailOpenReasonConfigUnusable means the daemon is running but its config
+	// did not decode, so it holds no rules and enforces nothing.
+	FailOpenReasonConfigUnusable FailOpenReason = "config_unusable"
+	// FailOpenReasonDaemonNotReady means the daemon answered before it held a
+	// runtime snapshot, so it had no rules to apply.
+	FailOpenReasonDaemonNotReady FailOpenReason = "daemon_not_ready"
+	// FailOpenReasonOverloaded means every evaluation slot was busy past the
+	// queue deadline, so the call was let through without being evaluated.
+	FailOpenReasonOverloaded FailOpenReason = "daemon_overloaded"
+	// FailOpenReasonPayloadUnreadable means the payload could not be normalized
+	// into a shape the rules can read.
+	FailOpenReasonPayloadUnreadable FailOpenReason = "payload_unreadable"
+	// FailOpenReasonIntakeWriteFailed means the durable intake record could not
+	// be written, so the daemon allowed the call rather than evaluate an event
+	// it could not account for.
+	FailOpenReasonIntakeWriteFailed FailOpenReason = "intake_write_failed"
+	// FailOpenReasonVerdictNotRecorded means the rules produced a verdict that
+	// could not be persisted, so it was discarded and the call allowed. The
+	// discarded verdict may have been a block.
+	FailOpenReasonVerdictNotRecorded FailOpenReason = "verdict_not_recorded"
 )
 
 // ResponseRequest is the provider-neutral declaration used at the hook

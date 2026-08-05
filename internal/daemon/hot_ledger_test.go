@@ -13,6 +13,7 @@ import (
 	"goodkind.io/agent-gate/api/daemonpb"
 	"goodkind.io/agent-gate/internal/audit"
 	"goodkind.io/agent-gate/internal/evaluation"
+	"goodkind.io/agent-gate/internal/hook"
 	"goodkind.io/agent-gate/internal/intake"
 )
 
@@ -168,9 +169,13 @@ func TestEvaluateHookLedgerFailureReturnsFailOpen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EvaluateHook: %v", err)
 	}
-	if response.ExitCode != 0 || len(response.StdoutData) != 0 || len(response.StderrData) != 0 {
-		t.Fatalf("ledger failure response = %+v", response)
+	// Still an allow, and now it says a verdict was computed and discarded.
+	// The discarded verdict may have been a block, so presenting it as a clean
+	// allow would show a dropped block as compliance.
+	if response.ExitCode != 0 {
+		t.Fatalf("ledger failure exit = %d, want 0", response.ExitCode)
 	}
+	assertSaysUnevaluated(t, response, hook.FailOpenReasonVerdictNotRecorded)
 }
 
 func TestEvaluateHookAtomicHotCommitFailureRecordsAndReturnsFailOpen(t *testing.T) {
@@ -190,9 +195,13 @@ func TestEvaluateHookAtomicHotCommitFailureRecordsAndReturnsFailOpen(t *testing.
 	if err != nil {
 		t.Fatalf("EvaluateHook: %v", err)
 	}
-	if response.ExitCode != 0 || len(response.StdoutData) != 0 || len(response.StderrData) != 0 {
-		t.Fatalf("pending failure response = %+v", response)
+	// Still an allow, and now it says a verdict was computed and discarded.
+	// The discarded verdict may have been a block, so presenting it as a clean
+	// allow would show a dropped block as compliance.
+	if response.ExitCode != 0 {
+		t.Fatalf("pending failure exit = %d, want 0", response.ExitCode)
 	}
+	assertSaysUnevaluated(t, response, hook.FailOpenReasonVerdictNotRecorded)
 	records := recorder.snapshot()
 	if len(records) != 1 || records[0].Evaluation.FinalVerdict != "error" ||
 		records[0].Evaluation.EnforcementAction != "fail_open" {
@@ -219,9 +228,13 @@ func TestEvaluateHookFallbackLedgerFailureLogsDistinctStatus(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EvaluateHook: %v", err)
 	}
-	if response.ExitCode != 0 || len(response.StdoutData) != 0 || len(response.StderrData) != 0 {
-		t.Fatalf("fallback failure response = %+v", response)
+	// Still an allow, and now it says a verdict was computed and discarded.
+	// The discarded verdict may have been a block, so presenting it as a clean
+	// allow would show a dropped block as compliance.
+	if response.ExitCode != 0 {
+		t.Fatalf("fallback failure exit = %d, want 0", response.ExitCode)
 	}
+	assertSaysUnevaluated(t, response, hook.FailOpenReasonVerdictNotRecorded)
 	if !strings.Contains(logs.String(), "status_class=fallback_evaluation_persistence_failed") {
 		t.Fatalf("logs missing fallback persistence status: %s", logs.String())
 	}

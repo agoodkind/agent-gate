@@ -165,10 +165,10 @@ func main() {
 	if len(os.Args) > 1 && commandName(os.Args[1]) == commandDaemon {
 		log, closeLog := openLog("daemon")
 		defer closeLog()
-		// The daemon loads degraded on purpose. A rule that will not compile is
-		// dropped on its own and every other rule still enforces, because the
-		// hook fails open when no daemon answers: refusing to start over one bad
-		// value trades a single broken rule for no enforcement at all.
+		// The daemon loads degraded on purpose, including when the file does not
+		// decode at all. Refusing to start preserves no enforcement: the daemon
+		// exits, every hook finds no daemon, and every call is allowed anyway.
+		// Starting is the same enforcement with a process alive to report it.
 		cfg, cfgErr := config.LoadDegraded()
 		if cfgErr != nil {
 			fmt.Fprintf(os.Stderr, "agent-gate: daemon: config load failed: %v\n", cfgErr)
@@ -178,6 +178,12 @@ func main() {
 			fmt.Fprintf(os.Stderr, "agent-gate: daemon: config degraded: %s\n", failure)
 			log.Error("config degraded", "kind", failure.Kind,
 				"scope", failure.Scope, "err", failure.Reason)
+		}
+		if cfg.Unusable() {
+			fmt.Fprintf(os.Stderr,
+				"agent-gate: daemon: NO RULES ARE LOADED. Every call is allowed "+
+					"without enforcement until the config parses. Fix %s and the "+
+					"daemon reloads on save.\n", config.Path())
 		}
 		telemCloser, telemErr := telemetry.Setup(telemetry.Options{
 			OTLPEndpoint:      cfg.Telemetry.OTLPEndpoint,
@@ -245,6 +251,12 @@ func runDaemonStatus() int {
 	_, _ = fmt.Fprintf(os.Stdout, "commit:           %s\n", resp.Commit)
 	_, _ = fmt.Fprintf(os.Stdout, "dirty:            %s\n", resp.Dirty)
 	_, _ = fmt.Fprintf(os.Stdout, "buildHash:        %s\n", resp.BuildHash)
+	_, _ = fmt.Fprintf(os.Stdout, "rules:            %d\n", resp.RulesLoaded)
+	if resp.ConfigError != "" {
+		_, _ = fmt.Fprintf(os.Stdout,
+			"enforcement:      ABSENT, every call is allowed\n")
+		_, _ = fmt.Fprintf(os.Stdout, "                  %s\n", resp.ConfigError)
+	}
 	reportFailOpenHistory(os.Stdout)
 	return 0
 }

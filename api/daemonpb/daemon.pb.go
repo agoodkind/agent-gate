@@ -321,8 +321,13 @@ type StatusResponse struct {
 	Commit         string                 `protobuf:"bytes,5,opt,name=commit,proto3" json:"commit,omitempty"`
 	Dirty          string                 `protobuf:"bytes,6,opt,name=dirty,proto3" json:"dirty,omitempty"`
 	BuildHash      string                 `protobuf:"bytes,7,opt,name=build_hash,json=buildHash,proto3" json:"build_hash,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// rules_loaded is how many rules the daemon is enforcing. Zero with
+	// config_error set means the daemon is running but enforcing nothing.
+	RulesLoaded int64 `protobuf:"varint,8,opt,name=rules_loaded,json=rulesLoaded,proto3" json:"rules_loaded,omitempty"`
+	// config_error names why the config could not be used, empty when it loaded.
+	ConfigError   string `protobuf:"bytes,9,opt,name=config_error,json=configError,proto3" json:"config_error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *StatusResponse) Reset() {
@@ -400,6 +405,20 @@ func (x *StatusResponse) GetDirty() string {
 func (x *StatusResponse) GetBuildHash() string {
 	if x != nil {
 		return x.BuildHash
+	}
+	return ""
+}
+
+func (x *StatusResponse) GetRulesLoaded() int64 {
+	if x != nil {
+		return x.RulesLoaded
+	}
+	return 0
+}
+
+func (x *StatusResponse) GetConfigError() string {
+	if x != nil {
+		return x.ConfigError
 	}
 	return ""
 }
@@ -1366,7 +1385,7 @@ const file_daemon_proto_rawDesc = "" +
 	"stdoutData\x12\x1f\n" +
 	"\vstderr_data\x18\x03 \x01(\fR\n" +
 	"stderrData\"\x0f\n" +
-	"\rStatusRequest\"\xd3\x01\n" +
+	"\rStatusRequest\"\x99\x02\n" +
 	"\x0eStatusResponse\x12\x10\n" +
 	"\x03pid\x18\x01 \x01(\x03R\x03pid\x12'\n" +
 	"\x0fexecutable_path\x18\x02 \x01(\tR\x0eexecutablePath\x12\x1f\n" +
@@ -1376,7 +1395,9 @@ const file_daemon_proto_rawDesc = "" +
 	"\x06commit\x18\x05 \x01(\tR\x06commit\x12\x14\n" +
 	"\x05dirty\x18\x06 \x01(\tR\x05dirty\x12\x1d\n" +
 	"\n" +
-	"build_hash\x18\a \x01(\tR\tbuildHash\"\x86\x02\n" +
+	"build_hash\x18\a \x01(\tR\tbuildHash\x12!\n" +
+	"\frules_loaded\x18\b \x01(\x03R\vrulesLoaded\x12!\n" +
+	"\fconfig_error\x18\t \x01(\tR\vconfigError\"\x86\x02\n" +
 	"\aKVEntry\x12\x1c\n" +
 	"\tnamespace\x18\x01 \x01(\tR\tnamespace\x12\x10\n" +
 	"\x03key\x18\x02 \x01(\tR\x03key\x12\x14\n" +

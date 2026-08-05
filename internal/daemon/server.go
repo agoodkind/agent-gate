@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -488,15 +489,34 @@ func (s *Server) EvaluateHook(ctx context.Context, req *daemonpb.EvaluateHookReq
 	defer s.runtimeMu.RUnlock()
 	snapshot := s.runtime.Load()
 	if snapshot == nil {
-		return failOpenEvaluateHookResponse(), nil
+		return s.unevaluated(ctx, req, hook.FailOpenReasonDaemonNotReady,
+			"daemon has no runtime snapshot yet"), nil
 	}
 	requestLog := s.log
 	if peerInfo, ok := peer.FromContext(ctx); ok && peerInfo.Addr != nil {
 		requestLog = requestLog.With("peer_addr", peerInfo.Addr.String())
 	}
+	// A config that did not decode leaves no rules, so the daemon is running but
+	// enforcing nothing. Answering with a clean allow would be worse than being
+	// down, because a hook that reaches no daemon at least says so. Report every
+	// call as unevaluated and record it, the same as any other fail-open.
+	if snapshot.cfg.Unusable() {
+		system := hook.SystemFromString(req.GetProviderHint())
+		diagnostic := unusableConfigDiagnostic(snapshot.cfg)
+		RecordFailOpen(
+			string(hook.FailOpenReasonConfigUnusable), system.String(),
+			"", "", req.GetCwd(), diagnostic,
+		)
+		requestLog.ErrorContext(ctx, "config unusable; call allowed without enforcement",
+			"err", diagnostic)
+		return failOpenEvaluateHookResponseFor(
+			system, hook.FailOpenReasonConfigUnusable, diagnostic,
+		), nil
+	}
 	if !s.acquireEvaluateSlot(ctx, snapshot) {
 		s.logEvaluateOverload(ctx, snapshot)
-		return failOpenEvaluateHookResponse(), nil
+		return s.unevaluated(ctx, req, hook.FailOpenReasonOverloaded,
+			"every evaluation slot was busy past the queue deadline"), nil
 	}
 	defer s.releaseEvaluateSlot(snapshot)
 
@@ -516,7 +536,8 @@ func (s *Server) EvaluateHook(ctx context.Context, req *daemonpb.EvaluateHookReq
 		var normalizeErr error
 		rawJSON, normalizeErr = hook.NormalizeCopilotPayload(rawJSON, copilotEventHint(req.GetArgv()))
 		if normalizeErr != nil {
-			return failOpenEvaluateHookResponse(), nil
+			return s.unevaluated(ctx, req, hook.FailOpenReasonPayloadUnreadable,
+				normalizeErr.Error()), nil
 		}
 	}
 
@@ -539,7 +560,7 @@ func (s *Server) EvaluateHook(ctx context.Context, req *daemonpb.EvaluateHookReq
 	appendResult, err := snapshot.intakeStore.Append(ctx, intakeRecord)
 	if err != nil {
 		requestLog.WarnContext(ctx, "append hook intake failed; failing open", "err", err)
-		return failOpenEvaluateHookResponse(), nil
+		return s.unevaluated(ctx, req, hook.FailOpenReasonIntakeWriteFailed, err.Error()), nil
 	}
 	if intakeErr == nil {
 		observeUserPrompt(
@@ -747,11 +768,29 @@ func (s *Server) releaseEvaluateSlot(snapshot *runtimeSnapshot) {
 	}
 }
 
-func failOpenEvaluateHookResponse() *daemonpb.EvaluateHookResponse {
+// failOpenEvaluateHookResponseFor renders an allow that says the call was not
+// evaluated, for the provider that asked.
+//
+// Used where the daemon knows enforcement is absent rather than merely delayed,
+// which today means a config that did not decode. An allow nobody evaluated has
+// to be distinguishable from one that passed every rule.
+func failOpenEvaluateHookResponseFor(
+	system hook.System,
+	reason hook.FailOpenReason,
+	diagnostic string,
+) *daemonpb.EvaluateHookResponse {
+	rendered := hook.FailOpenResponse(system, "", diagnostic, reason)
+	// A fail-open renderer only ever produces 0, and a value outside int32
+	// could not be a process exit code anyway, so an out-of-range result is
+	// clamped to the allow it is meant to be rather than wrapping.
+	exitCode := int32(0)
+	if rendered.ExitCode > 0 && rendered.ExitCode <= math.MaxInt32 {
+		exitCode = int32(rendered.ExitCode)
+	}
 	return &daemonpb.EvaluateHookResponse{
-		ExitCode:   0,
-		StdoutData: nil,
-		StderrData: nil,
+		ExitCode:   exitCode,
+		StdoutData: rendered.Stdout,
+		StderrData: rendered.Stderr,
 	}
 }
 
@@ -822,6 +861,17 @@ func (s *Server) Status(_ context.Context, _ *daemonpb.StatusRequest) (*daemonpb
 		s.log.Error("resolve executable failed", slog.Any("err", err))
 		return nil, status.Errorf(codes.Internal, "resolve executable: %v", err)
 	}
+	// Reported so an operator can tell a healthy daemon from one that is running
+	// and enforcing nothing. Those look identical from the outside otherwise,
+	// which is how a ten hour outage went unnoticed.
+	rulesLoaded := 0
+	configError := ""
+	if snapshot := s.runtime.Load(); snapshot != nil && snapshot.cfg != nil {
+		rulesLoaded = len(snapshot.cfg.Rules)
+		if snapshot.cfg.Unusable() {
+			configError = unusableConfigDiagnostic(snapshot.cfg)
+		}
+	}
 	return &daemonpb.StatusResponse{
 		Pid:            int64(os.Getpid()),
 		ExecutablePath: exe,
@@ -830,5 +880,41 @@ func (s *Server) Status(_ context.Context, _ *daemonpb.StatusRequest) (*daemonpb
 		Commit:         gkversion.Commit,
 		Dirty:          gkversion.Dirty,
 		BuildHash:      version.BuildHash(),
+		RulesLoaded:    int64(rulesLoaded),
+		ConfigError:    configError,
 	}, nil
+}
+
+// unusableConfigDiagnostic names why the config could not be used, so the
+// warning an agent sees points at the file rather than only saying enforcement
+// is gone.
+func unusableConfigDiagnostic(cfg *config.Config) string {
+	for _, failure := range cfg.Failures() {
+		if failure.Kind == config.LoadFailureDocument {
+			return fmt.Sprintf("config %s did not decode: %s", failure.Scope, failure.Reason)
+		}
+	}
+	return "config did not decode"
+}
+
+// unevaluated renders and records an allow for a call no rule was applied to.
+//
+// Every daemon path that reaches it allowed the call without evaluating it: no
+// runtime snapshot, no free slot before the queue deadline, a payload that
+// would not normalize, or an intake record that would not persist. A delayed
+// evaluation that never ran is an unevaluated call, so each of those says so
+// rather than returning an empty allow the agent cannot tell from compliance.
+func (s *Server) unevaluated(
+	ctx context.Context,
+	req *daemonpb.EvaluateHookRequest,
+	reason hook.FailOpenReason,
+	diagnostic string,
+) *daemonpb.EvaluateHookResponse {
+	system := hook.SystemFromString(req.GetProviderHint())
+	RecordFailOpen(string(reason), system.String(), "", "", req.GetCwd(), diagnostic)
+	if s != nil && s.log != nil {
+		s.log.ErrorContext(ctx, "call allowed without enforcement",
+			"reason", string(reason), "err", diagnostic)
+	}
+	return failOpenEvaluateHookResponseFor(system, reason, diagnostic)
 }

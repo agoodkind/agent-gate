@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"goodkind.io/agent-gate/internal/config"
 )
@@ -116,21 +117,99 @@ func TestLimitsAndIntervalsAreConfigurable(t *testing.T) {
 	}
 }
 
-// TestEveryDeclaredKnobHasAConsumer keeps [performance.limits] and
-// [performance.intervals] honest. A key that decodes but that nothing reads is
-// worse than no key, because setting it looks like it worked. This asserts the
-// declared field count, so adding a knob without wiring it fails here.
-func TestEveryDeclaredKnobHasAConsumer(t *testing.T) {
-	limitFields := reflect.TypeOf(config.LimitPerformance{}).NumField()
-	if limitFields != 5 {
-		t.Fatalf("LimitPerformance has %d fields, want 5; wire a new knob to its "+
-			"consumer and update this count, or drop it", limitFields)
+// TestEveryDeclaredKnobReachesAConsumer keeps [performance.limits] and
+// [performance.intervals] honest. A key an operator can set that changes
+// nothing is worse than no key, because setting it looks like it worked. Eleven
+// such keys shipped once before this existed.
+//
+// No linter covers this. Measured on 2026-08-06 with a field declared, named in
+// every struct literal, and given no accessor: make check passed clean.
+// exhaustruct only fires until the field is added to the literals, and its
+// remedy is to add it, which silences the check and leaves the knob inert.
+// deadcode reports an accessor with no caller, and here there is no accessor.
+//
+// Rather than count fields, this sets each declared key to a distinctive value
+// and requires some accessor to return it. A key with no reader fails by name,
+// and the fix is to wire it or drop it rather than to update a number.
+func TestEveryDeclaredKnobReachesAConsumer(t *testing.T) {
+	for _, section := range []struct {
+		table  string
+		fields reflect.Type
+	}{
+		{"limits", reflect.TypeOf(config.LimitPerformance{})},
+		{"intervals", reflect.TypeOf(config.IntervalPerformance{})},
+	} {
+		for index := range section.fields.NumField() {
+			field := section.fields.Field(index)
+			key := strings.Split(field.Tag.Get("toml"), ",")[0]
+			if key == "" {
+				t.Fatalf("%s.%s has no toml tag, so it cannot be configured",
+					section.table, field.Name)
+			}
+			t.Run(section.table+"."+key, func(t *testing.T) {
+				assertKnobIsRead(t, section.table, key)
+			})
+		}
 	}
-	intervalFields := reflect.TypeOf(config.IntervalPerformance{}).NumField()
-	if intervalFields != 5 {
-		t.Fatalf("IntervalPerformance has %d fields, want 5; wire a new knob to its "+
-			"consumer and update this count, or drop it", intervalFields)
+}
+
+// knobProbeValue is distinctive enough that finding it in an accessor's return
+// proves it came from the config rather than from a default.
+const knobProbeValue = 4242
+
+// largeKnobProbeValue is for a key whose validation requires it to exceed a
+// companion key's default. deferred_claim_lease_ms must stay above
+// deferred_claim_renew_ms, which defaults to 10000, so the small probe would be
+// rejected by a rule that is working correctly.
+const largeKnobProbeValue = 424242
+
+// probeValueFor picks a probe that satisfies the cross-key rules a config
+// enforces, so the test measures whether a key is read rather than re-testing
+// validation that other tests already cover.
+func probeValueFor(key string) int {
+	if key == "deferred_claim_lease_ms" {
+		return largeKnobProbeValue
 	}
+	return knobProbeValue
+}
+
+// assertKnobIsRead sets one key and requires an accessor to return it.
+//
+// The accessors are discovered by reflection rather than listed, so a knob
+// added with no reader has nothing to find and fails, while a knob wired to a
+// new accessor passes without this test needing an edit.
+func assertKnobIsRead(t *testing.T, table string, key string) {
+	t.Helper()
+	probe := probeValueFor(key)
+	body := "[performance." + table + "]\n" + key + " = " +
+		strconv.Itoa(probe) + "\n" + validExecRule
+	cfg, err := writeExecConfig(t, body)
+	if err != nil {
+		t.Fatalf("LoadExisting with %s = %d: %v", key, probe, err)
+	}
+
+	value := reflect.ValueOf(cfg)
+	for index := range value.NumMethod() {
+		method := value.Type().Method(index)
+		if method.Type.NumIn() != 1 || method.Type.NumOut() != 1 {
+			continue
+		}
+		switch returned := value.Method(index).Call(nil)[0].Interface().(type) {
+		case int:
+			if returned == probe {
+				return
+			}
+		case time.Duration:
+			// An interval is declared in milliseconds and returned as a
+			// Duration, so the probe is compared in the unit it was written in.
+			if returned.Milliseconds() == int64(probe) {
+				return
+			}
+		}
+	}
+	t.Fatalf("performance.%s.%s decodes but no accessor returns it, so setting "+
+		"it changes nothing. Wire it to the code that enforces it, or drop the key.",
+		table, key)
 }
 
 // TestUnsetKnobsTakeDefaults covers that an empty section still produces every

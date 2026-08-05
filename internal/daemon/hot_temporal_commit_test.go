@@ -78,9 +78,10 @@ cache_ttl_ms = 0
 	if err != nil {
 		t.Fatalf("first EvaluateHook: %v", err)
 	}
-	if first.ExitCode != 0 || len(first.StdoutData) != 0 || len(first.StderrData) != 0 {
-		t.Fatalf("failed commit response = %+v", first)
+	if first.ExitCode != 0 {
+		t.Fatalf("failed commit exit = %d, want 0", first.ExitCode)
 	}
+	assertSaysUnevaluated(t, first, hook.FailOpenReasonVerdictNotRecorded)
 
 	successfulRecorder := &recordingEvaluationRecorder{
 		mu: sync.Mutex{}, records: nil, err: nil, hotErr: nil,

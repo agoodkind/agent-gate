@@ -72,6 +72,11 @@ message StatusResponse {
   string commit = 5;
   string dirty = 6;
   string build_hash = 7;
+  // rules_loaded is how many rules the daemon is enforcing. Zero with
+  // config_error set means the daemon is running but enforcing nothing.
+  int64 rules_loaded = 8;
+  // config_error names why the config could not be used, empty when it loaded.
+  string config_error = 9;
 }
 
 message KVEntry {
