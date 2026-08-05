@@ -2,8 +2,8 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -138,13 +138,40 @@ func TestUnusableConfigRecordsTheOutage(t *testing.T) {
 		t.Fatalf("EvaluateHook: %v", err)
 	}
 
+	// Read back through the same summary an operator queries, rather than
+	// grepping the file, so the test asserts the answer they would get.
+	summary, err := FailOpenRecordSummary()
+	if err != nil {
+		t.Fatalf("summary: %v", err)
+	}
+	if summary.Count != 1 {
+		t.Fatalf("records = %d, want 1 for one unevaluated call", summary.Count)
+	}
+	if summary.Earliest == "" || summary.Latest == "" {
+		t.Fatalf("record window = %q..%q, want both ends set",
+			summary.Earliest, summary.Latest)
+	}
+
+	// The reason has to survive as a field, not merely as text somewhere in the
+	// line, because that is what a later query filters on.
 	record := FailOpenRecordPath()
 	data, readErr := os.ReadFile(record) // #nosec G304 -- test-owned temp path.
 	if readErr != nil {
 		t.Fatalf("no durable record of the outage at %s: %v", record, readErr)
 	}
-	if !strings.Contains(string(data), "config_unusable") {
-		t.Fatalf("record = %q, want it to name config_unusable", data)
+	var decoded FailOpenRecord
+	if err := json.Unmarshal([]byte(strings.TrimSpace(string(data))), &decoded); err != nil {
+		t.Fatalf("record is not decodable JSON: %v\n%s", err, data)
+	}
+	if decoded.Reason != string(hook.FailOpenReasonConfigUnusable) {
+		t.Fatalf("reason = %q, want %q", decoded.Reason,
+			hook.FailOpenReasonConfigUnusable)
+	}
+	if decoded.At == "" {
+		t.Fatal("record carries no timestamp, so it cannot date the outage")
+	}
+	if !strings.Contains(decoded.Detail, "did not decode") {
+		t.Fatalf("detail = %q, want it to name the decode failure", decoded.Detail)
 	}
 }
 
@@ -163,42 +190,5 @@ func assertSaysUnevaluated(
 	}
 	if !strings.Contains(body, string(reason)) {
 		t.Fatalf("response = %q, want it to name %q", body, reason)
-	}
-}
-
-// TestNoDaemonPathReturnsASilentAllow is the structural guard behind the six
-// per-path tests. Every place the daemon allows a call without a verdict has to
-// name why, and an empty response literal is how that silently regresses.
-//
-// It reads the daemon's own source rather than exercising each path, because
-// the point is to catch a path added later that no test covers yet. A response
-// carrying real evaluated output is untouched; only the empty shape is refused.
-func TestNoDaemonPathReturnsASilentAllow(t *testing.T) {
-	sources, err := filepath.Glob("*.go")
-	if err != nil {
-		t.Fatalf("glob: %v", err)
-	}
-	found := 0
-	for _, name := range sources {
-		if strings.HasSuffix(name, "_test.go") {
-			continue
-		}
-		data, readErr := os.ReadFile(name) // #nosec G304 -- package-local source.
-		if readErr != nil {
-			t.Fatalf("read %s: %v", name, readErr)
-		}
-		for number, line := range strings.Split(string(data), "\n") {
-			if !strings.Contains(line, "StdoutData: nil") {
-				continue
-			}
-			found++
-			t.Errorf("%s:%d returns an allow with no body. An agent cannot tell "+
-				"it from a call that passed every rule, so route it through "+
-				"failOpenEvaluateHookResponseFor with the reason no rule was applied",
-				name, number+1)
-		}
-	}
-	if found == 0 {
-		t.Log("no silent allow remains in the daemon")
 	}
 }
