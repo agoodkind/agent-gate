@@ -645,9 +645,9 @@ func TestEvaluateHook_OverloadFailsOpen(t *testing.T) {
 	if resp.ExitCode != 0 {
 		t.Fatalf("exit_code = %d, want fail-open exit 0", resp.ExitCode)
 	}
-	if len(resp.StdoutData) != 0 || len(resp.StderrData) != 0 {
-		t.Fatalf("overload response wrote stdout=%q stderr=%q, want transport-neutral allow", string(resp.StdoutData), string(resp.StderrData))
-	}
+	// An overloaded queue means the call was let through without being
+	// evaluated, so it says so rather than looking like a clean allow.
+	assertSaysUnevaluated(t, resp, hook.FailOpenReasonOverloaded)
 }
 
 func TestEvaluateHook_ConcurrentBurstCompletes(t *testing.T) {
@@ -1153,9 +1153,7 @@ func TestHotPathBlocksBeforeDeferredQueue(t *testing.T) {
 	if resp.ExitCode != 0 {
 		t.Fatalf("exit_code = %d, want fail-open exit 0", resp.ExitCode)
 	}
-	if len(resp.StdoutData) != 0 || len(resp.StderrData) != 0 {
-		t.Fatalf("append failure response wrote stdout=%q stderr=%q, want transport-neutral allow", string(resp.StdoutData), string(resp.StderrData))
-	}
+	assertSaysUnevaluated(t, resp, hook.FailOpenReasonIntakeWriteFailed)
 }
 
 func TestDeferredReplayAfterRestart(t *testing.T) {

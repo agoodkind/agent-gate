@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -144,5 +145,60 @@ func TestUnusableConfigRecordsTheOutage(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "config_unusable") {
 		t.Fatalf("record = %q, want it to name config_unusable", data)
+	}
+}
+
+// assertSaysUnevaluated checks that a fail-open response names why no rule was
+// applied. Every daemon path that allows a call without a verdict has to be
+// distinguishable from one that passed every rule.
+func assertSaysUnevaluated(
+	t *testing.T,
+	response *daemonpb.EvaluateHookResponse,
+	reason hook.FailOpenReason,
+) {
+	t.Helper()
+	body := string(response.StdoutData) + string(response.StderrData)
+	if !strings.Contains(body, "no rule was enforced") {
+		t.Fatalf("response = %q, want it to say the call went unevaluated", body)
+	}
+	if !strings.Contains(body, string(reason)) {
+		t.Fatalf("response = %q, want it to name %q", body, reason)
+	}
+}
+
+// TestNoDaemonPathReturnsASilentAllow is the structural guard behind the six
+// per-path tests. Every place the daemon allows a call without a verdict has to
+// name why, and an empty response literal is how that silently regresses.
+//
+// It reads the daemon's own source rather than exercising each path, because
+// the point is to catch a path added later that no test covers yet. A response
+// carrying real evaluated output is untouched; only the empty shape is refused.
+func TestNoDaemonPathReturnsASilentAllow(t *testing.T) {
+	sources, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatalf("glob: %v", err)
+	}
+	found := 0
+	for _, name := range sources {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		data, readErr := os.ReadFile(name) // #nosec G304 -- package-local source.
+		if readErr != nil {
+			t.Fatalf("read %s: %v", name, readErr)
+		}
+		for number, line := range strings.Split(string(data), "\n") {
+			if !strings.Contains(line, "StdoutData: nil") {
+				continue
+			}
+			found++
+			t.Errorf("%s:%d returns an allow with no body. An agent cannot tell "+
+				"it from a call that passed every rule, so route it through "+
+				"failOpenEvaluateHookResponseFor with the reason no rule was applied",
+				name, number+1)
+		}
+	}
+	if found == 0 {
+		t.Log("no silent allow remains in the daemon")
 	}
 }

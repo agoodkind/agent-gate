@@ -49,7 +49,7 @@ func (s *Server) commitHotEvaluation(
 		s.logHotEvaluationFailure(
 			ctx, input, record.Evaluation.EvaluationID, "evaluation_recorder_unavailable",
 		)
-		return failOpenEvaluateHookResponse()
+		return s.discardedVerdict(ctx, input, "evaluation recorder unavailable")
 	}
 	deferredPending := result.Deferred.Valid && systemError == ""
 	if err := input.Snapshot.evaluationRecorder.CommitHotEvaluation(
@@ -79,7 +79,7 @@ func (s *Server) commitHotEvaluation(
 		s.logHotEvaluationFailure(
 			ctx, input, record.Evaluation.EvaluationID, "hot_evaluation_commit_failed",
 		)
-		return failOpenEvaluateHookResponse()
+		return s.discardedVerdict(ctx, input, err.Error())
 	}
 	if systemError == "" && len(result.Stdout) > 0 {
 		for _, output := range result.TemporalResponseOutputs {
@@ -116,5 +116,31 @@ func (s *Server) logHotEvaluationFailure(
 		"event_id", input.AppendResult.EventID,
 		"evaluation_id", evaluationID,
 		"status_class", statusClass,
+	)
+}
+
+// discardedVerdict renders and records an allow for a call the rules did decide,
+// whose verdict could not be persisted and was therefore dropped.
+//
+// This is the fail-open that most needs saying out loud: unlike a call that was
+// never evaluated, here a rule may have produced a block that the agent will
+// never see. Returning a bare allow would present a discarded block as
+// compliance.
+func (s *Server) discardedVerdict(
+	ctx context.Context,
+	input hotEvaluationCommitInput,
+	diagnostic string,
+) *daemonpb.EvaluateHookResponse {
+	system := hook.SystemFromString(input.Intake.System)
+	RecordFailOpen(
+		string(hook.FailOpenReasonVerdictNotRecorded), system.String(),
+		input.Intake.EventName, input.Intake.ToolName, "", diagnostic,
+	)
+	if s != nil && s.log != nil {
+		s.log.ErrorContext(ctx, "verdict discarded; call allowed without enforcement",
+			"err", diagnostic)
+	}
+	return failOpenEvaluateHookResponseFor(
+		system, hook.FailOpenReasonVerdictNotRecorded, diagnostic,
 	)
 }

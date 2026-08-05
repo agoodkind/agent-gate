@@ -489,7 +489,8 @@ func (s *Server) EvaluateHook(ctx context.Context, req *daemonpb.EvaluateHookReq
 	defer s.runtimeMu.RUnlock()
 	snapshot := s.runtime.Load()
 	if snapshot == nil {
-		return failOpenEvaluateHookResponse(), nil
+		return s.unevaluated(ctx, req, hook.FailOpenReasonDaemonNotReady,
+			"daemon has no runtime snapshot yet"), nil
 	}
 	requestLog := s.log
 	if peerInfo, ok := peer.FromContext(ctx); ok && peerInfo.Addr != nil {
@@ -514,7 +515,8 @@ func (s *Server) EvaluateHook(ctx context.Context, req *daemonpb.EvaluateHookReq
 	}
 	if !s.acquireEvaluateSlot(ctx, snapshot) {
 		s.logEvaluateOverload(ctx, snapshot)
-		return failOpenEvaluateHookResponse(), nil
+		return s.unevaluated(ctx, req, hook.FailOpenReasonOverloaded,
+			"every evaluation slot was busy past the queue deadline"), nil
 	}
 	defer s.releaseEvaluateSlot(snapshot)
 
@@ -534,7 +536,8 @@ func (s *Server) EvaluateHook(ctx context.Context, req *daemonpb.EvaluateHookReq
 		var normalizeErr error
 		rawJSON, normalizeErr = hook.NormalizeCopilotPayload(rawJSON, copilotEventHint(req.GetArgv()))
 		if normalizeErr != nil {
-			return failOpenEvaluateHookResponse(), nil
+			return s.unevaluated(ctx, req, hook.FailOpenReasonPayloadUnreadable,
+				normalizeErr.Error()), nil
 		}
 	}
 
@@ -557,7 +560,7 @@ func (s *Server) EvaluateHook(ctx context.Context, req *daemonpb.EvaluateHookReq
 	appendResult, err := snapshot.intakeStore.Append(ctx, intakeRecord)
 	if err != nil {
 		requestLog.WarnContext(ctx, "append hook intake failed; failing open", "err", err)
-		return failOpenEvaluateHookResponse(), nil
+		return s.unevaluated(ctx, req, hook.FailOpenReasonIntakeWriteFailed, err.Error()), nil
 	}
 	if intakeErr == nil {
 		observeUserPrompt(
@@ -765,17 +768,6 @@ func (s *Server) releaseEvaluateSlot(snapshot *runtimeSnapshot) {
 	}
 }
 
-// failOpenEvaluateHookResponse is the transport-neutral allow for a per-call
-// failure the daemon cannot classify, such as an overloaded queue or a ledger
-// write that did not land. The hook renders its own response around it.
-func failOpenEvaluateHookResponse() *daemonpb.EvaluateHookResponse {
-	return &daemonpb.EvaluateHookResponse{
-		ExitCode:   0,
-		StdoutData: nil,
-		StderrData: nil,
-	}
-}
-
 // failOpenEvaluateHookResponseFor renders an allow that says the call was not
 // evaluated, for the provider that asked.
 //
@@ -903,4 +895,26 @@ func unusableConfigDiagnostic(cfg *config.Config) string {
 		}
 	}
 	return "config did not decode"
+}
+
+// unevaluated renders and records an allow for a call no rule was applied to.
+//
+// Every daemon path that reaches it allowed the call without evaluating it: no
+// runtime snapshot, no free slot before the queue deadline, a payload that
+// would not normalize, or an intake record that would not persist. A delayed
+// evaluation that never ran is an unevaluated call, so each of those says so
+// rather than returning an empty allow the agent cannot tell from compliance.
+func (s *Server) unevaluated(
+	ctx context.Context,
+	req *daemonpb.EvaluateHookRequest,
+	reason hook.FailOpenReason,
+	diagnostic string,
+) *daemonpb.EvaluateHookResponse {
+	system := hook.SystemFromString(req.GetProviderHint())
+	RecordFailOpen(string(reason), system.String(), "", "", req.GetCwd(), diagnostic)
+	if s != nil && s.log != nil {
+		s.log.ErrorContext(ctx, "call allowed without enforcement",
+			"reason", string(reason), "err", diagnostic)
+	}
+	return failOpenEvaluateHookResponseFor(system, reason, diagnostic)
 }
