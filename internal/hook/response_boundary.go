@@ -26,6 +26,9 @@ const (
 	FailOpenReasonRPCFailed FailOpenReason = "rpc_failed"
 	// FailOpenReasonPanic means the hook entrypoint recovered a panic.
 	FailOpenReasonPanic FailOpenReason = "panic_recovered"
+	// FailOpenReasonConfigUnusable means the daemon is running but its config
+	// did not decode, so it holds no rules and enforces nothing.
+	FailOpenReasonConfigUnusable FailOpenReason = "config_unusable"
 )
 
 // ResponseRequest is the provider-neutral declaration used at the hook

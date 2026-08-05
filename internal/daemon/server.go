@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -494,6 +495,23 @@ func (s *Server) EvaluateHook(ctx context.Context, req *daemonpb.EvaluateHookReq
 	if peerInfo, ok := peer.FromContext(ctx); ok && peerInfo.Addr != nil {
 		requestLog = requestLog.With("peer_addr", peerInfo.Addr.String())
 	}
+	// A config that did not decode leaves no rules, so the daemon is running but
+	// enforcing nothing. Answering with a clean allow would be worse than being
+	// down, because a hook that reaches no daemon at least says so. Report every
+	// call as unevaluated and record it, the same as any other fail-open.
+	if snapshot.cfg.Unusable() {
+		system := hook.SystemFromString(req.GetProviderHint())
+		diagnostic := unusableConfigDiagnostic(snapshot.cfg)
+		RecordFailOpen(
+			string(hook.FailOpenReasonConfigUnusable), system.String(),
+			"", "", req.GetCwd(), diagnostic,
+		)
+		requestLog.ErrorContext(ctx, "config unusable; call allowed without enforcement",
+			"err", diagnostic)
+		return failOpenEvaluateHookResponseFor(
+			system, hook.FailOpenReasonConfigUnusable, diagnostic,
+		), nil
+	}
 	if !s.acquireEvaluateSlot(ctx, snapshot) {
 		s.logEvaluateOverload(ctx, snapshot)
 		return failOpenEvaluateHookResponse(), nil
@@ -747,11 +765,40 @@ func (s *Server) releaseEvaluateSlot(snapshot *runtimeSnapshot) {
 	}
 }
 
+// failOpenEvaluateHookResponse is the transport-neutral allow for a per-call
+// failure the daemon cannot classify, such as an overloaded queue or a ledger
+// write that did not land. The hook renders its own response around it.
 func failOpenEvaluateHookResponse() *daemonpb.EvaluateHookResponse {
 	return &daemonpb.EvaluateHookResponse{
 		ExitCode:   0,
 		StdoutData: nil,
 		StderrData: nil,
+	}
+}
+
+// failOpenEvaluateHookResponseFor renders an allow that says the call was not
+// evaluated, for the provider that asked.
+//
+// Used where the daemon knows enforcement is absent rather than merely delayed,
+// which today means a config that did not decode. An allow nobody evaluated has
+// to be distinguishable from one that passed every rule.
+func failOpenEvaluateHookResponseFor(
+	system hook.System,
+	reason hook.FailOpenReason,
+	diagnostic string,
+) *daemonpb.EvaluateHookResponse {
+	rendered := hook.FailOpenResponse(system, "", diagnostic, reason)
+	// A fail-open renderer only ever produces 0, and a value outside int32
+	// could not be a process exit code anyway, so an out-of-range result is
+	// clamped to the allow it is meant to be rather than wrapping.
+	exitCode := int32(0)
+	if rendered.ExitCode > 0 && rendered.ExitCode <= math.MaxInt32 {
+		exitCode = int32(rendered.ExitCode)
+	}
+	return &daemonpb.EvaluateHookResponse{
+		ExitCode:   exitCode,
+		StdoutData: rendered.Stdout,
+		StderrData: rendered.Stderr,
 	}
 }
 
@@ -822,6 +869,17 @@ func (s *Server) Status(_ context.Context, _ *daemonpb.StatusRequest) (*daemonpb
 		s.log.Error("resolve executable failed", slog.Any("err", err))
 		return nil, status.Errorf(codes.Internal, "resolve executable: %v", err)
 	}
+	// Reported so an operator can tell a healthy daemon from one that is running
+	// and enforcing nothing. Those look identical from the outside otherwise,
+	// which is how a ten hour outage went unnoticed.
+	rulesLoaded := 0
+	configError := ""
+	if snapshot := s.runtime.Load(); snapshot != nil && snapshot.cfg != nil {
+		rulesLoaded = len(snapshot.cfg.Rules)
+		if snapshot.cfg.Unusable() {
+			configError = unusableConfigDiagnostic(snapshot.cfg)
+		}
+	}
 	return &daemonpb.StatusResponse{
 		Pid:            int64(os.Getpid()),
 		ExecutablePath: exe,
@@ -830,5 +888,19 @@ func (s *Server) Status(_ context.Context, _ *daemonpb.StatusRequest) (*daemonpb
 		Commit:         gkversion.Commit,
 		Dirty:          gkversion.Dirty,
 		BuildHash:      version.BuildHash(),
+		RulesLoaded:    int64(rulesLoaded),
+		ConfigError:    configError,
 	}, nil
+}
+
+// unusableConfigDiagnostic names why the config could not be used, so the
+// warning an agent sees points at the file rather than only saying enforcement
+// is gone.
+func unusableConfigDiagnostic(cfg *config.Config) string {
+	for _, failure := range cfg.Failures() {
+		if failure.Kind == config.LoadFailureDocument {
+			return fmt.Sprintf("config %s did not decode: %s", failure.Scope, failure.Reason)
+		}
+	}
+	return "config did not decode"
 }

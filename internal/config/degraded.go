@@ -31,6 +31,9 @@ const (
 	LoadFailureRule = "rule"
 	// LoadFailureSection marks a settings block that fell back to defaults.
 	LoadFailureSection = "section"
+	// LoadFailureDocument marks a file that did not decode at all, so no rule
+	// and no setting survived it.
+	LoadFailureDocument = "document"
 )
 
 // Failures returns the parts of the config that were dropped or defaulted

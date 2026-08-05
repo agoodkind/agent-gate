@@ -66,10 +66,15 @@ func loadPath(path string, requireExisting bool, strict bool) (*Config, error) {
 		return nil, fmt.Errorf("read config %s: %w", path, err)
 	}
 	cfg.sourceIdentity = hashIdentity(sourceBytes)
-	err = toml.Unmarshal(sourceBytes, &cfg)
-	if err != nil {
-		log.Error("decode config failed", "path", path, "err", err)
-		return nil, fmt.Errorf("decode config %s: %w", path, err)
+	if err := decodeOrDegrade(log, path, sourceBytes, &cfg, strict); err != nil {
+		return nil, err
+	}
+	// A file that would not decode has no rules and no settings to salvage, so
+	// there is nothing further to compile. Returning here rather than walking an
+	// empty config keeps the caller's Failures the single description of what
+	// happened.
+	if cfg.Unusable() {
+		return &cfg, nil
 	}
 	if err := validateSections(log, &cfg, recordOrFail); err != nil {
 		return nil, err
@@ -179,3 +184,70 @@ var (
 	zeroJudge               Judge
 	zeroUpdate              Update
 )
+
+// decodeOrDegrade decodes the source, or records an unusable config and lets
+// the daemon start anyway.
+//
+// A strict load still refuses the file, which is what install-time validation
+// wants. A degraded load does not, because refusing to start preserves no
+// enforcement: the daemon exits, every hook finds no daemon, and every call is
+// allowed. Measured on 2026-08-05 against a corrupt config, the daemon refused
+// to start and a guarded grep was allowed through.
+//
+// Starting with nothing is the same enforcement as that, and it keeps a process
+// alive that can say so. The daemon reports every evaluation as unevaluated
+// while it is in this state, so the outage announces itself instead of looking
+// like compliance.
+func decodeOrDegrade(
+	log *slog.Logger,
+	path string,
+	sourceBytes []byte,
+	cfg *Config,
+	strict bool,
+) error {
+	decodeErr := toml.Unmarshal(sourceBytes, cfg)
+	if decodeErr == nil {
+		return nil
+	}
+	if strict {
+		log.Error("decode config failed", "path", path, "err", decodeErr)
+		return fmt.Errorf("decode config %s: %w", path, decodeErr)
+	}
+
+	// A partial decode may have left fields set from before the error, and those
+	// were never validated. Start from an empty config so nothing half-read
+	// reaches enforcement.
+	identity := cfg.sourceIdentity
+	// Zeroed field by field rather than by literal, so a new config section
+	// cannot be silently carried over from a partial decode by being forgotten
+	// here.
+	var empty Config
+	*cfg = empty
+	cfg.sourceIdentity = identity
+	cfg.loadFailures = []LoadFailure{{
+		Scope:  path,
+		Kind:   LoadFailureDocument,
+		Reason: decodeErr.Error(),
+	}}
+	log.Error("config did not decode; starting with no rules and reporting "+
+		"every call as unevaluated", "path", path, "err", decodeErr)
+	return nil
+}
+
+// Unusable reports whether the config failed to decode at all, so it carries no
+// rules and enforcement is absent rather than merely reduced.
+//
+// This is distinct from Degraded, which covers a file that decoded and lost
+// some part of itself. A caller that must tell "enforcing less" from "enforcing
+// nothing" asks this.
+func (c *Config) Unusable() bool {
+	if c == nil {
+		return false
+	}
+	for _, failure := range c.loadFailures {
+		if failure.Kind == LoadFailureDocument {
+			return true
+		}
+	}
+	return false
+}

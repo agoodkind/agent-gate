@@ -1,0 +1,148 @@
+package daemon
+
+import (
+	"context"
+	"os"
+	"strings"
+	"testing"
+
+	"goodkind.io/agent-gate/api/daemonpb"
+	"goodkind.io/agent-gate/internal/config"
+	"goodkind.io/agent-gate/internal/hook"
+)
+
+func unusableServer(t *testing.T) *Server {
+	t.Helper()
+	setDaemonTestDirs(t)
+	// Missing a closing bracket, so nothing in the file decodes.
+	writeConfig(t, config.Path(), "\n[[rules]]\nname = \"broken\"\nevents = [\"PreToolUse\"\n")
+
+	cfg, err := config.LoadDegraded()
+	if err != nil {
+		t.Fatalf("degraded load refused to start: %v", err)
+	}
+	if !cfg.Unusable() {
+		t.Fatal("test fixture did not produce an unusable config")
+	}
+	server, err := New(newDiscardLogger(), cfg)
+	if err != nil {
+		t.Fatalf("New refused an unusable config: %v", err)
+	}
+	t.Cleanup(server.Close)
+	return server
+}
+
+// TestUnusableConfigAllowsButSaysSo is the load-bearing half of starting on a
+// config that does not decode.
+//
+// A daemon holding no rules answers every call, and a clean allow from it would
+// be worse than being down: a hook that reaches no daemon at least emits the
+// fail-open notice, while a daemon returning an empty allow looks exactly like
+// a call that passed every rule.
+func TestUnusableConfigAllowsButSaysSo(t *testing.T) {
+	server := unusableServer(t)
+
+	response, err := server.EvaluateHook(context.Background(), &daemonpb.EvaluateHookRequest{
+		RawJson: []byte(`{"hook_event_name":"PreToolUse","tool_name":"Bash",` +
+			`"tool_input":{"command":"grep -rn x /repo"}}`),
+		ProviderHint: hook.SystemClaude.String(),
+	})
+	if err != nil {
+		t.Fatalf("EvaluateHook: %v", err)
+	}
+	if response.ExitCode != 0 {
+		t.Fatalf("exit = %d, want 0; enforcing nothing must not block the call",
+			response.ExitCode)
+	}
+	body := string(response.StdoutData) + string(response.StderrData)
+	if !strings.Contains(body, "no rule was enforced") {
+		t.Fatalf("response = %q, want it to say the call went unevaluated", body)
+	}
+	if !strings.Contains(body, string(hook.FailOpenReasonConfigUnusable)) {
+		t.Fatalf("response = %q, want it to name config_unusable", body)
+	}
+}
+
+// TestUnusableConfigIsReportedInStatus covers the operator's view. A daemon
+// that is up and enforcing nothing is otherwise indistinguishable from a
+// healthy one, which is how the outage went unnoticed for ten hours.
+func TestUnusableConfigIsReportedInStatus(t *testing.T) {
+	server := unusableServer(t)
+
+	response, err := server.Status(context.Background(), &daemonpb.StatusRequest{})
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if response.RulesLoaded != 0 {
+		t.Fatalf("RulesLoaded = %d, want 0", response.RulesLoaded)
+	}
+	if response.ConfigError == "" {
+		t.Fatal("ConfigError is empty, so status looks healthy while nothing is enforced")
+	}
+	if !strings.Contains(response.ConfigError, "did not decode") {
+		t.Fatalf("ConfigError = %q, want it to name the decode failure", response.ConfigError)
+	}
+}
+
+// TestUsableConfigReportsItsRuleCount keeps the status signal meaningful.
+func TestUsableConfigReportsItsRuleCount(t *testing.T) {
+	setDaemonTestDirs(t)
+	writeConfig(t, config.Path(), `
+[audit]
+enabled = false
+
+[[rules]]
+name = "block-alpha"
+claude_events = ["PreToolUse"]
+field_paths = ["tool_input.command"]
+pattern = "alpha"
+action = "block"
+violation_message = "blocked"
+`)
+	cfg, err := config.LoadDegraded()
+	if err != nil {
+		t.Fatalf("LoadDegraded: %v", err)
+	}
+	server, err := New(newDiscardLogger(), cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer server.Close()
+
+	response, err := server.Status(context.Background(), &daemonpb.StatusRequest{})
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if response.RulesLoaded != 1 {
+		t.Fatalf("RulesLoaded = %d, want 1", response.RulesLoaded)
+	}
+	if response.ConfigError != "" {
+		t.Fatalf("ConfigError = %q, want empty for a config that loaded",
+			response.ConfigError)
+	}
+}
+
+// TestUnusableConfigRecordsTheOutage confirms the evidence survives the daemon,
+// so a later question of the form "was anything unenforced" has an answer.
+func TestUnusableConfigRecordsTheOutage(t *testing.T) {
+	// setDaemonTestDirs inside the helper owns XDG_STATE_HOME, so the record
+	// path is read back from the same place the daemon writes it.
+	server := unusableServer(t)
+
+	_, err := server.EvaluateHook(context.Background(), &daemonpb.EvaluateHookRequest{
+		RawJson:      []byte(`{"hook_event_name":"PreToolUse","tool_name":"Bash"}`),
+		ProviderHint: hook.SystemClaude.String(),
+	})
+	if err != nil {
+		t.Fatalf("EvaluateHook: %v", err)
+	}
+
+	record := FailOpenRecordPath()
+	data, readErr := os.ReadFile(record) // #nosec G304 -- test-owned temp path.
+	if readErr != nil {
+		t.Fatalf("no durable record of the outage at %s: %v", record, readErr)
+	}
+	if !strings.Contains(string(data), "config_unusable") {
+		t.Fatalf("record = %q, want it to name config_unusable", data)
+	}
+}
