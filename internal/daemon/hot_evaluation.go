@@ -23,10 +23,33 @@ type hotEvaluationCommitInput struct {
 	ErrorMessage string
 }
 
+// durableWriteCeiling bounds a durable audit write once it is detached from the
+// caller. It is generous because the write is small and the point is to survive
+// a caller that left, not to race a deadline.
+const durableWriteCeiling = 30 * time.Second
+
 func (s *Server) commitHotEvaluation(
 	ctx context.Context,
 	input hotEvaluationCommitInput,
 ) *daemonpb.EvaluateHookResponse {
+	// The verdict is already decided by the time this runs, so the caller going
+	// away must not erase it. Cancelling here discards a computed block and the
+	// audit then shows nothing, which is the record saying a call was fine when
+	// a rule had in fact matched it.
+	//
+	// Measured on 2026-08-05: under load an evaluation exceeded the 10 second
+	// validator budget, the caller's 12 second deadline expired two seconds
+	// later, and the transaction could not begin. 92 such overruns are on
+	// record since 2026-07-30, 51 of them on the search rule.
+	//
+	// runExpandedCommands already detaches for the same reason. Values on the
+	// context are kept so tracing and logging still correlate.
+	commitCtx, cancelCommit := context.WithTimeout(
+		context.WithoutCancel(ctx), durableWriteCeiling,
+	)
+	defer cancelCommit()
+	ctx = commitCtx
+
 	result := input.Result
 	systemError := input.SystemError
 	errorMessage := input.ErrorMessage

@@ -557,7 +557,16 @@ func (s *Server) EvaluateHook(ctx context.Context, req *daemonpb.EvaluateHookReq
 		)
 	}
 
-	appendResult, err := snapshot.intakeStore.Append(ctx, intakeRecord)
+	// Detached from the caller for the same reason the commit is: the event
+	// happened, so the record of it must not depend on the caller still
+	// listening. Measured on 2026-08-05, every one of the 77 append failures on
+	// record was the caller cancelling or its deadline expiring, and none was
+	// database contention.
+	appendCtx, cancelAppend := context.WithTimeout(
+		context.WithoutCancel(ctx), durableWriteCeiling,
+	)
+	appendResult, err := snapshot.intakeStore.Append(appendCtx, intakeRecord)
+	cancelAppend()
 	if err != nil {
 		requestLog.WarnContext(ctx, "append hook intake failed; failing open", "err", err)
 		return s.unevaluated(ctx, req, hook.FailOpenReasonIntakeWriteFailed, err.Error()), nil
