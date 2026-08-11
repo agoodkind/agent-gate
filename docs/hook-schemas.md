@@ -1,14 +1,98 @@
 # Hook payload and response contracts
 
-The daemon parses the provider payload fields below into typed adapters. Fields
-not listed here can remain in the raw intake payload, but they do not define the
-current typed rule surface. [../HOOKS.md](../HOOKS.md) lists which events the
-installer registers.
+The daemon preserves each hook request, classifies its provider, then evaluates
+a separate normalized payload. The sections below define the resulting payload
+and response contracts. The [hook inventory](../HOOKS.md) defines registered
+events.
 
-All providers send JSON on standard input. The daemon selects an adapter from
-the explicit hook subcommand, provider environment signals, and payload
-fingerprints. Unknown events retain their common event, session, conversation,
-and working-directory fields through the fallback payload.
+## Preserve hook input
+
+Each hook sends JSON on standard input. Agent Gate stores those exact bytes
+before enrichment or normalization. This wire input remains unchanged in intake
+and audit records.
+
+Agent Gate derives a separate normalized payload for evaluation. Request working
+directories and Copilot field conversion affect only this derived value. Deferred
+replay uses the stored wire input, normalized payload, and provider decision.
+
+A genuine empty hook request creates an invalid intake event with a receipt and a
+zero-byte payload. Malformed nonempty input also remains durable. Help and invalid
+command-line requests never enter hook mode, so they create no intake event.
+
+Seen-event queries omit wire payload bodies. JSON output includes the wire byte
+count and hash in the classification input. Use `--include-normalized` to inspect
+the derived payload.
+
+## Classify providers
+
+Agent Gate classifies each accepted request from the complete available evidence
+set. It records unavailable evidence instead of inventing a value.
+
+| Evidence | Recorded input | Classification role |
+| --- | --- | --- |
+| Routing | Explicit provider hint, hook subcommand, literal hook tags, and full argument vector | Direct route evidence |
+| Payload | Event name, top-level field names, field casing, detected shapes, and provider identifiers | Provider identity and shape evidence |
+| Invocation | Working directory and hook executable identity | Supporting request context |
+| Process | Parent name and executable path, plus available ancestor names and paths | Supporting provider context |
+| Environment | Provider variables inherited from the host and values injected by a hook | Supporting provider context with provenance |
+| Registration | Provider tag carried by a managed hook command | Supporting installation context |
+| Availability | Missing or unreadable signals and collection errors | Explicit limits on the decision |
+
+The classifier applies this precedence from strongest to weakest:
+
+1. Explicit provider hints and provider-specific hook subcommands.
+2. Provider identifiers inside the payload.
+3. Provider-specific payload shapes and event identities.
+4. Managed registration context.
+5. Executable, parent, ancestor, and environment evidence.
+6. Shared shapes, event names, and host markers.
+
+The working directory remains supporting context. It does not identify a
+provider by itself. Process evidence can resolve a provider only when stronger
+evidence is absent and the process identity is specific.
+
+Environment evidence preserves the provenance supplied with each value. The
+hook process marks its process environment as inherited because a variable name
+cannot prove who injected it. An invocation context can identify a hook-injected
+value explicitly. A Claude marker remains Claude evidence when another harness
+inherits it. The marker does not override explicit routing, provider
+identifiers, or provider-specific payload shape.
+
+Equal strongest evidence for different providers produces an ambiguous result.
+Weaker disagreement remains in both the full evidence list and the conflict
+list. Missing and unreadable signals remain in the stored input with their
+collection status and error source.
+
+Each intake event records one classification object:
+
+| Field | Meaning |
+| --- | --- |
+| `input` | Routing, payload, invocation, process, environment, registration, availability, wire byte count, and wire hash used by classification. |
+| `resolved_provider` | Selected payload and response adapter, or `unknown`. |
+| `confidence` | `high`, `medium`, `low`, or `none`, based on evidence strength and conflicts. |
+| `evidence` | Every provider candidate with its source, provenance, strength, and result. |
+| `conflicts` | Evidence that supports a provider other than the resolved provider. |
+| `result` | `resolved`, `ambiguous`, `unknown`, or `invalid`. |
+
+High confidence means route, identifier, or payload evidence selected one
+provider without conflicting payload-strength evidence. Medium confidence means
+stronger evidence won despite another provider-specific payload or route signal.
+Registration or context-only resolution has low confidence. Ambiguous, unknown,
+and invalid results have no confidence.
+
+The daemon stores this decision with the intake event. Evaluation and deferred
+replay reuse the stored wire input, normalized payload, environment fingerprint,
+and classification. Replay does not reinterpret the request from a later process
+or environment.
+
+Classification collection failures do not create guessed values. Valid payloads
+continue with the remaining evidence. Empty or malformed payloads remain durable
+invalid events. Storage failures report the database cause and do not produce a
+receipt for an event that was not accepted.
+
+Unknown events retain common event, session, conversation, and working-directory
+fields through the fallback payload. Fields not listed below remain in the wire
+input but do not define the typed rule surface.
 
 ## Claude
 
@@ -132,7 +216,7 @@ Copilot uses lower-camel event names and a VS Code-shaped payload:
 
 ```typescript
 type CopilotPayload = {
-  // Supplied by the managed command because userPromptTransformed omits it.
+  // Added only to normalized evaluation data.
   hook_event_name: string;
   sessionId: string;
   transcriptPath: string;
@@ -160,9 +244,10 @@ type CopilotPayload = {
 };
 ```
 
-The daemon adds `hook_event_name` from `copilot-hook <event>` and normalizes
-camelCase fields before evaluation. The adapter joins multi-replacement old and
-new strings into the corresponding rule fields. `sessionStart`, `subagentStart`,
+The daemon adds `hook_event_name` to the normalized payload from the event tag in
+`managed-hook copilot <event>`. It also normalizes camelCase fields before
+evaluation. The wire input remains unchanged. The adapter joins multi-replacement
+old and new strings into the corresponding rule fields. `sessionStart`, `subagentStart`,
 `postToolUse`, `postToolUseFailure`, and `notification` can return
 `additionalContext`. `preToolUse` can return `modifiedArgs`, `postToolUse` can
 return `modifiedResult` as a successful `ToolResult` object with `resultType`
