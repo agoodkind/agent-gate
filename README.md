@@ -53,12 +53,14 @@ agent-gate install service
 
 ## Understand enforcement
 
-Each hook reads one JSON payload from standard input and sends the raw bytes,
-provider hint, process arguments, working directory, and selected environment
-signals to the supervised daemon over its Unix socket. The daemon stores the
-receipt before evaluation, then applies every rule that targets the detected
-provider and event. A block response includes every matching blocking rule that
-the provider event can enforce.
+Each hook sends one JSON payload to the supervised daemon. The daemon preserves
+the wire input, records a receipt, classifies the provider, and evaluates a
+separate normalized payload. The [hook contract](docs/hook-schemas.md) defines
+input preservation, inherited-hook classification, confidence, and failures.
+
+The daemon applies every rule that targets the resolved provider and event. A
+block response includes every matching blocking rule that the provider event can
+enforce.
 
 Rules with multiple `[[rules.conditions]]` entries use all-match semantics.
 Every condition must match before that rule fires. Separate rules remain
@@ -142,9 +144,10 @@ agent-gate query evaluations --evaluation-id eval_123 --json
 agent-gate export evaluations --since 24h --rule build-through-make
 ```
 
-`query seen` omits raw payload bodies. Its optional flags expose normalized JSON
-and the environment fingerprint. `export evaluations` emits one JSONL row per
-evaluation with ordered typed layers and labels.
+`query seen` omits wire payload bodies. Each JSON row includes the provider
+classification and its evidence. Optional flags expose normalized JSON and the
+environment fingerprint. `export evaluations` emits one JSONL row per evaluation
+with ordered typed layers and labels.
 
 ## Operate the daemon and updater
 

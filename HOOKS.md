@@ -1,9 +1,9 @@
 # Hook inventory
 
 `agent-gate` installs the registered events below for Claude Code, Codex,
-Cursor, Gemini CLI, and GitHub Copilot Chat. The files under `hooks/` are the
-installation templates. [docs/hook-schemas.md](docs/hook-schemas.md) describes
-the payload fields the daemon parses and the responses it renders.
+Cursor, Gemini CLI, and GitHub Copilot Chat. The
+[hook contract](docs/hook-schemas.md) describes the payload fields the daemon
+parses and the responses it renders.
 
 The provider contracts are
 [Claude Code hooks](https://code.claude.com/docs/en/hooks),
@@ -74,11 +74,11 @@ model-facing response field for that event.
 
 | Provider | Installed config | Hook command | Managed ownership |
 | --- | --- | --- | --- |
-| Claude | `$HOME/.claude/settings.json` | installed binary | Replaces prior agent-gate commands inside `hooks`; preserves unrelated settings and hooks. |
-| Codex | `$HOME/.codex/config.toml` | installed binary plus `codex-hook` | Replaces the marked agent-gate block and sets `[features] hooks = true`; preserves content outside the block. |
-| Cursor | `$HOME/.cursor/hooks.json` | installed binary | Replaces prior agent-gate commands inside the top-level `hooks` object; preserves unrelated settings and hooks. |
-| Gemini | `$HOME/.gemini/settings.json` | installed binary plus `gemini-hook` | Replaces prior agent-gate commands inside `hooks`; preserves unrelated settings and hooks. |
-| Copilot | `$HOME/.copilot/hooks/agent-gate.json` | installed binary plus `copilot-hook <event>` | Owns and replaces this dedicated file. Other files in the hooks directory remain untouched. |
+| Claude | `$HOME/.claude/settings.json` | installed binary plus `managed-hook claude` | Replaces prior agent-gate commands inside `hooks`; preserves unrelated settings and hooks. |
+| Codex | `$HOME/.codex/config.toml` | installed binary plus `managed-hook codex` | Replaces the marked agent-gate block and sets `[features] hooks = true`; preserves content outside the block. |
+| Cursor | `$HOME/.cursor/hooks.json` | installed binary plus `managed-hook cursor` | Replaces prior agent-gate commands inside the top-level `hooks` object; preserves unrelated settings and hooks. |
+| Gemini | `$HOME/.gemini/settings.json` | installed binary plus `managed-hook gemini` | Replaces prior agent-gate commands inside `hooks`; preserves unrelated settings and hooks. |
+| Copilot | `$HOME/.copilot/hooks/agent-gate.json` | installed binary plus `managed-hook copilot <event>` | Owns and replaces this dedicated file. Other files in the hooks directory remain untouched. |
 
 Every JSON template sets `failClosed: false`. Writes are atomic, and malformed
 existing JSON stops installation before the target changes. The template
@@ -105,8 +105,6 @@ order.
 
 ## Claude
 
-Template: `hooks/claude.json`
-
 Registered events:
 
 | Event | Matcher |
@@ -121,6 +119,7 @@ Registered events:
 | `PermissionDenied` | `.*` |
 | `PermissionRequest` | `.*` |
 | `PostCompact` | none |
+| `PostToolBatch` | none |
 | `PostToolUse` | `.*` |
 | `PostToolUseFailure` | `.*` |
 | `PreCompact` | none |
@@ -136,10 +135,9 @@ Registered events:
 | `TaskCreated` | none |
 | `TeammateIdle` | none |
 | `UserPromptSubmit` | none |
+| `UserPromptExpansion` | none |
 
 ## Codex
-
-Template: `hooks/codex.toml`
 
 | Event | Matcher |
 | --- | --- |
@@ -156,12 +154,10 @@ Template: `hooks/codex.toml`
 
 ## Copilot
 
-Template: `hooks/copilot.json`
-
 Copilot uses lower-camel event names and VS Code-shaped tool inputs. Each
-managed command carries the event name through `copilot-hook <event>` because
-`userPromptTransformed` does not identify itself in its payload. The daemon
-uses that hint to normalize camelCase fields before rule evaluation.
+managed command carries the event name through `managed-hook copilot <event>`.
+The `userPromptTransformed` payload does not identify itself. The daemon uses
+the command tag to normalize camelCase fields before rule evaluation.
 
 | Event | Matcher |
 | --- | --- |
@@ -175,8 +171,6 @@ uses that hint to normalize camelCase fields before rule evaluation.
 
 ## Cursor
 
-Template: `hooks/cursor.json`
-
 Cursor registers these events without matchers:
 
 | Event | Event | Event | Event |
@@ -188,8 +182,6 @@ Cursor registers these events without matchers:
 | `afterAgentResponse` | `afterAgentThought` | `beforeTabFileRead` | `afterTabFileEdit` |
 
 ## Gemini
-
-Template: `hooks/gemini.json`
 
 | Event | Matcher |
 | --- | --- |
