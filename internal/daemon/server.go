@@ -45,7 +45,7 @@ type runtimeSnapshot struct {
 	deferredProcessor  *deferredProcessor
 	evaluateSlots      chan struct{}
 	evaluateQueueWait  time.Duration
-	hotEvaluate        func(context.Context, []byte, *config.Config, hook.System, func(string) string, string) hook.HotEvaluation
+	hotEvaluate        func(context.Context, hook.EvaluationInput, *config.Config, func(string) string, string) hook.HotEvaluation
 	execRuntime        *rules.ExecRuntime
 	inferRuntime       *rules.InferRuntime
 }
@@ -288,11 +288,14 @@ func newRuntimeSnapshot(ctx context.Context, cfg *config.Config, log *slog.Logge
 	}, nil
 }
 
-func defaultHotEvaluate(ctx context.Context, rawJSON []byte, cfg *config.Config, hint hook.System, getenv func(string) string, eventID string) hook.HotEvaluation {
-	if eventID == "" {
-		return hook.EvaluateHot(ctx, rawJSON, cfg, hint, getenv)
-	}
-	return hook.EvaluateHotWithEventID(ctx, rawJSON, cfg, hint, getenv, eventID)
+func defaultHotEvaluate(
+	ctx context.Context,
+	input hook.EvaluationInput,
+	cfg *config.Config,
+	getenv func(string) string,
+	eventID string,
+) hook.HotEvaluation {
+	return hook.EvaluateClassifiedHotWithEventID(ctx, input, cfg, getenv, eventID)
 }
 
 func (s *runtimeSnapshot) close(ctx context.Context, log *slog.Logger) {
@@ -520,28 +523,10 @@ func (s *Server) EvaluateHook(ctx context.Context, req *daemonpb.EvaluateHookReq
 	}
 	defer s.releaseEvaluateSlot(snapshot)
 
-	ctx = rules.WithExecRuntime(ctx, snapshot.execRuntime)
-	ctx = rules.WithInferRuntime(ctx, snapshot.inferRuntime)
-	ctx = rules.WithGitStateReader(ctx, gitbranch.ReadState)
-	var traceSink *inferenceTraceSink
-	if configHasInference(snapshot.cfg) {
-		traceSink = &inferenceTraceSink{traces: nil}
-		ctx = rules.WithInferenceTraceCollector(ctx, traceSink)
-	}
-	rawJSON := req.GetRawJson()
-	if cwd := req.GetCwd(); cwd != "" {
-		rawJSON = injectCWD(rawJSON, cwd)
-	}
-	if req.GetProviderHint() == hook.SystemCopilot.String() {
-		var normalizeErr error
-		rawJSON, normalizeErr = hook.NormalizeCopilotPayload(rawJSON, copilotEventHint(req.GetArgv()))
-		if normalizeErr != nil {
-			return s.unevaluated(ctx, req, hook.FailOpenReasonPayloadUnreadable,
-				normalizeErr.Error()), nil
-		}
-	}
-
+	ctx, traceSink := hookEvaluationContext(ctx, snapshot)
 	envFingerprint := req.GetEnvFingerprint()
+	evaluationInput, normalizationErr := prepareHookEvaluationInput(req)
+
 	getenv := func(key string) string {
 		if envFingerprint == nil {
 			return ""
@@ -550,10 +535,20 @@ func (s *Server) EvaluateHook(ctx context.Context, req *daemonpb.EvaluateHookReq
 	}
 
 	evalStart := hotEvalNow()
-	intakeRecord, intakeErr := buildIntakeRecord(rawJSON, req.GetProviderHint(), envFingerprint)
+	intakeRecord, intakeErr := buildClassifiedIntakeRecord(
+		evaluationInput.WireBytes,
+		evaluationInput.NormalizedJSON,
+		evaluationInput.Classification,
+		envFingerprint,
+	)
+	if normalizationErr != nil {
+		intakeErr = normalizationErr
+	}
 	if intakeErr != nil {
 		intakeRecord = buildInvalidIntakeRecord(
-			rawJSON, req.GetProviderHint(), envFingerprint,
+			evaluationInput.WireBytes,
+			evaluationInput.Classification,
+			envFingerprint,
 		)
 	}
 
@@ -566,13 +561,19 @@ func (s *Server) EvaluateHook(ctx context.Context, req *daemonpb.EvaluateHookReq
 		observeUserPrompt(
 			snapshot.execRuntime,
 			intakeRecord.System,
-			rawJSON,
+			evaluationInput.NormalizedJSON,
 			appendResult.ReceiptID,
 		)
 	}
 
 	syncCfg := hook.SyncConfig(snapshot.cfg)
-	result := snapshot.hotEvaluate(ctx, rawJSON, syncCfg, hook.SystemFromString(req.GetProviderHint()), getenv, appendResult.EventID)
+	result := snapshot.hotEvaluate(
+		ctx,
+		evaluationInput,
+		syncCfg,
+		getenv,
+		appendResult.EventID,
+	)
 	result.Deferred.InferenceTraces = traceSink.snapshot()
 	systemError := ""
 	errorMessage := ""
@@ -585,6 +586,56 @@ func (s *Server) EvaluateHook(ctx context.Context, req *daemonpb.EvaluateHookReq
 		AppendResult: appendResult, StartedAt: evalStart, Result: result,
 		SystemError: systemError, ErrorMessage: errorMessage,
 	}), nil
+}
+
+func hookEvaluationContext(
+	ctx context.Context,
+	snapshot *runtimeSnapshot,
+) (context.Context, *inferenceTraceSink) {
+	ctx = rules.WithExecRuntime(ctx, snapshot.execRuntime)
+	ctx = rules.WithInferRuntime(ctx, snapshot.inferRuntime)
+	ctx = rules.WithGitStateReader(ctx, gitbranch.ReadState)
+	var traceSink *inferenceTraceSink
+	if configHasInference(snapshot.cfg) {
+		traceSink = &inferenceTraceSink{traces: nil}
+		ctx = rules.WithInferenceTraceCollector(ctx, traceSink)
+	}
+	return ctx, traceSink
+}
+
+func prepareHookEvaluationInput(
+	request *daemonpb.EvaluateHookRequest,
+) (hook.EvaluationInput, error) {
+	wireInput := cloneBytes(request.GetRawJson())
+	classification := hook.Classify(
+		wireInput,
+		hook.SystemFromString(request.GetProviderHint()),
+		request.GetArgv(),
+		request.GetEnvFingerprint(),
+	)
+	normalizedJSON := cloneBytes(wireInput)
+	if cwd := request.GetCwd(); cwd != "" {
+		normalizedJSON = injectCWD(normalizedJSON, cwd)
+	}
+	if classification.ResolvedSystem() == hook.SystemCopilot {
+		var err error
+		normalizedJSON, err = hook.NormalizeCopilotPayload(
+			normalizedJSON,
+			copilotEventHint(request.GetArgv()),
+		)
+		if err != nil {
+			return hook.EvaluationInput{
+				WireBytes:      wireInput,
+				NormalizedJSON: cloneBytes(wireInput),
+				Classification: classification,
+			}, wrapServerError("normalize Copilot payload", err)
+		}
+	}
+	return hook.EvaluationInput{
+		WireBytes:      wireInput,
+		NormalizedJSON: normalizedJSON,
+		Classification: classification,
+	}, nil
 }
 
 func observeUserPrompt(
@@ -631,15 +682,14 @@ func configHasInference(cfg *config.Config) bool {
 	return false
 }
 
-func buildIntakeRecord(rawJSON []byte, providerHint string, envFingerprint map[string]string) (intake.Record, error) {
-	detectionPayload, err := hook.ParseDetectionPayload(rawJSON)
-	if err != nil {
-		return intake.Record{}, wrapServerError("parse intake detection payload", err)
-	}
-	system := hook.DetectWithEnv(detectionPayload, hook.SystemFromString(providerHint), func(key string) string {
-		return envFingerprint[key]
-	})
-	payload, err := hook.ParseHookPayload(system, rawJSON)
+func buildClassifiedIntakeRecord(
+	wireInput []byte,
+	normalizedJSON []byte,
+	classification hook.Classification,
+	envFingerprint map[string]string,
+) (intake.Record, error) {
+	system := classification.ResolvedSystem()
+	payload, err := hook.ParseHookPayload(system, normalizedJSON)
 	if err != nil {
 		return intake.Record{}, wrapServerError("parse intake hook payload", err)
 	}
@@ -652,8 +702,9 @@ func buildIntakeRecord(rawJSON []byte, providerHint string, envFingerprint map[s
 	record.EventName = payload.EventName()
 	record.ToolName = fields.ToolName
 	record.ToolUseID = fields.ToolUseID
-	record.RawPayload = append([]byte(nil), rawJSON...)
-	record.NormalizedJSON = append([]byte(nil), rawJSON...)
+	record.RawPayload = cloneBytes(wireInput)
+	record.NormalizedJSON = cloneBytes(normalizedJSON)
+	record.ClassificationJSON = hook.MarshalClassification(classification)
 	record.EnvFingerprint = cloneStringMap(envFingerprint)
 	record.Operation.CWD = firstNonEmpty(fields.CWD, payload.CWD())
 	effectiveCwd := fields.String(config.FieldEffectiveCWD)
@@ -669,19 +720,20 @@ func buildIntakeRecord(rawJSON []byte, providerHint string, envFingerprint map[s
 }
 
 func buildInvalidIntakeRecord(
-	rawJSON []byte,
-	providerHint string,
+	wireInput []byte,
+	classification hook.Classification,
 	envFingerprint map[string]string,
 ) intake.Record {
 	return intake.Record{
 		ReceiptID: 0, ReceivedAt: time.Time{}, EventID: "", SchemaVersion: 0,
-		RecordedAt: time.Time{}, System: hook.SystemFromString(providerHint).String(),
+		RecordedAt: time.Time{}, System: classification.ResolvedProvider,
 		SessionID: "_no-session", TurnID: "", EventName: "_invalid",
 		ToolName: "", ToolUseID: "", Operation: intake.Operation{
 			CWD: "", EffectiveCWD: "", Command: "", FilePath: "",
 		},
-		RawPayload: append([]byte(nil), rawJSON...), NormalizedJSON: json.RawMessage(`{}`),
-		RawPayloadHash: "", EnvFingerprint: cloneStringMap(envFingerprint),
+		RawPayload: cloneBytes(wireInput), NormalizedJSON: json.RawMessage(`{}`),
+		ClassificationJSON: hook.MarshalClassification(classification),
+		RawPayloadHash:     "", EnvFingerprint: cloneStringMap(envFingerprint),
 		DeferredState: intake.DeferredStateNone, PendingAt: nil, CompletedAt: nil,
 		LastReplayAt: nil, DeferredReplays: 0, Sequence: 0,
 	}
@@ -702,6 +754,12 @@ func cloneStringMap(values map[string]string) map[string]string {
 	}
 	cloned := make(map[string]string, len(values))
 	maps.Copy(cloned, values)
+	return cloned
+}
+
+func cloneBytes(value []byte) []byte {
+	cloned := make([]byte, len(value))
+	copy(cloned, value)
 	return cloned
 }
 
@@ -838,19 +896,23 @@ func clampExitCode(exitCode int) int32 {
 }
 
 func injectCWD(rawJSON []byte, cwd string) []byte {
-	if cwd == "" || len(rawJSON) == 0 || rawJSON[len(rawJSON)-1] != '}' {
+	if cwd == "" || len(rawJSON) == 0 {
 		return rawJSON
 	}
-	insert := []byte(`,"cwd":"` + escapeJSONString(cwd) + `"}`)
-	out := make([]byte, 0, len(rawJSON)+len(insert))
-	out = append(out, rawJSON[:len(rawJSON)-1]...)
-	out = append(out, insert...)
-	return out
-}
-
-func escapeJSONString(value string) string {
-	replacer := strings.NewReplacer(`\`, `\\`, `"`, `\"`, "\n", `\n`, "\r", `\r`, "\t", `\t`)
-	return replacer.Replace(value)
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(rawJSON, &payload); err != nil {
+		return rawJSON
+	}
+	encodedCWD, err := json.Marshal(cwd)
+	if err != nil {
+		return rawJSON
+	}
+	payload["cwd"] = encodedCWD
+	normalized, err := json.Marshal(payload)
+	if err != nil {
+		return rawJSON
+	}
+	return normalized
 }
 
 // Status implements the AgentGateD Status RPC and returns a snapshot of

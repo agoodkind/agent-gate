@@ -4,11 +4,94 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"goodkind.io/agent-gate/internal/intake"
 )
+
+func TestSQLiteStoreAppendPreservesEmptyPayloadAsBlob(t *testing.T) {
+	store := newTestStore(t)
+	appendResult, err := store.Append(context.Background(), intake.Record{
+		EventID:        "evt_empty",
+		System:         "unknown",
+		SessionID:      "_no-session",
+		EventName:      "_invalid",
+		RawPayload:     []byte{},
+		NormalizedJSON: []byte(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("Append empty payload: %v", err)
+	}
+
+	var payloadType string
+	var payloadLength int
+	err = store.Handle().QueryRowContext(
+		context.Background(),
+		`select typeof(raw_payload), length(raw_payload) from intake_events where event_id = ?`,
+		appendResult.EventID,
+	).Scan(&payloadType, &payloadLength)
+	if err != nil {
+		t.Fatalf("query empty payload: %v", err)
+	}
+	if payloadType != "blob" || payloadLength != 0 {
+		t.Fatalf("raw payload = %s/%d, want blob/0", payloadType, payloadLength)
+	}
+
+	var receiptCount int
+	err = store.Handle().QueryRowContext(
+		context.Background(),
+		`select count(*) from intake_receipts where event_id = ?`,
+		appendResult.EventID,
+	).Scan(&receiptCount)
+	if err != nil {
+		t.Fatalf("query receipt count: %v", err)
+	}
+	if receiptCount != 1 {
+		t.Fatalf("receipt count = %d, want 1", receiptCount)
+	}
+}
+
+func TestSQLiteStoreReportsNonEventIDConstraint(t *testing.T) {
+	store := newTestStore(t)
+	_, err := store.Append(context.Background(), intake.Record{
+		EventID:        "evt_first",
+		System:         "constraint-provider",
+		SessionID:      "session-1",
+		EventName:      "PreToolUse",
+		RawPayload:     []byte(`{"event":"first"}`),
+		NormalizedJSON: []byte(`{"event":"first"}`),
+	})
+	if err != nil {
+		t.Fatalf("Append first: %v", err)
+	}
+	_, err = store.Handle().ExecContext(
+		context.Background(),
+		`create unique index intake_events_system_test_idx on intake_events(system)`,
+	)
+	if err != nil {
+		t.Fatalf("create test constraint: %v", err)
+	}
+
+	_, err = store.Append(context.Background(), intake.Record{
+		EventID:        "evt_second",
+		System:         "constraint-provider",
+		SessionID:      "session-2",
+		EventName:      "PreToolUse",
+		RawPayload:     []byte(`{"event":"second"}`),
+		NormalizedJSON: []byte(`{"event":"second"}`),
+	})
+	if err == nil {
+		t.Fatal("Append second error = nil, want unique constraint error")
+	}
+	if !strings.Contains(err.Error(), "UNIQUE constraint failed: intake_events.system") {
+		t.Fatalf("Append second error = %q, want original unique constraint", err)
+	}
+	if strings.Contains(err.Error(), "FOREIGN KEY constraint failed") {
+		t.Fatalf("Append second error hid the cause: %v", err)
+	}
+}
 
 func TestSQLiteStoreAppendIsIdempotentByStableEventID(t *testing.T) {
 	store := newTestStore(t)

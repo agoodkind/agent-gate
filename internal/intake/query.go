@@ -52,6 +52,7 @@ type QueryRecord struct {
 	ToolUseID      string            `json:"tool_use_id,omitempty"`
 	Operation      Operation         `json:"operation"`
 	RawPayloadHash string            `json:"raw_payload_hash"`
+	Classification json.RawMessage   `json:"classification"`
 	Deferred       QueryDeferred     `json:"deferred"`
 	NormalizedJSON json.RawMessage   `json:"normalized_json,omitempty"`
 	EnvFingerprint map[string]string `json:"env_fingerprint,omitempty"`
@@ -232,6 +233,7 @@ func intakeQuerySelect(hasDeferredTable bool) string {
 			e.file_path,
 			e.raw_payload_hash,
 			e.normalized_json,
+			e.classification_json,
 			e.env_fingerprint_json,
 			'none',
 			null as pending_at,
@@ -257,6 +259,7 @@ func intakeQuerySelect(hasDeferredTable bool) string {
 			e.file_path,
 			e.raw_payload_hash,
 			e.normalized_json,
+			e.classification_json,
 			e.env_fingerprint_json,
 			coalesce(d.state, ?),
 			d.pending_at,
@@ -329,6 +332,7 @@ func scanQueryRecord(ctx context.Context, rows *sql.Rows, filter QueryFilter) (Q
 	var (
 		record         QueryRecord
 		normalized     string
+		classification string
 		envFingerprint string
 		state          string
 		pendingAt      sql.NullString
@@ -350,6 +354,7 @@ func scanQueryRecord(ctx context.Context, rows *sql.Rows, filter QueryFilter) (Q
 		&record.Operation.FilePath,
 		&record.RawPayloadHash,
 		&normalized,
+		&classification,
 		&envFingerprint,
 		&state,
 		&pendingAt,
@@ -364,6 +369,7 @@ func scanQueryRecord(ctx context.Context, rows *sql.Rows, filter QueryFilter) (Q
 	record.Deferred.PendingAt = nullStringValue(pendingAt)
 	record.Deferred.CompletedAt = nullStringValue(completedAt)
 	record.Deferred.LastReplayAt = nullStringValue(lastReplayAt)
+	record.Classification = json.RawMessage(classification)
 	if filter.IncludeNormalized {
 		record.NormalizedJSON = json.RawMessage(normalized)
 	}

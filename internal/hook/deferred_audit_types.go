@@ -15,6 +15,13 @@ type HotEvaluation struct {
 	TemporalResponseOutputs []TemporalResponseOutput
 }
 
+// EvaluationInput separates immutable hook bytes from derived evaluation data.
+type EvaluationInput struct {
+	WireBytes      []byte
+	NormalizedJSON []byte
+	Classification Classification
+}
+
 // TemporalResponseOutput is an in-memory model-facing value eligible for
 // process-local prior-response tracking after durable evaluation persistence.
 type TemporalResponseOutput struct {

@@ -69,7 +69,7 @@ func TestDeferredAuditReusesHotInferenceOutcomeAndTrace(t *testing.T) {
 		collector,
 	)
 	rawPayload := []byte(`{"session_id":"s1","hook_event_name":"PreToolUse","tool_name":"Shell","tool_input":{"command":"echo audit"}}`)
-	syncEvaluation := hook.EvaluateHotWithEventID(
+	syncEvaluation := evaluateHotWithEventIDForTest(
 		ctx,
 		rawPayload,
 		hook.SyncConfig(cfg),
@@ -216,7 +216,7 @@ func TestDeferredAuditOnlyInferenceUsesDaemonRuntimeAndAppendsTraces(t *testing.
 
 	for i := range 2 {
 		eventID := "evt-audit-" + strconv.Itoa(i+1)
-		hotEvent := hook.EvaluateHotWithEventID(
+		hotEvent := evaluateHotWithEventIDForTest(
 			context.Background(),
 			rawPayload,
 			hook.SyncConfig(cfg),

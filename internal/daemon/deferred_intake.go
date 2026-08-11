@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -485,17 +486,26 @@ func (p *deferredProcessor) rebuildDeferredAudit(
 		return record.EnvFingerprint[key]
 	}
 	hint := hook.SystemFromString(record.System)
+	classification := replayClassification(record, hint)
+	normalizedJSON := record.NormalizedJSON
+	if len(normalizedJSON) == 0 {
+		normalizedJSON = record.RawPayload
+	}
+	evaluationInput := hook.EvaluationInput{
+		WireBytes:      record.RawPayload,
+		NormalizedJSON: normalizedJSON,
+		Classification: classification,
+	}
 
 	var merged hook.DeferredAuditEvent
 	if hotEvent != nil && hotEvent.Valid {
 		merged = *hotEvent
 	} else {
 		syncCfg := hook.ReplaySyncConfig(p.cfg)
-		syncEval := hook.EvaluateHotWithEventID(
+		syncEval := hook.EvaluateClassifiedHotWithEventID(
 			ctx,
-			record.RawPayload,
+			evaluationInput,
 			syncCfg,
-			hint,
 			getenv,
 			record.EventID,
 		)
@@ -525,11 +535,10 @@ func (p *deferredProcessor) rebuildDeferredAudit(
 		if p.inferRuntime != nil {
 			deferredCtx = rules.WithInferRuntime(deferredCtx, p.inferRuntime)
 		}
-		deferredEval := hook.EvaluateHotWithEventID(
+		deferredEval := hook.EvaluateClassifiedHotWithEventID(
 			deferredCtx,
-			record.RawPayload,
+			evaluationInput,
 			deferredCfg,
-			hint,
 			getenv,
 			record.EventID,
 		)
@@ -545,4 +554,14 @@ func (p *deferredProcessor) rebuildDeferredAudit(
 		}
 	}
 	return merged, true
+}
+
+func replayClassification(record intake.Record, hint hook.System) hook.Classification {
+	var classification hook.Classification
+	if len(record.ClassificationJSON) > 0 {
+		if err := json.Unmarshal(record.ClassificationJSON, &classification); err == nil && classification.Result != "" {
+			return classification
+		}
+	}
+	return hook.Classify(record.RawPayload, hint, nil, record.EnvFingerprint)
 }

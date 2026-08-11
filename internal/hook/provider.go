@@ -12,32 +12,25 @@ import (
 	"goodkind.io/agent-gate/internal/rules"
 )
 
-// EvaluateHot performs only provider detection, typed parsing, rule
-// evaluation, block diagnostics, and response rendering.
-func EvaluateHot(ctx context.Context, rawBytes []byte, cfg *config.Config, hint System, getenv func(string) string) HotEvaluation {
-	return EvaluateHotWithEventID(ctx, rawBytes, cfg, hint, getenv, "")
-}
-
-// EvaluateHotWithEventID is EvaluateHot with the durable intake event_id that
-// is included in block responses for query lookup.
-func EvaluateHotWithEventID(ctx context.Context, rawBytes []byte, cfg *config.Config, hint System, getenv func(string) string, eventID string) HotEvaluation {
-	detectionPayload, err := ParseDetectionPayload(rawBytes)
+// EvaluateClassifiedHotWithEventID evaluates one normalized payload with the
+// provider classification already selected at the daemon boundary.
+func EvaluateClassifiedHotWithEventID(
+	ctx context.Context,
+	input EvaluationInput,
+	cfg *config.Config,
+	getenv func(string) string,
+	eventID string,
+) HotEvaluation {
+	system := input.Classification.ResolvedSystem()
+	payload, err := ParseHookPayload(system, input.NormalizedJSON)
 	if err != nil {
-		return HotEvaluation{
-			Stdout:                  nil,
-			Stderr:                  []byte("agent-gate: parse stdin JSON: " + err.Error() + "\n"),
-			ExitCode:                2,
-			Deferred:                emptyDeferredAuditEvent(SystemUnknown),
-			Trace:                   emptyDecisionTrace(),
-			TemporalResponseOutputs: nil,
+		message := "agent-gate: parse typed hook JSON: "
+		if input.Classification.Result == ClassificationResultInvalid {
+			message = "agent-gate: parse stdin JSON: "
 		}
-	}
-	system := DetectWithEnv(detectionPayload, hint, getenv)
-	payload, err := ParseHookPayload(system, rawBytes)
-	if err != nil {
 		return HotEvaluation{
 			Stdout:                  nil,
-			Stderr:                  []byte("agent-gate: parse typed hook JSON: " + err.Error() + "\n"),
+			Stderr:                  []byte(message + err.Error() + "\n"),
 			ExitCode:                2,
 			Deferred:                emptyDeferredAuditEvent(system),
 			Trace:                   emptyDecisionTrace(),
@@ -45,7 +38,15 @@ func EvaluateHotWithEventID(ctx context.Context, rawBytes []byte, cfg *config.Co
 		}
 	}
 
-	return evaluatePayloadHot(ctx, payload, rawBytes, cfg, getenv, eventID)
+	return evaluatePayloadHot(
+		ctx,
+		payload,
+		input.NormalizedJSON,
+		input.WireBytes,
+		cfg,
+		getenv,
+		eventID,
+	)
 }
 
 func emptyDecisionTrace() rules.DecisionTrace {
@@ -88,7 +89,15 @@ func CanBlock(system System, eventName string) bool {
 	return LookupCapability(system, eventName) != CapabilityObserve
 }
 
-func evaluatePayloadHot(ctx context.Context, payload Payload, rawBytes []byte, cfg *config.Config, getenv func(string) string, eventID string) HotEvaluation {
+func evaluatePayloadHot(
+	ctx context.Context,
+	payload Payload,
+	normalizedJSON []byte,
+	wireBytes []byte,
+	cfg *config.Config,
+	getenv func(string) string,
+	eventID string,
+) HotEvaluation {
 	systemStr := payload.System.String()
 	eventName := payload.EventName()
 	fields := payload.Fields()
@@ -104,7 +113,7 @@ func evaluatePayloadHot(ctx context.Context, payload Payload, rawBytes []byte, c
 		fields,
 		ruleSet,
 		getenv,
-		compactTraceJSON(rawBytes),
+		compactTraceJSON(normalizedJSON),
 	)
 	violations := staged.violations
 	blockingViolations := blockingMatches(violations)
@@ -143,7 +152,7 @@ func evaluatePayloadHot(ctx context.Context, payload Payload, rawBytes []byte, c
 			Stdout:                  response.Stdout,
 			Stderr:                  response.Stderr,
 			ExitCode:                response.ExitCode,
-			Deferred:                newDeferredAuditEvent(rawBytes, payload, fields, ruleSet, blockingViolations, auditOnlyViolations, responseEffects, staged.trace, decision, diagnostic, eventID),
+			Deferred:                newDeferredAuditEvent(wireBytes, payload, fields, ruleSet, blockingViolations, auditOnlyViolations, responseEffects, staged.trace, decision, diagnostic, eventID),
 			Trace:                   staged.trace,
 			TemporalResponseOutputs: nil,
 		}
@@ -165,7 +174,7 @@ func evaluatePayloadHot(ctx context.Context, payload Payload, rawBytes []byte, c
 		Stdout:                  response.Stdout,
 		Stderr:                  response.Stderr,
 		ExitCode:                response.ExitCode,
-		Deferred:                newDeferredAuditEvent(rawBytes, payload, fields, ruleSet, blockingViolations, auditOnlyViolations, responseEffects, staged.trace, decision, diagnostic, eventID),
+		Deferred:                newDeferredAuditEvent(wireBytes, payload, fields, ruleSet, blockingViolations, auditOnlyViolations, responseEffects, staged.trace, decision, diagnostic, eventID),
 		Trace:                   staged.trace,
 		TemporalResponseOutputs: temporalResponseOutputs(payload.System, eventName, contextText, mutationText, promptText),
 	}

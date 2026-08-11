@@ -547,13 +547,240 @@ func TestBuildIntakeRecordMapsUnresolvableCwdToEmpty(t *testing.T) {
 		"tool_input": {"command": "cd \"$(echo /tmp)\" && grep -rn x ."}
 	}`)
 
-	record, err := buildIntakeRecord(raw, "claude", map[string]string{})
+	classification := hook.Classify(raw, hook.SystemClaude, nil, nil)
+	record, err := buildClassifiedIntakeRecord(
+		raw,
+		raw,
+		classification,
+		nil,
+	)
 	if err != nil {
 		t.Fatalf("buildIntakeRecord: %v", err)
 	}
 	if record.Operation.EffectiveCWD != "" {
 		t.Fatalf("EffectiveCWD = %q, want empty for an unresolvable cwd", record.Operation.EffectiveCWD)
 	}
+}
+
+func TestEvaluateHookPreservesWireInput(t *testing.T) {
+	setDaemonTestDirs(t)
+	srv, err := New(newDiscardLogger(), daemonTestConfig(t))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer srv.Close()
+
+	wireInput := []byte(`{"hook_event_name":"preToolUse","conversation_id":"cursor-wire","cursor_version":"1.0","cwd":"/payload","tool_name":"Shell","tool_input":{"command":"true"}}`)
+	requestCWD := filepath.Join(t.TempDir(), "request-cwd")
+	response, err := srv.EvaluateHook(context.Background(), &daemonpb.EvaluateHookRequest{
+		RawJson: wireInput,
+		Cwd:     requestCWD,
+		Argv:    []string{"agent-gate"},
+	})
+	if err != nil {
+		t.Fatalf("EvaluateHook: %v", err)
+	}
+	if response.ExitCode != 0 {
+		t.Fatalf("exit code = %d, want 0", response.ExitCode)
+	}
+
+	record := onlyIntakeRecord(t, srv)
+	if !bytes.Equal(record.RawPayload, wireInput) {
+		t.Fatalf("raw payload changed: got %q want %q", record.RawPayload, wireInput)
+	}
+	var normalized map[string]json.RawMessage
+	if err := json.Unmarshal(record.NormalizedJSON, &normalized); err != nil {
+		t.Fatalf("decode normalized payload: %v", err)
+	}
+	var normalizedCWD string
+	if err := json.Unmarshal(normalized["cwd"], &normalizedCWD); err != nil {
+		t.Fatalf("decode normalized cwd: %v", err)
+	}
+	if normalizedCWD != requestCWD {
+		t.Fatalf("normalized cwd = %q, want %q", normalizedCWD, requestCWD)
+	}
+	classification := decodeClassification(t, record.ClassificationJSON)
+	if classification.ResolvedSystem() != hook.SystemCursor {
+		t.Fatalf(
+			"resolved system = %q, want cursor",
+			classification.ResolvedSystem(),
+		)
+	}
+}
+
+func TestEvaluateHookPreservesCopilotWireInput(t *testing.T) {
+	setDaemonTestDirs(t)
+	srv, err := New(newDiscardLogger(), daemonTestConfig(t))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer srv.Close()
+
+	wireInput := []byte(`{"sessionId":"copilot-wire","toolName":"run_in_terminal","toolUseId":"tool-1","toolInput":{"command":"true"}}`)
+	_, err = srv.EvaluateHook(context.Background(), &daemonpb.EvaluateHookRequest{
+		RawJson:      wireInput,
+		ProviderHint: hook.SystemCopilot.String(),
+		Cwd:          t.TempDir(),
+		Argv:         []string{"agent-gate", "copilot-hook", "preToolUse"},
+	})
+	if err != nil {
+		t.Fatalf("EvaluateHook: %v", err)
+	}
+
+	record := onlyIntakeRecord(t, srv)
+	if !bytes.Equal(record.RawPayload, wireInput) {
+		t.Fatalf("raw payload changed: got %q want %q", record.RawPayload, wireInput)
+	}
+	var normalized map[string]json.RawMessage
+	if err := json.Unmarshal(record.NormalizedJSON, &normalized); err != nil {
+		t.Fatalf("decode normalized payload: %v", err)
+	}
+	if _, ok := normalized["session_id"]; !ok {
+		t.Fatalf("normalized payload missing session_id: %s", record.NormalizedJSON)
+	}
+	if _, ok := normalized["hook_event_name"]; !ok {
+		t.Fatalf("normalized payload missing hook_event_name: %s", record.NormalizedJSON)
+	}
+}
+
+func TestEvaluateHookPersistsGenuineEmptyInput(t *testing.T) {
+	setDaemonTestDirs(t)
+	srv, err := New(newDiscardLogger(), daemonTestConfig(t))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer srv.Close()
+
+	response, err := srv.EvaluateHook(context.Background(), &daemonpb.EvaluateHookRequest{
+		RawJson: []byte{},
+		Argv:    []string{"agent-gate"},
+	})
+	if err != nil {
+		t.Fatalf("EvaluateHook: %v", err)
+	}
+	if response.ExitCode != 2 {
+		t.Fatalf("exit code = %d, want invalid hook exit 2", response.ExitCode)
+	}
+
+	record := onlyIntakeRecord(t, srv)
+	if record.ReceiptID == 0 {
+		t.Fatal("receipt id = 0, want durable receipt")
+	}
+	if len(record.RawPayload) != 0 {
+		t.Fatalf("raw payload length = %d, want 0", len(record.RawPayload))
+	}
+	classification := decodeClassification(t, record.ClassificationJSON)
+	if classification.Result != hook.ClassificationResultInvalid {
+		t.Fatalf(
+			"classification result = %q, want invalid",
+			classification.Result,
+		)
+	}
+
+	sqliteStore := daemonSQLiteStore(t, srv)
+	var payloadType string
+	err = sqliteStore.Handle().QueryRowContext(
+		context.Background(),
+		`select typeof(raw_payload) from intake_events where event_id = ?`,
+		record.EventID,
+	).Scan(&payloadType)
+	if err != nil {
+		t.Fatalf("query raw payload type: %v", err)
+	}
+	if payloadType != "blob" {
+		t.Fatalf("raw payload type = %q, want blob", payloadType)
+	}
+}
+
+func TestEvaluateHookClassifiesInheritedMarkers(t *testing.T) {
+	setDaemonTestDirs(t)
+	srv, err := New(newDiscardLogger(), daemonTestConfig(t))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer srv.Close()
+
+	wireInput := []byte(`{"hook_event_name":"preToolUse","conversation_id":"cursor-inherited","cursor_version":"1.0","tool_name":"Shell","tool_input":{"command":"true"}}`)
+	_, err = srv.EvaluateHook(context.Background(), &daemonpb.EvaluateHookRequest{
+		RawJson: wireInput,
+		Argv:    []string{"agent-gate"},
+		EnvFingerprint: map[string]string{
+			"CLAUDE_CODE_ENTRYPOINT": "cli",
+			"CODEX_THREAD_ID":        "inherited",
+		},
+	})
+	if err != nil {
+		t.Fatalf("EvaluateHook: %v", err)
+	}
+
+	record := onlyIntakeRecord(t, srv)
+	if record.System != hook.SystemCursor.String() {
+		t.Fatalf("record system = %q, want cursor", record.System)
+	}
+	classification := decodeClassification(t, record.ClassificationJSON)
+	assertClassificationConflict(t, classification, hook.SystemClaude.String())
+	assertClassificationConflict(t, classification, hook.SystemCodex.String())
+}
+
+func daemonSQLiteStore(t *testing.T, srv *Server) *intake.Store {
+	t.Helper()
+	snapshot := srv.runtime.Load()
+	if snapshot == nil {
+		t.Fatal("runtime snapshot is nil")
+	}
+	store, ok := snapshot.intakeStore.(*sqliteIntakeStore)
+	if !ok || store.store == nil {
+		t.Fatalf("intake store = %T, want sqlite store", snapshot.intakeStore)
+	}
+	return store.store
+}
+
+func onlyIntakeRecord(t *testing.T, srv *Server) intake.Record {
+	t.Helper()
+	store := daemonSQLiteStore(t, srv)
+	var eventID string
+	var count int
+	err := store.Handle().QueryRowContext(
+		context.Background(),
+		`select min(event_id), count(*) from intake_events`,
+	).Scan(&eventID, &count)
+	if err != nil {
+		t.Fatalf("query intake event: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("intake event count = %d, want 1", count)
+	}
+	record, err := store.Get(context.Background(), eventID)
+	if err != nil {
+		t.Fatalf("Get intake event: %v", err)
+	}
+	return record
+}
+
+func decodeClassification(
+	t *testing.T,
+	rawClassification json.RawMessage,
+) hook.Classification {
+	t.Helper()
+	var classification hook.Classification
+	if err := json.Unmarshal(rawClassification, &classification); err != nil {
+		t.Fatalf("decode classification: %v", err)
+	}
+	return classification
+}
+
+func assertClassificationConflict(
+	t *testing.T,
+	classification hook.Classification,
+	provider string,
+) {
+	t.Helper()
+	for _, evidence := range classification.Evidence {
+		if evidence.Provider == provider && evidence.Result == "conflict" {
+			return
+		}
+	}
+	t.Fatalf("classification missing %s conflict: %#v", provider, classification.Evidence)
 }
 
 func TestEvaluateHook_DaemonOwnsEnforcement(t *testing.T) {
@@ -708,15 +935,14 @@ func TestServerCloseWaitsForAdmittedEvaluation(t *testing.T) {
 		server,
 		func(
 			ctx context.Context,
-			rawJSON []byte,
+			input hook.EvaluationInput,
 			cfg *config.Config,
-			hint hook.System,
 			getenv func(string) string,
 			eventID string,
 		) hook.HotEvaluation {
 			close(evaluationEntered)
 			<-releaseEvaluation
-			return defaultHotEvaluate(ctx, rawJSON, cfg, hint, getenv, eventID)
+			return defaultHotEvaluate(ctx, input, cfg, getenv, eventID)
 		},
 	)
 
@@ -1130,9 +1356,9 @@ func TestHotPathBlocksBeforeDeferredQueue(t *testing.T) {
 	defer srv.Close()
 
 	hotCalled := false
-	setHotEvaluatorForTest(t, srv, func(ctx context.Context, rawJSON []byte, cfg *config.Config, hint hook.System, getenv func(string) string, eventID string) hook.HotEvaluation {
+	setHotEvaluatorForTest(t, srv, func(ctx context.Context, input hook.EvaluationInput, cfg *config.Config, getenv func(string) string, eventID string) hook.HotEvaluation {
 		hotCalled = true
-		return hook.EvaluateHotWithEventID(ctx, rawJSON, cfg, hint, getenv, eventID)
+		return hook.EvaluateClassifiedHotWithEventID(ctx, input, cfg, getenv, eventID)
 	})
 	replaceIntakeStoreForTest(t, srv, failingIntakeStore{})
 
@@ -1695,7 +1921,7 @@ func fillDeferredProcessorQueue(t testing.TB, srv *Server) {
 	}
 }
 
-func setHotEvaluatorForTest(t testing.TB, srv *Server, evaluator func(context.Context, []byte, *config.Config, hook.System, func(string) string, string) hook.HotEvaluation) {
+func setHotEvaluatorForTest(t testing.TB, srv *Server, evaluator func(context.Context, hook.EvaluationInput, *config.Config, func(string) string, string) hook.HotEvaluation) {
 	t.Helper()
 	snapshot := srv.runtime.Load()
 	if snapshot == nil {

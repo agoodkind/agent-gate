@@ -1,6 +1,7 @@
 package intake_test
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -220,6 +221,60 @@ func TestQueryIncludesNormalizedAndEnvJSONOnlyWhenRequested(t *testing.T) {
 	if strings.Contains(string(encodedWith), "secret") {
 		t.Fatalf("raw payload leaked in query JSON: %s", string(encodedWith))
 	}
+}
+
+func TestQueryIncludesClassification(t *testing.T) {
+	store, path := newQueryTestStore(t)
+	classification := json.RawMessage(`{
+		"input":{"provider_hint":"unknown"},
+		"resolved_provider":"cursor",
+		"confidence":"high",
+		"evidence":[{"source":"payload","result":"match"}],
+		"result":"resolved"
+	}`)
+	appendResult, err := store.Append(context.Background(), intake.Record{
+		EventID:            "evt_classification",
+		System:             "cursor",
+		SessionID:          "session-classification",
+		EventName:          "preToolUse",
+		RawPayload:         []byte(`{"conversation_id":"session-classification"}`),
+		NormalizedJSON:     []byte(`{"conversation_id":"session-classification"}`),
+		ClassificationJSON: classification,
+	})
+	if err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+
+	result, err := intake.Query(
+		context.Background(),
+		queryConfig(path),
+		intake.QueryFilter{EventID: appendResult.EventID},
+	)
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	if len(result.Records) != 1 {
+		t.Fatalf("records = %d, want 1", len(result.Records))
+	}
+	if !json.Valid(result.Records[0].Classification) {
+		t.Fatalf("classification is invalid JSON: %s", result.Records[0].Classification)
+	}
+	if string(result.Records[0].Classification) != string(mustCompactJSON(t, classification)) {
+		t.Fatalf(
+			"classification = %s, want %s",
+			result.Records[0].Classification,
+			mustCompactJSON(t, classification),
+		)
+	}
+}
+
+func mustCompactJSON(t *testing.T, value json.RawMessage) json.RawMessage {
+	t.Helper()
+	var compacted bytes.Buffer
+	if err := json.Compact(&compacted, value); err != nil {
+		t.Fatalf("compact JSON: %v", err)
+	}
+	return json.RawMessage(compacted.String())
 }
 
 func queryConfig(path string) *config.Config {

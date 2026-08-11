@@ -136,7 +136,7 @@ pattern = "blocked"
 `)
 	collector := &stagedTraceCollector{}
 
-	evaluation := hook.EvaluateHot(
+	evaluation := evaluateHot(
 		stagedContext(t, collector),
 		[]byte(stagedPreToolPayload),
 		cfg,
@@ -206,7 +206,7 @@ reasoning_effort = "high"
 `)
 	collector := &stagedTraceCollector{}
 
-	evaluation := hook.EvaluateHot(
+	evaluation := evaluateHot(
 		stagedContext(t, collector),
 		[]byte(stagedPreToolPayload),
 		cfg,
@@ -258,7 +258,7 @@ pattern = "blocked"
 	collector := &stagedTraceCollector{}
 	rawPayload := []byte(`{"hook_event_name":"Stop","session_id":"s1","turn_id":"t1","stop_hook_active":false,"last_assistant_message":"blocked"}`)
 
-	evaluation := hook.EvaluateHot(
+	evaluation := evaluateHot(
 		stagedContext(t, collector),
 		rawPayload,
 		cfg,
@@ -332,7 +332,7 @@ model = "later-model"
 	collector := &stagedTraceCollector{}
 	started := time.Now()
 
-	evaluation := hook.EvaluateHot(
+	evaluation := evaluateHot(
 		stagedContext(t, collector),
 		[]byte(stagedPreToolPayload),
 		cfg,
@@ -430,7 +430,7 @@ pattern = "command"
 `)
 	collector := &stagedTraceCollector{}
 
-	evaluation := hook.EvaluateHot(
+	evaluation := evaluateHot(
 		stagedContext(t, collector),
 		[]byte(stagedPreToolPayload),
 		cfg,
