@@ -124,85 +124,115 @@ func main() {
 			os.Exit(2)
 		}
 	}()
+	os.Exit(runCLIWithHook(os.Args[1:], os.Stdout, os.Stderr, runHook))
+}
 
-	if len(os.Args) > 1 {
-		switch commandName(os.Args[1]) {
-		case commandDaemon:
-			if len(os.Args) > 2 {
-				switch daemonCommandName(os.Args[2]) {
-				case daemonCommandStatus:
-					os.Exit(runDaemonStatus())
-				default:
-					fmt.Fprintf(os.Stderr, "agent-gate: unknown daemon subcommand %q\n", os.Args[2])
-					os.Exit(2)
-				}
+func runCLIWithHook(
+	args []string,
+	stdout io.Writer,
+	stderr io.Writer,
+	hookRunner func(hook.System) int,
+) int {
+	if len(args) == 0 {
+		return hookRunner(hook.SystemUnknown)
+	}
+
+	switch commandName(args[0]) {
+	case "--help", "-h", "help":
+		writeUsage(stdout)
+		return 0
+	case commandDaemon:
+		if len(args) > 1 {
+			switch daemonCommandName(args[1]) {
+			case daemonCommandStatus:
+				return runDaemonStatus()
+			default:
+				fmt.Fprintf(stderr, "agent-gate: unknown daemon subcommand %q\n", args[1])
+				return 2
 			}
-		case commandCodexHook:
-			os.Exit(runHook(hook.SystemCodex))
-		case commandCopilotHook:
-			os.Exit(runHook(hook.SystemCopilot))
-		case commandGeminiHook:
-			os.Exit(runHook(hook.SystemGemini))
-		case commandKV:
-			os.Exit(runKV(os.Args[2:]))
-		case commandQuery:
-			os.Exit(runQuery(os.Args[2:]))
-		case commandExport:
-			os.Exit(runExport(os.Args[2:]))
-		case commandConfig:
-			os.Exit(runConfig(os.Args[2:]))
-		case commandInstall:
-			os.Exit(runInstall(os.Args[2:]))
-		case commandUpdate:
-			os.Exit(runUpdate(os.Args[2:]))
-		case commandVersion, "--version", "-v":
-			printVersion(os.Stdout)
-			return
 		}
+		return runDaemon(stderr)
+	case commandCodexHook:
+		return hookRunner(hook.SystemCodex)
+	case commandCopilotHook:
+		return hookRunner(hook.SystemCopilot)
+	case commandGeminiHook:
+		return hookRunner(hook.SystemGemini)
+	case commandKV:
+		return runKV(args[1:])
+	case commandQuery:
+		return runQuery(args[1:])
+	case commandExport:
+		return runExport(args[1:])
+	case commandConfig:
+		return runConfig(args[1:])
+	case commandInstall:
+		return runInstall(args[1:])
+	case commandUpdate:
+		return runUpdate(args[1:])
+	case commandVersion, "--version", "-v":
+		printVersion(stdout)
+		return 0
+	default:
+		fmt.Fprintf(stderr, "agent-gate: unknown command %q\n", args[0])
+		return 2
 	}
+}
 
-	// Hidden subcommand: start the background daemon.
-	if len(os.Args) > 1 && commandName(os.Args[1]) == commandDaemon {
-		log, closeLog := openLog("daemon")
-		defer closeLog()
-		// The daemon loads degraded on purpose, including when the file does not
-		// decode at all. Refusing to start preserves no enforcement: the daemon
-		// exits, every hook finds no daemon, and every call is allowed anyway.
-		// Starting is the same enforcement with a process alive to report it.
-		cfg, cfgErr := config.LoadDegraded()
-		if cfgErr != nil {
-			fmt.Fprintf(os.Stderr, "agent-gate: daemon: config load failed: %v\n", cfgErr)
-			os.Exit(1)
-		}
-		for _, failure := range cfg.Failures() {
-			fmt.Fprintf(os.Stderr, "agent-gate: daemon: config degraded: %s\n", failure)
-			log.Error("config degraded", "kind", failure.Kind,
-				"scope", failure.Scope, "err", failure.Reason)
-		}
-		if cfg.Unusable() {
-			fmt.Fprintf(os.Stderr,
-				"agent-gate: daemon: NO RULES ARE LOADED. Every call is allowed "+
-					"without enforcement until the config parses. Fix %s and the "+
-					"daemon reloads on save.\n", config.Path())
-		}
-		telemCloser, telemErr := telemetry.Setup(telemetry.Options{
-			OTLPEndpoint:      cfg.Telemetry.OTLPEndpoint,
-			SlowOpThresholdMs: cfg.Telemetry.SlowOpThresholdMs,
-		})
-		if telemErr != nil {
-			fmt.Fprintf(os.Stderr, "agent-gate: daemon: telemetry setup failed: %v\n", telemErr)
-			os.Exit(1)
-		}
-		defer func() { _ = telemCloser.Close() }()
-		if err := daemon.Run(log, cfg); err != nil {
-			fmt.Fprintf(os.Stderr, "agent-gate: daemon: %v\n", err)
-			os.Exit(1)
-		}
-		return
+func writeUsage(writer io.Writer) {
+	_, _ = io.WriteString(writer, `Usage: agent-gate [command]
+
+Commands:
+  config         Check configuration
+  copilot-hook   Handle a GitHub Copilot hook event
+  codex-hook     Handle a Codex hook event
+  daemon         Run the daemon
+  daemon status  Show daemon status
+  export         Export audit data
+  gemini-hook    Handle a Gemini hook event
+  install        Install managed integrations
+  kv             Access durable key-value data
+  query          Query audit and intake data
+  update         Manage updates
+  version        Show build information
+
+Run without a command only from a hook integration.
+`)
+}
+
+func runDaemon(stderr io.Writer) int {
+	log, closeLog := openLog("daemon")
+	defer closeLog()
+	cfg, cfgErr := config.LoadDegraded()
+	if cfgErr != nil {
+		fmt.Fprintf(stderr, "agent-gate: daemon: config load failed: %v\n", cfgErr)
+		return 1
 	}
-
-	// Everything else: hook mode (reads JSON from stdin).
-	os.Exit(runHook(hook.SystemUnknown))
+	for _, failure := range cfg.Failures() {
+		fmt.Fprintf(stderr, "agent-gate: daemon: config degraded: %s\n", failure)
+		log.Error("config degraded", "kind", failure.Kind,
+			"scope", failure.Scope, "err", failure.Reason)
+	}
+	if cfg.Unusable() {
+		fmt.Fprintf(stderr,
+			"agent-gate: daemon: NO RULES ARE LOADED. Every call is allowed "+
+				"without enforcement until the config parses. Fix %s and the "+
+				"daemon reloads on save.\n", config.Path())
+	}
+	telemCloser, telemErr := telemetry.Setup(telemetry.Options{
+		OTLPEndpoint:      cfg.Telemetry.OTLPEndpoint,
+		SlowOpThresholdMs: cfg.Telemetry.SlowOpThresholdMs,
+	})
+	if telemErr != nil {
+		fmt.Fprintf(stderr, "agent-gate: daemon: telemetry setup failed: %v\n", telemErr)
+		return 1
+	}
+	defer func() { _ = telemCloser.Close() }()
+	if err := daemon.Run(log, cfg); err != nil {
+		fmt.Fprintf(stderr, "agent-gate: daemon: %v\n", err)
+		return 1
+	}
+	return 0
 }
 
 func connectDaemon(ctx context.Context) (*daemon.Client, error) {
