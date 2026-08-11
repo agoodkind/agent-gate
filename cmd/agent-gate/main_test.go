@@ -86,6 +86,87 @@ func (client fakeHookClient) Close() error {
 	return nil
 }
 
+func TestRunCLIHelpDoesNotEnterHookMode(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	hookCalls := 0
+
+	exitCode := runCLIWithHook(
+		[]string{"--help"},
+		&stdout,
+		&stderr,
+		func(hook.System) int {
+			hookCalls++
+			return 0
+		},
+	)
+
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d, want 0", exitCode)
+	}
+	if hookCalls != 0 {
+		t.Fatalf("hook calls = %d, want 0", hookCalls)
+	}
+	if !strings.Contains(stdout.String(), "Usage: agent-gate") {
+		t.Fatalf("stdout = %q, want usage", stdout.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+}
+
+func TestRunCLIUnknownCommandDoesNotEnterHookMode(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	hookCalls := 0
+
+	exitCode := runCLIWithHook(
+		[]string{"not-a-command"},
+		&stdout,
+		&stderr,
+		func(hook.System) int {
+			hookCalls++
+			return 0
+		},
+	)
+
+	if exitCode != 2 {
+		t.Fatalf("exit code = %d, want 2", exitCode)
+	}
+	if hookCalls != 0 {
+		t.Fatalf("hook calls = %d, want 0", hookCalls)
+	}
+	if !strings.Contains(stderr.String(), `unknown command "not-a-command"`) {
+		t.Fatalf("stderr = %q, want unknown command", stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want empty", stdout.String())
+	}
+}
+
+func TestRunCLINoArgumentsPreservesBareHookMode(t *testing.T) {
+	hookCalls := 0
+	exitCode := runCLIWithHook(
+		nil,
+		io.Discard,
+		io.Discard,
+		func(system hook.System) int {
+			hookCalls++
+			if system != hook.SystemUnknown {
+				t.Fatalf("hook system = %q, want unknown", system)
+			}
+			return 7
+		},
+	)
+
+	if exitCode != 7 {
+		t.Fatalf("exit code = %d, want hook exit 7", exitCode)
+	}
+	if hookCalls != 1 {
+		t.Fatalf("hook calls = %d, want 1", hookCalls)
+	}
+}
+
 func TestRunHookFailOpenOnStdinReadFailure(t *testing.T) {
 	runtime, stdout, stderr := testHookRuntime(readError{}, nil)
 
