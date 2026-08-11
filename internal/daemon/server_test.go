@@ -618,10 +618,15 @@ func TestEvaluateHookPreservesCopilotWireInput(t *testing.T) {
 
 	wireInput := []byte(`{"sessionId":"copilot-wire","toolName":"run_in_terminal","toolUseId":"tool-1","toolInput":{"command":"true"}}`)
 	_, err = srv.EvaluateHook(context.Background(), &daemonpb.EvaluateHookRequest{
-		RawJson:      wireInput,
-		ProviderHint: hook.SystemCopilot.String(),
-		Cwd:          t.TempDir(),
-		Argv:         []string{"agent-gate", "copilot-hook", "preToolUse"},
+		RawJson: wireInput,
+		Cwd:     t.TempDir(),
+		Argv:    []string{"agent-gate", "managed-hook", "copilot", "preToolUse"},
+		InvocationContext: invocationContextToProto(hook.InvocationContext{
+			ManagedRegistration: hook.ObservedValue{
+				Value: "copilot", Source: "managed_registration", Provenance: "hook_tag",
+				Status: hook.SignalStatusObserved,
+			},
+		}),
 	})
 	if err != nil {
 		t.Fatalf("EvaluateHook: %v", err)
@@ -720,6 +725,153 @@ func TestEvaluateHookClassifiesInheritedMarkers(t *testing.T) {
 	classification := decodeClassification(t, record.ClassificationJSON)
 	assertClassificationConflict(t, classification, hook.SystemClaude.String())
 	assertClassificationConflict(t, classification, hook.SystemCodex.String())
+}
+
+func TestEvaluateHookPersistsCompleteClassificationEvidence(t *testing.T) {
+	tests := []struct {
+		name         string
+		rawJSON      []byte
+		invocation   func(*testing.T) hook.InvocationContext
+		wantProvider hook.System
+		wantResult   hook.ClassificationResult
+		verify       func(*testing.T, hook.Classification)
+	}{
+		{
+			name:    "missing evidence",
+			rawJSON: []byte(`{"field":"value"}`),
+			invocation: func(*testing.T) hook.InvocationContext {
+				return hook.InvocationContext{
+					WorkingDirectory: hook.ObservedValue{
+						Source: "working_directory", Provenance: "operating_system",
+						Status: hook.SignalStatusMissing,
+					},
+					CollectionIssues: []hook.CollectionIssue{{
+						Source: "working_directory", Status: hook.SignalStatusMissing,
+						Detail: "working directory was unavailable",
+					}},
+				}
+			},
+			wantProvider: hook.SystemUnknown,
+			wantResult:   hook.ClassificationResultUnknown,
+			verify: func(t *testing.T, classification hook.Classification) {
+				t.Helper()
+				if len(classification.Input.Invocation.CollectionIssues) != 1 {
+					t.Fatalf("collection issues = %#v", classification.Input.Invocation.CollectionIssues)
+				}
+			},
+		},
+		{
+			name:    "mixed inherited and conflicting evidence",
+			rawJSON: []byte(`{"hook_event_name":"preToolUse","conversation_id":"c1","cursor_version":"1.0"}`),
+			invocation: func(t *testing.T) hook.InvocationContext {
+				return hook.InvocationContext{
+					ManagedRegistration: hook.ObservedValue{
+						Value: "claude", Source: "managed_registration", Provenance: "hook_tag",
+						Status: hook.SignalStatusObserved,
+					},
+					ParentProcess: hook.ProcessEvidence{
+						Name: "codex", ExecutablePath: t.TempDir(), Source: "parent_process",
+						Provenance: "operating_system", Status: hook.SignalStatusObserved,
+					},
+					Environment: []hook.EnvironmentEvidence{{
+						Name: "CLAUDE_CODE_ENTRYPOINT", Value: "cli",
+						Category: "provider_environment", Source: "environment",
+						Provenance: "inherited_environment", Status: hook.SignalStatusObserved,
+					}},
+				}
+			},
+			wantProvider: hook.SystemCursor,
+			wantResult:   hook.ClassificationResultResolved,
+			verify: func(t *testing.T, classification hook.Classification) {
+				t.Helper()
+				assertClassificationConflict(t, classification, hook.SystemClaude.String())
+				assertClassificationConflict(t, classification, hook.SystemCodex.String())
+				if len(classification.Conflicts) < 2 {
+					t.Fatalf("stored conflicts = %#v", classification.Conflicts)
+				}
+			},
+		},
+		{
+			name:    "hook injected evidence",
+			rawJSON: []byte(`{"session_id":"s1"}`),
+			invocation: func(*testing.T) hook.InvocationContext {
+				return hook.InvocationContext{
+					Environment: []hook.EnvironmentEvidence{{
+						Name: "AGENT_GATE_HOOK_PROVIDER", Value: "copilot",
+						Category: "hook_environment", Source: "environment",
+						Provenance: "hook_injected", Status: hook.SignalStatusObserved,
+					}},
+				}
+			},
+			wantProvider: hook.SystemCopilot,
+			wantResult:   hook.ClassificationResultResolved,
+			verify: func(t *testing.T, classification hook.Classification) {
+				t.Helper()
+				for _, evidence := range classification.Evidence {
+					if evidence.Signal == "AGENT_GATE_HOOK_PROVIDER" &&
+						evidence.Provenance == "hook_injected" && evidence.Result == "match" {
+						return
+					}
+				}
+				t.Fatalf("stored injected evidence does not explain result: %#v", classification.Evidence)
+			},
+		},
+		{
+			name:         "ambiguous evidence",
+			rawJSON:      []byte(`{"hook_event_name":"preToolUse"}`),
+			invocation:   func(*testing.T) hook.InvocationContext { return hook.InvocationContext{} },
+			wantProvider: hook.SystemUnknown,
+			wantResult:   hook.ClassificationResultAmbiguous,
+			verify: func(t *testing.T, classification hook.Classification) {
+				t.Helper()
+				if len(classification.Evidence) != 2 {
+					t.Fatalf("ambiguous evidence = %#v, want two candidates", classification.Evidence)
+				}
+			},
+		},
+		{
+			name:         "unknown evidence",
+			rawJSON:      []byte(`{"unrecognizedField":"value"}`),
+			invocation:   func(*testing.T) hook.InvocationContext { return hook.InvocationContext{} },
+			wantProvider: hook.SystemUnknown,
+			wantResult:   hook.ClassificationResultUnknown,
+			verify: func(t *testing.T, classification hook.Classification) {
+				t.Helper()
+				fields := classification.Input.Payload.Fields
+				if len(fields) != 1 || fields[0].Name != "unrecognizedField" {
+					t.Fatalf("stored payload fields = %#v", fields)
+				}
+			},
+		},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			setDaemonTestDirs(t)
+			srv, err := New(newDiscardLogger(), daemonTestConfig(t))
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			defer srv.Close()
+
+			_, err = srv.EvaluateHook(context.Background(), &daemonpb.EvaluateHookRequest{
+				RawJson:           testCase.rawJSON,
+				Argv:              []string{"agent-gate", "managed-hook", "claude"},
+				InvocationContext: invocationContextToProto(testCase.invocation(t)),
+			})
+			if err != nil {
+				t.Fatalf("EvaluateHook: %v", err)
+			}
+			classification := decodeClassification(t, onlyIntakeRecord(t, srv).ClassificationJSON)
+			if classification.ResolvedSystem() != testCase.wantProvider {
+				t.Fatalf("resolved provider = %q, want %q", classification.ResolvedSystem(), testCase.wantProvider)
+			}
+			if classification.Result != testCase.wantResult {
+				t.Fatalf("result = %q, want %q", classification.Result, testCase.wantResult)
+			}
+			testCase.verify(t, classification)
+		})
+	}
 }
 
 func daemonSQLiteStore(t *testing.T, srv *Server) *intake.Store {

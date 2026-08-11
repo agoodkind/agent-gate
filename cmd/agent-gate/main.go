@@ -45,12 +45,18 @@ const (
 	commandGeminiHook  commandName = "gemini-hook"
 	commandInstall     commandName = "install"
 	commandKV          commandName = "kv"
+	commandManagedHook commandName = "managed-hook"
 	commandQuery       commandName = "query"
 	commandUpdate      commandName = "update"
 	commandVersion     commandName = "version"
 )
 
 type daemonCommandName string
+
+type hookRoute struct {
+	ProviderHint        hook.System
+	ManagedRegistration string
+}
 
 const (
 	daemonCommandStatus daemonCommandName = "status"
@@ -131,10 +137,10 @@ func runCLIWithHook(
 	args []string,
 	stdout io.Writer,
 	stderr io.Writer,
-	hookRunner func(hook.System) int,
+	hookRunner func(hookRoute) int,
 ) int {
 	if len(args) == 0 {
-		return hookRunner(hook.SystemUnknown)
+		return hookRunner(hookRoute{ProviderHint: hook.SystemUnknown})
 	}
 
 	switch commandName(args[0]) {
@@ -153,11 +159,19 @@ func runCLIWithHook(
 		}
 		return runDaemon(stderr)
 	case commandCodexHook:
-		return hookRunner(hook.SystemCodex)
+		return hookRunner(hookRoute{ProviderHint: hook.SystemCodex})
 	case commandCopilotHook:
-		return hookRunner(hook.SystemCopilot)
+		return hookRunner(hookRoute{ProviderHint: hook.SystemCopilot})
 	case commandGeminiHook:
-		return hookRunner(hook.SystemGemini)
+		return hookRunner(hookRoute{ProviderHint: hook.SystemGemini})
+	case commandManagedHook:
+		if len(args) < 2 || hook.SystemFromString(args[1]) == hook.SystemUnknown {
+			fmt.Fprintln(stderr, "agent-gate: managed-hook requires a supported provider tag")
+			return 2
+		}
+		return hookRunner(hookRoute{
+			ProviderHint: hook.SystemUnknown, ManagedRegistration: args[1],
+		})
 	case commandKV:
 		return runKV(args[1:])
 	case commandQuery:
@@ -192,6 +206,7 @@ Commands:
   gemini-hook    Handle a Gemini hook event
   install        Install managed integrations
   kv             Access durable key-value data
+  managed-hook   Handle an installed provider hook
   query          Query audit and intake data
   update         Manage updates
   version        Show build information
@@ -245,20 +260,36 @@ func connectDaemon(ctx context.Context) (*daemon.Client, error) {
 }
 
 type hookClient interface {
-	ResolveHookEnvironment(rawJSON []byte, providerHint string, argv []string, env map[string]string) ([]string, error)
-	EvaluateHook(rawJSON []byte, providerHint, cwd string, argv []string, env map[string]string) (*daemonpb.EvaluateHookResponse, error)
+	ResolveHookEnvironment(
+		rawJSON []byte,
+		providerHint string,
+		argv []string,
+		env map[string]string,
+		invocationContext hook.InvocationContext,
+	) ([]string, error)
+	EvaluateHook(
+		rawJSON []byte,
+		providerHint string,
+		cwd string,
+		argv []string,
+		env map[string]string,
+		invocationContext hook.InvocationContext,
+	) (*daemonpb.EvaluateHookResponse, error)
 	Close() error
 }
 
 type hookRuntime struct {
-	stdin   io.Reader
-	stdout  io.Writer
-	stderr  io.Writer
-	args    []string
-	connect func(context.Context) (hookClient, error)
-	getwd   func() (string, error)
-	env     func() map[string]string
-	getenv  func(string) string
+	stdin               io.Reader
+	stdout              io.Writer
+	stderr              io.Writer
+	args                []string
+	connect             func(context.Context) (hookClient, error)
+	getwd               func() (string, error)
+	executable          func() (string, error)
+	processes           func() (hook.ProcessEvidence, []hook.ProcessEvidence, error)
+	env                 func() map[string]string
+	getenv              func(string) string
+	managedRegistration string
 }
 
 func runDaemonStatus() int {
@@ -1435,18 +1466,21 @@ func printEvaluationTable(result evaluation.QueryResult) {
 }
 
 // runHook handles hook mode: read stdin, forward to daemon, mirror response.
-func runHook(systemHint hook.System) int {
+func runHook(route hookRoute) int {
 	runtime := hookRuntime{
-		stdin:   os.Stdin,
-		stdout:  os.Stdout,
-		stderr:  os.Stderr,
-		args:    os.Args,
-		connect: defaultHookConnector,
-		getwd:   os.Getwd,
-		env:     envFingerprint,
-		getenv:  os.Getenv,
+		stdin:               os.Stdin,
+		stdout:              os.Stdout,
+		stderr:              os.Stderr,
+		args:                os.Args,
+		connect:             defaultHookConnector,
+		getwd:               os.Getwd,
+		executable:          os.Executable,
+		processes:           collectProcessEvidence,
+		env:                 envFingerprint,
+		getenv:              os.Getenv,
+		managedRegistration: route.ManagedRegistration,
 	}
-	return runHookWithRuntime(systemHint, runtime)
+	return runHookWithRuntime(route.ProviderHint, runtime)
 }
 
 func defaultHookConnector(ctx context.Context) (hookClient, error) {
@@ -1472,6 +1506,15 @@ func runHookWithRuntime(systemHint hook.System, runtime hookRuntime) (exitCode i
 		writeResponse(runtime.stdout, runtime.stderr, response)
 		return response.ExitCode
 	}
+	baseEnvironment := runtime.env()
+	invocationContext := collectHookInvocationContext(
+		runtime.args,
+		runtime.managedRegistration,
+		runtime.getwd,
+		runtime.executable,
+		baseEnvironment,
+		runtime.processes,
+	)
 	ctx := context.Background()
 	client, err := runtime.connect(ctx)
 	if err != nil {
@@ -1483,10 +1526,9 @@ func runHookWithRuntime(systemHint hook.System, runtime hookRuntime) (exitCode i
 	}
 	defer func() { _ = client.Close() }()
 
-	cwd, _ := runtime.getwd()
-	baseEnvironment := runtime.env()
+	cwd := invocationContext.WorkingDirectory.Value
 	referencedNames, err := client.ResolveHookEnvironment(
-		data, systemHint.String(), runtime.args, baseEnvironment,
+		data, systemHint.String(), runtime.args, baseEnvironment, invocationContext,
 	)
 	if err != nil {
 		diagnostic := fmt.Sprintf("agent-gate: daemon ResolveHookEnvironment failed: %v", err)
@@ -1498,7 +1540,9 @@ func runHookWithRuntime(systemHint hook.System, runtime hookRuntime) (exitCode i
 	environment := hookEnvironmentFingerprint(
 		baseEnvironment, referencedNames, runtime.getenv,
 	)
-	resp, err := client.EvaluateHook(data, systemHint.String(), cwd, runtime.args, environment)
+	resp, err := client.EvaluateHook(
+		data, systemHint.String(), cwd, runtime.args, environment, invocationContext,
+	)
 	if err != nil {
 		diagnostic := fmt.Sprintf("agent-gate: daemon EvaluateHook failed: %v", err)
 		response := hook.FailOpenResponse(systemHint, "", diagnostic, hook.FailOpenReasonRPCFailed)
@@ -1549,6 +1593,9 @@ func envFingerprint() map[string]string {
 		"GEMINI_CLI",
 		"VSCODE_IPC_HOOK",
 		"VSCODE_PID",
+		"AGENT_GATE_HOOK_EVENT",
+		"AGENT_GATE_HOOK_PROVIDER",
+		"AGENT_GATE_HOOK_REGISTRATION",
 	}
 	out := make(map[string]string)
 	for _, key := range keys {

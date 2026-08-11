@@ -22,13 +22,14 @@ const (
 )
 
 type ResolveHookEnvironmentRequest struct {
-	state          protoimpl.MessageState `protogen:"open.v1"`
-	RawJson        []byte                 `protobuf:"bytes,1,opt,name=raw_json,json=rawJson,proto3" json:"raw_json,omitempty"`
-	ProviderHint   string                 `protobuf:"bytes,2,opt,name=provider_hint,json=providerHint,proto3" json:"provider_hint,omitempty"`
-	EnvFingerprint map[string]string      `protobuf:"bytes,3,rep,name=env_fingerprint,json=envFingerprint,proto3" json:"env_fingerprint,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	Argv           []string               `protobuf:"bytes,4,rep,name=argv,proto3" json:"argv,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	RawJson           []byte                 `protobuf:"bytes,1,opt,name=raw_json,json=rawJson,proto3" json:"raw_json,omitempty"`
+	ProviderHint      string                 `protobuf:"bytes,2,opt,name=provider_hint,json=providerHint,proto3" json:"provider_hint,omitempty"`
+	EnvFingerprint    map[string]string      `protobuf:"bytes,3,rep,name=env_fingerprint,json=envFingerprint,proto3" json:"env_fingerprint,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	Argv              []string               `protobuf:"bytes,4,rep,name=argv,proto3" json:"argv,omitempty"`
+	InvocationContext *HookInvocationContext `protobuf:"bytes,5,opt,name=invocation_context,json=invocationContext,proto3" json:"invocation_context,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *ResolveHookEnvironmentRequest) Reset() {
@@ -89,6 +90,13 @@ func (x *ResolveHookEnvironmentRequest) GetArgv() []string {
 	return nil
 }
 
+func (x *ResolveHookEnvironmentRequest) GetInvocationContext() *HookInvocationContext {
+	if x != nil {
+		return x.InvocationContext
+	}
+	return nil
+}
+
 type ResolveHookEnvironmentResponse struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
 	ReferencedNames []string               `protobuf:"bytes,1,rep,name=referenced_names,json=referencedNames,proto3" json:"referenced_names,omitempty"`
@@ -139,12 +147,13 @@ type EvaluateHookRequest struct {
 	RawJson []byte `protobuf:"bytes,1,opt,name=raw_json,json=rawJson,proto3" json:"raw_json,omitempty"`
 	// provider_hint is a best-effort CLI/template hint such as "codex" or
 	// "gemini". Daemon-side detection may override it based on env/payload.
-	ProviderHint   string            `protobuf:"bytes,2,opt,name=provider_hint,json=providerHint,proto3" json:"provider_hint,omitempty"`
-	Cwd            string            `protobuf:"bytes,3,opt,name=cwd,proto3" json:"cwd,omitempty"`
-	Argv           []string          `protobuf:"bytes,4,rep,name=argv,proto3" json:"argv,omitempty"`
-	EnvFingerprint map[string]string `protobuf:"bytes,5,rep,name=env_fingerprint,json=envFingerprint,proto3" json:"env_fingerprint,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	ProviderHint      string                 `protobuf:"bytes,2,opt,name=provider_hint,json=providerHint,proto3" json:"provider_hint,omitempty"`
+	Cwd               string                 `protobuf:"bytes,3,opt,name=cwd,proto3" json:"cwd,omitempty"`
+	Argv              []string               `protobuf:"bytes,4,rep,name=argv,proto3" json:"argv,omitempty"`
+	EnvFingerprint    map[string]string      `protobuf:"bytes,5,rep,name=env_fingerprint,json=envFingerprint,proto3" json:"env_fingerprint,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	InvocationContext *HookInvocationContext `protobuf:"bytes,6,opt,name=invocation_context,json=invocationContext,proto3" json:"invocation_context,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *EvaluateHookRequest) Reset() {
@@ -212,6 +221,409 @@ func (x *EvaluateHookRequest) GetEnvFingerprint() map[string]string {
 	return nil
 }
 
+func (x *EvaluateHookRequest) GetInvocationContext() *HookInvocationContext {
+	if x != nil {
+		return x.InvocationContext
+	}
+	return nil
+}
+
+type ObservedHookValue struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Value         string                 `protobuf:"bytes,1,opt,name=value,proto3" json:"value,omitempty"`
+	Source        string                 `protobuf:"bytes,2,opt,name=source,proto3" json:"source,omitempty"`
+	Provenance    string                 `protobuf:"bytes,3,opt,name=provenance,proto3" json:"provenance,omitempty"`
+	Status        string                 `protobuf:"bytes,4,opt,name=status,proto3" json:"status,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ObservedHookValue) Reset() {
+	*x = ObservedHookValue{}
+	mi := &file_daemon_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ObservedHookValue) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ObservedHookValue) ProtoMessage() {}
+
+func (x *ObservedHookValue) ProtoReflect() protoreflect.Message {
+	mi := &file_daemon_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ObservedHookValue.ProtoReflect.Descriptor instead.
+func (*ObservedHookValue) Descriptor() ([]byte, []int) {
+	return file_daemon_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *ObservedHookValue) GetValue() string {
+	if x != nil {
+		return x.Value
+	}
+	return ""
+}
+
+func (x *ObservedHookValue) GetSource() string {
+	if x != nil {
+		return x.Source
+	}
+	return ""
+}
+
+func (x *ObservedHookValue) GetProvenance() string {
+	if x != nil {
+		return x.Provenance
+	}
+	return ""
+}
+
+func (x *ObservedHookValue) GetStatus() string {
+	if x != nil {
+		return x.Status
+	}
+	return ""
+}
+
+type HookProcessEvidence struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	Name           string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	ExecutablePath string                 `protobuf:"bytes,2,opt,name=executable_path,json=executablePath,proto3" json:"executable_path,omitempty"`
+	Source         string                 `protobuf:"bytes,3,opt,name=source,proto3" json:"source,omitempty"`
+	Provenance     string                 `protobuf:"bytes,4,opt,name=provenance,proto3" json:"provenance,omitempty"`
+	Status         string                 `protobuf:"bytes,5,opt,name=status,proto3" json:"status,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *HookProcessEvidence) Reset() {
+	*x = HookProcessEvidence{}
+	mi := &file_daemon_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *HookProcessEvidence) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*HookProcessEvidence) ProtoMessage() {}
+
+func (x *HookProcessEvidence) ProtoReflect() protoreflect.Message {
+	mi := &file_daemon_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use HookProcessEvidence.ProtoReflect.Descriptor instead.
+func (*HookProcessEvidence) Descriptor() ([]byte, []int) {
+	return file_daemon_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *HookProcessEvidence) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *HookProcessEvidence) GetExecutablePath() string {
+	if x != nil {
+		return x.ExecutablePath
+	}
+	return ""
+}
+
+func (x *HookProcessEvidence) GetSource() string {
+	if x != nil {
+		return x.Source
+	}
+	return ""
+}
+
+func (x *HookProcessEvidence) GetProvenance() string {
+	if x != nil {
+		return x.Provenance
+	}
+	return ""
+}
+
+func (x *HookProcessEvidence) GetStatus() string {
+	if x != nil {
+		return x.Status
+	}
+	return ""
+}
+
+type HookEnvironmentEvidence struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Value         string                 `protobuf:"bytes,2,opt,name=value,proto3" json:"value,omitempty"`
+	Category      string                 `protobuf:"bytes,3,opt,name=category,proto3" json:"category,omitempty"`
+	Source        string                 `protobuf:"bytes,4,opt,name=source,proto3" json:"source,omitempty"`
+	Provenance    string                 `protobuf:"bytes,5,opt,name=provenance,proto3" json:"provenance,omitempty"`
+	Status        string                 `protobuf:"bytes,6,opt,name=status,proto3" json:"status,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *HookEnvironmentEvidence) Reset() {
+	*x = HookEnvironmentEvidence{}
+	mi := &file_daemon_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *HookEnvironmentEvidence) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*HookEnvironmentEvidence) ProtoMessage() {}
+
+func (x *HookEnvironmentEvidence) ProtoReflect() protoreflect.Message {
+	mi := &file_daemon_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use HookEnvironmentEvidence.ProtoReflect.Descriptor instead.
+func (*HookEnvironmentEvidence) Descriptor() ([]byte, []int) {
+	return file_daemon_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *HookEnvironmentEvidence) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *HookEnvironmentEvidence) GetValue() string {
+	if x != nil {
+		return x.Value
+	}
+	return ""
+}
+
+func (x *HookEnvironmentEvidence) GetCategory() string {
+	if x != nil {
+		return x.Category
+	}
+	return ""
+}
+
+func (x *HookEnvironmentEvidence) GetSource() string {
+	if x != nil {
+		return x.Source
+	}
+	return ""
+}
+
+func (x *HookEnvironmentEvidence) GetProvenance() string {
+	if x != nil {
+		return x.Provenance
+	}
+	return ""
+}
+
+func (x *HookEnvironmentEvidence) GetStatus() string {
+	if x != nil {
+		return x.Status
+	}
+	return ""
+}
+
+type HookCollectionIssue struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Source        string                 `protobuf:"bytes,1,opt,name=source,proto3" json:"source,omitempty"`
+	Status        string                 `protobuf:"bytes,2,opt,name=status,proto3" json:"status,omitempty"`
+	Detail        string                 `protobuf:"bytes,3,opt,name=detail,proto3" json:"detail,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *HookCollectionIssue) Reset() {
+	*x = HookCollectionIssue{}
+	mi := &file_daemon_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *HookCollectionIssue) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*HookCollectionIssue) ProtoMessage() {}
+
+func (x *HookCollectionIssue) ProtoReflect() protoreflect.Message {
+	mi := &file_daemon_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use HookCollectionIssue.ProtoReflect.Descriptor instead.
+func (*HookCollectionIssue) Descriptor() ([]byte, []int) {
+	return file_daemon_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *HookCollectionIssue) GetSource() string {
+	if x != nil {
+		return x.Source
+	}
+	return ""
+}
+
+func (x *HookCollectionIssue) GetStatus() string {
+	if x != nil {
+		return x.Status
+	}
+	return ""
+}
+
+func (x *HookCollectionIssue) GetDetail() string {
+	if x != nil {
+		return x.Detail
+	}
+	return ""
+}
+
+type HookInvocationContext struct {
+	state               protoimpl.MessageState     `protogen:"open.v1"`
+	HookSubcommand      *ObservedHookValue         `protobuf:"bytes,1,opt,name=hook_subcommand,json=hookSubcommand,proto3" json:"hook_subcommand,omitempty"`
+	HookTags            []*ObservedHookValue       `protobuf:"bytes,2,rep,name=hook_tags,json=hookTags,proto3" json:"hook_tags,omitempty"`
+	WorkingDirectory    *ObservedHookValue         `protobuf:"bytes,3,opt,name=working_directory,json=workingDirectory,proto3" json:"working_directory,omitempty"`
+	Executable          *HookProcessEvidence       `protobuf:"bytes,4,opt,name=executable,proto3" json:"executable,omitempty"`
+	ParentProcess       *HookProcessEvidence       `protobuf:"bytes,5,opt,name=parent_process,json=parentProcess,proto3" json:"parent_process,omitempty"`
+	Ancestors           []*HookProcessEvidence     `protobuf:"bytes,6,rep,name=ancestors,proto3" json:"ancestors,omitempty"`
+	Environment         []*HookEnvironmentEvidence `protobuf:"bytes,7,rep,name=environment,proto3" json:"environment,omitempty"`
+	ManagedRegistration *ObservedHookValue         `protobuf:"bytes,8,opt,name=managed_registration,json=managedRegistration,proto3" json:"managed_registration,omitempty"`
+	CollectionIssues    []*HookCollectionIssue     `protobuf:"bytes,9,rep,name=collection_issues,json=collectionIssues,proto3" json:"collection_issues,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
+}
+
+func (x *HookInvocationContext) Reset() {
+	*x = HookInvocationContext{}
+	mi := &file_daemon_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *HookInvocationContext) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*HookInvocationContext) ProtoMessage() {}
+
+func (x *HookInvocationContext) ProtoReflect() protoreflect.Message {
+	mi := &file_daemon_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use HookInvocationContext.ProtoReflect.Descriptor instead.
+func (*HookInvocationContext) Descriptor() ([]byte, []int) {
+	return file_daemon_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *HookInvocationContext) GetHookSubcommand() *ObservedHookValue {
+	if x != nil {
+		return x.HookSubcommand
+	}
+	return nil
+}
+
+func (x *HookInvocationContext) GetHookTags() []*ObservedHookValue {
+	if x != nil {
+		return x.HookTags
+	}
+	return nil
+}
+
+func (x *HookInvocationContext) GetWorkingDirectory() *ObservedHookValue {
+	if x != nil {
+		return x.WorkingDirectory
+	}
+	return nil
+}
+
+func (x *HookInvocationContext) GetExecutable() *HookProcessEvidence {
+	if x != nil {
+		return x.Executable
+	}
+	return nil
+}
+
+func (x *HookInvocationContext) GetParentProcess() *HookProcessEvidence {
+	if x != nil {
+		return x.ParentProcess
+	}
+	return nil
+}
+
+func (x *HookInvocationContext) GetAncestors() []*HookProcessEvidence {
+	if x != nil {
+		return x.Ancestors
+	}
+	return nil
+}
+
+func (x *HookInvocationContext) GetEnvironment() []*HookEnvironmentEvidence {
+	if x != nil {
+		return x.Environment
+	}
+	return nil
+}
+
+func (x *HookInvocationContext) GetManagedRegistration() *ObservedHookValue {
+	if x != nil {
+		return x.ManagedRegistration
+	}
+	return nil
+}
+
+func (x *HookInvocationContext) GetCollectionIssues() []*HookCollectionIssue {
+	if x != nil {
+		return x.CollectionIssues
+	}
+	return nil
+}
+
 type EvaluateHookResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// exit_code is the code the hook process should exit with.
@@ -227,7 +639,7 @@ type EvaluateHookResponse struct {
 
 func (x *EvaluateHookResponse) Reset() {
 	*x = EvaluateHookResponse{}
-	mi := &file_daemon_proto_msgTypes[3]
+	mi := &file_daemon_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -239,7 +651,7 @@ func (x *EvaluateHookResponse) String() string {
 func (*EvaluateHookResponse) ProtoMessage() {}
 
 func (x *EvaluateHookResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_daemon_proto_msgTypes[3]
+	mi := &file_daemon_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -252,7 +664,7 @@ func (x *EvaluateHookResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EvaluateHookResponse.ProtoReflect.Descriptor instead.
 func (*EvaluateHookResponse) Descriptor() ([]byte, []int) {
-	return file_daemon_proto_rawDescGZIP(), []int{3}
+	return file_daemon_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *EvaluateHookResponse) GetExitCode() int32 {
@@ -284,7 +696,7 @@ type StatusRequest struct {
 
 func (x *StatusRequest) Reset() {
 	*x = StatusRequest{}
-	mi := &file_daemon_proto_msgTypes[4]
+	mi := &file_daemon_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -296,7 +708,7 @@ func (x *StatusRequest) String() string {
 func (*StatusRequest) ProtoMessage() {}
 
 func (x *StatusRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_daemon_proto_msgTypes[4]
+	mi := &file_daemon_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -309,7 +721,7 @@ func (x *StatusRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StatusRequest.ProtoReflect.Descriptor instead.
 func (*StatusRequest) Descriptor() ([]byte, []int) {
-	return file_daemon_proto_rawDescGZIP(), []int{4}
+	return file_daemon_proto_rawDescGZIP(), []int{9}
 }
 
 type StatusResponse struct {
@@ -332,7 +744,7 @@ type StatusResponse struct {
 
 func (x *StatusResponse) Reset() {
 	*x = StatusResponse{}
-	mi := &file_daemon_proto_msgTypes[5]
+	mi := &file_daemon_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -344,7 +756,7 @@ func (x *StatusResponse) String() string {
 func (*StatusResponse) ProtoMessage() {}
 
 func (x *StatusResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_daemon_proto_msgTypes[5]
+	mi := &file_daemon_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -357,7 +769,7 @@ func (x *StatusResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StatusResponse.ProtoReflect.Descriptor instead.
 func (*StatusResponse) Descriptor() ([]byte, []int) {
-	return file_daemon_proto_rawDescGZIP(), []int{5}
+	return file_daemon_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *StatusResponse) GetPid() int64 {
@@ -439,7 +851,7 @@ type KVEntry struct {
 
 func (x *KVEntry) Reset() {
 	*x = KVEntry{}
-	mi := &file_daemon_proto_msgTypes[6]
+	mi := &file_daemon_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -451,7 +863,7 @@ func (x *KVEntry) String() string {
 func (*KVEntry) ProtoMessage() {}
 
 func (x *KVEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_daemon_proto_msgTypes[6]
+	mi := &file_daemon_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -464,7 +876,7 @@ func (x *KVEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KVEntry.ProtoReflect.Descriptor instead.
 func (*KVEntry) Descriptor() ([]byte, []int) {
-	return file_daemon_proto_rawDescGZIP(), []int{6}
+	return file_daemon_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *KVEntry) GetNamespace() string {
@@ -533,7 +945,7 @@ type KVGetRequest struct {
 
 func (x *KVGetRequest) Reset() {
 	*x = KVGetRequest{}
-	mi := &file_daemon_proto_msgTypes[7]
+	mi := &file_daemon_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -545,7 +957,7 @@ func (x *KVGetRequest) String() string {
 func (*KVGetRequest) ProtoMessage() {}
 
 func (x *KVGetRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_daemon_proto_msgTypes[7]
+	mi := &file_daemon_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -558,7 +970,7 @@ func (x *KVGetRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KVGetRequest.ProtoReflect.Descriptor instead.
 func (*KVGetRequest) Descriptor() ([]byte, []int) {
-	return file_daemon_proto_rawDescGZIP(), []int{7}
+	return file_daemon_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *KVGetRequest) GetNamespace() string {
@@ -585,7 +997,7 @@ type KVGetResponse struct {
 
 func (x *KVGetResponse) Reset() {
 	*x = KVGetResponse{}
-	mi := &file_daemon_proto_msgTypes[8]
+	mi := &file_daemon_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -597,7 +1009,7 @@ func (x *KVGetResponse) String() string {
 func (*KVGetResponse) ProtoMessage() {}
 
 func (x *KVGetResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_daemon_proto_msgTypes[8]
+	mi := &file_daemon_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -610,7 +1022,7 @@ func (x *KVGetResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KVGetResponse.ProtoReflect.Descriptor instead.
 func (*KVGetResponse) Descriptor() ([]byte, []int) {
-	return file_daemon_proto_rawDescGZIP(), []int{8}
+	return file_daemon_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *KVGetResponse) GetFound() bool {
@@ -640,7 +1052,7 @@ type KVSetRequest struct {
 
 func (x *KVSetRequest) Reset() {
 	*x = KVSetRequest{}
-	mi := &file_daemon_proto_msgTypes[9]
+	mi := &file_daemon_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -652,7 +1064,7 @@ func (x *KVSetRequest) String() string {
 func (*KVSetRequest) ProtoMessage() {}
 
 func (x *KVSetRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_daemon_proto_msgTypes[9]
+	mi := &file_daemon_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -665,7 +1077,7 @@ func (x *KVSetRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KVSetRequest.ProtoReflect.Descriptor instead.
 func (*KVSetRequest) Descriptor() ([]byte, []int) {
-	return file_daemon_proto_rawDescGZIP(), []int{9}
+	return file_daemon_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *KVSetRequest) GetNamespace() string {
@@ -713,7 +1125,7 @@ type KVSetResponse struct {
 
 func (x *KVSetResponse) Reset() {
 	*x = KVSetResponse{}
-	mi := &file_daemon_proto_msgTypes[10]
+	mi := &file_daemon_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -725,7 +1137,7 @@ func (x *KVSetResponse) String() string {
 func (*KVSetResponse) ProtoMessage() {}
 
 func (x *KVSetResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_daemon_proto_msgTypes[10]
+	mi := &file_daemon_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -738,7 +1150,7 @@ func (x *KVSetResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KVSetResponse.ProtoReflect.Descriptor instead.
 func (*KVSetResponse) Descriptor() ([]byte, []int) {
-	return file_daemon_proto_rawDescGZIP(), []int{10}
+	return file_daemon_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *KVSetResponse) GetStored() bool {
@@ -765,7 +1177,7 @@ type KVDeleteRequest struct {
 
 func (x *KVDeleteRequest) Reset() {
 	*x = KVDeleteRequest{}
-	mi := &file_daemon_proto_msgTypes[11]
+	mi := &file_daemon_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -777,7 +1189,7 @@ func (x *KVDeleteRequest) String() string {
 func (*KVDeleteRequest) ProtoMessage() {}
 
 func (x *KVDeleteRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_daemon_proto_msgTypes[11]
+	mi := &file_daemon_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -790,7 +1202,7 @@ func (x *KVDeleteRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KVDeleteRequest.ProtoReflect.Descriptor instead.
 func (*KVDeleteRequest) Descriptor() ([]byte, []int) {
-	return file_daemon_proto_rawDescGZIP(), []int{11}
+	return file_daemon_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *KVDeleteRequest) GetNamespace() string {
@@ -816,7 +1228,7 @@ type KVDeleteResponse struct {
 
 func (x *KVDeleteResponse) Reset() {
 	*x = KVDeleteResponse{}
-	mi := &file_daemon_proto_msgTypes[12]
+	mi := &file_daemon_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -828,7 +1240,7 @@ func (x *KVDeleteResponse) String() string {
 func (*KVDeleteResponse) ProtoMessage() {}
 
 func (x *KVDeleteResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_daemon_proto_msgTypes[12]
+	mi := &file_daemon_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -841,7 +1253,7 @@ func (x *KVDeleteResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KVDeleteResponse.ProtoReflect.Descriptor instead.
 func (*KVDeleteResponse) Descriptor() ([]byte, []int) {
-	return file_daemon_proto_rawDescGZIP(), []int{12}
+	return file_daemon_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *KVDeleteResponse) GetDeleted() bool {
@@ -861,7 +1273,7 @@ type KVExistsRequest struct {
 
 func (x *KVExistsRequest) Reset() {
 	*x = KVExistsRequest{}
-	mi := &file_daemon_proto_msgTypes[13]
+	mi := &file_daemon_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -873,7 +1285,7 @@ func (x *KVExistsRequest) String() string {
 func (*KVExistsRequest) ProtoMessage() {}
 
 func (x *KVExistsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_daemon_proto_msgTypes[13]
+	mi := &file_daemon_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -886,7 +1298,7 @@ func (x *KVExistsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KVExistsRequest.ProtoReflect.Descriptor instead.
 func (*KVExistsRequest) Descriptor() ([]byte, []int) {
-	return file_daemon_proto_rawDescGZIP(), []int{13}
+	return file_daemon_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *KVExistsRequest) GetNamespace() string {
@@ -912,7 +1324,7 @@ type KVExistsResponse struct {
 
 func (x *KVExistsResponse) Reset() {
 	*x = KVExistsResponse{}
-	mi := &file_daemon_proto_msgTypes[14]
+	mi := &file_daemon_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -924,7 +1336,7 @@ func (x *KVExistsResponse) String() string {
 func (*KVExistsResponse) ProtoMessage() {}
 
 func (x *KVExistsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_daemon_proto_msgTypes[14]
+	mi := &file_daemon_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -937,7 +1349,7 @@ func (x *KVExistsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KVExistsResponse.ProtoReflect.Descriptor instead.
 func (*KVExistsResponse) Descriptor() ([]byte, []int) {
-	return file_daemon_proto_rawDescGZIP(), []int{14}
+	return file_daemon_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *KVExistsResponse) GetExists() bool {
@@ -956,7 +1368,7 @@ type KVTTLResponse struct {
 
 func (x *KVTTLResponse) Reset() {
 	*x = KVTTLResponse{}
-	mi := &file_daemon_proto_msgTypes[15]
+	mi := &file_daemon_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -968,7 +1380,7 @@ func (x *KVTTLResponse) String() string {
 func (*KVTTLResponse) ProtoMessage() {}
 
 func (x *KVTTLResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_daemon_proto_msgTypes[15]
+	mi := &file_daemon_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -981,7 +1393,7 @@ func (x *KVTTLResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KVTTLResponse.ProtoReflect.Descriptor instead.
 func (*KVTTLResponse) Descriptor() ([]byte, []int) {
-	return file_daemon_proto_rawDescGZIP(), []int{15}
+	return file_daemon_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *KVTTLResponse) GetTtl() int64 {
@@ -1000,7 +1412,7 @@ type KVPTTLResponse struct {
 
 func (x *KVPTTLResponse) Reset() {
 	*x = KVPTTLResponse{}
-	mi := &file_daemon_proto_msgTypes[16]
+	mi := &file_daemon_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1012,7 +1424,7 @@ func (x *KVPTTLResponse) String() string {
 func (*KVPTTLResponse) ProtoMessage() {}
 
 func (x *KVPTTLResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_daemon_proto_msgTypes[16]
+	mi := &file_daemon_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1025,7 +1437,7 @@ func (x *KVPTTLResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KVPTTLResponse.ProtoReflect.Descriptor instead.
 func (*KVPTTLResponse) Descriptor() ([]byte, []int) {
-	return file_daemon_proto_rawDescGZIP(), []int{16}
+	return file_daemon_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *KVPTTLResponse) GetPttl() int64 {
@@ -1046,7 +1458,7 @@ type KVExpireRequest struct {
 
 func (x *KVExpireRequest) Reset() {
 	*x = KVExpireRequest{}
-	mi := &file_daemon_proto_msgTypes[17]
+	mi := &file_daemon_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1058,7 +1470,7 @@ func (x *KVExpireRequest) String() string {
 func (*KVExpireRequest) ProtoMessage() {}
 
 func (x *KVExpireRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_daemon_proto_msgTypes[17]
+	mi := &file_daemon_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1071,7 +1483,7 @@ func (x *KVExpireRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KVExpireRequest.ProtoReflect.Descriptor instead.
 func (*KVExpireRequest) Descriptor() ([]byte, []int) {
-	return file_daemon_proto_rawDescGZIP(), []int{17}
+	return file_daemon_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *KVExpireRequest) GetNamespace() string {
@@ -1104,7 +1516,7 @@ type KVExpireResponse struct {
 
 func (x *KVExpireResponse) Reset() {
 	*x = KVExpireResponse{}
-	mi := &file_daemon_proto_msgTypes[18]
+	mi := &file_daemon_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1116,7 +1528,7 @@ func (x *KVExpireResponse) String() string {
 func (*KVExpireResponse) ProtoMessage() {}
 
 func (x *KVExpireResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_daemon_proto_msgTypes[18]
+	mi := &file_daemon_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1129,7 +1541,7 @@ func (x *KVExpireResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KVExpireResponse.ProtoReflect.Descriptor instead.
 func (*KVExpireResponse) Descriptor() ([]byte, []int) {
-	return file_daemon_proto_rawDescGZIP(), []int{18}
+	return file_daemon_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *KVExpireResponse) GetUpdated() bool {
@@ -1149,7 +1561,7 @@ type KVGetDeleteRequest struct {
 
 func (x *KVGetDeleteRequest) Reset() {
 	*x = KVGetDeleteRequest{}
-	mi := &file_daemon_proto_msgTypes[19]
+	mi := &file_daemon_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1161,7 +1573,7 @@ func (x *KVGetDeleteRequest) String() string {
 func (*KVGetDeleteRequest) ProtoMessage() {}
 
 func (x *KVGetDeleteRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_daemon_proto_msgTypes[19]
+	mi := &file_daemon_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1174,7 +1586,7 @@ func (x *KVGetDeleteRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KVGetDeleteRequest.ProtoReflect.Descriptor instead.
 func (*KVGetDeleteRequest) Descriptor() ([]byte, []int) {
-	return file_daemon_proto_rawDescGZIP(), []int{19}
+	return file_daemon_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *KVGetDeleteRequest) GetNamespace() string {
@@ -1201,7 +1613,7 @@ type KVGetDeleteResponse struct {
 
 func (x *KVGetDeleteResponse) Reset() {
 	*x = KVGetDeleteResponse{}
-	mi := &file_daemon_proto_msgTypes[20]
+	mi := &file_daemon_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1213,7 +1625,7 @@ func (x *KVGetDeleteResponse) String() string {
 func (*KVGetDeleteResponse) ProtoMessage() {}
 
 func (x *KVGetDeleteResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_daemon_proto_msgTypes[20]
+	mi := &file_daemon_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1226,7 +1638,7 @@ func (x *KVGetDeleteResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KVGetDeleteResponse.ProtoReflect.Descriptor instead.
 func (*KVGetDeleteResponse) Descriptor() ([]byte, []int) {
-	return file_daemon_proto_rawDescGZIP(), []int{20}
+	return file_daemon_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *KVGetDeleteResponse) GetFound() bool {
@@ -1255,7 +1667,7 @@ type KVListRequest struct {
 
 func (x *KVListRequest) Reset() {
 	*x = KVListRequest{}
-	mi := &file_daemon_proto_msgTypes[21]
+	mi := &file_daemon_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1267,7 +1679,7 @@ func (x *KVListRequest) String() string {
 func (*KVListRequest) ProtoMessage() {}
 
 func (x *KVListRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_daemon_proto_msgTypes[21]
+	mi := &file_daemon_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1280,7 +1692,7 @@ func (x *KVListRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KVListRequest.ProtoReflect.Descriptor instead.
 func (*KVListRequest) Descriptor() ([]byte, []int) {
-	return file_daemon_proto_rawDescGZIP(), []int{21}
+	return file_daemon_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *KVListRequest) GetNamespace() string {
@@ -1320,7 +1732,7 @@ type KVListResponse struct {
 
 func (x *KVListResponse) Reset() {
 	*x = KVListResponse{}
-	mi := &file_daemon_proto_msgTypes[22]
+	mi := &file_daemon_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1332,7 +1744,7 @@ func (x *KVListResponse) String() string {
 func (*KVListResponse) ProtoMessage() {}
 
 func (x *KVListResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_daemon_proto_msgTypes[22]
+	mi := &file_daemon_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1345,7 +1757,7 @@ func (x *KVListResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KVListResponse.ProtoReflect.Descriptor instead.
 func (*KVListResponse) Descriptor() ([]byte, []int) {
-	return file_daemon_proto_rawDescGZIP(), []int{22}
+	return file_daemon_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *KVListResponse) GetEntries() []*KVEntry {
@@ -1359,26 +1771,68 @@ var File_daemon_proto protoreflect.FileDescriptor
 
 const file_daemon_proto_rawDesc = "" +
 	"\n" +
-	"\fdaemon.proto\x12\tagentgate\"\x9d\x02\n" +
+	"\fdaemon.proto\x12\tagentgate\"\xee\x02\n" +
 	"\x1dResolveHookEnvironmentRequest\x12\x19\n" +
 	"\braw_json\x18\x01 \x01(\fR\arawJson\x12#\n" +
 	"\rprovider_hint\x18\x02 \x01(\tR\fproviderHint\x12e\n" +
 	"\x0fenv_fingerprint\x18\x03 \x03(\v2<.agentgate.ResolveHookEnvironmentRequest.EnvFingerprintEntryR\x0eenvFingerprint\x12\x12\n" +
-	"\x04argv\x18\x04 \x03(\tR\x04argv\x1aA\n" +
+	"\x04argv\x18\x04 \x03(\tR\x04argv\x12O\n" +
+	"\x12invocation_context\x18\x05 \x01(\v2 .agentgate.HookInvocationContextR\x11invocationContext\x1aA\n" +
 	"\x13EnvFingerprintEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"K\n" +
 	"\x1eResolveHookEnvironmentResponse\x12)\n" +
-	"\x10referenced_names\x18\x01 \x03(\tR\x0freferencedNames\"\x9b\x02\n" +
+	"\x10referenced_names\x18\x01 \x03(\tR\x0freferencedNames\"\xec\x02\n" +
 	"\x13EvaluateHookRequest\x12\x19\n" +
 	"\braw_json\x18\x01 \x01(\fR\arawJson\x12#\n" +
 	"\rprovider_hint\x18\x02 \x01(\tR\fproviderHint\x12\x10\n" +
 	"\x03cwd\x18\x03 \x01(\tR\x03cwd\x12\x12\n" +
 	"\x04argv\x18\x04 \x03(\tR\x04argv\x12[\n" +
-	"\x0fenv_fingerprint\x18\x05 \x03(\v22.agentgate.EvaluateHookRequest.EnvFingerprintEntryR\x0eenvFingerprint\x1aA\n" +
+	"\x0fenv_fingerprint\x18\x05 \x03(\v22.agentgate.EvaluateHookRequest.EnvFingerprintEntryR\x0eenvFingerprint\x12O\n" +
+	"\x12invocation_context\x18\x06 \x01(\v2 .agentgate.HookInvocationContextR\x11invocationContext\x1aA\n" +
 	"\x13EnvFingerprintEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"u\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"y\n" +
+	"\x11ObservedHookValue\x12\x14\n" +
+	"\x05value\x18\x01 \x01(\tR\x05value\x12\x16\n" +
+	"\x06source\x18\x02 \x01(\tR\x06source\x12\x1e\n" +
+	"\n" +
+	"provenance\x18\x03 \x01(\tR\n" +
+	"provenance\x12\x16\n" +
+	"\x06status\x18\x04 \x01(\tR\x06status\"\xa2\x01\n" +
+	"\x13HookProcessEvidence\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12'\n" +
+	"\x0fexecutable_path\x18\x02 \x01(\tR\x0eexecutablePath\x12\x16\n" +
+	"\x06source\x18\x03 \x01(\tR\x06source\x12\x1e\n" +
+	"\n" +
+	"provenance\x18\x04 \x01(\tR\n" +
+	"provenance\x12\x16\n" +
+	"\x06status\x18\x05 \x01(\tR\x06status\"\xaf\x01\n" +
+	"\x17HookEnvironmentEvidence\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value\x12\x1a\n" +
+	"\bcategory\x18\x03 \x01(\tR\bcategory\x12\x16\n" +
+	"\x06source\x18\x04 \x01(\tR\x06source\x12\x1e\n" +
+	"\n" +
+	"provenance\x18\x05 \x01(\tR\n" +
+	"provenance\x12\x16\n" +
+	"\x06status\x18\x06 \x01(\tR\x06status\"]\n" +
+	"\x13HookCollectionIssue\x12\x16\n" +
+	"\x06source\x18\x01 \x01(\tR\x06source\x12\x16\n" +
+	"\x06status\x18\x02 \x01(\tR\x06status\x12\x16\n" +
+	"\x06detail\x18\x03 \x01(\tR\x06detail\"\x8d\x05\n" +
+	"\x15HookInvocationContext\x12E\n" +
+	"\x0fhook_subcommand\x18\x01 \x01(\v2\x1c.agentgate.ObservedHookValueR\x0ehookSubcommand\x129\n" +
+	"\thook_tags\x18\x02 \x03(\v2\x1c.agentgate.ObservedHookValueR\bhookTags\x12I\n" +
+	"\x11working_directory\x18\x03 \x01(\v2\x1c.agentgate.ObservedHookValueR\x10workingDirectory\x12>\n" +
+	"\n" +
+	"executable\x18\x04 \x01(\v2\x1e.agentgate.HookProcessEvidenceR\n" +
+	"executable\x12E\n" +
+	"\x0eparent_process\x18\x05 \x01(\v2\x1e.agentgate.HookProcessEvidenceR\rparentProcess\x12<\n" +
+	"\tancestors\x18\x06 \x03(\v2\x1e.agentgate.HookProcessEvidenceR\tancestors\x12D\n" +
+	"\venvironment\x18\a \x03(\v2\".agentgate.HookEnvironmentEvidenceR\venvironment\x12O\n" +
+	"\x14managed_registration\x18\b \x01(\v2\x1c.agentgate.ObservedHookValueR\x13managedRegistration\x12K\n" +
+	"\x11collection_issues\x18\t \x03(\v2\x1e.agentgate.HookCollectionIssueR\x10collectionIssues\"u\n" +
 	"\x14EvaluateHookResponse\x12\x1b\n" +
 	"\texit_code\x18\x01 \x01(\x05R\bexitCode\x12\x1f\n" +
 	"\vstdout_data\x18\x02 \x01(\fR\n" +
@@ -1482,70 +1936,86 @@ func file_daemon_proto_rawDescGZIP() []byte {
 	return file_daemon_proto_rawDescData
 }
 
-var file_daemon_proto_msgTypes = make([]protoimpl.MessageInfo, 25)
+var file_daemon_proto_msgTypes = make([]protoimpl.MessageInfo, 30)
 var file_daemon_proto_goTypes = []any{
 	(*ResolveHookEnvironmentRequest)(nil),  // 0: agentgate.ResolveHookEnvironmentRequest
 	(*ResolveHookEnvironmentResponse)(nil), // 1: agentgate.ResolveHookEnvironmentResponse
 	(*EvaluateHookRequest)(nil),            // 2: agentgate.EvaluateHookRequest
-	(*EvaluateHookResponse)(nil),           // 3: agentgate.EvaluateHookResponse
-	(*StatusRequest)(nil),                  // 4: agentgate.StatusRequest
-	(*StatusResponse)(nil),                 // 5: agentgate.StatusResponse
-	(*KVEntry)(nil),                        // 6: agentgate.KVEntry
-	(*KVGetRequest)(nil),                   // 7: agentgate.KVGetRequest
-	(*KVGetResponse)(nil),                  // 8: agentgate.KVGetResponse
-	(*KVSetRequest)(nil),                   // 9: agentgate.KVSetRequest
-	(*KVSetResponse)(nil),                  // 10: agentgate.KVSetResponse
-	(*KVDeleteRequest)(nil),                // 11: agentgate.KVDeleteRequest
-	(*KVDeleteResponse)(nil),               // 12: agentgate.KVDeleteResponse
-	(*KVExistsRequest)(nil),                // 13: agentgate.KVExistsRequest
-	(*KVExistsResponse)(nil),               // 14: agentgate.KVExistsResponse
-	(*KVTTLResponse)(nil),                  // 15: agentgate.KVTTLResponse
-	(*KVPTTLResponse)(nil),                 // 16: agentgate.KVPTTLResponse
-	(*KVExpireRequest)(nil),                // 17: agentgate.KVExpireRequest
-	(*KVExpireResponse)(nil),               // 18: agentgate.KVExpireResponse
-	(*KVGetDeleteRequest)(nil),             // 19: agentgate.KVGetDeleteRequest
-	(*KVGetDeleteResponse)(nil),            // 20: agentgate.KVGetDeleteResponse
-	(*KVListRequest)(nil),                  // 21: agentgate.KVListRequest
-	(*KVListResponse)(nil),                 // 22: agentgate.KVListResponse
-	nil,                                    // 23: agentgate.ResolveHookEnvironmentRequest.EnvFingerprintEntry
-	nil,                                    // 24: agentgate.EvaluateHookRequest.EnvFingerprintEntry
+	(*ObservedHookValue)(nil),              // 3: agentgate.ObservedHookValue
+	(*HookProcessEvidence)(nil),            // 4: agentgate.HookProcessEvidence
+	(*HookEnvironmentEvidence)(nil),        // 5: agentgate.HookEnvironmentEvidence
+	(*HookCollectionIssue)(nil),            // 6: agentgate.HookCollectionIssue
+	(*HookInvocationContext)(nil),          // 7: agentgate.HookInvocationContext
+	(*EvaluateHookResponse)(nil),           // 8: agentgate.EvaluateHookResponse
+	(*StatusRequest)(nil),                  // 9: agentgate.StatusRequest
+	(*StatusResponse)(nil),                 // 10: agentgate.StatusResponse
+	(*KVEntry)(nil),                        // 11: agentgate.KVEntry
+	(*KVGetRequest)(nil),                   // 12: agentgate.KVGetRequest
+	(*KVGetResponse)(nil),                  // 13: agentgate.KVGetResponse
+	(*KVSetRequest)(nil),                   // 14: agentgate.KVSetRequest
+	(*KVSetResponse)(nil),                  // 15: agentgate.KVSetResponse
+	(*KVDeleteRequest)(nil),                // 16: agentgate.KVDeleteRequest
+	(*KVDeleteResponse)(nil),               // 17: agentgate.KVDeleteResponse
+	(*KVExistsRequest)(nil),                // 18: agentgate.KVExistsRequest
+	(*KVExistsResponse)(nil),               // 19: agentgate.KVExistsResponse
+	(*KVTTLResponse)(nil),                  // 20: agentgate.KVTTLResponse
+	(*KVPTTLResponse)(nil),                 // 21: agentgate.KVPTTLResponse
+	(*KVExpireRequest)(nil),                // 22: agentgate.KVExpireRequest
+	(*KVExpireResponse)(nil),               // 23: agentgate.KVExpireResponse
+	(*KVGetDeleteRequest)(nil),             // 24: agentgate.KVGetDeleteRequest
+	(*KVGetDeleteResponse)(nil),            // 25: agentgate.KVGetDeleteResponse
+	(*KVListRequest)(nil),                  // 26: agentgate.KVListRequest
+	(*KVListResponse)(nil),                 // 27: agentgate.KVListResponse
+	nil,                                    // 28: agentgate.ResolveHookEnvironmentRequest.EnvFingerprintEntry
+	nil,                                    // 29: agentgate.EvaluateHookRequest.EnvFingerprintEntry
 }
 var file_daemon_proto_depIdxs = []int32{
-	23, // 0: agentgate.ResolveHookEnvironmentRequest.env_fingerprint:type_name -> agentgate.ResolveHookEnvironmentRequest.EnvFingerprintEntry
-	24, // 1: agentgate.EvaluateHookRequest.env_fingerprint:type_name -> agentgate.EvaluateHookRequest.EnvFingerprintEntry
-	6,  // 2: agentgate.KVGetResponse.entry:type_name -> agentgate.KVEntry
-	6,  // 3: agentgate.KVSetResponse.entry:type_name -> agentgate.KVEntry
-	6,  // 4: agentgate.KVGetDeleteResponse.entry:type_name -> agentgate.KVEntry
-	6,  // 5: agentgate.KVListResponse.entries:type_name -> agentgate.KVEntry
-	0,  // 6: agentgate.AgentGateD.ResolveHookEnvironment:input_type -> agentgate.ResolveHookEnvironmentRequest
-	2,  // 7: agentgate.AgentGateD.EvaluateHook:input_type -> agentgate.EvaluateHookRequest
-	4,  // 8: agentgate.AgentGateD.Status:input_type -> agentgate.StatusRequest
-	7,  // 9: agentgate.AgentGateD.KVGet:input_type -> agentgate.KVGetRequest
-	9,  // 10: agentgate.AgentGateD.KVSet:input_type -> agentgate.KVSetRequest
-	11, // 11: agentgate.AgentGateD.KVDelete:input_type -> agentgate.KVDeleteRequest
-	13, // 12: agentgate.AgentGateD.KVExists:input_type -> agentgate.KVExistsRequest
-	7,  // 13: agentgate.AgentGateD.KVTTL:input_type -> agentgate.KVGetRequest
-	7,  // 14: agentgate.AgentGateD.KVPTTL:input_type -> agentgate.KVGetRequest
-	17, // 15: agentgate.AgentGateD.KVExpire:input_type -> agentgate.KVExpireRequest
-	19, // 16: agentgate.AgentGateD.KVGetDelete:input_type -> agentgate.KVGetDeleteRequest
-	21, // 17: agentgate.AgentGateD.KVList:input_type -> agentgate.KVListRequest
-	1,  // 18: agentgate.AgentGateD.ResolveHookEnvironment:output_type -> agentgate.ResolveHookEnvironmentResponse
-	3,  // 19: agentgate.AgentGateD.EvaluateHook:output_type -> agentgate.EvaluateHookResponse
-	5,  // 20: agentgate.AgentGateD.Status:output_type -> agentgate.StatusResponse
-	8,  // 21: agentgate.AgentGateD.KVGet:output_type -> agentgate.KVGetResponse
-	10, // 22: agentgate.AgentGateD.KVSet:output_type -> agentgate.KVSetResponse
-	12, // 23: agentgate.AgentGateD.KVDelete:output_type -> agentgate.KVDeleteResponse
-	14, // 24: agentgate.AgentGateD.KVExists:output_type -> agentgate.KVExistsResponse
-	15, // 25: agentgate.AgentGateD.KVTTL:output_type -> agentgate.KVTTLResponse
-	16, // 26: agentgate.AgentGateD.KVPTTL:output_type -> agentgate.KVPTTLResponse
-	18, // 27: agentgate.AgentGateD.KVExpire:output_type -> agentgate.KVExpireResponse
-	20, // 28: agentgate.AgentGateD.KVGetDelete:output_type -> agentgate.KVGetDeleteResponse
-	22, // 29: agentgate.AgentGateD.KVList:output_type -> agentgate.KVListResponse
-	18, // [18:30] is the sub-list for method output_type
-	6,  // [6:18] is the sub-list for method input_type
-	6,  // [6:6] is the sub-list for extension type_name
-	6,  // [6:6] is the sub-list for extension extendee
-	0,  // [0:6] is the sub-list for field type_name
+	28, // 0: agentgate.ResolveHookEnvironmentRequest.env_fingerprint:type_name -> agentgate.ResolveHookEnvironmentRequest.EnvFingerprintEntry
+	7,  // 1: agentgate.ResolveHookEnvironmentRequest.invocation_context:type_name -> agentgate.HookInvocationContext
+	29, // 2: agentgate.EvaluateHookRequest.env_fingerprint:type_name -> agentgate.EvaluateHookRequest.EnvFingerprintEntry
+	7,  // 3: agentgate.EvaluateHookRequest.invocation_context:type_name -> agentgate.HookInvocationContext
+	3,  // 4: agentgate.HookInvocationContext.hook_subcommand:type_name -> agentgate.ObservedHookValue
+	3,  // 5: agentgate.HookInvocationContext.hook_tags:type_name -> agentgate.ObservedHookValue
+	3,  // 6: agentgate.HookInvocationContext.working_directory:type_name -> agentgate.ObservedHookValue
+	4,  // 7: agentgate.HookInvocationContext.executable:type_name -> agentgate.HookProcessEvidence
+	4,  // 8: agentgate.HookInvocationContext.parent_process:type_name -> agentgate.HookProcessEvidence
+	4,  // 9: agentgate.HookInvocationContext.ancestors:type_name -> agentgate.HookProcessEvidence
+	5,  // 10: agentgate.HookInvocationContext.environment:type_name -> agentgate.HookEnvironmentEvidence
+	3,  // 11: agentgate.HookInvocationContext.managed_registration:type_name -> agentgate.ObservedHookValue
+	6,  // 12: agentgate.HookInvocationContext.collection_issues:type_name -> agentgate.HookCollectionIssue
+	11, // 13: agentgate.KVGetResponse.entry:type_name -> agentgate.KVEntry
+	11, // 14: agentgate.KVSetResponse.entry:type_name -> agentgate.KVEntry
+	11, // 15: agentgate.KVGetDeleteResponse.entry:type_name -> agentgate.KVEntry
+	11, // 16: agentgate.KVListResponse.entries:type_name -> agentgate.KVEntry
+	0,  // 17: agentgate.AgentGateD.ResolveHookEnvironment:input_type -> agentgate.ResolveHookEnvironmentRequest
+	2,  // 18: agentgate.AgentGateD.EvaluateHook:input_type -> agentgate.EvaluateHookRequest
+	9,  // 19: agentgate.AgentGateD.Status:input_type -> agentgate.StatusRequest
+	12, // 20: agentgate.AgentGateD.KVGet:input_type -> agentgate.KVGetRequest
+	14, // 21: agentgate.AgentGateD.KVSet:input_type -> agentgate.KVSetRequest
+	16, // 22: agentgate.AgentGateD.KVDelete:input_type -> agentgate.KVDeleteRequest
+	18, // 23: agentgate.AgentGateD.KVExists:input_type -> agentgate.KVExistsRequest
+	12, // 24: agentgate.AgentGateD.KVTTL:input_type -> agentgate.KVGetRequest
+	12, // 25: agentgate.AgentGateD.KVPTTL:input_type -> agentgate.KVGetRequest
+	22, // 26: agentgate.AgentGateD.KVExpire:input_type -> agentgate.KVExpireRequest
+	24, // 27: agentgate.AgentGateD.KVGetDelete:input_type -> agentgate.KVGetDeleteRequest
+	26, // 28: agentgate.AgentGateD.KVList:input_type -> agentgate.KVListRequest
+	1,  // 29: agentgate.AgentGateD.ResolveHookEnvironment:output_type -> agentgate.ResolveHookEnvironmentResponse
+	8,  // 30: agentgate.AgentGateD.EvaluateHook:output_type -> agentgate.EvaluateHookResponse
+	10, // 31: agentgate.AgentGateD.Status:output_type -> agentgate.StatusResponse
+	13, // 32: agentgate.AgentGateD.KVGet:output_type -> agentgate.KVGetResponse
+	15, // 33: agentgate.AgentGateD.KVSet:output_type -> agentgate.KVSetResponse
+	17, // 34: agentgate.AgentGateD.KVDelete:output_type -> agentgate.KVDeleteResponse
+	19, // 35: agentgate.AgentGateD.KVExists:output_type -> agentgate.KVExistsResponse
+	20, // 36: agentgate.AgentGateD.KVTTL:output_type -> agentgate.KVTTLResponse
+	21, // 37: agentgate.AgentGateD.KVPTTL:output_type -> agentgate.KVPTTLResponse
+	23, // 38: agentgate.AgentGateD.KVExpire:output_type -> agentgate.KVExpireResponse
+	25, // 39: agentgate.AgentGateD.KVGetDelete:output_type -> agentgate.KVGetDeleteResponse
+	27, // 40: agentgate.AgentGateD.KVList:output_type -> agentgate.KVListResponse
+	29, // [29:41] is the sub-list for method output_type
+	17, // [17:29] is the sub-list for method input_type
+	17, // [17:17] is the sub-list for extension type_name
+	17, // [17:17] is the sub-list for extension extendee
+	0,  // [0:17] is the sub-list for field type_name
 }
 
 func init() { file_daemon_proto_init() }
@@ -1559,7 +2029,7 @@ func file_daemon_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_daemon_proto_rawDesc), len(file_daemon_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   25,
+			NumMessages:   30,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

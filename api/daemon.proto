@@ -32,6 +32,7 @@ message ResolveHookEnvironmentRequest {
   string provider_hint = 2;
   map<string, string> env_fingerprint = 3;
   repeated string argv = 4;
+  HookInvocationContext invocation_context = 5;
 }
 
 message ResolveHookEnvironmentResponse {
@@ -48,6 +49,49 @@ message EvaluateHookRequest {
   string cwd = 3;
   repeated string argv = 4;
   map<string, string> env_fingerprint = 5;
+  HookInvocationContext invocation_context = 6;
+}
+
+message ObservedHookValue {
+  string value = 1;
+  string source = 2;
+  string provenance = 3;
+  string status = 4;
+}
+
+message HookProcessEvidence {
+  string name = 1;
+  string executable_path = 2;
+  string source = 3;
+  string provenance = 4;
+  string status = 5;
+}
+
+message HookEnvironmentEvidence {
+  string name = 1;
+  string value = 2;
+  string category = 3;
+  string source = 4;
+  string provenance = 5;
+  string status = 6;
+}
+
+message HookCollectionIssue {
+  string source = 1;
+  string status = 2;
+  string detail = 3;
+}
+
+message HookInvocationContext {
+  ObservedHookValue hook_subcommand = 1;
+  repeated ObservedHookValue hook_tags = 2;
+  ObservedHookValue working_directory = 3;
+  HookProcessEvidence executable = 4;
+  HookProcessEvidence parent_process = 5;
+  repeated HookProcessEvidence ancestors = 6;
+  repeated HookEnvironmentEvidence environment = 7;
+  ObservedHookValue managed_registration = 8;
+  repeated HookCollectionIssue collection_issues = 9;
 }
 
 message EvaluateHookResponse {

@@ -21,11 +21,12 @@ func (s *Server) ResolveHookEnvironment(
 func referencedHookEnvironment(request *daemonpb.ResolveHookEnvironmentRequest) []string {
 	environment := request.GetEnvFingerprint()
 	wireInput := request.GetRawJson()
-	classification := hook.Classify(
+	classification := hook.ClassifyWithContext(
 		wireInput,
-		hook.SystemFromString(request.GetProviderHint()),
+		request.GetProviderHint(),
 		request.GetArgv(),
 		environment,
+		invocationContextFromProto(request.GetInvocationContext()),
 	)
 	normalizedJSON := wireInput
 	if classification.ResolvedSystem() == hook.SystemCopilot {

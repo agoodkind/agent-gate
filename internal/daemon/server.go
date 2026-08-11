@@ -607,11 +607,12 @@ func prepareHookEvaluationInput(
 	request *daemonpb.EvaluateHookRequest,
 ) (hook.EvaluationInput, error) {
 	wireInput := cloneBytes(request.GetRawJson())
-	classification := hook.Classify(
+	classification := hook.ClassifyWithContext(
 		wireInput,
-		hook.SystemFromString(request.GetProviderHint()),
+		request.GetProviderHint(),
 		request.GetArgv(),
 		request.GetEnvFingerprint(),
+		invocationContextFromProto(request.GetInvocationContext()),
 	)
 	normalizedJSON := cloneBytes(wireInput)
 	if cwd := request.GetCwd(); cwd != "" {
@@ -657,13 +658,16 @@ func observeUserPrompt(
 
 func copilotEventHint(argv []string) string {
 	for index := range argv {
-		if argv[index] != "copilot-hook" {
-			continue
+		if argv[index] == "copilot-hook" {
+			if index+1 < len(argv) {
+				return argv[index+1]
+			}
+			return ""
 		}
-		if index+1 < len(argv) {
-			return argv[index+1]
+		if argv[index] == "managed-hook" &&
+			index+2 < len(argv) && argv[index+1] == "copilot" {
+			return argv[index+2]
 		}
-		return ""
 	}
 	return ""
 }

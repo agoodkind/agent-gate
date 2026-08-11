@@ -2,6 +2,7 @@ package hook_test
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"slices"
 	"testing"
 
@@ -57,8 +58,8 @@ func TestClassifyUsesPayloadEvidenceOverInheritedMarkers(t *testing.T) {
 	assertClassificationEvidence(
 		t,
 		classification,
-		"payload",
-		"cursor fields",
+		"payload_shape",
+		"cursor_fields",
 		hook.SystemCursor.String(),
 		"match",
 	)
@@ -106,7 +107,7 @@ func TestClassifyRecordsManagedCopilotRoute(t *testing.T) {
 	assertClassificationEvidence(
 		t,
 		classification,
-		"hint",
+		"provider_hint",
 		hook.SystemCopilot.String(),
 		hook.SystemCopilot.String(),
 		"match",
@@ -169,6 +170,234 @@ func TestClassifyReportsEmptyInputAsInvalid(t *testing.T) {
 	if classification.Input.RawPayloadHash == "" {
 		t.Fatal("raw payload hash is empty")
 	}
+}
+
+func TestClassifyReportsNonObjectAndMalformedInputAsInvalid(t *testing.T) {
+	for _, rawPayload := range []string{"null", "[]", `"value"`, "{"} {
+		classification := hook.Classify(
+			[]byte(rawPayload), hook.SystemUnknown, []string{"agent-gate"}, nil,
+		)
+
+		if classification.Result != hook.ClassificationResultInvalid {
+			t.Fatalf("payload %q result = %q, want invalid", rawPayload, classification.Result)
+		}
+		if classification.Confidence != hook.ClassificationConfidenceNone {
+			t.Fatalf("payload %q confidence = %q, want none", rawPayload, classification.Confidence)
+		}
+		if classification.Input.RawPayloadBytes != len(rawPayload) {
+			t.Fatalf(
+				"payload %q byte count = %d, want %d",
+				rawPayload,
+				classification.Input.RawPayloadBytes,
+				len(rawPayload),
+			)
+		}
+		if classification.Input.Payload.Status != hook.SignalStatusUnreadable {
+			t.Fatalf(
+				"payload %q status = %q, want unreadable",
+				rawPayload,
+				classification.Input.Payload.Status,
+			)
+		}
+	}
+}
+
+func TestClassifyRecordsPayloadFieldsCasingAndProviderIdentifier(t *testing.T) {
+	classification := hook.ClassifyWithContext(
+		[]byte(`{"providerId":"gemini-cli","hook_event_name":"SessionStart","sessionId":"s1"}`),
+		"",
+		[]string{"agent-gate"},
+		nil,
+		hook.InvocationContext{},
+	)
+
+	if classification.ResolvedSystem() != hook.SystemGemini {
+		t.Fatalf("resolved system = %q, want gemini", classification.ResolvedSystem())
+	}
+	if classification.Confidence != hook.ClassificationConfidenceMedium {
+		t.Fatalf("confidence = %q, want medium", classification.Confidence)
+	}
+	if len(classification.Input.Payload.ProviderIdentifiers) != 1 {
+		t.Fatalf("provider identifiers = %#v", classification.Input.Payload.ProviderIdentifiers)
+	}
+	assertPayloadField(t, classification, "providerId", "lower_camel")
+	assertPayloadField(t, classification, "hook_event_name", "snake_case")
+	assertClassificationEvidence(
+		t, classification, "payload_identifier", "gemini-cli",
+		hook.SystemGemini.String(), "match",
+	)
+	assertClassificationEvidence(
+		t, classification, "payload_shape", "copilot_fields",
+		hook.SystemCopilot.String(), "conflict",
+	)
+}
+
+func TestClassifyPayloadOverridesInheritedManagedAndProcessEvidence(t *testing.T) {
+	invocation := hook.InvocationContext{
+		ManagedRegistration: hook.ObservedValue{
+			Value: "claude", Source: "managed_registration", Provenance: "hook_tag",
+			Status: hook.SignalStatusObserved,
+		},
+		ParentProcess: hook.ProcessEvidence{
+			Name: "codex", ExecutablePath: filepath.Join(t.TempDir(), "codex"),
+			Source:     "parent_process",
+			Provenance: "operating_system", Status: hook.SignalStatusObserved,
+		},
+		Environment: []hook.EnvironmentEvidence{{
+			Name: "CLAUDE_CODE_ENTRYPOINT", Value: "cli", Category: "provider_environment",
+			Source: "environment", Provenance: "inherited_environment",
+			Status: hook.SignalStatusObserved,
+		}},
+	}
+	classification := hook.ClassifyWithContext(
+		[]byte(`{"hook_event_name":"preToolUse","cursor_version":"1.0","conversation_id":"c1"}`),
+		"",
+		[]string{"agent-gate", "managed-hook", "claude"},
+		nil,
+		invocation,
+	)
+
+	if classification.ResolvedSystem() != hook.SystemCursor {
+		t.Fatalf("resolved system = %q, want cursor", classification.ResolvedSystem())
+	}
+	if len(classification.Conflicts) < 3 {
+		t.Fatalf("conflicts = %#v, want inherited registration, process, and environment", classification.Conflicts)
+	}
+	assertClassificationEvidence(
+		t, classification, "managed_registration", "claude",
+		hook.SystemClaude.String(), "conflict",
+	)
+	assertClassificationEvidence(
+		t, classification, "parent_process", "codex",
+		hook.SystemCodex.String(), "conflict",
+	)
+}
+
+func TestClassifyManagedRegistrationOverridesInheritedContext(t *testing.T) {
+	invocation := hook.InvocationContext{
+		ManagedRegistration: hook.ObservedValue{
+			Value: "claude", Source: "managed_registration", Provenance: "hook_tag",
+			Status: hook.SignalStatusObserved,
+		},
+		ParentProcess: hook.ProcessEvidence{
+			Name: "codex", ExecutablePath: filepath.Join(t.TempDir(), "codex"),
+			Source:     "parent_process",
+			Provenance: "operating_system", Status: hook.SignalStatusObserved,
+		},
+		Environment: []hook.EnvironmentEvidence{{
+			Name: "CODEX_THREAD_ID", Value: "inherited", Category: "provider_environment",
+			Source: "environment", Provenance: "inherited_environment",
+			Status: hook.SignalStatusObserved,
+		}},
+	}
+	classification := hook.ClassifyWithContext(
+		[]byte(`{"hook_event_name":"SessionStart","session_id":"s1","transcript_path":"/tmp/t"}`),
+		"",
+		[]string{"agent-gate", "managed-hook", "claude"},
+		nil,
+		invocation,
+	)
+
+	if classification.ResolvedSystem() != hook.SystemClaude {
+		t.Fatalf("resolved system = %q, want claude", classification.ResolvedSystem())
+	}
+	if classification.Confidence != hook.ClassificationConfidenceLow {
+		t.Fatalf("confidence = %q, want low", classification.Confidence)
+	}
+	assertClassificationEvidence(
+		t, classification, "managed_registration", "claude",
+		hook.SystemClaude.String(), "match",
+	)
+	assertClassificationEvidence(
+		t, classification, "parent_process", "codex",
+		hook.SystemCodex.String(), "conflict",
+	)
+	assertClassificationEvidence(
+		t, classification, "environment", "CODEX_THREAD_ID",
+		hook.SystemCodex.String(), "conflict",
+	)
+}
+
+func TestClassifyRecordsHookInjectedEnvironmentProvenance(t *testing.T) {
+	invocation := hook.InvocationContext{
+		Environment: []hook.EnvironmentEvidence{{
+			Name: "AGENT_GATE_HOOK_PROVIDER", Value: "copilot", Category: "hook_environment",
+			Source: "environment", Provenance: "hook_injected",
+			Status: hook.SignalStatusObserved,
+		}},
+	}
+	classification := hook.ClassifyWithContext(
+		[]byte(`{"session_id":"s1"}`), "", []string{"agent-gate"}, nil, invocation,
+	)
+
+	if classification.ResolvedSystem() != hook.SystemCopilot {
+		t.Fatalf("resolved system = %q, want copilot", classification.ResolvedSystem())
+	}
+	assertClassificationEvidenceWithProvenance(
+		t, classification, "environment", "hook_injected", "AGENT_GATE_HOOK_PROVIDER",
+		hook.SystemCopilot.String(), "match",
+	)
+}
+
+func TestClassifyRecordsMissingAndUnreadableEvidence(t *testing.T) {
+	invocation := hook.InvocationContext{
+		WorkingDirectory: hook.ObservedValue{
+			Source: "working_directory", Provenance: "operating_system",
+			Status: hook.SignalStatusUnreadable,
+		},
+		CollectionIssues: []hook.CollectionIssue{{
+			Source: "working_directory", Status: hook.SignalStatusUnreadable,
+			Detail: "working directory unavailable",
+		}},
+	}
+	classification := hook.ClassifyWithContext(
+		[]byte(`{"field":"value"}`), "", []string{"agent-gate"}, nil, invocation,
+	)
+
+	if classification.Result != hook.ClassificationResultUnknown {
+		t.Fatalf("result = %q, want unknown", classification.Result)
+	}
+	if classification.Input.Invocation.WorkingDirectory.Status != hook.SignalStatusUnreadable {
+		t.Fatalf("working directory = %#v", classification.Input.Invocation.WorkingDirectory)
+	}
+	if len(classification.Input.Invocation.CollectionIssues) != 1 {
+		t.Fatalf("collection issues = %#v", classification.Input.Invocation.CollectionIssues)
+	}
+}
+
+func assertPayloadField(
+	t *testing.T,
+	classification hook.Classification,
+	name string,
+	casing string,
+) {
+	t.Helper()
+	for _, field := range classification.Input.Payload.Fields {
+		if field.Name == name && field.Casing == casing {
+			return
+		}
+	}
+	t.Fatalf("payload field %q with casing %q missing: %#v", name, casing, classification.Input.Payload.Fields)
+}
+
+func assertClassificationEvidenceWithProvenance(
+	t *testing.T,
+	classification hook.Classification,
+	source string,
+	provenance string,
+	signal string,
+	provider string,
+	result string,
+) {
+	t.Helper()
+	for _, evidence := range classification.Evidence {
+		if evidence.Source == source && evidence.Provenance == provenance &&
+			evidence.Signal == signal && evidence.Provider == provider &&
+			evidence.Result == result {
+			return
+		}
+	}
+	t.Fatalf("classification evidence missing provenance: %#v", classification.Evidence)
 }
 
 func assertClassificationEvidence(
