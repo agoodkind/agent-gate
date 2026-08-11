@@ -3,62 +3,62 @@ matcher = "startup|resume|clear"
 
 [[hooks.SessionStart.hooks]]
 type = "command"
-command = "__AGENT_GATE_BIN__ codex-hook"
+command = "__AGENT_GATE_BIN__ managed-hook codex"
 
 [[hooks.SubagentStart]]
 matcher = ".*"
 
 [[hooks.SubagentStart.hooks]]
 type = "command"
-command = "__AGENT_GATE_BIN__ codex-hook"
+command = "__AGENT_GATE_BIN__ managed-hook codex"
 
 [[hooks.PreToolUse]]
 matcher = ".*"
 
 [[hooks.PreToolUse.hooks]]
 type = "command"
-command = "__AGENT_GATE_BIN__ codex-hook"
+command = "__AGENT_GATE_BIN__ managed-hook codex"
 
 [[hooks.PermissionRequest]]
 matcher = ".*"
 
 [[hooks.PermissionRequest.hooks]]
 type = "command"
-command = "__AGENT_GATE_BIN__ codex-hook"
+command = "__AGENT_GATE_BIN__ managed-hook codex"
 
 [[hooks.PostToolUse]]
 matcher = ".*"
 
 [[hooks.PostToolUse.hooks]]
 type = "command"
-command = "__AGENT_GATE_BIN__ codex-hook"
+command = "__AGENT_GATE_BIN__ managed-hook codex"
 
 [[hooks.PreCompact]]
 
 [[hooks.PreCompact.hooks]]
 type = "command"
-command = "__AGENT_GATE_BIN__ codex-hook"
+command = "__AGENT_GATE_BIN__ managed-hook codex"
 
 [[hooks.PostCompact]]
 
 [[hooks.PostCompact.hooks]]
 type = "command"
-command = "__AGENT_GATE_BIN__ codex-hook"
+command = "__AGENT_GATE_BIN__ managed-hook codex"
 
 [[hooks.UserPromptSubmit]]
 
 [[hooks.UserPromptSubmit.hooks]]
 type = "command"
-command = "__AGENT_GATE_BIN__ codex-hook"
+command = "__AGENT_GATE_BIN__ managed-hook codex"
 
 [[hooks.SubagentStop]]
 
 [[hooks.SubagentStop.hooks]]
 type = "command"
-command = "__AGENT_GATE_BIN__ codex-hook"
+command = "__AGENT_GATE_BIN__ managed-hook codex"
 
 [[hooks.Stop]]
 
 [[hooks.Stop.hooks]]
 type = "command"
-command = "__AGENT_GATE_BIN__ codex-hook"
+command = "__AGENT_GATE_BIN__ managed-hook codex"

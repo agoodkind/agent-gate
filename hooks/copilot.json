@@ -2,7 +2,7 @@
   "sessionStart": [
     {
       "hooks": [
-        {"type": "command", "command": "__AGENT_GATE_BIN__ copilot-hook sessionStart"}
+        {"type": "command", "command": "__AGENT_GATE_BIN__ managed-hook copilot sessionStart"}
       ],
       "failClosed": false
     }
@@ -10,7 +10,7 @@
   "subagentStart": [
     {
       "hooks": [
-        {"type": "command", "command": "__AGENT_GATE_BIN__ copilot-hook subagentStart"}
+        {"type": "command", "command": "__AGENT_GATE_BIN__ managed-hook copilot subagentStart"}
       ],
       "failClosed": false
     }
@@ -18,7 +18,7 @@
   "userPromptTransformed": [
     {
       "hooks": [
-        {"type": "command", "command": "__AGENT_GATE_BIN__ copilot-hook userPromptTransformed"}
+        {"type": "command", "command": "__AGENT_GATE_BIN__ managed-hook copilot userPromptTransformed"}
       ],
       "failClosed": false
     }
@@ -27,7 +27,7 @@
     {
       "matcher": ".*",
       "hooks": [
-        {"type": "command", "command": "__AGENT_GATE_BIN__ copilot-hook preToolUse"}
+        {"type": "command", "command": "__AGENT_GATE_BIN__ managed-hook copilot preToolUse"}
       ],
       "failClosed": false
     }
@@ -36,7 +36,7 @@
     {
       "matcher": ".*",
       "hooks": [
-        {"type": "command", "command": "__AGENT_GATE_BIN__ copilot-hook postToolUse"}
+        {"type": "command", "command": "__AGENT_GATE_BIN__ managed-hook copilot postToolUse"}
       ],
       "failClosed": false
     }
@@ -45,7 +45,7 @@
     {
       "matcher": ".*",
       "hooks": [
-        {"type": "command", "command": "__AGENT_GATE_BIN__ copilot-hook postToolUseFailure"}
+        {"type": "command", "command": "__AGENT_GATE_BIN__ managed-hook copilot postToolUseFailure"}
       ],
       "failClosed": false
     }
@@ -53,7 +53,7 @@
   "notification": [
     {
       "hooks": [
-        {"type": "command", "command": "__AGENT_GATE_BIN__ copilot-hook notification"}
+        {"type": "command", "command": "__AGENT_GATE_BIN__ managed-hook copilot notification"}
       ],
       "failClosed": false
     }

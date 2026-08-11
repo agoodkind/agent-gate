@@ -5,7 +5,7 @@
       "hooks": [
         {
           "type": "command",
-          "command": "__AGENT_GATE_BIN__ gemini-hook"
+          "command": "__AGENT_GATE_BIN__ managed-hook gemini"
         }
       ],
       "failClosed": false
@@ -17,7 +17,7 @@
       "hooks": [
         {
           "type": "command",
-          "command": "__AGENT_GATE_BIN__ gemini-hook"
+          "command": "__AGENT_GATE_BIN__ managed-hook gemini"
         }
       ],
       "failClosed": false
@@ -28,7 +28,7 @@
       "hooks": [
         {
           "type": "command",
-          "command": "__AGENT_GATE_BIN__ gemini-hook"
+          "command": "__AGENT_GATE_BIN__ managed-hook gemini"
         }
       ],
       "failClosed": false
@@ -39,7 +39,7 @@
       "hooks": [
         {
           "type": "command",
-          "command": "__AGENT_GATE_BIN__ gemini-hook"
+          "command": "__AGENT_GATE_BIN__ managed-hook gemini"
         }
       ],
       "failClosed": false
@@ -50,7 +50,7 @@
       "hooks": [
         {
           "type": "command",
-          "command": "__AGENT_GATE_BIN__ gemini-hook"
+          "command": "__AGENT_GATE_BIN__ managed-hook gemini"
         }
       ],
       "failClosed": false
@@ -61,7 +61,7 @@
       "hooks": [
         {
           "type": "command",
-          "command": "__AGENT_GATE_BIN__ gemini-hook"
+          "command": "__AGENT_GATE_BIN__ managed-hook gemini"
         }
       ],
       "failClosed": false
@@ -72,7 +72,7 @@
       "hooks": [
         {
           "type": "command",
-          "command": "__AGENT_GATE_BIN__ gemini-hook"
+          "command": "__AGENT_GATE_BIN__ managed-hook gemini"
         }
       ],
       "failClosed": false
@@ -84,7 +84,7 @@
       "hooks": [
         {
           "type": "command",
-          "command": "__AGENT_GATE_BIN__ gemini-hook"
+          "command": "__AGENT_GATE_BIN__ managed-hook gemini"
         }
       ],
       "failClosed": false
@@ -94,7 +94,7 @@
       "hooks": [
         {
           "type": "command",
-          "command": "__AGENT_GATE_BIN__ gemini-hook"
+          "command": "__AGENT_GATE_BIN__ managed-hook gemini"
         }
       ],
       "failClosed": false
@@ -104,7 +104,7 @@
       "hooks": [
         {
           "type": "command",
-          "command": "__AGENT_GATE_BIN__ gemini-hook"
+          "command": "__AGENT_GATE_BIN__ managed-hook gemini"
         }
       ],
       "failClosed": false
@@ -116,7 +116,7 @@
       "hooks": [
         {
           "type": "command",
-          "command": "__AGENT_GATE_BIN__ gemini-hook"
+          "command": "__AGENT_GATE_BIN__ managed-hook gemini"
         }
       ],
       "failClosed": false
@@ -126,7 +126,7 @@
       "hooks": [
         {
           "type": "command",
-          "command": "__AGENT_GATE_BIN__ gemini-hook"
+          "command": "__AGENT_GATE_BIN__ managed-hook gemini"
         }
       ],
       "failClosed": false
@@ -136,7 +136,7 @@
       "hooks": [
         {
           "type": "command",
-          "command": "__AGENT_GATE_BIN__ gemini-hook"
+          "command": "__AGENT_GATE_BIN__ managed-hook gemini"
         }
       ],
       "failClosed": false
@@ -146,7 +146,7 @@
       "hooks": [
         {
           "type": "command",
-          "command": "__AGENT_GATE_BIN__ gemini-hook"
+          "command": "__AGENT_GATE_BIN__ managed-hook gemini"
         }
       ],
       "failClosed": false
@@ -156,7 +156,7 @@
       "hooks": [
         {
           "type": "command",
-          "command": "__AGENT_GATE_BIN__ gemini-hook"
+          "command": "__AGENT_GATE_BIN__ managed-hook gemini"
         }
       ],
       "failClosed": false
@@ -168,7 +168,7 @@
       "hooks": [
         {
           "type": "command",
-          "command": "__AGENT_GATE_BIN__ gemini-hook"
+          "command": "__AGENT_GATE_BIN__ managed-hook gemini"
         }
       ],
       "failClosed": false
@@ -180,7 +180,7 @@
       "hooks": [
         {
           "type": "command",
-          "command": "__AGENT_GATE_BIN__ gemini-hook"
+          "command": "__AGENT_GATE_BIN__ managed-hook gemini"
         }
       ],
       "failClosed": false
@@ -190,7 +190,7 @@
       "hooks": [
         {
           "type": "command",
-          "command": "__AGENT_GATE_BIN__ gemini-hook"
+          "command": "__AGENT_GATE_BIN__ managed-hook gemini"
         }
       ],
       "failClosed": false
