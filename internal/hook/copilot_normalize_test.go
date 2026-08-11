@@ -30,7 +30,7 @@ func TestNormalizeCopilotPayloadComposesTransformedPrompt(t *testing.T) {
 		Name: "turn-context", CopilotEvents: []string{"userPromptTransformed"},
 		Action: config.ActionInject, Output: "turn context",
 	}}}
-	evaluation := hook.EvaluateHot(
+	evaluation := evaluateHot(
 		context.Background(),
 		normalized,
 		cfg,

@@ -62,28 +62,29 @@ type Operation struct {
 
 // Record is one durable hook intake event plus its deferred replay metadata.
 type Record struct {
-	ReceiptID       int64
-	ReceivedAt      time.Time
-	EventID         string
-	SchemaVersion   int
-	RecordedAt      time.Time
-	System          string
-	SessionID       string
-	TurnID          string
-	EventName       string
-	ToolName        string
-	ToolUseID       string
-	Operation       Operation
-	RawPayload      []byte
-	NormalizedJSON  json.RawMessage
-	RawPayloadHash  string
-	EnvFingerprint  map[string]string
-	DeferredState   DeferredState
-	PendingAt       *time.Time
-	CompletedAt     *time.Time
-	LastReplayAt    *time.Time
-	DeferredReplays int
-	Sequence        int64
+	ReceiptID          int64
+	ReceivedAt         time.Time
+	EventID            string
+	SchemaVersion      int
+	RecordedAt         time.Time
+	System             string
+	SessionID          string
+	TurnID             string
+	EventName          string
+	ToolName           string
+	ToolUseID          string
+	Operation          Operation
+	RawPayload         []byte
+	NormalizedJSON     json.RawMessage
+	ClassificationJSON json.RawMessage
+	RawPayloadHash     string
+	EnvFingerprint     map[string]string
+	DeferredState      DeferredState
+	PendingAt          *time.Time
+	CompletedAt        *time.Time
+	LastReplayAt       *time.Time
+	DeferredReplays    int
+	Sequence           int64
 }
 
 // DeferredClaim fences one deferred evaluation attempt to a single processor.
@@ -211,6 +212,11 @@ func (s *Store) Append(ctx context.Context, record Record) (AppendResult, error)
 		return AppendResult{}, wrapLoggedError(ctx, s.log, "normalize intake payload", err)
 	}
 	record.NormalizedJSON = normalizedJSON
+	classificationJSON, err := normalizeJSON(record.ClassificationJSON)
+	if err != nil {
+		return AppendResult{}, wrapLoggedError(ctx, s.log, "normalize intake classification", err)
+	}
+	record.ClassificationJSON = classificationJSON
 	record = normalizeRecord(record)
 	if record.EventID == "" {
 		record.EventID = stableEventID(record)
@@ -224,7 +230,7 @@ func (s *Store) Append(ctx context.Context, record Record) (AppendResult, error)
 	}()
 
 	result, err := tx.ExecContext(ctx, `
-		insert or ignore into intake_events (
+		insert into intake_events (
 			event_id,
 			schema_version,
 			recorded_at,
@@ -241,8 +247,10 @@ func (s *Store) Append(ctx context.Context, record Record) (AppendResult, error)
 			raw_payload,
 			raw_payload_hash,
 			normalized_json,
+			classification_json,
 			env_fingerprint_json
-		) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		on conflict(event_id) do nothing
 	`,
 		record.EventID,
 		record.SchemaVersion,
@@ -260,6 +268,7 @@ func (s *Store) Append(ctx context.Context, record Record) (AppendResult, error)
 		record.RawPayload,
 		record.RawPayloadHash,
 		string(record.NormalizedJSON),
+		string(record.ClassificationJSON),
 		mustMarshalEnvFingerprint(record.EnvFingerprint),
 	)
 	if err != nil {
@@ -349,6 +358,7 @@ func (s *Store) ListDeferredPending(ctx context.Context, limit int) ([]Record, e
 			e.raw_payload,
 			e.raw_payload_hash,
 			e.normalized_json,
+			e.classification_json,
 			e.env_fingerprint_json,
 			r.receipt_id,
 			r.received_at,
@@ -413,6 +423,7 @@ func (s *Store) Get(ctx context.Context, eventID string) (Record, error) {
 			e.raw_payload,
 			e.raw_payload_hash,
 			e.normalized_json,
+			e.classification_json,
 			e.env_fingerprint_json,
 			coalesce(r.receipt_id, 0),
 			coalesce(r.received_at, e.recorded_at),
@@ -475,6 +486,7 @@ func (s *Store) init(ctx context.Context) error {
 			raw_payload blob not null,
 			raw_payload_hash text not null,
 			normalized_json text not null,
+			classification_json text not null default '{}',
 			env_fingerprint_json text not null default '{}'
 		)`,
 		`create table if not exists intake_deferred (
@@ -621,6 +633,7 @@ func (s *Store) receiptRecord(ctx context.Context, receiptID int64, requiredStat
 			e.raw_payload,
 			e.raw_payload_hash,
 			e.normalized_json,
+			e.classification_json,
 			e.env_fingerprint_json,
 			r.receipt_id,
 			r.received_at,
@@ -665,6 +678,7 @@ func scanRecord(rows *sql.Rows) (Record, error) {
 		recordedAt     string
 		receivedAt     string
 		normalized     string
+		classification string
 		envFingerprint string
 		state          string
 		pendingAt      sql.NullString
@@ -692,6 +706,7 @@ func scanRecord(rows *sql.Rows) (Record, error) {
 		&rawPayload,
 		&rawPayloadHash,
 		&normalized,
+		&classification,
 		&envFingerprint,
 		&record.ReceiptID,
 		&receivedAt,
@@ -713,7 +728,9 @@ func scanRecord(rows *sql.Rows) (Record, error) {
 		return Record{}, wrapError("parse intake received_at", err)
 	}
 	record.NormalizedJSON = json.RawMessage(normalized)
-	record.RawPayload = append([]byte(nil), rawPayload...)
+	record.ClassificationJSON = json.RawMessage(classification)
+	record.RawPayload = make([]byte, len(rawPayload))
+	copy(record.RawPayload, rawPayload)
 	record.RawPayloadHash = rawPayloadHash
 	record.EnvFingerprint, err = unmarshalEnvFingerprint(envFingerprint)
 	if err != nil {
@@ -763,7 +780,9 @@ func normalizeRecord(record Record) Record {
 	record.Operation.EffectiveCWD = strings.TrimSpace(record.Operation.EffectiveCWD)
 	record.Operation.Command = strings.TrimSpace(record.Operation.Command)
 	record.Operation.FilePath = strings.TrimSpace(record.Operation.FilePath)
-	record.RawPayload = append([]byte(nil), record.RawPayload...)
+	rawPayload := make([]byte, len(record.RawPayload))
+	copy(rawPayload, record.RawPayload)
+	record.RawPayload = rawPayload
 	record.EnvFingerprint = cloneEnvFingerprint(record.EnvFingerprint)
 	if record.RawPayloadHash == "" {
 		record.RawPayloadHash = payloadHash(record.RawPayload)
@@ -795,6 +814,7 @@ func stableEventID(record Record) string {
 	writeHashPart(hash, record.Operation.Command)
 	writeHashPart(hash, record.Operation.FilePath)
 	writeHashPart(hash, string(record.NormalizedJSON))
+	writeHashPart(hash, string(record.ClassificationJSON))
 	writeHashPart(hash, mustMarshalEnvFingerprint(record.EnvFingerprint))
 	_, _ = hash.Write(record.RawPayload)
 	return "intake_" + hex.EncodeToString(hash.Sum(nil))
@@ -841,6 +861,9 @@ func unmarshalEnvFingerprint(raw string) (map[string]string, error) {
 
 func ensureIntakeSchemaMigrations(ctx context.Context, db *sql.DB) error {
 	if err := ensureIntakeEventColumn(ctx, db, "env_fingerprint_json", "text not null default '{}'"); err != nil {
+		return err
+	}
+	if err := ensureIntakeEventColumn(ctx, db, "classification_json", "text not null default '{}'"); err != nil {
 		return err
 	}
 	if err := ensureIntakeEventColumn(ctx, db, "hot_eval_latency_us", "integer"); err != nil {
@@ -929,58 +952,4 @@ func (s *Store) UpdateHotEvalLatency(ctx context.Context, eventID string, latenc
 		return wrapLoggedError(ctx, s.log, "update intake hot_eval_latency_us", err)
 	}
 	return nil
-}
-
-func ensureIntakeEventColumn(ctx context.Context, db *sql.DB, columnName string, definition string) error {
-	rows, err := db.QueryContext(ctx, `pragma table_info(intake_events)`)
-	if err != nil {
-		return wrapError("query intake_events schema", err)
-	}
-	defer func() {
-		_ = rows.Close()
-	}()
-
-	for rows.Next() {
-		var (
-			cid        int
-			name       string
-			columnType string
-			notNull    int
-			defaultVal sql.NullString
-			primaryKey int
-		)
-		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultVal, &primaryKey); err != nil {
-			return wrapError("scan intake_events schema", err)
-		}
-		if name == columnName {
-			return nil
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return wrapError("iterate intake_events schema", err)
-	}
-
-	statement := fmt.Sprintf("alter table intake_events add column %s %s", columnName, definition)
-	if _, err := db.ExecContext(ctx, statement); err != nil {
-		return wrapError("add intake_events."+columnName, err)
-	}
-	return nil
-}
-
-func wrapLoggedError(ctx context.Context, log *slog.Logger, message string, err error) error {
-	if err == nil {
-		return nil
-	}
-	if log != nil {
-		log.WarnContext(ctx, message+" failed", "err", err)
-	}
-	return fmt.Errorf("%s: %w", message, err)
-}
-
-func wrapError(message string, err error) error {
-	if err == nil {
-		return nil
-	}
-	slog.Warn(message+" failed", "err", err)
-	return fmt.Errorf("%s: %w", message, err)
 }

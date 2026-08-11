@@ -1,6 +1,7 @@
 package hook_test
 
 import (
+	"encoding/json"
 	"slices"
 	"testing"
 
@@ -256,13 +257,18 @@ func TestDetectEvidenceResolution(t *testing.T) {
 
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
-			clearTrackedEnv(t)
-			for key, value := range testCase.env {
-				t.Setenv(key, value)
+			rawPayload, err := json.Marshal(testCase.payload)
+			if err != nil {
+				t.Fatalf("Marshal payload: %v", err)
 			}
-			got := hook.Detect(testCase.payload, testCase.hint)
+			got := hook.Classify(
+				rawPayload,
+				testCase.hint,
+				nil,
+				testCase.env,
+			).ResolvedSystem()
 			if got != testCase.want {
-				t.Errorf("Detect() = %v, want %v", got, testCase.want)
+				t.Errorf("Classify() = %v, want %v", got, testCase.want)
 			}
 		})
 	}

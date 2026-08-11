@@ -629,7 +629,7 @@ func deferredLedgerHotEvent(
 	record intake.Record,
 ) hook.DeferredAuditEvent {
 	t.Helper()
-	return hook.EvaluateHotWithEventID(
+	return evaluateHotWithEventIDForTest(
 		context.Background(), record.RawPayload, hook.SyncConfig(cfg),
 		hook.SystemCodex, func(string) string { return "" }, record.EventID,
 	).Deferred

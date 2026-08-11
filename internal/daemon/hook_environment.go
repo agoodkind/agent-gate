@@ -20,24 +20,28 @@ func (s *Server) ResolveHookEnvironment(
 
 func referencedHookEnvironment(request *daemonpb.ResolveHookEnvironmentRequest) []string {
 	environment := request.GetEnvFingerprint()
-	rawJSON := request.GetRawJson()
-	if request.GetProviderHint() == hook.SystemCopilot.String() {
+	wireInput := request.GetRawJson()
+	classification := hook.Classify(
+		wireInput,
+		hook.SystemFromString(request.GetProviderHint()),
+		request.GetArgv(),
+		environment,
+	)
+	normalizedJSON := wireInput
+	if classification.ResolvedSystem() == hook.SystemCopilot {
 		var normalizeErr error
-		rawJSON, normalizeErr = hook.NormalizeCopilotPayload(rawJSON, copilotEventHint(request.GetArgv()))
+		normalizedJSON, normalizeErr = hook.NormalizeCopilotPayload(
+			normalizedJSON,
+			copilotEventHint(request.GetArgv()),
+		)
 		if normalizeErr != nil {
 			return nil
 		}
 	}
-	detectionPayload, err := hook.ParseDetectionPayload(rawJSON)
-	if err != nil {
-		return nil
-	}
-	system := hook.DetectWithEnv(
-		detectionPayload,
-		hook.SystemFromString(request.GetProviderHint()),
-		func(key string) string { return environment[key] },
+	payload, err := hook.ParseHookPayload(
+		classification.ResolvedSystem(),
+		normalizedJSON,
 	)
-	payload, err := hook.ParseHookPayload(system, rawJSON)
 	if err != nil {
 		return nil
 	}

@@ -88,7 +88,7 @@ func TestEvaluateHotCopilotPromptInjectionFallsBackToPrompt(t *testing.T) {
 	}}}
 	rawJSON := []byte(`{"hook_event_name":"userPromptTransformed","session_id":"s1","prompt":"original prompt"}`)
 
-	evaluation := hook.EvaluateHot(
+	evaluation := evaluateHot(
 		context.Background(),
 		rawJSON,
 		cfg,
@@ -117,7 +117,7 @@ func TestEvaluateHotCopilotPromptInjectionPublishesFinalPrompt(t *testing.T) {
 			`"prompt":"user-authored prompt","transformedPrompt":"provider-transformed prompt"}`,
 	)
 
-	evaluation := hook.EvaluateHot(
+	evaluation := evaluateHot(
 		context.Background(),
 		rawJSON,
 		cfg,
@@ -165,7 +165,7 @@ func TestEvaluateHotCopilotPromptEffectsPublishFinalComposedPromptOnce(t *testin
 			`"prompt":"user-authored prompt","transformedPrompt":"provider-transformed prompt"}`,
 	)
 
-	evaluation := hook.EvaluateHot(
+	evaluation := evaluateHot(
 		context.Background(),
 		rawJSON,
 		cfg,
@@ -202,7 +202,7 @@ func TestEvaluateHotCursorStopInjectsFollowupPrompt(t *testing.T) {
 	}}}
 	rawJSON := []byte(`{"hook_event_name":"stop","session_id":"s1","status":"completed","loop_count":0}`)
 
-	evaluation := hook.EvaluateHot(
+	evaluation := evaluateHot(
 		context.Background(),
 		rawJSON,
 		cfg,
@@ -271,7 +271,7 @@ func TestEvaluateHot_ComposesResponseEffectsInConfigOrder(t *testing.T) {
 	}}
 	rawJSON := []byte(`{"hook_event_name":"PreToolUse","session_id":"s1","tool_name":"Shell","tool_input":{"command":"go test ./..."}}`)
 
-	evaluation := hook.EvaluateHot(context.Background(), rawJSON, cfg, hook.SystemCodex, func(string) string { return "" })
+	evaluation := evaluateHot(context.Background(), rawJSON, cfg, hook.SystemCodex, func(string) string { return "" })
 	stdout := string(evaluation.Stdout)
 	if !strings.Contains(stdout, `"additionalContext":"first context\n\nsecond context"`) {
 		t.Fatalf("response context = %q", stdout)
@@ -321,7 +321,7 @@ func TestEvaluateHotUsesLastMatchingMutationForTarget(t *testing.T) {
 	}}
 	rawJSON := []byte(`{"hook_event_name":"PreToolUse","session_id":"s1","tool_name":"Shell","tool_input":{"command":"original"}}`)
 
-	evaluation := hook.EvaluateHot(context.Background(), rawJSON, cfg, hook.SystemCodex, func(string) string { return "" })
+	evaluation := evaluateHot(context.Background(), rawJSON, cfg, hook.SystemCodex, func(string) string { return "" })
 	stdout := string(evaluation.Stdout)
 	if !strings.Contains(stdout, `"updatedInput":{"command":"last"}`) || strings.Contains(stdout, `"updatedInput":{"command":"first"}`) {
 		t.Fatalf("response mutation = %q", stdout)
@@ -346,7 +346,7 @@ func TestEvaluateHot_BlockSuppressesResponseEffects(t *testing.T) {
 	}}
 	rawJSON := []byte(`{"hook_event_name":"PreToolUse","session_id":"s1","tool_name":"Shell","tool_input":{"command":"blocked-command"}}`)
 
-	evaluation := hook.EvaluateHot(context.Background(), rawJSON, cfg, hook.SystemCodex, func(string) string { return "" })
+	evaluation := evaluateHot(context.Background(), rawJSON, cfg, hook.SystemCodex, func(string) string { return "" })
 	if strings.Contains(string(evaluation.Stdout), "must not appear") {
 		t.Fatalf("block response retained context: %q", evaluation.Stdout)
 	}
@@ -367,7 +367,7 @@ func TestEvaluateHotRecordsTargetForEmptyResponseEffect(t *testing.T) {
 	}}}
 	rawJSON := []byte(`{"hook_event_name":"SessionStart","session_id":"s1"}`)
 
-	evaluation := hook.EvaluateHot(context.Background(), rawJSON, cfg, hook.SystemCodex, func(string) string { return "" })
+	evaluation := evaluateHot(context.Background(), rawJSON, cfg, hook.SystemCodex, func(string) string { return "" })
 	if len(evaluation.Deferred.ResponseEffects) != 1 {
 		t.Fatalf("response effects = %#v", evaluation.Deferred.ResponseEffects)
 	}
@@ -419,7 +419,7 @@ output = "third context"
 		`{"hook_event_name":"UserPromptSubmit","session_id":"s1","prompt":"do the thing"}`,
 	)
 
-	evaluation := hook.EvaluateHot(
+	evaluation := evaluateHot(
 		context.Background(),
 		rawJSON,
 		cfg,
@@ -456,7 +456,7 @@ func TestEvaluateHotDoesNotPublishUnsupportedResponseEffect(t *testing.T) {
 			`"prompt":"request"}`,
 	)
 
-	evaluation := hook.EvaluateHot(
+	evaluation := evaluateHot(
 		context.Background(),
 		rawJSON,
 		cfg,
@@ -497,7 +497,7 @@ cache_ttl_ms = 0
 		`{"hook_event_name":"stop","conversation_id":"c1","status":"completed"}`,
 	)
 
-	evaluation := hook.EvaluateHot(
+	evaluation := evaluateHot(
 		ctx,
 		rawJSON,
 		cfg,
@@ -519,7 +519,7 @@ func TestEvaluateHotAuditsInvalidCopilotToolOutputAsNoOp(t *testing.T) {
 	}}}
 	rawJSON := []byte(`{"hook_event_name":"postToolUse","session_id":"s1"}`)
 
-	evaluation := hook.EvaluateHot(context.Background(), rawJSON, cfg, hook.SystemCopilot, func(string) string { return "" })
+	evaluation := evaluateHot(context.Background(), rawJSON, cfg, hook.SystemCopilot, func(string) string { return "" })
 	if strings.Contains(string(evaluation.Stdout), "modifiedResult") {
 		t.Fatalf("invalid mutation rendered: %q", evaluation.Stdout)
 	}
@@ -706,7 +706,7 @@ func TestCursorMCPExecution_NestedObjectToolInputAllows(t *testing.T) {
 				t.Fatalf("tool_input.command = %q, want contentful search", fields.ToolInputCommand)
 			}
 
-			evaluation := hook.EvaluateHot(
+			evaluation := evaluateHot(
 				context.Background(),
 				rawJSON,
 				nil,
@@ -910,7 +910,7 @@ func TestEvaluateHot_BlocksCodexCredentialFileRead(t *testing.T) {
 	cfg := &config.Config{Rules: []config.Rule{rule}}
 	rawJSON := []byte(`{"hook_event_name":"PreToolUse","session_id":"s1","turn_id":"t1","tool_name":"Read","tool_use_id":"call_1","cwd":"/repo","tool_input":{"path":"/Users/agoodkind/Downloads/AuthKey_ABC123.p8"}}`)
 
-	evaluation := hook.EvaluateHot(context.Background(), rawJSON, cfg, hook.SystemCodex, func(string) string { return "" })
+	evaluation := evaluateHot(context.Background(), rawJSON, cfg, hook.SystemCodex, func(string) string { return "" })
 	if evaluation.ExitCode != 0 {
 		t.Fatalf("ExitCode = %d, want 0 for Codex hook response", evaluation.ExitCode)
 	}
@@ -935,7 +935,7 @@ func TestEvaluateHotWithEventID_BlocksCodexWithVisibleEventID(t *testing.T) {
 	cfg := &config.Config{Rules: []config.Rule{rule}}
 	rawJSON := []byte(`{"hook_event_name":"PreToolUse","session_id":"s1","turn_id":"t1","tool_name":"Bash","tool_use_id":"call_1","cwd":"/repo","tool_input":{"command":"bad-command"}}`)
 
-	evaluation := hook.EvaluateHotWithEventID(context.Background(), rawJSON, cfg, hook.SystemCodex, func(string) string { return "" }, "intake_test")
+	evaluation := evaluateHotWithEventID(context.Background(), rawJSON, cfg, hook.SystemCodex, func(string) string { return "" }, "intake_test")
 	if evaluation.ExitCode != 0 {
 		t.Fatalf("ExitCode = %d, want 0 for Codex hook response", evaluation.ExitCode)
 	}
@@ -959,7 +959,7 @@ func TestEvaluateHot_BlocksCursorBeforeReadFileCredentialPath(t *testing.T) {
 	cfg := &config.Config{Rules: []config.Rule{rule}}
 	rawJSON := []byte(`{"hook_event_name":"beforeReadFile","session_id":"s1","cwd":"/repo","file_path":"/Users/agoodkind/Downloads/1Password Export/items.json"}`)
 
-	evaluation := hook.EvaluateHot(context.Background(), rawJSON, cfg, hook.SystemCursor, func(string) string { return "" })
+	evaluation := evaluateHot(context.Background(), rawJSON, cfg, hook.SystemCursor, func(string) string { return "" })
 	if evaluation.ExitCode != 0 {
 		t.Fatalf("ExitCode = %d, want 0 for Cursor hook response", evaluation.ExitCode)
 	}
@@ -985,7 +985,7 @@ func TestEvaluateHot_BlocksCursorPostToolSecretOutput(t *testing.T) {
 	privateKeyHeader := "-----BEGIN " + "PRIVATE KEY-----"
 	rawJSON := []byte(`{"hook_event_name":"postToolUse","session_id":"s1","tool_name":"Read","tool_use_id":"call_1","cwd":"/repo","tool_input":{"file_path":"/tmp/AuthKey_ABC123.p8"},"tool_output":"` + privateKeyHeader + `\nsecret\n-----END PRIVATE KEY-----"}`)
 
-	evaluation := hook.EvaluateHot(context.Background(), rawJSON, cfg, hook.SystemCursor, func(string) string { return "" })
+	evaluation := evaluateHot(context.Background(), rawJSON, cfg, hook.SystemCursor, func(string) string { return "" })
 	if evaluation.ExitCode != 0 {
 		t.Fatalf("ExitCode = %d, want 0 for Cursor hook response", evaluation.ExitCode)
 	}
@@ -1011,7 +1011,7 @@ func TestEvaluateHot_AllowsCodexPostToolImageDataJWTShape(t *testing.T) {
 	imageData := "eyJ" + strings.Repeat("A", 100)
 	rawJSON := []byte(`{"hook_event_name":"PostToolUse","session_id":"s1","turn_id":"t1","tool_name":"mcp__computer_use__get_app_state","tool_use_id":"call_1","cwd":"/repo","tool_input":{},"tool_response":{"content":[{"type":"text","text":"visible output"},{"type":"image","mimeType":"image/png","data":` + strconv.Quote(imageData) + `}]}}`)
 
-	evaluation := hook.EvaluateHot(context.Background(), rawJSON, cfg, hook.SystemCodex, func(string) string { return "" })
+	evaluation := evaluateHot(context.Background(), rawJSON, cfg, hook.SystemCodex, func(string) string { return "" })
 	if evaluation.ExitCode != 0 {
 		t.Fatalf("ExitCode = %d, want 0 for Codex hook response", evaluation.ExitCode)
 	}
@@ -1034,7 +1034,7 @@ func TestEvaluateHot_BlocksCodexPostToolTextSecretInStructuredResponse(t *testin
 	secretText := "token: " + "sk-" + "ant-" + strings.Repeat("a", 20)
 	rawJSON := []byte(`{"hook_event_name":"PostToolUse","session_id":"s1","turn_id":"t1","tool_name":"mcp__computer_use__get_app_state","tool_use_id":"call_1","cwd":"/repo","tool_input":{},"tool_response":{"content":[{"type":"text","text":` + strconv.Quote(secretText) + `},{"type":"image","mimeType":"image/png","data":"not-scanned"}]}}`)
 
-	evaluation := hook.EvaluateHot(context.Background(), rawJSON, cfg, hook.SystemCodex, func(string) string { return "" })
+	evaluation := evaluateHot(context.Background(), rawJSON, cfg, hook.SystemCodex, func(string) string { return "" })
 	if evaluation.ExitCode != 0 {
 		t.Fatalf("ExitCode = %d, want 0 for Codex hook response", evaluation.ExitCode)
 	}
@@ -1051,7 +1051,7 @@ func TestWriteDeferredAudit_AllowSkipsReceivedAndRawPayload(t *testing.T) {
 	cfg := &config.Config{}
 	rawJSON := []byte(`{"hook_event_name":"PreToolUse","session_id":"s1","tool_name":"Shell","tool_use_id":"call_1","cwd":"/repo","tool_input":{"command":"echo ok"}}`)
 
-	evaluation := hook.EvaluateHot(context.Background(), rawJSON, cfg, hook.SystemCodex, func(string) string { return "" })
+	evaluation := evaluateHot(context.Background(), rawJSON, cfg, hook.SystemCodex, func(string) string { return "" })
 	sink := &recordingAuditSink{}
 	hook.WriteDeferredAudit(context.Background(), evaluation.Deferred, sink)
 
@@ -1073,7 +1073,7 @@ func TestWriteDeferredAudit_AuditOnlySkipsReceivedAndRawPayload(t *testing.T) {
 	cfg := &config.Config{Rules: []config.Rule{rule}}
 	rawJSON := []byte(`{"hook_event_name":"PreToolUse","session_id":"s1","tool_name":"Shell","tool_use_id":"call_1","cwd":"/repo","tool_input":{"command":"echo ok"}}`)
 
-	evaluation := hook.EvaluateHot(context.Background(), rawJSON, cfg, hook.SystemCodex, func(string) string { return "" })
+	evaluation := evaluateHot(context.Background(), rawJSON, cfg, hook.SystemCodex, func(string) string { return "" })
 	sink := &recordingAuditSink{}
 	hook.WriteDeferredAudit(context.Background(), evaluation.Deferred, sink)
 
@@ -1093,7 +1093,7 @@ func TestWriteDeferredAudit_CodexStopBlockingRuleDowngradesToAudit(t *testing.T)
 	)}}
 	rawJSON := []byte(`{"hook_event_name":"Stop","session_id":"s1","turn_id":"t1","cwd":"/repo","stop_hook_active":false,"last_assistant_message":"blocked"}`)
 
-	evaluation := hook.EvaluateHot(context.Background(), rawJSON, cfg, hook.SystemCodex, func(string) string { return "" })
+	evaluation := evaluateHot(context.Background(), rawJSON, cfg, hook.SystemCodex, func(string) string { return "" })
 	if strings.TrimSpace(string(evaluation.Stdout)) != "{}" {
 		t.Fatalf("Codex Stop should allow, got %s", string(evaluation.Stdout))
 	}
@@ -1116,7 +1116,7 @@ func TestWriteDeferredAudit_BlockKeepsReceived(t *testing.T) {
 	)}}
 	rawJSON := []byte(`{"hook_event_name":"PreToolUse","session_id":"s1","tool_name":"Shell","tool_use_id":"call_1","cwd":"/repo","tool_input":{"command":"go test ./..."}}`)
 
-	evaluation := hook.EvaluateHot(context.Background(), rawJSON, cfg, hook.SystemCodex, func(string) string { return "" })
+	evaluation := evaluateHot(context.Background(), rawJSON, cfg, hook.SystemCodex, func(string) string { return "" })
 	sink := &recordingAuditSink{}
 	hook.WriteDeferredAudit(context.Background(), evaluation.Deferred, sink)
 

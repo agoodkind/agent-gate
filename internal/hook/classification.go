@@ -3,6 +3,7 @@ package hook
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"slices"
 	"strings"
 )
@@ -349,4 +350,13 @@ type emptyClassificationInputError struct{}
 
 func (*emptyClassificationInputError) Error() string {
 	return "empty classification input"
+}
+
+// MarshalClassification returns stable JSON for durable intake.
+func MarshalClassification(classification Classification) json.RawMessage {
+	encoded, err := json.Marshal(classification)
+	if err != nil {
+		return json.RawMessage(`{}`)
+	}
+	return encoded
 }
