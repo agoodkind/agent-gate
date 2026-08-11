@@ -8,6 +8,7 @@ import (
 	"google.golang.org/grpc"
 
 	"goodkind.io/agent-gate/api/daemonpb"
+	"goodkind.io/agent-gate/internal/hook"
 )
 
 type deadlineRecordingAgentGateClient struct {
@@ -32,7 +33,9 @@ func TestClientEvaluateHookUsesTwelveSecondDeadline(t *testing.T) {
 	rpc := &deadlineRecordingAgentGateClient{}
 	client := &Client{rpc: rpc}
 
-	if _, err := client.EvaluateHook(nil, "codex", "", nil, nil); err != nil {
+	if _, err := client.EvaluateHook(
+		nil, "codex", "", nil, nil, hook.InvocationContext{},
+	); err != nil {
 		t.Fatalf("EvaluateHook returned error: %v", err)
 	}
 	if rpc.remaining < 11*time.Second || rpc.remaining > 12*time.Second {

@@ -12,6 +12,7 @@ import (
 
 	"goodkind.io/agent-gate/api/daemonpb"
 	"goodkind.io/agent-gate/internal/config"
+	"goodkind.io/agent-gate/internal/hook"
 )
 
 // evaluateHookTimeout returns the deadline this client applies to one daemon
@@ -75,13 +76,15 @@ func (c *Client) ResolveHookEnvironment(
 	providerHint string,
 	argv []string,
 	env map[string]string,
+	invocationContext hook.InvocationContext,
 ) ([]string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), evaluateHookTimeout())
 	defer cancel()
 	response, err := c.rpc.ResolveHookEnvironment(
 		ctx,
 		&daemonpb.ResolveHookEnvironmentRequest{
-			RawJson: rawJSON, ProviderHint: providerHint, Argv: argv, EnvFingerprint: env,
+			RawJson: rawJSON, ProviderHint: providerHint, Argv: argv,
+			EnvFingerprint: env, InvocationContext: invocationContextToProto(invocationContext),
 		},
 	)
 	if err != nil {
@@ -92,17 +95,25 @@ func (c *Client) ResolveHookEnvironment(
 }
 
 // EvaluateHook forwards raw hook input to daemon-owned enforcement.
-func (c *Client) EvaluateHook(rawJSON []byte, providerHint, cwd string, argv []string, env map[string]string) (*daemonpb.EvaluateHookResponse, error) {
+func (c *Client) EvaluateHook(
+	rawJSON []byte,
+	providerHint string,
+	cwd string,
+	argv []string,
+	env map[string]string,
+	invocationContext hook.InvocationContext,
+) (*daemonpb.EvaluateHookResponse, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), evaluateHookTimeout())
 	defer cancel()
 	log := slog.Default()
 
 	resp, err := c.rpc.EvaluateHook(ctx, &daemonpb.EvaluateHookRequest{
-		RawJson:        rawJSON,
-		ProviderHint:   providerHint,
-		Cwd:            cwd,
-		Argv:           argv,
-		EnvFingerprint: env,
+		RawJson:           rawJSON,
+		ProviderHint:      providerHint,
+		Cwd:               cwd,
+		Argv:              argv,
+		EnvFingerprint:    env,
+		InvocationContext: invocationContextToProto(invocationContext),
 	})
 	if err != nil {
 		log.WarnContext(ctx, "daemon EvaluateHook rpc failed", slog.Any("err", err))

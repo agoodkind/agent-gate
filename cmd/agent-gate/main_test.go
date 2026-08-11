@@ -39,6 +39,7 @@ type environmentRecordingHookClient struct {
 	environment      map[string]string
 	referencedNames  []string
 	referenceRequest []byte
+	invocation       hook.InvocationContext
 }
 
 func (client *environmentRecordingHookClient) ResolveHookEnvironment(
@@ -46,8 +47,10 @@ func (client *environmentRecordingHookClient) ResolveHookEnvironment(
 	_ string,
 	_ []string,
 	_ map[string]string,
+	invocation hook.InvocationContext,
 ) ([]string, error) {
 	client.referenceRequest = append([]byte(nil), rawJSON...)
+	client.invocation = invocation
 	return client.referencedNames, nil
 }
 
@@ -57,8 +60,10 @@ func (client *environmentRecordingHookClient) EvaluateHook(
 	_ string,
 	_ []string,
 	environment map[string]string,
+	invocation hook.InvocationContext,
 ) (*daemonpb.EvaluateHookResponse, error) {
 	client.environment = environment
+	client.invocation = invocation
 	return &daemonpb.EvaluateHookResponse{}, nil
 }
 
@@ -66,7 +71,14 @@ func (client *environmentRecordingHookClient) Close() error {
 	return nil
 }
 
-func (client fakeHookClient) EvaluateHook(_ []byte, _ string, _ string, _ []string, _ map[string]string) (*daemonpb.EvaluateHookResponse, error) {
+func (client fakeHookClient) EvaluateHook(
+	_ []byte,
+	_ string,
+	_ string,
+	_ []string,
+	_ map[string]string,
+	_ hook.InvocationContext,
+) (*daemonpb.EvaluateHookResponse, error) {
 	if client.err != nil {
 		return nil, client.err
 	}
@@ -78,6 +90,7 @@ func (client fakeHookClient) ResolveHookEnvironment(
 	_ string,
 	_ []string,
 	_ map[string]string,
+	_ hook.InvocationContext,
 ) ([]string, error) {
 	return nil, nil
 }
@@ -95,7 +108,7 @@ func TestRunCLIHelpDoesNotEnterHookMode(t *testing.T) {
 		[]string{"--help"},
 		&stdout,
 		&stderr,
-		func(hook.System) int {
+		func(hookRoute) int {
 			hookCalls++
 			return 0
 		},
@@ -124,7 +137,7 @@ func TestRunCLIUnknownCommandDoesNotEnterHookMode(t *testing.T) {
 		[]string{"not-a-command"},
 		&stdout,
 		&stderr,
-		func(hook.System) int {
+		func(hookRoute) int {
 			hookCalls++
 			return 0
 		},
@@ -150,10 +163,10 @@ func TestRunCLINoArgumentsPreservesBareHookMode(t *testing.T) {
 		nil,
 		io.Discard,
 		io.Discard,
-		func(system hook.System) int {
+		func(route hookRoute) int {
 			hookCalls++
-			if system != hook.SystemUnknown {
-				t.Fatalf("hook system = %q, want unknown", system)
+			if route.ProviderHint != hook.SystemUnknown {
+				t.Fatalf("hook system = %q, want unknown", route.ProviderHint)
 			}
 			return 7
 		},
@@ -164,6 +177,29 @@ func TestRunCLINoArgumentsPreservesBareHookMode(t *testing.T) {
 	}
 	if hookCalls != 1 {
 		t.Fatalf("hook calls = %d, want 1", hookCalls)
+	}
+}
+
+func TestRunCLIManagedHookRecordsRegistrationWithoutExplicitHint(t *testing.T) {
+	var received hookRoute
+	exitCode := runCLIWithHook(
+		[]string{"managed-hook", "claude"},
+		io.Discard,
+		io.Discard,
+		func(route hookRoute) int {
+			received = route
+			return 0
+		},
+	)
+
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d, want 0", exitCode)
+	}
+	if received.ProviderHint != hook.SystemUnknown {
+		t.Fatalf("provider hint = %q, want unknown", received.ProviderHint)
+	}
+	if received.ManagedRegistration != "claude" {
+		t.Fatalf("managed registration = %q, want claude", received.ManagedRegistration)
 	}
 }
 
@@ -309,6 +345,94 @@ func TestRunHookForwardsReferencedCommandEnvironment(t *testing.T) {
 	}
 	if string(client.referenceRequest) != payload {
 		t.Fatalf("reference request = %q, want raw payload", client.referenceRequest)
+	}
+	if client.invocation.WorkingDirectory.Value != "test-working-directory" {
+		t.Fatalf("invocation working directory = %#v", client.invocation.WorkingDirectory)
+	}
+}
+
+func TestCollectHookInvocationContextPreservesSignalProvenance(t *testing.T) {
+	workingDirectory := t.TempDir()
+	executablePath := filepath.Join(t.TempDir(), "agent-gate")
+	parentPath := filepath.Join(t.TempDir(), "shell")
+	ancestorPath := filepath.Join(t.TempDir(), "harness")
+	context := collectHookInvocationContext(
+		[]string{executablePath, "managed-hook", "claude"},
+		"claude",
+		func() (string, error) { return workingDirectory, nil },
+		func() (string, error) { return executablePath, nil },
+		map[string]string{
+			"CLAUDE_CODE_ENTRYPOINT":   "cli",
+			"CODEX_THREAD_ID":          "inherited-thread",
+			"AGENT_GATE_HOOK_PROVIDER": "claude",
+		},
+		func() (hook.ProcessEvidence, []hook.ProcessEvidence, error) {
+			return hook.ProcessEvidence{
+					Name: "shell", ExecutablePath: parentPath,
+					Source: "parent_process", Provenance: "operating_system",
+					Status: hook.SignalStatusObserved,
+				}, []hook.ProcessEvidence{{
+					Name: "harness", ExecutablePath: ancestorPath,
+					Source: "ancestor_process", Provenance: "operating_system",
+					Status: hook.SignalStatusObserved,
+				}}, nil
+		},
+	)
+
+	if context.HookSubcommand.Value != "managed-hook" {
+		t.Fatalf("hook subcommand = %q, want managed-hook", context.HookSubcommand.Value)
+	}
+	if len(context.HookTags) != 1 || context.HookTags[0].Value != "claude" {
+		t.Fatalf("hook tags = %#v, want claude", context.HookTags)
+	}
+	if context.ManagedRegistration.Value != "claude" {
+		t.Fatalf("managed registration = %#v, want claude", context.ManagedRegistration)
+	}
+	if context.WorkingDirectory.Value != workingDirectory {
+		t.Fatalf("working directory = %#v", context.WorkingDirectory)
+	}
+	if context.Executable.ExecutablePath != executablePath {
+		t.Fatalf("executable = %#v", context.Executable)
+	}
+	if context.ParentProcess.Name != "shell" || len(context.Ancestors) != 1 {
+		t.Fatalf("process evidence = parent %#v ancestors %#v", context.ParentProcess, context.Ancestors)
+	}
+	if len(context.Environment) != 3 {
+		t.Fatalf("environment evidence = %#v", context.Environment)
+	}
+	for _, signal := range context.Environment {
+		if signal.Provenance != "inherited_environment" {
+			t.Fatalf("environment provenance = %q", signal.Provenance)
+		}
+		if signal.Category != "provider_environment" {
+			t.Fatalf("environment category = %q", signal.Category)
+		}
+	}
+}
+
+func TestCollectHookInvocationContextRecordsUnavailableEvidence(t *testing.T) {
+	context := collectHookInvocationContext(
+		[]string{"agent-gate"},
+		"",
+		func() (string, error) { return "", errors.New("cwd unavailable") },
+		func() (string, error) { return "", errors.New("executable unavailable") },
+		nil,
+		func() (hook.ProcessEvidence, []hook.ProcessEvidence, error) {
+			return hook.ProcessEvidence{}, nil, errors.New("process table unavailable")
+		},
+	)
+
+	if context.WorkingDirectory.Status != hook.SignalStatusUnreadable {
+		t.Fatalf("working directory = %#v", context.WorkingDirectory)
+	}
+	if context.Executable.Status != hook.SignalStatusUnreadable {
+		t.Fatalf("executable = %#v", context.Executable)
+	}
+	if context.ParentProcess.Status != hook.SignalStatusUnreadable {
+		t.Fatalf("parent process = %#v", context.ParentProcess)
+	}
+	if len(context.CollectionIssues) != 4 {
+		t.Fatalf("collection issues = %#v, want four", context.CollectionIssues)
 	}
 }
 
@@ -658,7 +782,16 @@ func testHookRuntime(stdin io.Reader, connect func(context.Context) (hookClient,
 		args:    []string{"agent-gate"},
 		connect: connect,
 		getwd: func() (string, error) {
-			return "/tmp", nil
+			return "test-working-directory", nil
+		},
+		executable: func() (string, error) {
+			return "agent-gate", nil
+		},
+		processes: func() (hook.ProcessEvidence, []hook.ProcessEvidence, error) {
+			return hook.ProcessEvidence{
+				Name: "shell", ExecutablePath: "shell", Source: "parent_process",
+				Provenance: "operating_system", Status: hook.SignalStatusObserved,
+			}, nil, nil
 		},
 		env: func() map[string]string {
 			return map[string]string{}

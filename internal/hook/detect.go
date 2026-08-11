@@ -5,8 +5,6 @@ package hook
 
 import (
 	"encoding/json"
-	"fmt"
-	"log/slog"
 	"unicode"
 	"unicode/utf8"
 )
@@ -29,16 +27,6 @@ type DetectionPayload struct {
 	CopilotToolName       string          `json:"toolName,omitempty"`
 	CopilotToolUseID      string          `json:"toolUseId,omitempty"`
 	CopilotToolInput      json.RawMessage `json:"toolInput,omitempty"`
-}
-
-// ParseDetectionPayload decodes a [DetectionPayload] from raw JSON bytes.
-func ParseDetectionPayload(rawBytes []byte) (DetectionPayload, error) {
-	var payload DetectionPayload
-	if err := json.Unmarshal(rawBytes, &payload); err != nil {
-		slog.Warn("decode detection payload failed", slog.Any("err", err))
-		return payload, fmt.Errorf("decode detection payload: %w", err)
-	}
-	return payload, nil
 }
 
 func hasCursorPayload(p DetectionPayload) bool {
