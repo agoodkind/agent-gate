@@ -4,7 +4,7 @@
       "hooks": [
         {
           "type": "command",
-          "command": "__AGENT_GATE_BIN__"
+          "command": "__AGENT_GATE_BIN__ managed-hook claude"
         }
       ],
       "failClosed": false
@@ -15,7 +15,7 @@
       "hooks": [
         {
           "type": "command",
-          "command": "__AGENT_GATE_BIN__"
+          "command": "__AGENT_GATE_BIN__ managed-hook claude"
         }
       ],
       "failClosed": false
@@ -26,7 +26,7 @@
       "hooks": [
         {
           "type": "command",
-          "command": "__AGENT_GATE_BIN__"
+          "command": "__AGENT_GATE_BIN__ managed-hook claude"
         }
       ],
       "failClosed": false
@@ -37,7 +37,7 @@
       "hooks": [
         {
           "type": "command",
-          "command": "__AGENT_GATE_BIN__"
+          "command": "__AGENT_GATE_BIN__ managed-hook claude"
         }
       ],
       "failClosed": false
@@ -48,7 +48,7 @@
       "hooks": [
         {
           "type": "command",
-          "command": "__AGENT_GATE_BIN__"
+          "command": "__AGENT_GATE_BIN__ managed-hook claude"
         }
       ],
       "failClosed": false
@@ -59,7 +59,7 @@
       "hooks": [
         {
           "type": "command",
-          "command": "__AGENT_GATE_BIN__"
+          "command": "__AGENT_GATE_BIN__ managed-hook claude"
         }
       ],
       "failClosed": false
@@ -70,7 +70,7 @@
       "hooks": [
         {
           "type": "command",
-          "command": "__AGENT_GATE_BIN__"
+          "command": "__AGENT_GATE_BIN__ managed-hook claude"
         }
       ],
       "failClosed": false
@@ -82,7 +82,7 @@
       "hooks": [
         {
           "type": "command",
-          "command": "__AGENT_GATE_BIN__"
+          "command": "__AGENT_GATE_BIN__ managed-hook claude"
         }
       ],
       "failClosed": false
@@ -94,7 +94,7 @@
       "hooks": [
         {
           "type": "command",
-          "command": "__AGENT_GATE_BIN__"
+          "command": "__AGENT_GATE_BIN__ managed-hook claude"
         }
       ],
       "failClosed": false
@@ -105,7 +105,7 @@
       "hooks": [
         {
           "type": "command",
-          "command": "__AGENT_GATE_BIN__"
+          "command": "__AGENT_GATE_BIN__ managed-hook claude"
         }
       ],
       "failClosed": false
@@ -117,7 +117,7 @@
       "hooks": [
         {
           "type": "command",
-          "command": "__AGENT_GATE_BIN__"
+          "command": "__AGENT_GATE_BIN__ managed-hook claude"
         }
       ],
       "failClosed": false
@@ -129,7 +129,7 @@
       "hooks": [
         {
           "type": "command",
-          "command": "__AGENT_GATE_BIN__"
+          "command": "__AGENT_GATE_BIN__ managed-hook claude"
         }
       ],
       "failClosed": false
@@ -140,7 +140,7 @@
       "hooks": [
         {
           "type": "command",
-          "command": "__AGENT_GATE_BIN__"
+          "command": "__AGENT_GATE_BIN__ managed-hook claude"
         }
       ],
       "failClosed": false
@@ -152,7 +152,7 @@
       "hooks": [
         {
           "type": "command",
-          "command": "__AGENT_GATE_BIN__"
+          "command": "__AGENT_GATE_BIN__ managed-hook claude"
         }
       ],
       "failClosed": false
@@ -163,7 +163,7 @@
       "hooks": [
         {
           "type": "command",
-          "command": "__AGENT_GATE_BIN__"
+          "command": "__AGENT_GATE_BIN__ managed-hook claude"
         }
       ],
       "failClosed": false
@@ -174,7 +174,7 @@
       "hooks": [
         {
           "type": "command",
-          "command": "__AGENT_GATE_BIN__"
+          "command": "__AGENT_GATE_BIN__ managed-hook claude"
         }
       ],
       "failClosed": false
@@ -185,7 +185,7 @@
       "hooks": [
         {
           "type": "command",
-          "command": "__AGENT_GATE_BIN__"
+          "command": "__AGENT_GATE_BIN__ managed-hook claude"
         }
       ],
       "failClosed": false
@@ -196,7 +196,7 @@
       "hooks": [
         {
           "type": "command",
-          "command": "__AGENT_GATE_BIN__"
+          "command": "__AGENT_GATE_BIN__ managed-hook claude"
         }
       ],
       "failClosed": false
@@ -207,7 +207,7 @@
       "hooks": [
         {
           "type": "command",
-          "command": "__AGENT_GATE_BIN__"
+          "command": "__AGENT_GATE_BIN__ managed-hook claude"
         }
       ],
       "failClosed": false
@@ -218,7 +218,7 @@
       "hooks": [
         {
           "type": "command",
-          "command": "__AGENT_GATE_BIN__"
+          "command": "__AGENT_GATE_BIN__ managed-hook claude"
         }
       ],
       "failClosed": false
@@ -229,7 +229,7 @@
       "hooks": [
         {
           "type": "command",
-          "command": "__AGENT_GATE_BIN__"
+          "command": "__AGENT_GATE_BIN__ managed-hook claude"
         }
       ],
       "failClosed": false
@@ -240,7 +240,7 @@
       "hooks": [
         {
           "type": "command",
-          "command": "__AGENT_GATE_BIN__"
+          "command": "__AGENT_GATE_BIN__ managed-hook claude"
         }
       ],
       "failClosed": false
@@ -251,7 +251,7 @@
       "hooks": [
         {
           "type": "command",
-          "command": "__AGENT_GATE_BIN__"
+          "command": "__AGENT_GATE_BIN__ managed-hook claude"
         }
       ],
       "failClosed": false
@@ -262,7 +262,7 @@
       "hooks": [
         {
           "type": "command",
-          "command": "__AGENT_GATE_BIN__"
+          "command": "__AGENT_GATE_BIN__ managed-hook claude"
         }
       ],
       "failClosed": false
@@ -273,7 +273,7 @@
       "hooks": [
         {
           "type": "command",
-          "command": "__AGENT_GATE_BIN__"
+          "command": "__AGENT_GATE_BIN__ managed-hook claude"
         }
       ],
       "failClosed": false
@@ -284,7 +284,7 @@
       "hooks": [
         {
           "type": "command",
-          "command": "__AGENT_GATE_BIN__"
+          "command": "__AGENT_GATE_BIN__ managed-hook claude"
         }
       ],
       "failClosed": false
@@ -295,7 +295,7 @@
       "hooks": [
         {
           "type": "command",
-          "command": "__AGENT_GATE_BIN__"
+          "command": "__AGENT_GATE_BIN__ managed-hook claude"
         }
       ],
       "failClosed": false

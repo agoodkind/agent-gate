@@ -110,7 +110,7 @@ func TestInstallHooksUpdatesCursorJSONIdempotently(t *testing.T) {
 		"external-hook --first",
 		"wrapper --delegate agent-gate",
 		"external-hook --last",
-		binPath,
+		binPath + " managed-hook cursor",
 	}
 	for i, wantCommand := range wantCommands {
 		if preToolUse[i].Command != wantCommand {
@@ -193,7 +193,7 @@ func TestInstallHooksRemovesClaudeWorktreeFactoryHooks(t *testing.T) {
 		"external-hook --first",
 		"wrapper --delegate /obsolete/bin/agent-gate",
 		"external-hook --last",
-		binPath,
+		binPath + " managed-hook claude",
 	}
 	if !reflect.DeepEqual(sessionStartCommands, wantSessionStartCommands) {
 		t.Fatalf("SessionStart commands = %v, want %v", sessionStartCommands, wantSessionStartCommands)
@@ -259,7 +259,7 @@ func TestInstallHooksMergesGeminiJSONIdempotently(t *testing.T) {
 		"external-hook --first",
 		"wrapper --delegate /obsolete/bin/agent-gate",
 		"external-hook --last",
-		binPath + " gemini-hook",
+		binPath + " managed-hook gemini",
 	}
 	gotCommands := eventCommands(t, settings.Hooks["BeforeTool"])
 	if !reflect.DeepEqual(gotCommands, wantCommands) {
@@ -430,7 +430,7 @@ func TestInstallCopilotHooksRegistersResponseEventsWithHints(t *testing.T) {
 			t.Fatalf("Copilot hooks missing %q", eventName)
 		}
 		commands := eventCommands(t, event)
-		wantCommand := binPath + " copilot-hook " + eventName
+		wantCommand := binPath + " managed-hook copilot " + eventName
 		if len(commands) != 1 || commands[0] != wantCommand {
 			t.Fatalf("%s commands = %#v, want %q", eventName, commands, wantCommand)
 		}
@@ -519,7 +519,7 @@ old = "block"
 		`model = "gpt-test"`,
 		"other = true",
 		"hooks = true",
-		`command = "` + binPath + ` codex-hook"`,
+		`command = "` + binPath + ` managed-hook codex"`,
 		"[[hooks.SubagentStart]]",
 	} {
 		if !strings.Contains(got, want) {
@@ -591,7 +591,7 @@ func TestInstallHooksReplacesNestedJSONCommands(t *testing.T) {
 	if strings.Contains(got, agentGatePlaceholder) {
 		t.Fatalf("placeholder survived JSON render:\n%s", got)
 	}
-	if !strings.Contains(got, binPath+" gemini-hook") {
+	if !strings.Contains(got, binPath+" managed-hook gemini") {
 		t.Fatalf("rendered command missing bin path:\n%s", got)
 	}
 }
@@ -628,7 +628,7 @@ func TestInstallFromScratchCreatesExpectedFiles(t *testing.T) {
 		},
 		{
 			path:           filepath.Join(homeDir, ".codex", "config.toml"),
-			wantSubstrings: []string{"hooks = true", `command = "` + binPath + ` codex-hook"`},
+			wantSubstrings: []string{"hooks = true", `command = "` + binPath + ` managed-hook codex"`},
 		},
 		{
 			path:           filepath.Join(homeDir, ".cursor", "hooks.json"),
@@ -636,7 +636,7 @@ func TestInstallFromScratchCreatesExpectedFiles(t *testing.T) {
 		},
 		{
 			path:           filepath.Join(homeDir, ".gemini", "settings.json"),
-			wantSubstrings: []string{binPath + " gemini-hook"},
+			wantSubstrings: []string{binPath + " managed-hook gemini"},
 		},
 		{
 			path:           filepath.Join(homeDir, ".copilot", "hooks", "agent-gate.json"),
