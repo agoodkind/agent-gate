@@ -103,6 +103,12 @@ func TestDeferredAuditOutboxMigrationDoesNotInventHistoricalRows(t *testing.T) {
 	if _, err := database.Exec(`drop table deferred_audit_outbox`); err != nil {
 		t.Fatalf("drop outbox: %v", err)
 	}
+	if _, err := database.Exec(`drop table audit_schema_migrations`); err != nil {
+		t.Fatalf("remove schema version from legacy database: %v", err)
+	}
+	if _, err := database.Exec(`pragma user_version = 0`); err != nil {
+		t.Fatalf("reset legacy user version: %v", err)
+	}
 	if err := database.Close(); err != nil {
 		t.Fatalf("close legacy database: %v", err)
 	}

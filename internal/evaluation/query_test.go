@@ -356,6 +356,7 @@ func dropEvaluationQueryColumns(t *testing.T, database *sql.DB) {
 	if _, err := database.Exec(`alter table gate_evaluations drop column label_count`); err != nil {
 		t.Fatalf("drop label count column: %v", err)
 	}
+	resetAuditSchemaVersion(t, database)
 }
 
 func assertLegacyQueryRecord(t *testing.T, records []evaluation.QueryRecord, evaluationID string) {

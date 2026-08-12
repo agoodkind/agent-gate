@@ -1,0 +1,226 @@
+package auditstorage
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"log/slog"
+	"time"
+)
+
+const migrationTimeFormat = time.RFC3339Nano
+
+var migrations = []Migration{
+	{Version: 1, Apply: migrateV1},
+}
+
+var migrationNow = time.Now
+
+// Migrate applies every pending audit schema version in order.
+func Migrate(ctx context.Context, database *sql.DB) error {
+	if database == nil {
+		return errors.New("audit storage database is required")
+	}
+	if err := configureDatabase(ctx, database); err != nil {
+		return err
+	}
+	version, err := SchemaVersion(ctx, database)
+	if err != nil {
+		return err
+	}
+	if version > 0 {
+		if _, err := MigrationAppliedAt(ctx, database, version); err != nil {
+			return err
+		}
+	}
+	for _, migration := range migrations {
+		if migration.Version <= version {
+			continue
+		}
+		if err := applyMigration(ctx, database, migration); err != nil {
+			return err
+		}
+		version = migration.Version
+	}
+	return nil
+}
+
+// SchemaVersion returns the newest recorded audit schema version.
+func SchemaVersion(ctx context.Context, database *sql.DB) (int, error) {
+	if database == nil {
+		return 0, errors.New("audit storage database is required")
+	}
+	exists, err := schemaObjectExists(ctx, database, "audit_schema_migrations")
+	if err != nil {
+		return 0, err
+	}
+	if !exists {
+		return 0, nil
+	}
+	var version int
+	if err := database.QueryRowContext(
+		ctx,
+		`select coalesce(max(version), 0) from audit_schema_migrations`,
+	).Scan(&version); err != nil {
+		return 0, wrapError("read audit schema version", err)
+	}
+	return version, nil
+}
+
+// MigrationAppliedAt returns when one audit schema version committed.
+func MigrationAppliedAt(
+	ctx context.Context,
+	database *sql.DB,
+	version int,
+) (time.Time, error) {
+	if database == nil {
+		return time.Time{}, errors.New("audit storage database is required")
+	}
+	var raw string
+	if err := database.QueryRowContext(
+		ctx,
+		`select applied_at from audit_schema_migrations where version = ?`,
+		version,
+	).Scan(&raw); err != nil {
+		return time.Time{}, wrapError(
+			fmt.Sprintf("read audit migration %d application time", version),
+			err,
+		)
+	}
+	appliedAt, err := time.Parse(migrationTimeFormat, raw)
+	if err != nil {
+		return time.Time{}, wrapError(
+			fmt.Sprintf("parse audit migration %d application time", version),
+			err,
+		)
+	}
+	return appliedAt, nil
+}
+
+func configureDatabase(ctx context.Context, database *sql.DB) error {
+	newDatabase, err := hasNoApplicationTables(ctx, database)
+	if err != nil {
+		return err
+	}
+	if newDatabase {
+		if _, err := database.ExecContext(ctx, `pragma auto_vacuum = incremental`); err != nil {
+			return wrapError("enable incremental auto-vacuum", err)
+		}
+	}
+	statements := []string{
+		`pragma busy_timeout = 5000`,
+		`pragma journal_mode = wal`,
+		`pragma foreign_keys = on`,
+	}
+	for _, statement := range statements {
+		if _, err := database.ExecContext(ctx, statement); err != nil {
+			return wrapError("configure audit storage", err)
+		}
+	}
+	var foreignKeysEnabled int
+	if err := database.QueryRowContext(ctx, `pragma foreign_keys`).Scan(&foreignKeysEnabled); err != nil {
+		return wrapError("verify audit storage foreign keys", err)
+	}
+	if foreignKeysEnabled != 1 {
+		return errors.New("audit storage foreign keys are disabled")
+	}
+	return nil
+}
+
+func hasNoApplicationTables(ctx context.Context, database *sql.DB) (bool, error) {
+	var count int
+	if err := database.QueryRowContext(ctx, `
+		select count(*)
+		from sqlite_schema
+		where type = 'table'
+			and name not like 'sqlite_%'
+			and name != 'audit_schema_migrations'
+	`).Scan(&count); err != nil {
+		return false, wrapError("inspect audit storage tables", err)
+	}
+	return count == 0, nil
+}
+
+func schemaObjectExists(ctx context.Context, database *sql.DB, name string) (bool, error) {
+	var count int
+	if err := database.QueryRowContext(
+		ctx,
+		`select count(*) from sqlite_schema where name = ?`,
+		name,
+	).Scan(&count); err != nil {
+		return false, wrapError(fmt.Sprintf("inspect audit schema object %q", name), err)
+	}
+	return count != 0, nil
+}
+
+func applyMigration(ctx context.Context, database *sql.DB, migration Migration) error {
+	transaction, err := database.BeginTx(ctx, nil)
+	if err != nil {
+		return wrapError(fmt.Sprintf("begin audit migration %d", migration.Version), err)
+	}
+	defer func() { _ = transaction.Rollback() }()
+	if _, err := transaction.ExecContext(ctx, `
+		create table if not exists audit_schema_migrations (
+			version integer primary key,
+			applied_at text not null
+		)
+	`); err != nil {
+		return wrapError("create audit schema migration ledger", err)
+	}
+	if err := migration.Apply(ctx, transaction); err != nil {
+		return wrapError(fmt.Sprintf("apply audit migration %d", migration.Version), err)
+	}
+	if err := verifyForeignKeys(ctx, transaction); err != nil {
+		return wrapError(fmt.Sprintf("verify audit migration %d foreign keys", migration.Version), err)
+	}
+	if _, err := transaction.ExecContext(
+		ctx,
+		`insert into audit_schema_migrations (version, applied_at) values (?, ?)`,
+		migration.Version,
+		migrationNow().UTC().Format(migrationTimeFormat),
+	); err != nil {
+		return wrapError(fmt.Sprintf("record audit migration %d", migration.Version), err)
+	}
+	userVersionStatement := fmt.Sprintf("pragma user_version = %d", migration.Version)
+	if _, err := transaction.ExecContext(ctx, userVersionStatement); err != nil {
+		return wrapError(fmt.Sprintf("record audit user version %d", migration.Version), err)
+	}
+	if err := transaction.Commit(); err != nil {
+		return wrapError(fmt.Sprintf("commit audit migration %d", migration.Version), err)
+	}
+	return nil
+}
+
+func verifyForeignKeys(ctx context.Context, transaction *sql.Tx) error {
+	rows, err := transaction.QueryContext(ctx, `pragma foreign_key_check`)
+	if err != nil {
+		return wrapError("query audit foreign keys", err)
+	}
+	defer func() { _ = rows.Close() }()
+	if rows.Next() {
+		var table string
+		var rowID sql.NullInt64
+		var parent string
+		var constraintID int
+		if err := rows.Scan(&table, &rowID, &parent, &constraintID); err != nil {
+			return wrapError("scan audit foreign key violation", err)
+		}
+		return fmt.Errorf(
+			"foreign key violation in %s row %d referencing %s constraint %d",
+			table,
+			rowID.Int64,
+			parent,
+			constraintID,
+		)
+	}
+	if err := rows.Err(); err != nil {
+		return wrapError("iterate audit foreign keys", err)
+	}
+	return nil
+}
+
+func wrapError(message string, err error) error {
+	slog.Warn(message+" failed", "err", err)
+	return fmt.Errorf("%s: %w", message, err)
+}

@@ -17,53 +17,6 @@ var ErrDeferredAuditClaimUnavailable = errors.New("deferred audit claim unavaila
 // ErrDeferredAuditClaimLost means a processor no longer owns the delivery attempt.
 var ErrDeferredAuditClaimLost = errors.New("deferred audit claim lost")
 
-func ensureDeferredAuditOutboxSchema(ctx context.Context, database *sql.DB) error {
-	transaction, err := database.BeginTx(ctx, nil)
-	if err != nil {
-		return wrapError("begin deferred audit outbox migration", err)
-	}
-	defer func() { _ = transaction.Rollback() }()
-	statements := []string{
-		`create table if not exists deferred_audit_outbox (
-			receipt_id integer primary key,
-			event_id text not null,
-			evaluation_id text not null unique,
-			state text not null,
-			created_at text not null,
-			completed_at text,
-			claim_owner text,
-			claim_expires_at text,
-			claim_attempt integer not null default 0,
-			foreign key(receipt_id, event_id)
-				references intake_receipts(receipt_id, event_id) on delete cascade,
-			foreign key(evaluation_id) references gate_evaluations(evaluation_id)
-				on delete cascade,
-			check(state in ('pending', 'complete'))
-		)`,
-		`create table if not exists deferred_audit_outbox_entries (
-			receipt_id integer not null,
-			entry_index integer not null,
-			audit_event_id text not null,
-			payload_json blob not null,
-			delivered_at text,
-			primary key(receipt_id, entry_index),
-			foreign key(receipt_id) references deferred_audit_outbox(receipt_id)
-				on delete cascade
-		)`,
-		`create index if not exists deferred_audit_outbox_pending_idx
-			on deferred_audit_outbox(state, claim_expires_at)`,
-	}
-	for _, statement := range statements {
-		if _, err := transaction.ExecContext(ctx, statement); err != nil {
-			return wrapError("initialize deferred audit outbox", err)
-		}
-	}
-	if err := transaction.Commit(); err != nil {
-		return wrapError("commit deferred audit outbox migration", err)
-	}
-	return nil
-}
-
 // ListPendingDeferredAudit returns receipt ids with undelivered audit entries.
 func (s *Store) ListPendingDeferredAudit(ctx context.Context, limit int) ([]int64, error) {
 	query := `select receipt_id from deferred_audit_outbox

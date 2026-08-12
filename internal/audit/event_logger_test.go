@@ -9,6 +9,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 
 	"goodkind.io/agent-gate/internal/audit"
+	"goodkind.io/agent-gate/internal/auditstorage"
 	"goodkind.io/agent-gate/internal/config"
 )
 
@@ -27,6 +28,32 @@ func testConfig(t *testing.T) *config.Config {
 				},
 			},
 		},
+	}
+}
+
+func TestEventLoggerMigrationRecordsSharedSchemaVersion(t *testing.T) {
+	cfg := testConfig(t)
+	logger, err := audit.NewEventLoggerWithOptions(
+		t.Context(), cfg, nil, audit.LoggerOptions{QueueLimit: 0},
+	)
+	if err != nil {
+		t.Fatalf("NewEventLogger: %v", err)
+	}
+	if err := logger.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	database, err := sql.Open("sqlite3", cfg.AuditSQLitePath())
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	version, err := auditstorage.SchemaVersion(t.Context(), database)
+	if err != nil {
+		t.Fatalf("SchemaVersion: %v", err)
+	}
+	if version != 1 {
+		t.Fatalf("schema version = %d, want 1", version)
 	}
 }
 
