@@ -16,9 +16,34 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 
+	"goodkind.io/agent-gate/internal/auditstorage"
 	"goodkind.io/agent-gate/internal/evaluation"
 	"goodkind.io/agent-gate/internal/intake"
 )
+
+func TestNewStoreMigrationRecordsSharedSchemaVersion(t *testing.T) {
+	database, err := sql.Open("sqlite3", filepath.Join(t.TempDir(), "evaluation.db"))
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	database.SetMaxOpenConns(1)
+	t.Cleanup(func() {
+		if err := database.Close(); err != nil {
+			t.Fatalf("close database: %v", err)
+		}
+	})
+
+	if _, err := evaluation.NewStore(t.Context(), database); err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	version, err := auditstorage.SchemaVersion(t.Context(), database)
+	if err != nil {
+		t.Fatalf("SchemaVersion: %v", err)
+	}
+	if version != 1 {
+		t.Fatalf("schema version = %d, want 1", version)
+	}
+}
 
 func TestStoreRoundTripsCompletedEvaluation(t *testing.T) {
 	store, receipt := newEvaluationStore(t)
@@ -70,6 +95,7 @@ func TestStoreMigratesPopulatedLayerMetadata(t *testing.T) {
 	); err != nil {
 		t.Fatalf("remove post-Task-6 metadata column: %v", err)
 	}
+	resetAuditSchemaVersion(t, intakeStore.Handle())
 
 	migratedStore, err := evaluation.NewStore(ctx, intakeStore.Handle())
 	if err != nil {
@@ -338,17 +364,6 @@ func TestNewStoreEnablesForeignKeyEnforcement(t *testing.T) {
 			t.Fatalf("close database: %v", err)
 		}
 	})
-	_, err = database.ExecContext(context.Background(), `
-		create table intake_events (event_id text primary key);
-		create table intake_receipts (
-			receipt_id integer primary key,
-			event_id text not null,
-			unique(receipt_id, event_id)
-		);
-	`)
-	if err != nil {
-		t.Fatalf("create intake schema: %v", err)
-	}
 	if _, err := evaluation.NewStore(context.Background(), database); err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
@@ -490,6 +505,7 @@ func TestStoreMigratesMissingLayerVerdict(t *testing.T) {
 	); err != nil {
 		t.Fatalf("remove verdict column: %v", err)
 	}
+	resetAuditSchemaVersion(t, intakeStore.Handle())
 
 	migratedStore, err := evaluation.NewStore(ctx, intakeStore.Handle())
 	if err != nil {
@@ -534,6 +550,16 @@ func newEvaluationStore(t *testing.T) (*evaluation.Store, intake.AppendResult) {
 		t.Fatalf("Append: %v", err)
 	}
 	return intakeStore.Evaluations(), receipt
+}
+
+func resetAuditSchemaVersion(t *testing.T, database *sql.DB) {
+	t.Helper()
+	if _, err := database.Exec(`drop table audit_schema_migrations`); err != nil {
+		t.Fatalf("remove schema version from legacy database: %v", err)
+	}
+	if _, err := database.Exec(`pragma user_version = 0`); err != nil {
+		t.Fatalf("reset legacy user version: %v", err)
+	}
 }
 
 func completeRecord(receipt intake.AppendResult) evaluation.Record {

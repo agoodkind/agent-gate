@@ -10,7 +10,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"hash"
 	"log/slog"
 	"maps"
@@ -22,13 +21,12 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 
 	"goodkind.io/agent-gate/internal/audit"
+	"goodkind.io/agent-gate/internal/auditstorage"
 	"goodkind.io/agent-gate/internal/config"
 	"goodkind.io/agent-gate/internal/evaluation"
 )
 
 const schemaVersion = 1
-
-const sqliteBusyTimeoutMS = 5000
 
 // DeferredState tracks whether an intake event is still waiting for deferred
 // replay or has already been processed.
@@ -162,10 +160,6 @@ func OpenSQLite(ctx context.Context, path string, log *slog.Logger) (*Store, err
 	if err != nil {
 		_ = db.Close()
 		return nil, wrapLoggedError(ctx, log, "init evaluation store", err)
-	}
-	if err := ensureDeferredAuditOutboxSchema(ctx, db); err != nil {
-		_ = db.Close()
-		return nil, err
 	}
 	return store, nil
 }
@@ -464,90 +458,10 @@ func (s *Store) GetReceipt(ctx context.Context, receiptID int64) (Record, error)
 }
 
 func (s *Store) init(ctx context.Context) error {
-	stmts := []string{
-		fmt.Sprintf(`pragma busy_timeout = %d`, sqliteBusyTimeoutMS),
-		`pragma journal_mode = wal`,
-		`pragma foreign_keys = on`,
-		`create table if not exists intake_events (
-			seq integer primary key autoincrement,
-			event_id text not null unique,
-			schema_version integer not null,
-			recorded_at text not null,
-			system text not null,
-			session_id text not null,
-			turn_id text not null,
-			event_name text not null,
-			tool_name text not null,
-			tool_use_id text not null,
-			cwd text not null,
-			effective_cwd text not null,
-			command text not null,
-			file_path text not null,
-			raw_payload blob not null,
-			raw_payload_hash text not null,
-			normalized_json text not null,
-			classification_json text not null default '{}',
-			env_fingerprint_json text not null default '{}'
-		)`,
-		`create table if not exists intake_deferred (
-			receipt_id integer primary key,
-			event_id text not null,
-			state text not null,
-			pending_at text,
-			completed_at text,
-			last_replay_at text,
-			replay_count integer not null default 0,
-			claim_owner text,
-			claim_expires_at text,
-			claim_attempt integer not null default 0,
-			foreign key(receipt_id, event_id)
-				references intake_receipts(receipt_id, event_id) on delete cascade,
-			check(state in ('none', 'pending', 'complete'))
-		)`,
-		`create table if not exists intake_receipts (
-			receipt_id integer primary key autoincrement,
-			event_id text not null,
-			received_at text not null,
-			foreign key(event_id) references intake_events(event_id) on delete cascade,
-			unique(receipt_id, event_id)
-		)`,
-		`create index if not exists intake_events_recorded_at_idx on intake_events(recorded_at)`,
-		`create index if not exists intake_events_session_recorded_at_idx on intake_events(session_id, recorded_at)`,
-		`create index if not exists intake_events_system_recorded_at_idx on intake_events(system, recorded_at)`,
-		`create index if not exists intake_deferred_state_idx on intake_deferred(state)`,
-		`create index if not exists intake_receipts_event_id_idx on intake_receipts(event_id)`,
-		`create index if not exists intake_receipts_received_at_idx on intake_receipts(received_at)`,
-		// Per-slice indices so common group-by/filter queries use an index
-		// instead of scanning the table. command, raw_payload, normalized_json,
-		// and env_fingerprint_json are intentionally excluded: they are free
-		// text, blobs, or JSON, and a LIKE '%...%' scan cannot use a b-tree.
-		// command is searched through the FTS5 trigram index instead.
-		`create index if not exists intake_events_event_name_idx on intake_events(event_name)`,
-		`create index if not exists intake_events_tool_name_idx on intake_events(tool_name)`,
-		`create index if not exists intake_events_tool_use_id_idx on intake_events(tool_use_id)`,
-		`create index if not exists intake_events_turn_id_idx on intake_events(turn_id)`,
-		`create index if not exists intake_events_cwd_idx on intake_events(cwd)`,
-		`create index if not exists intake_events_effective_cwd_idx on intake_events(effective_cwd)`,
-		`create index if not exists intake_events_file_path_idx on intake_events(file_path)`,
-		`create index if not exists intake_events_raw_payload_hash_idx on intake_events(raw_payload_hash)`,
-		`create index if not exists intake_events_schema_version_idx on intake_events(schema_version)`,
-		`create index if not exists intake_events_effective_cwd_recorded_at_idx on intake_events(effective_cwd, recorded_at)`,
-		`create index if not exists intake_events_tool_name_recorded_at_idx on intake_events(tool_name, recorded_at)`,
-		`create index if not exists intake_events_event_name_recorded_at_idx on intake_events(event_name, recorded_at)`,
-	}
-	for _, stmt := range stmts {
-		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
-			return wrapLoggedError(ctx, s.log, "init intake sqlite schema", err)
-		}
-	}
-	if err := ensureDeferredReceiptSchema(ctx, s.db); err != nil {
-		return err
+	if err := auditstorage.Migrate(ctx, s.db); err != nil {
+		return wrapLoggedError(ctx, s.log, "migrate intake sqlite schema", err)
 	}
 	logDeferredReceiptRepairs(ctx, s.db, s.log)
-	if err := ensureIntakeSchemaMigrations(ctx, s.db); err != nil {
-		return err
-	}
-	ensureCommandFTS(ctx, s.db, s.log)
 	return nil
 }
 
@@ -857,87 +771,6 @@ func unmarshalEnvFingerprint(raw string) (map[string]string, error) {
 		return nil, wrapError("decode intake env fingerprint", err)
 	}
 	return cloneEnvFingerprint(envFingerprint), nil
-}
-
-func ensureIntakeSchemaMigrations(ctx context.Context, db *sql.DB) error {
-	if err := ensureIntakeEventColumn(ctx, db, "env_fingerprint_json", "text not null default '{}'"); err != nil {
-		return err
-	}
-	if err := ensureIntakeEventColumn(ctx, db, "classification_json", "text not null default '{}'"); err != nil {
-		return err
-	}
-	if err := ensureIntakeEventColumn(ctx, db, "hot_eval_latency_us", "integer"); err != nil {
-		return err
-	}
-	if _, err := db.ExecContext(ctx, `create index if not exists intake_events_hot_eval_latency_us_idx on intake_events(hot_eval_latency_us)`); err != nil {
-		return wrapError("create intake_events hot_eval_latency_us index", err)
-	}
-	return nil
-}
-
-// commandFTSTriggers keeps the external-content FTS5 index in sync with
-// intake_events. The update trigger is scoped to OF command so a latency-only
-// write-back never churns the index.
-var commandFTSTriggers = []string{
-	`create trigger if not exists intake_events_ai after insert on intake_events begin
-		insert into intake_command_fts(rowid, command) values (new.seq, new.command);
-	end`,
-	`create trigger if not exists intake_events_ad after delete on intake_events begin
-		insert into intake_command_fts(intake_command_fts, rowid, command) values('delete', old.seq, old.command);
-	end`,
-	`create trigger if not exists intake_events_au after update of command on intake_events begin
-		insert into intake_command_fts(intake_command_fts, rowid, command) values('delete', old.seq, old.command);
-		insert into intake_command_fts(rowid, command) values (new.seq, new.command);
-	end`,
-}
-
-// ensureCommandFTS creates the FTS5 trigram index over intake_events.command and
-// its sync triggers, then backfills the pre-existing rows exactly once. It is
-// best-effort: a binary built without the sqlite_fts5 tag cannot load the fts5
-// module, so creation fails and the index is skipped rather than breaking
-// intake. The rebuild runs only when the FTS table did not exist before this
-// call, because for an external-content FTS5 table "select count(*) from
-// intake_command_fts" reads the content table (always the full row count) and
-// cannot reveal an empty index.
-func ensureCommandFTS(ctx context.Context, db *sql.DB, log *slog.Logger) {
-	alreadyExisted := commandFTSExists(ctx, db)
-
-	_, err := db.ExecContext(ctx, `create virtual table if not exists intake_command_fts using fts5(
-		command,
-		content='intake_events',
-		content_rowid='seq',
-		tokenize='trigram'
-	)`)
-	if err != nil {
-		if log != nil {
-			log.WarnContext(ctx, "fts5 command index unavailable; substring search will scan", "err", err)
-		}
-		return
-	}
-	for _, stmt := range commandFTSTriggers {
-		if _, err := db.ExecContext(ctx, stmt); err != nil {
-			if log != nil {
-				log.WarnContext(ctx, "create intake command fts trigger failed", "err", err)
-			}
-			return
-		}
-	}
-	if alreadyExisted {
-		return
-	}
-	if _, err := db.ExecContext(ctx, `insert into intake_command_fts(intake_command_fts) values('rebuild')`); err != nil {
-		if log != nil {
-			log.WarnContext(ctx, "backfill intake command fts failed", "err", err)
-		}
-	}
-}
-
-// commandFTSExists reports whether the FTS table is already present, so the
-// one-time backfill runs only on first creation.
-func commandFTSExists(ctx context.Context, db *sql.DB) bool {
-	var name string
-	err := db.QueryRowContext(ctx, `select name from sqlite_master where type = 'table' and name = 'intake_command_fts'`).Scan(&name)
-	return err == nil
 }
 
 // UpdateHotEvalLatency records the synchronous hot-path evaluation latency for a

@@ -19,6 +19,7 @@ import (
 	expirable "github.com/hashicorp/golang-lru/v2/expirable"
 	_ "github.com/mattn/go-sqlite3"
 
+	"goodkind.io/agent-gate/internal/auditstorage"
 	"goodkind.io/agent-gate/internal/config"
 )
 
@@ -684,62 +685,9 @@ func newSQLiteEventSinkFromDB(ctx context.Context, db *sql.DB, log *slog.Logger)
 }
 
 func (s *sqliteEventSink) init(ctx context.Context) error {
-	stmts := []string{
-		`pragma busy_timeout = 5000`,
-		`pragma journal_mode = wal`,
-		`create table if not exists events (
-			event_id text primary key,
-			schema_version integer,
-			time text,
-			level text,
-			message text,
-			system text,
-			session_id text,
-			turn_id text,
-			event_name text,
-			tool_use_id text,
-			tool_name text,
-			raw_payload_hash text
-		)`,
-		`create table if not exists operations (
-			event_id text primary key,
-			cwd text,
-			effective_cwd text,
-			command text,
-			file_path text
-		)`,
-		`create table if not exists decisions (
-			event_id text primary key,
-			kind text,
-			can_block integer,
-			rules_checked_json text,
-			rules_matched_json text
-		)`,
-		`create table if not exists violations (
-			id integer primary key autoincrement,
-			event_id text,
-			rule text,
-			mode text,
-			field_path text,
-			file_path text,
-			start integer,
-			end integer,
-			message text
-		)`,
-		`create index if not exists events_time_idx on events(time)`,
-		`create index if not exists events_system_time_idx on events(system, time)`,
-		`create index if not exists events_session_time_idx on events(session_id, time)`,
-		`create index if not exists events_tool_time_idx on events(tool_name, time)`,
-		`create index if not exists events_event_name_time_idx on events(event_name, time)`,
-		`create index if not exists decisions_kind_idx on decisions(kind)`,
-		`create index if not exists violations_rule_idx on violations(rule)`,
-		`create index if not exists violations_mode_idx on violations(mode)`,
-	}
-	for _, stmt := range stmts {
-		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
-			s.log.WarnContext(ctx, "init audit sqlite schema failed", slog.Any("err", err))
-			return fmt.Errorf("init audit sqlite schema: %w", err)
-		}
+	if err := auditstorage.Migrate(ctx, s.db); err != nil {
+		s.log.WarnContext(ctx, "migrate audit sqlite schema failed", slog.Any("err", err))
+		return fmt.Errorf("migrate audit sqlite schema: %w", err)
 	}
 	return nil
 }
