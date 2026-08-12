@@ -11,7 +11,11 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -93,6 +97,7 @@ type updateCheck struct {
 	stdout      io.Writer
 	stderr      io.Writer
 	child       *childProcess
+	apiProxy    *httptest.Server
 }
 
 func main() {
@@ -166,6 +171,9 @@ func run(
 		selection.target.TagName,
 	)
 	if err := check.installOldRelease(ctx, selection.previous); err != nil {
+		return err
+	}
+	if err := check.startAuthenticatedProxy(ctx); err != nil {
 		return err
 	}
 	if err := check.startDaemon(ctx); err != nil {
@@ -384,6 +392,31 @@ func (check *updateCheck) installOldRelease(ctx context.Context, release githubR
 	return nil
 }
 
+func authenticatedProxy(target *url.URL, token string) *httputil.ReverseProxy {
+	return &httputil.ReverseProxy{Rewrite: func(request *httputil.ProxyRequest) {
+		request.SetURL(target)
+		request.Out.Header.Set("Authorization", "Bearer "+token)
+	}}
+}
+
+func (check *updateCheck) startAuthenticatedProxy(ctx context.Context) error {
+	target, err := url.Parse(githubAPIBaseURL)
+	if err != nil {
+		slog.WarnContext(ctx, "ci.auto_update.api_proxy_url_invalid", "err", err)
+		return fmt.Errorf("parse GitHub API URL: %w", err)
+	}
+	listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp6", "[::1]:0")
+	if err != nil {
+		slog.WarnContext(ctx, "ci.auto_update.api_proxy_listen_failed", "err", err)
+		return fmt.Errorf("listen for authenticated GitHub API proxy: %w", err)
+	}
+	server := httptest.NewUnstartedServer(authenticatedProxy(target, check.environment.token))
+	server.Listener = listener
+	server.Start()
+	check.apiProxy = server
+	return nil
+}
+
 func extractBinary(archive io.Reader, destination string) error {
 	gzipReader, err := gzip.NewReader(archive)
 	if err != nil {
@@ -431,6 +464,9 @@ func extractBinary(archive io.Reader, destination string) error {
 }
 
 func (check *updateCheck) startDaemon(ctx context.Context) error {
+	if check.apiProxy == nil {
+		return fmt.Errorf("authenticated GitHub API proxy is not running")
+	}
 	logFile, err := os.OpenFile(check.daemonLog, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
 		slog.WarnContext(ctx, "ci.auto_update.daemon_log_create_failed", "path", check.daemonLog, "err", err)
@@ -440,11 +476,12 @@ func (check *updateCheck) startDaemon(ctx context.Context) error {
 	command := exec.CommandContext(context.WithoutCancel(ctx), check.installBin, "daemon")
 	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	command.Env = replaceEnvironment(os.Environ(), map[string]string{
-		"HOME":            check.testHome,
-		"XDG_CACHE_HOME":  check.cacheRoot,
-		"XDG_CONFIG_HOME": check.configRoot,
-		"XDG_RUNTIME_DIR": check.runtimeRoot,
-		"XDG_STATE_HOME":  check.stateRoot,
+		"AGENT_GATE_UPDATE_API_BASE_URL": check.apiProxy.URL,
+		"HOME":                           check.testHome,
+		"XDG_CACHE_HOME":                 check.cacheRoot,
+		"XDG_CONFIG_HOME":                check.configRoot,
+		"XDG_RUNTIME_DIR":                check.runtimeRoot,
+		"XDG_STATE_HOME":                 check.stateRoot,
 	})
 	command.Stdout = logFile
 	command.Stderr = logFile
@@ -627,6 +664,9 @@ func (check *updateCheck) cleanup() error {
 		if err := check.child.stop(); err != nil {
 			cleanupErrors = append(cleanupErrors, err)
 		}
+	}
+	if check.apiProxy != nil {
+		check.apiProxy.Close()
 	}
 	if err := removeTestRoot(check.testRoot); err != nil {
 		cleanupErrors = append(cleanupErrors, err)

@@ -4,6 +4,10 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +15,54 @@ import (
 
 	"goodkind.io/go-makefile/selfupdate"
 )
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (function roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return function(request)
+}
+
+func TestAuthenticatedProxyAddsTokenAndPreservesRequest(t *testing.T) {
+	t.Parallel()
+	target, err := url.Parse("https://api.github.com")
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	var receivedRequest *http.Request
+	proxy := authenticatedProxy(target, "ci-token")
+	proxy.Transport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		receivedRequest = request.Clone(request.Context())
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader("ok")),
+		}, nil
+	})
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(
+		http.MethodGet,
+		"http://localhost/repos/fork/agent-gate/releases?per_page=100",
+		nil,
+	)
+
+	proxy.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+	if receivedRequest == nil {
+		t.Fatal("proxy did not forward request")
+	}
+	if got := receivedRequest.Header.Get("Authorization"); got != "Bearer ci-token" {
+		t.Fatalf("Authorization = %q, want bearer token", got)
+	}
+	if receivedRequest.Host != "" {
+		t.Fatalf("Host = %q, want URL host", receivedRequest.Host)
+	}
+	if got := receivedRequest.URL.String(); got != "https://api.github.com/repos/fork/agent-gate/releases?per_page=100" {
+		t.Fatalf("URL = %q", got)
+	}
+}
 
 func TestSelectReleasesForBranchBuild(t *testing.T) {
 	t.Parallel()
