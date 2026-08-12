@@ -247,4 +247,7 @@ func TestQuery_SQLite(t *testing.T) {
 	if got := events[0].Decision.RulesMatched; len(got) != 1 || got[0] != "use-make-not-go-direct" {
 		t.Fatalf("rules matched = %#v", got)
 	}
+	if events[0].Detail.State != auditstorage.DetailStateAvailable {
+		t.Fatalf("detail state = %q, want available", events[0].Detail.State)
+	}
 }

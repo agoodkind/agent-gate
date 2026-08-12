@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"goodkind.io/agent-gate/internal/auditstorage"
 )
 
 const (
@@ -18,6 +20,10 @@ const (
 	DefaultQueryLimit = 50
 	// MaxQueryLimit is the largest evaluation page accepted by the query API.
 	MaxQueryLimit = 1000
+	// QueryDetailFull loads and validates stored evaluation content.
+	QueryDetailFull = "full"
+	// QueryDetailSummary returns summary rows without loading evaluation content.
+	QueryDetailSummary = "summary"
 )
 
 // QueryFilter narrows complete evaluation records and their joined intake metadata.
@@ -38,6 +44,7 @@ type QueryFilter struct {
 	LayerOutcome string
 	ModelName    string
 	FinalVerdict string
+	DetailMode   string
 	Limit        int
 	Offset       int
 }
@@ -51,31 +58,32 @@ type QueryResult struct {
 
 // QueryRecord contains safe evaluation and intake metadata plus ordered children.
 type QueryRecord struct {
-	EvaluationID       string       `json:"evaluation_id"`
-	ReceiptID          int64        `json:"receipt_id"`
-	EventID            string       `json:"event_id"`
-	Attempt            int          `json:"attempt"`
-	Mode               string       `json:"mode"`
-	System             string       `json:"system"`
-	SessionID          string       `json:"session_id"`
-	EventName          string       `json:"event_name"`
-	ToolName           string       `json:"tool_name,omitempty"`
-	ConfigHash         string       `json:"config_hash"`
-	EngineVersion      string       `json:"engine_version"`
-	EngineCommit       string       `json:"engine_commit"`
-	EngineBuildHash    string       `json:"engine_build_hash"`
-	InputHash          string       `json:"input_hash"`
-	StartedAt          time.Time    `json:"started_at"`
-	CompletedAt        time.Time    `json:"completed_at"`
-	FinalVerdict       string       `json:"final_verdict"`
-	FinalSource        string       `json:"final_source"`
-	EnforcementAction  string       `json:"enforcement_action"`
-	Enforced           bool         `json:"enforced"`
-	TotalLatencyUS     int64        `json:"total_latency_us"`
-	Layers             []QueryLayer `json:"layers"`
-	Labels             []QueryLabel `json:"labels"`
-	expectedLayerCount int          `json:"-"`
-	expectedLabelCount int          `json:"-"`
+	EvaluationID       string                        `json:"evaluation_id"`
+	ReceiptID          int64                         `json:"receipt_id"`
+	EventID            string                        `json:"event_id"`
+	Attempt            int                           `json:"attempt"`
+	Mode               string                        `json:"mode"`
+	System             string                        `json:"system"`
+	SessionID          string                        `json:"session_id"`
+	EventName          string                        `json:"event_name"`
+	ToolName           string                        `json:"tool_name,omitempty"`
+	ConfigHash         string                        `json:"config_hash"`
+	EngineVersion      string                        `json:"engine_version"`
+	EngineCommit       string                        `json:"engine_commit"`
+	EngineBuildHash    string                        `json:"engine_build_hash"`
+	InputHash          string                        `json:"input_hash"`
+	StartedAt          time.Time                     `json:"started_at"`
+	CompletedAt        time.Time                     `json:"completed_at"`
+	FinalVerdict       string                        `json:"final_verdict"`
+	FinalSource        string                        `json:"final_source"`
+	EnforcementAction  string                        `json:"enforcement_action"`
+	Enforced           bool                          `json:"enforced"`
+	TotalLatencyUS     int64                         `json:"total_latency_us"`
+	Detail             auditstorage.DetailProjection `json:"detail"`
+	Layers             []QueryLayer                  `json:"layers"`
+	Labels             []QueryLabel                  `json:"labels"`
+	expectedLayerCount int                           `json:"-"`
+	expectedLabelCount int                           `json:"-"`
 }
 
 // QueryLayer is the safe training projection of one ordered layer.
@@ -90,8 +98,8 @@ type QueryLayer struct {
 	InputReference    string          `json:"input_reference"`
 	InputHash         string          `json:"input_hash"`
 	OutputHash        string          `json:"output_hash"`
-	Output            json.RawMessage `json:"output"`
-	Metadata          json.RawMessage `json:"metadata"`
+	Output            json.RawMessage `json:"output,omitempty"`
+	Metadata          json.RawMessage `json:"metadata,omitempty"`
 	StartedAt         time.Time       `json:"started_at"`
 	CompletedAt       time.Time       `json:"completed_at"`
 	LatencyUS         int64           `json:"latency_us"`
@@ -212,7 +220,7 @@ func listQueryRecords(
 		queryArgument{Value: strconv.Itoa(normalized.Limit)},
 		queryArgument{Value: strconv.Itoa(normalized.Offset)},
 	)
-	rows, err := queryEvaluationRows(ctx, database, evaluationQuerySelect(hasChildCounts)+where+`
+	rows, err := queryEvaluationRows(ctx, database, evaluationQuerySelect(hasChildCounts, hasSplitDetail)+where+`
 		order by g.completed_at desc, g.evaluation_id desc
 		limit ? offset ?
 	`, arguments)
@@ -240,6 +248,9 @@ func listQueryRecords(
 	}
 	for i := range records {
 		outcomeKnown := hasOutcome && records[i].expectedLayerCount >= 0
+		detailAvailable := normalized.DetailMode == QueryDetailFull &&
+			(records[i].Detail.State == auditstorage.DetailStateAvailable ||
+				records[i].Detail.State == auditstorage.DetailStateProtected)
 		layers, err := querySafeLayers(
 			ctx,
 			database,
@@ -248,6 +259,7 @@ func listQueryRecords(
 			outcomeKnown,
 			hasVerdict,
 			hasSplitDetail,
+			detailAvailable,
 		)
 		if err != nil {
 			return nil, err
@@ -285,16 +297,44 @@ func listQueryRecords(
 	return records, nil
 }
 
-func evaluationQuerySelect(hasChildCounts bool) string {
+func evaluationQuerySelect(hasChildCounts bool, hasSplitDetail bool) string {
 	childCounts := "-1, -1"
 	if hasChildCounts {
 		childCounts = "g.layer_count, g.label_count"
+	}
+	detailColumns := `'available', 1, 1, 0`
+	if hasSplitDetail {
+		detailColumns = `g.detail_state,
+			case when g.detail_state != 'not_recorded' then 1 else 0 end,
+			case when exists (
+				select 1 from gate_evaluation_details evaluation_detail
+				where evaluation_detail.evaluation_id = g.evaluation_id
+			) and (select count(*) from gate_evaluation_layer_details layer_detail
+				where layer_detail.evaluation_id = g.evaluation_id) =
+				(select count(*) from gate_evaluation_layers layer_summary
+					where layer_summary.evaluation_id = g.evaluation_id)
+			and (select count(*) from gate_evaluation_label_details label_detail
+				where label_detail.evaluation_id = g.evaluation_id) =
+				(select count(*) from gate_evaluation_labels label_summary
+					where label_summary.evaluation_id = g.evaluation_id)
+			then 1 else 0 end,
+			case when g.detail_state = 'protected' and (
+				exists (select 1 from intake_deferred pending
+					where pending.receipt_id = g.receipt_id and pending.state = 'pending')
+				or exists (select 1 from deferred_audit_outbox pending_outbox
+					where pending_outbox.receipt_id = g.receipt_id
+						and pending_outbox.state = 'pending')
+				or exists (select 1 from deferred_audit_outbox_entries undelivered
+					where undelivered.receipt_id = g.receipt_id
+						and undelivered.delivered_at is null)
+			) then 1 else 0 end`
 	}
 	return `select g.evaluation_id, g.receipt_id, g.event_id, g.attempt, g.mode,
 		e.system, e.session_id, e.event_name, e.tool_name,
 		g.config_hash, g.engine_version, g.engine_commit, g.engine_build_hash,
 		g.input_hash, g.started_at, g.completed_at, g.final_verdict,
-		g.final_source, g.enforcement_action, g.enforced, g.total_latency_us, ` + childCounts + `
+		g.final_source, g.enforcement_action, g.enforced, g.total_latency_us, ` + childCounts + `,
+		` + detailColumns + `
 	from gate_evaluations g
 	join intake_events e on e.event_id = g.event_id
 `
@@ -309,6 +349,12 @@ func normalizeQueryFilter(filter QueryFilter) (QueryFilter, error) {
 	}
 	if filter.Limit == 0 {
 		filter.Limit = DefaultQueryLimit
+	}
+	if filter.DetailMode == "" {
+		filter.DetailMode = QueryDetailFull
+	}
+	if filter.DetailMode != QueryDetailFull && filter.DetailMode != QueryDetailSummary {
+		return QueryFilter{}, errors.New("evaluation query detail mode must be full or summary")
 	}
 	return filter, nil
 }
@@ -452,6 +498,10 @@ func scanQueryEvaluation(rows *sql.Rows) (QueryRecord, error) {
 	var record QueryRecord
 	var startedAt string
 	var completedAt string
+	var detailState auditstorage.DetailState
+	var detailRecorded int
+	var detailAvailable int
+	var detailProtected int
 	if err := rows.Scan(
 		&record.EvaluationID,
 		&record.ReceiptID,
@@ -476,6 +526,10 @@ func scanQueryEvaluation(rows *sql.Rows) (QueryRecord, error) {
 		&record.TotalLatencyUS,
 		&record.expectedLayerCount,
 		&record.expectedLabelCount,
+		&detailState,
+		&detailRecorded,
+		&detailAvailable,
+		&detailProtected,
 	); err != nil {
 		return QueryRecord{}, wrapError("scan evaluation row", err)
 	}
@@ -488,6 +542,26 @@ func scanQueryEvaluation(rows *sql.Rows) (QueryRecord, error) {
 	if err != nil {
 		return QueryRecord{}, err
 	}
+	recordedClasses := make([]auditstorage.DetailClass, 0, 1)
+	if detailRecorded != 0 {
+		recordedClasses = append(recordedClasses, auditstorage.DetailClassEvaluationContent)
+	}
+	availableClasses := make([]auditstorage.DetailClass, 0, 1)
+	if detailAvailable != 0 {
+		availableClasses = append(availableClasses, auditstorage.DetailClassEvaluationContent)
+	}
+	protectedClasses := make([]auditstorage.DetailClass, 0, 1)
+	if detailProtected != 0 {
+		protectedClasses = append(protectedClasses, auditstorage.DetailClassEvaluationContent)
+	}
+	record.Detail = auditstorage.ProjectDetail(
+		recordedClasses,
+		availableClasses,
+		[]auditstorage.DetailClass{auditstorage.DetailClassEvaluationContent},
+		detailState,
+		"",
+		protectedClasses,
+	)
 	return record, nil
 }
 
@@ -499,6 +573,7 @@ func querySafeLayers(
 	outcomeKnown bool,
 	hasVerdict bool,
 	hasSplitDetail bool,
+	detailAvailable bool,
 ) ([]QueryLayer, error) {
 	outcomeColumn := "''"
 	if hasOutcome {
@@ -511,10 +586,13 @@ func querySafeLayers(
 	detailColumns := "output_json, metadata_json"
 	detailJoin := ""
 	if hasSplitDetail {
-		detailColumns = "detail.output_json, detail.metadata_json"
-		detailJoin = ` join gate_evaluation_layer_details detail
-			on detail.evaluation_id = layer.evaluation_id
-			and detail.layer_index = layer.layer_index`
+		detailColumns = "null, null"
+		if detailAvailable {
+			detailColumns = "detail.output_json, detail.metadata_json"
+			detailJoin = ` join gate_evaluation_layer_details detail
+				on detail.evaluation_id = layer.evaluation_id
+				and detail.layer_index = layer.layer_index`
+		}
 	}
 	query := `select layer.layer_index, layer.parent_layer_index, layer.kind, layer.name, layer.status, ` + outcomeColumn + `, ` + verdictColumn + `,
 		input_reference, input_hash, output_hash, output_json, metadata_json,
@@ -537,7 +615,9 @@ func querySafeLayers(
 		if err != nil {
 			return nil, err
 		}
-		normalized, err := validateQueryLayer(layer, len(layers), outcomeKnown)
+		normalized, err := validateQueryLayer(
+			layer, len(layers), outcomeKnown, detailAvailable,
+		)
 		if err != nil {
 			return nil, wrapError(fmt.Sprintf("validate evaluation %q layer", evaluationID), err)
 		}
@@ -622,6 +702,7 @@ func validateQueryLayer(
 	layer QueryLayer,
 	position int,
 	outcomeKnown bool,
+	detailAvailable bool,
 ) (QueryLayer, error) {
 	if layer.LayerIndex != position {
 		return QueryLayer{}, fmt.Errorf(
@@ -649,6 +730,9 @@ func validateQueryLayer(
 			layer.LayerIndex,
 			err.Error(),
 		)
+	}
+	if !detailAvailable {
+		return layer, nil
 	}
 	if err := unmarshalJSONObject(layer.Output, "output"); err != nil {
 		return QueryLayer{}, fmt.Errorf("layer index %d: %s", layer.LayerIndex, err.Error())

@@ -4,6 +4,7 @@ package auditstorage
 import (
 	"context"
 	"database/sql"
+	"slices"
 )
 
 // Migration applies one ordered schema version inside its caller's transaction.
@@ -18,6 +19,14 @@ type DetailState string
 
 // DetailClass identifies one independently retained audit content class.
 type DetailClass string
+
+// DetailProjection describes the stored detail available to a query.
+type DetailProjection struct {
+	State            DetailState   `json:"state"`
+	RecordedClasses  []DetailClass `json:"recorded_classes"`
+	AvailableClasses []DetailClass `json:"available_classes"`
+	ExpiredAt        string        `json:"expired_at,omitempty"`
+}
 
 const (
 	// DetailStateAvailable means every requested class is present.
@@ -39,4 +48,69 @@ const (
 	DetailClassEnvironmentEvidence DetailClass = "environment_evidence"
 	// DetailClassEvaluationContent identifies evaluation input and output content.
 	DetailClassEvaluationContent DetailClass = "evaluation_content"
+	// DetailClassDeferredAuditPayload identifies deferred audit delivery content.
+	DetailClassDeferredAuditPayload DetailClass = "deferred_audit_payload"
 )
+
+// ProjectDetail resolves stored class metadata for the classes requested by a query.
+func ProjectDetail(
+	recordedClasses []DetailClass,
+	availableClasses []DetailClass,
+	requestedClasses []DetailClass,
+	storedState DetailState,
+	stateChangedAt string,
+	protectedClasses []DetailClass,
+) DetailProjection {
+	if recordedClasses == nil {
+		recordedClasses = make([]DetailClass, 0)
+	}
+	if availableClasses == nil {
+		availableClasses = make([]DetailClass, 0)
+	}
+	projection := DetailProjection{
+		State:            DetailStateAvailable,
+		RecordedClasses:  recordedClasses,
+		AvailableClasses: availableClasses,
+		ExpiredAt:        "",
+	}
+	for _, requestedClass := range requestedClasses {
+		if containsDetailClass(protectedClasses, requestedClass) {
+			projection.State = DetailStateProtected
+			return projection
+		}
+	}
+	if storedState == DetailStateExpired {
+		projection.State = DetailStateExpired
+		projection.ExpiredAt = stateChangedAt
+		return projection
+	}
+	if storedState == DetailStateNotRecorded {
+		projection.State = DetailStateNotRecorded
+		return projection
+	}
+	hasExpired := false
+	hasNotRecorded := false
+	for _, requestedClass := range requestedClasses {
+		recorded := containsDetailClass(recordedClasses, requestedClass)
+		available := containsDetailClass(availableClasses, requestedClass)
+		if recorded && !available {
+			hasExpired = true
+		}
+		if !recorded {
+			hasNotRecorded = true
+		}
+	}
+	if hasExpired {
+		projection.State = DetailStateExpired
+		projection.ExpiredAt = stateChangedAt
+		return projection
+	}
+	if hasNotRecorded {
+		projection.State = DetailStateNotRecorded
+	}
+	return projection
+}
+
+func containsDetailClass(classes []DetailClass, target DetailClass) bool {
+	return slices.Contains(classes, target)
+}

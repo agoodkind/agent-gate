@@ -12,6 +12,7 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 
+	"goodkind.io/agent-gate/internal/auditstorage"
 	"goodkind.io/agent-gate/internal/evaluation"
 	"goodkind.io/agent-gate/internal/intake"
 )
@@ -132,6 +133,121 @@ func TestStoreListReturnsOrderedSafeTrainingExport(t *testing.T) {
 		if _, promoted := layerMetadata.VerifiedProvenance[claim]; promoted {
 			t.Fatalf("untrusted claim %q was promoted to verified provenance", claim)
 		}
+	}
+}
+
+func TestQueryReportsExpiredEvaluationDetailAndOmitsContent(t *testing.T) {
+	_, database, path, first, _ := newEvaluationQueryFixture(t)
+	if _, err := database.Exec(
+		`delete from gate_evaluation_details where evaluation_id = ?`,
+		first.Evaluation.EvaluationID,
+	); err != nil {
+		t.Fatalf("delete evaluation detail: %v", err)
+	}
+	if _, err := database.Exec(
+		`delete from gate_evaluation_layer_details where evaluation_id = ?`,
+		first.Evaluation.EvaluationID,
+	); err != nil {
+		t.Fatalf("delete layer detail: %v", err)
+	}
+	if _, err := database.Exec(
+		`delete from gate_evaluation_label_details where evaluation_id = ?`,
+		first.Evaluation.EvaluationID,
+	); err != nil {
+		t.Fatalf("delete label detail: %v", err)
+	}
+	if _, err := database.Exec(
+		`update gate_evaluations set detail_state = 'expired' where evaluation_id = ?`,
+		first.Evaluation.EvaluationID,
+	); err != nil {
+		t.Fatalf("mark evaluation detail expired: %v", err)
+	}
+
+	result, err := evaluation.Query(t.Context(), path, evaluation.QueryFilter{
+		EvaluationID: first.Evaluation.EvaluationID,
+	})
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	record := result.Records[0]
+	if record.Detail.State != auditstorage.DetailStateExpired {
+		t.Fatalf("detail state = %q, want expired", record.Detail.State)
+	}
+	if len(record.Layers) == 0 || len(record.Labels) == 0 {
+		t.Fatalf("summary children missing: layers=%d labels=%d", len(record.Layers), len(record.Labels))
+	}
+	encoded, err := json.Marshal(record)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if strings.Contains(string(encoded), `"output"`) ||
+		strings.Contains(string(encoded), `"metadata"`) {
+		t.Fatalf("expired evaluation content present: %s", encoded)
+	}
+}
+
+func TestQueryReportsProtectedEvaluationDetail(t *testing.T) {
+	_, database, path, first, _ := newEvaluationQueryFixture(t)
+	if _, err := database.Exec(`
+		update gate_evaluations set detail_state = 'protected' where evaluation_id = ?
+	`, first.Evaluation.EvaluationID); err != nil {
+		t.Fatalf("mark evaluation detail protected: %v", err)
+	}
+	if _, err := database.Exec(`
+		insert into intake_deferred (
+			receipt_id, event_id, state, pending_at, completed_at,
+			last_replay_at, replay_count, claim_owner, claim_expires_at, claim_attempt
+		) values (?, ?, 'pending', '2026-07-11T01:00:00Z', null, null, 0, null, null, 0)
+	`, first.Evaluation.ReceiptID, first.Evaluation.EventID); err != nil {
+		t.Fatalf("insert pending evaluation relationship: %v", err)
+	}
+
+	result, err := evaluation.Query(t.Context(), path, evaluation.QueryFilter{
+		EvaluationID: first.Evaluation.EvaluationID,
+	})
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	if result.Records[0].Detail.State != auditstorage.DetailStateProtected {
+		t.Fatalf("detail state = %q, want protected", result.Records[0].Detail.State)
+	}
+	if len(result.Records[0].Layers[0].Output) == 0 {
+		t.Fatal("protected evaluation output is absent")
+	}
+}
+
+func TestQueryReportsNotRecordedEvaluationDetail(t *testing.T) {
+	_, database, path, first, _ := newEvaluationQueryFixture(t)
+	for _, table := range []string{
+		"gate_evaluation_label_details",
+		"gate_evaluation_layer_details",
+		"gate_evaluation_details",
+	} {
+		if _, err := database.Exec(
+			"delete from "+table+" where evaluation_id = ?",
+			first.Evaluation.EvaluationID,
+		); err != nil {
+			t.Fatalf("delete %s: %v", table, err)
+		}
+	}
+	if _, err := database.Exec(`
+		update gate_evaluations set detail_state = 'not_recorded' where evaluation_id = ?
+	`, first.Evaluation.EvaluationID); err != nil {
+		t.Fatalf("mark evaluation detail not recorded: %v", err)
+	}
+
+	result, err := evaluation.Query(t.Context(), path, evaluation.QueryFilter{
+		EvaluationID: first.Evaluation.EvaluationID,
+	})
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	record := result.Records[0]
+	if record.Detail.State != auditstorage.DetailStateNotRecorded {
+		t.Fatalf("detail state = %q, want not_recorded", record.Detail.State)
+	}
+	if len(record.Layers[0].Output) != 0 || len(record.Layers[0].Metadata) != 0 {
+		t.Fatalf("not-recorded evaluation content present: %+v", record.Layers[0])
 	}
 }
 
