@@ -96,6 +96,144 @@ func TestRunAuditMaintainDryRunDoesNotWriteDatabase(t *testing.T) {
 	}
 }
 
+func TestRunAuditCompactDryRunReportsPlanWithoutWriting(t *testing.T) {
+	setupAuditCommandEnvironment(t, "[audit.storage]\nmaintenance_batch_rows = 17\n")
+	createAuditCommandDatabase(t)
+	createAuditCommandFreePages(t, 1<<20)
+	before := snapshotAuditFiles(t, config.DefaultAuditSQLitePath())
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := runAudit([]string{"compact", "--dry-run"}, &stdout, &stderr)
+
+	if exitCode != 0 || stderr.Len() != 0 {
+		t.Fatalf("exit code/stderr = %d/%q, want 0/empty", exitCode, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "pages to reclaim: 17") ||
+		!strings.Contains(stdout.String(), "full compaction needed: no") {
+		t.Fatalf("stdout = %q, want bounded incremental compact plan", stdout.String())
+	}
+	after := snapshotAuditFiles(t, config.DefaultAuditSQLitePath())
+	if !reflect.DeepEqual(after, before) {
+		t.Fatalf("compact dry-run changed SQLite files: before %#v after %#v", before, after)
+	}
+}
+
+func TestRunAuditCompactApplyRecordsMeasuredBytes(t *testing.T) {
+	setupAuditCommandEnvironment(t, "[audit.storage]\nmaintenance_batch_rows = 1000\n")
+	createAuditCommandDatabase(t)
+	createAuditCommandFreePages(t, 1<<20)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := runAudit([]string{"compact", "--apply"}, &stdout, &stderr)
+
+	if exitCode != 0 || stderr.Len() != 0 {
+		t.Fatalf("exit code/stderr = %d/%q, want 0/empty", exitCode, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "result: success") ||
+		!strings.Contains(stdout.String(), "reclaimed bytes:") {
+		t.Fatalf("stdout = %q, want compact result", stdout.String())
+	}
+	database, err := sql.Open("sqlite3", config.DefaultAuditSQLitePath())
+	if err != nil {
+		t.Fatalf("open compacted database: %v", err)
+	}
+	defer func() { _ = database.Close() }()
+	var reclaimed int64
+	if err := database.QueryRowContext(t.Context(), `
+		select reclaimed_bytes from audit_maintenance_runs order by started_at desc limit 1
+	`).Scan(&reclaimed); err != nil {
+		t.Fatalf("read compact run: %v", err)
+	}
+	if reclaimed <= 0 {
+		t.Fatalf("reclaimed bytes = %d, want positive", reclaimed)
+	}
+}
+
+func TestRunAuditCompactApplyDefersForReaderPinnedLiveWAL(t *testing.T) {
+	setupAuditCommandEnvironment(t, "[audit.storage]\nmaintenance_batch_rows = 1000\n")
+	createAuditCommandDatabase(t)
+	createAuditCommandFreePages(t, 1<<20)
+	path := config.DefaultAuditSQLitePath()
+	reader, err := sql.Open("sqlite3", path)
+	if err != nil {
+		t.Fatalf("open reader: %v", err)
+	}
+	defer func() { _ = reader.Close() }()
+	readerConnection, err := reader.Conn(t.Context())
+	if err != nil {
+		t.Fatalf("reserve reader: %v", err)
+	}
+	defer func() { _ = readerConnection.Close() }()
+	if _, err := readerConnection.ExecContext(t.Context(), `begin`); err != nil {
+		t.Fatalf("begin reader: %v", err)
+	}
+	readerActive := true
+	defer func() {
+		if readerActive {
+			_, _ = readerConnection.ExecContext(t.Context(), `rollback`)
+		}
+	}()
+	var rows int
+	if err := readerConnection.QueryRowContext(
+		t.Context(), `select count(*) from intake_events`,
+	).Scan(&rows); err != nil {
+		t.Fatalf("establish reader snapshot: %v", err)
+	}
+	writer, err := sql.Open("sqlite3", path)
+	if err != nil {
+		t.Fatalf("open writer: %v", err)
+	}
+	defer func() { _ = writer.Close() }()
+	if _, err := writer.ExecContext(t.Context(), `
+		update intake_events set command = command || 'x'
+		where event_id = 'audit-command-event'
+	`); err != nil {
+		t.Fatalf("write live WAL frame: %v", err)
+	}
+	var beforeFree int64
+	if err := writer.QueryRowContext(t.Context(), `pragma freelist_count`).Scan(&beforeFree); err != nil {
+		t.Fatalf("read free pages before compact: %v", err)
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := runAudit([]string{"compact", "--apply"}, &stdout, &stderr)
+
+	if exitCode != 0 || stderr.Len() != 0 {
+		t.Fatalf("exit code/stderr = %d/%q, want 0/empty", exitCode, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "maintenance deferred:") ||
+		!strings.Contains(stdout.String(), "result: deferred") ||
+		!strings.Contains(stdout.String(), "reclaimed bytes: 0") {
+		t.Fatalf("stdout = %q, want deferred compact without reclaimed bytes", stdout.String())
+	}
+	var afterFree int64
+	if err := writer.QueryRowContext(t.Context(), `pragma freelist_count`).Scan(&afterFree); err != nil {
+		t.Fatalf("read free pages after compact: %v", err)
+	}
+	if afterFree != beforeFree {
+		t.Fatalf("free pages changed from %d to %d during deferred compact", beforeFree, afterFree)
+	}
+	if _, err := readerConnection.ExecContext(t.Context(), `rollback`); err != nil {
+		t.Fatalf("release reader: %v", err)
+	}
+	readerActive = false
+}
+
+func TestRunAuditCompactRequiresExactlyOneMode(t *testing.T) {
+	setupAuditCommandEnvironment(t, "[audit.storage]\n")
+	createAuditCommandDatabase(t)
+	for _, args := range [][]string{{"compact"}, {"compact", "--dry-run", "--apply"}} {
+		var stdout bytes.Buffer
+		var stderr bytes.Buffer
+		if exitCode := runAudit(args, &stdout, &stderr); exitCode != 2 {
+			t.Fatalf("runAudit(%v) exit code = %d, want 2", args, exitCode)
+		}
+	}
+}
+
 func TestRunAuditMaintainDryRunPredictsSizeDrivenApplyAndStoredPlan(t *testing.T) {
 	setupAuditCommandEnvironment(t, `
 [audit.storage]
@@ -558,6 +696,28 @@ func createAuditCommandDatabase(t *testing.T) {
 	}
 	if err := store.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
+	}
+}
+
+func createAuditCommandFreePages(t *testing.T, paddingBytes int) {
+	t.Helper()
+	database, err := sql.Open("sqlite3", config.DefaultAuditSQLitePath())
+	if err != nil {
+		t.Fatalf("open audit database: %v", err)
+	}
+	if _, err := database.ExecContext(t.Context(), `
+		pragma wal_checkpoint(truncate);
+		create table compact_padding(value blob not null);
+		insert into compact_padding values (zeroblob(?));
+		pragma wal_checkpoint(truncate);
+		drop table compact_padding;
+		pragma wal_checkpoint(truncate);
+	`, paddingBytes); err != nil {
+		_ = database.Close()
+		t.Fatalf("create compact free pages: %v", err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatalf("close audit database: %v", err)
 	}
 }
 
