@@ -197,7 +197,10 @@ create table violations (
 insert into intake_events values (
     1, 'event-legacy', 1, '2026-05-09T19:26:30Z', 'codex', 'session-legacy',
     'turn-legacy', 'PreToolUse', 'Shell', 'tool-legacy', '/repo', '/repo',
-    'echo legacy', '', x'7b7d', 'sha256:legacy', '{}', '{}', '{}', 123
+    'echo legacy', '', cast('{"wire":"legacy"}' as blob), 'sha256:legacy',
+    '{"normalized":"legacy"}',
+    '{"resolved_provider":"codex","result":"resolved"}',
+    '{"CODEX_THREAD_ID":"legacy-thread"}', 123
 );
 insert into intake_receipts values (1, 'event-legacy', '2026-05-09T19:26:31Z');
 insert into intake_deferred values (

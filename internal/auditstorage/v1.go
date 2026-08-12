@@ -11,8 +11,14 @@ func migrateV1(ctx context.Context, transaction *sql.Tx) error {
 	if err := executeStatements(ctx, transaction, intakeBaseSchema); err != nil {
 		return err
 	}
-	if err := ensureIntakeColumns(ctx, transaction); err != nil {
+	hasSplitIntakeDetail, err := tableExists(ctx, transaction, "intake_event_details")
+	if err != nil {
 		return err
+	}
+	if !hasSplitIntakeDetail {
+		if err := ensureIntakeColumns(ctx, transaction); err != nil {
+			return err
+		}
 	}
 	if err := ensureDeferredSchema(ctx, transaction); err != nil {
 		return err

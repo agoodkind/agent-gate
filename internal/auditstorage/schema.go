@@ -12,7 +12,8 @@ import (
 const migrationTimeFormat = time.RFC3339Nano
 
 var migrations = []Migration{
-	{Version: 1, Apply: migrateV1},
+	{Version: 1, ForeignKeysDisabled: false, Apply: migrateV1},
+	{Version: 2, ForeignKeysDisabled: true, Apply: migrateIntakeV2},
 }
 
 var migrationNow = time.Now
@@ -154,7 +155,24 @@ func schemaObjectExists(ctx context.Context, database *sql.DB, name string) (boo
 	return count != 0, nil
 }
 
-func applyMigration(ctx context.Context, database *sql.DB, migration Migration) error {
+func applyMigration(
+	ctx context.Context,
+	database *sql.DB,
+	migration Migration,
+) (returnErr error) {
+	if migration.ForeignKeysDisabled {
+		if _, err := database.ExecContext(ctx, `pragma foreign_keys = off`); err != nil {
+			return wrapError(fmt.Sprintf("disable audit migration %d foreign keys", migration.Version), err)
+		}
+		defer func() {
+			if _, err := database.ExecContext(ctx, `pragma foreign_keys = on`); err != nil && returnErr == nil {
+				returnErr = wrapError(
+					fmt.Sprintf("restore audit migration %d foreign keys", migration.Version),
+					err,
+				)
+			}
+		}()
+	}
 	transaction, err := database.BeginTx(ctx, nil)
 	if err != nil {
 		return wrapError(fmt.Sprintf("begin audit migration %d", migration.Version), err)

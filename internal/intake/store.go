@@ -121,6 +121,7 @@ type AppendResult struct {
 type Store struct {
 	db          *sql.DB
 	log         *slog.Logger
+	policy      config.AuditStoragePolicy
 	evaluations *evaluation.Store
 }
 
@@ -131,25 +132,47 @@ func DefaultSQLitePath() string {
 	return config.DefaultAuditSQLitePath()
 }
 
-// OpenSQLite opens the durable intake store, creating tables on demand.
+// SQLiteOptions configures one immutable intake store policy snapshot.
+type SQLiteOptions struct {
+	Path   string
+	Policy config.AuditStoragePolicy
+	Log    *slog.Logger
+}
+
+// OpenSQLite opens the durable intake store with the balanced compatibility policy.
 func OpenSQLite(ctx context.Context, path string, log *slog.Logger) (*Store, error) {
-	if strings.TrimSpace(path) == "" {
-		path = DefaultSQLitePath()
+	return openSQLite(ctx, SQLiteOptions{
+		Path: path, Policy: balancedAuditStoragePolicy(), Log: log,
+	})
+}
+
+// OpenSQLiteWithOptions opens the durable intake store with one policy snapshot.
+func OpenSQLiteWithOptions(ctx context.Context, options SQLiteOptions) (*Store, error) {
+	if options.Policy.Profile == "" {
+		return OpenSQLite(ctx, options.Path, options.Log)
 	}
-	if log == nil {
-		log = slog.Default()
+	return openSQLite(ctx, options)
+}
+
+func openSQLite(ctx context.Context, options SQLiteOptions) (*Store, error) {
+	if strings.TrimSpace(options.Path) == "" {
+		options.Path = DefaultSQLitePath()
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return nil, wrapLoggedError(ctx, log, "create intake sqlite dir", err)
+	if options.Log == nil {
+		options.Log = slog.Default()
 	}
-	db, err := sql.Open("sqlite3", path)
+	if err := os.MkdirAll(filepath.Dir(options.Path), 0o755); err != nil {
+		return nil, wrapLoggedError(ctx, options.Log, "create intake sqlite dir", err)
+	}
+	db, err := sql.Open("sqlite3", options.Path)
 	if err != nil {
-		return nil, wrapLoggedError(ctx, log, "open intake sqlite db", err)
+		return nil, wrapLoggedError(ctx, options.Log, "open intake sqlite db", err)
 	}
 	configureSQLite(db)
 	store := &Store{
 		db:          db,
-		log:         log,
+		log:         options.Log,
+		policy:      options.Policy,
 		evaluations: nil,
 	}
 	if err := store.init(ctx); err != nil {
@@ -159,9 +182,25 @@ func OpenSQLite(ctx context.Context, path string, log *slog.Logger) (*Store, err
 	store.evaluations, err = evaluation.NewStore(ctx, db)
 	if err != nil {
 		_ = db.Close()
-		return nil, wrapLoggedError(ctx, log, "init evaluation store", err)
+		return nil, wrapLoggedError(ctx, options.Log, "init evaluation store", err)
 	}
 	return store, nil
+}
+
+func balancedAuditStoragePolicy() config.AuditStoragePolicy {
+	return config.AuditStoragePolicy{
+		Profile:                 config.AuditStorageProfileBalanced,
+		MaintenanceInterval:     24 * time.Hour,
+		MaxSizeBytes:            0,
+		MaintenanceBatchRows:    1000,
+		CompactAfterMaintenance: true,
+		FullDetailRetention:     168 * time.Hour,
+		SummaryRetention:        720 * time.Hour,
+		Detail: config.AuditStorageDetailPolicy{
+			WireInput: true, NormalizedInput: true, ProviderEvidence: true,
+			EnvironmentEvidence: true, EvaluationContent: true,
+		},
+	}
 }
 
 func configureSQLite(db *sql.DB) {
@@ -224,7 +263,7 @@ func (s *Store) Append(ctx context.Context, record Record) (AppendResult, error)
 	}()
 
 	result, err := tx.ExecContext(ctx, `
-		insert into intake_events (
+			insert into intake_events (
 			event_id,
 			schema_version,
 			recorded_at,
@@ -237,15 +276,11 @@ func (s *Store) Append(ctx context.Context, record Record) (AppendResult, error)
 			cwd,
 			effective_cwd,
 			command,
-			file_path,
-			raw_payload,
-			raw_payload_hash,
-			normalized_json,
-			classification_json,
-			env_fingerprint_json
-		) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		on conflict(event_id) do nothing
-	`,
+				file_path,
+				raw_payload_hash
+			) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			on conflict(event_id) do nothing
+		`,
 		record.EventID,
 		record.SchemaVersion,
 		record.RecordedAt.UTC().Format(time.RFC3339Nano),
@@ -259,11 +294,7 @@ func (s *Store) Append(ctx context.Context, record Record) (AppendResult, error)
 		record.Operation.EffectiveCWD,
 		record.Operation.Command,
 		record.Operation.FilePath,
-		record.RawPayload,
 		record.RawPayloadHash,
-		string(record.NormalizedJSON),
-		string(record.ClassificationJSON),
-		mustMarshalEnvFingerprint(record.EnvFingerprint),
 	)
 	if err != nil {
 		return AppendResult{}, wrapLoggedError(ctx, s.log, "insert intake event", err)
@@ -272,10 +303,16 @@ func (s *Store) Append(ctx context.Context, record Record) (AppendResult, error)
 	if err != nil {
 		return AppendResult{}, wrapLoggedError(ctx, s.log, "read intake append rows", err)
 	}
+	receivedAt := intakeNow().UTC()
+	if rowsAffected == 1 {
+		if err := s.insertDetail(ctx, tx, record, receivedAt); err != nil {
+			return AppendResult{}, err
+		}
+	}
 	receiptResult, err := tx.ExecContext(ctx, `
-		insert into intake_receipts (event_id, received_at)
-		values (?, ?)
-	`, record.EventID, intakeNow().UTC().Format(time.RFC3339Nano))
+			insert into intake_receipts (event_id, received_at)
+			values (?, ?)
+		`, record.EventID, receivedAt.Format(time.RFC3339Nano))
 	if err != nil {
 		return AppendResult{}, wrapLoggedError(ctx, s.log, "insert intake receipt", err)
 	}
@@ -292,6 +329,50 @@ func (s *Store) Append(ctx context.Context, record Record) (AppendResult, error)
 		Inserted:  rowsAffected == 1,
 	}, nil
 }
+
+func (s *Store) insertDetail(
+	ctx context.Context,
+	transaction *sql.Tx,
+	record Record,
+	changedAt time.Time,
+) error {
+	details := []struct {
+		class   auditstorage.DetailClass
+		content []byte
+	}{
+		{class: auditstorage.DetailClassWireInput, content: record.RawPayload},
+		{class: auditstorage.DetailClassNormalizedInput, content: record.NormalizedJSON},
+		{class: auditstorage.DetailClassProviderEvidence, content: record.ClassificationJSON},
+		{
+			class:   auditstorage.DetailClassEnvironmentEvidence,
+			content: []byte(mustMarshalEnvFingerprint(record.EnvFingerprint)),
+		},
+	}
+	for _, detail := range details {
+		if _, err := transaction.ExecContext(ctx, `
+			insert into intake_event_details (event_id, detail_class, content)
+			values (?, ?, ?)
+		`, record.EventID, detail.class, detail.content); err != nil {
+			return wrapLoggedError(ctx, s.log, "insert intake event detail", err)
+		}
+	}
+	state := auditstorage.DetailStateAvailable
+	if !s.policy.Detail.WireInput || !s.policy.Detail.NormalizedInput ||
+		!s.policy.Detail.ProviderEvidence || !s.policy.Detail.EnvironmentEvidence {
+		state = auditstorage.DetailStateProtected
+	}
+	if _, err := transaction.ExecContext(ctx, `
+		insert into intake_event_detail_manifest (
+			event_id, recorded_classes_json, available_classes_json, state, state_changed_at
+		) values (?, ?, ?, ?, ?)
+	`, record.EventID, intakeDetailClassesJSON, intakeDetailClassesJSON, state,
+		changedAt.Format(time.RFC3339Nano)); err != nil {
+		return wrapLoggedError(ctx, s.log, "insert intake event detail manifest", err)
+	}
+	return nil
+}
+
+const intakeDetailClassesJSON = `["wire_input","normalized_input","provider_evidence","environment_evidence"]`
 
 // MarkDeferredPending marks an intake record ready for deferred replay.
 func (s *Store) MarkDeferredPending(ctx context.Context, eventID string, receiptID int64) error {
@@ -349,11 +430,15 @@ func (s *Store) ListDeferredPending(ctx context.Context, limit int) ([]Record, e
 			e.effective_cwd,
 			e.command,
 			e.file_path,
-			e.raw_payload,
-			e.raw_payload_hash,
-			e.normalized_json,
-			e.classification_json,
-			e.env_fingerprint_json,
+				(select content from intake_event_details
+					where event_id = e.event_id and detail_class = 'wire_input'),
+				e.raw_payload_hash,
+				(select content from intake_event_details
+					where event_id = e.event_id and detail_class = 'normalized_input'),
+				(select content from intake_event_details
+					where event_id = e.event_id and detail_class = 'provider_evidence'),
+				(select content from intake_event_details
+					where event_id = e.event_id and detail_class = 'environment_evidence'),
 			r.receipt_id,
 			r.received_at,
 			d.state,
@@ -414,11 +499,15 @@ func (s *Store) Get(ctx context.Context, eventID string) (Record, error) {
 			e.effective_cwd,
 			e.command,
 			e.file_path,
-			e.raw_payload,
-			e.raw_payload_hash,
-			e.normalized_json,
-			e.classification_json,
-			e.env_fingerprint_json,
+				(select content from intake_event_details
+					where event_id = e.event_id and detail_class = 'wire_input'),
+				e.raw_payload_hash,
+				(select content from intake_event_details
+					where event_id = e.event_id and detail_class = 'normalized_input'),
+				(select content from intake_event_details
+					where event_id = e.event_id and detail_class = 'provider_evidence'),
+				(select content from intake_event_details
+					where event_id = e.event_id and detail_class = 'environment_evidence'),
 			coalesce(r.receipt_id, 0),
 			coalesce(r.received_at, e.recorded_at),
 			coalesce(d.state, ?),
@@ -544,11 +633,15 @@ func (s *Store) receiptRecord(ctx context.Context, receiptID int64, requiredStat
 			e.effective_cwd,
 			e.command,
 			e.file_path,
-			e.raw_payload,
-			e.raw_payload_hash,
-			e.normalized_json,
-			e.classification_json,
-			e.env_fingerprint_json,
+				(select content from intake_event_details
+					where event_id = e.event_id and detail_class = 'wire_input'),
+				e.raw_payload_hash,
+				(select content from intake_event_details
+					where event_id = e.event_id and detail_class = 'normalized_input'),
+				(select content from intake_event_details
+					where event_id = e.event_id and detail_class = 'provider_evidence'),
+				(select content from intake_event_details
+					where event_id = e.event_id and detail_class = 'environment_evidence'),
 			r.receipt_id,
 			r.received_at,
 			coalesce(d.state, 'none'),

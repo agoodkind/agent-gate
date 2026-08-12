@@ -6,16 +6,105 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"goodkind.io/agent-gate/api/daemonpb"
 	"goodkind.io/agent-gate/internal/audit"
+	"goodkind.io/agent-gate/internal/auditstorage"
+	"goodkind.io/agent-gate/internal/config"
 	"goodkind.io/agent-gate/internal/evaluation"
 	"goodkind.io/agent-gate/internal/hook"
 	"goodkind.io/agent-gate/internal/intake"
 )
+
+func TestEvaluateHookMinimalDetailProtectsPayloadThroughDeferredDelivery(t *testing.T) {
+	setDaemonTestDirs(t)
+	databasePath := filepath.Join(t.TempDir(), "audit.db")
+	configPath := filepath.Join(t.TempDir(), "config.toml")
+	configBody := `[audit]
+enabled = true
+
+[audit.storage]
+profile = "minimal"
+
+[audit.outputs.sqlite]
+path = "` + databasePath + `"
+`
+	if err := os.WriteFile(configPath, []byte(configBody), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := config.LoadExisting(configPath)
+	if err != nil {
+		t.Fatalf("LoadExisting: %v", err)
+	}
+	server, err := New(newDiscardLogger(), cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer server.Close()
+
+	snapshot := server.runtime.Load()
+	originalProcessor := snapshot.deferredProcessor
+	originalProcessor.Close()
+	controlledProcessor := newDeferredProcessor(
+		context.Background(), snapshot.intakeStore, originalProcessor.sink, cfg,
+		snapshot.inferRuntime, 1, 0, newDiscardLogger(),
+	)
+	controlledProcessor.evaluationRecorder = snapshot.evaluationRecorder
+	snapshot.deferredProcessor = controlledProcessor
+
+	request := blockingLedgerRequest(t)
+	if _, err := server.EvaluateHook(t.Context(), request); err != nil {
+		t.Fatalf("EvaluateHook: %v", err)
+	}
+	var work deferredWork
+	select {
+	case work = <-controlledProcessor.events:
+	case <-time.After(time.Second):
+		t.Fatal("deferred work was not enqueued")
+	}
+	sqliteStore, ok := snapshot.intakeStore.(*sqliteIntakeStore)
+	if !ok {
+		t.Fatalf("intake store type = %T", snapshot.intakeStore)
+	}
+	before, err := sqliteStore.GetReceipt(t.Context(), work.receiptID)
+	if err != nil {
+		t.Fatalf("GetReceipt before deferred delivery: %v", err)
+	}
+	if !bytes.Equal(before.RawPayload, request.RawJson) {
+		t.Fatalf("protected raw payload = %q, want %q", before.RawPayload, request.RawJson)
+	}
+	var state auditstorage.DetailState
+	if err := sqliteStore.Handle().QueryRowContext(t.Context(), `
+		select state from intake_event_detail_manifest where event_id = ?
+	`, work.eventID).Scan(&state); err != nil {
+		t.Fatalf("query daemon detail manifest: %v", err)
+	}
+	if state != auditstorage.DetailStateProtected {
+		t.Fatalf("daemon detail state = %q, want protected", state)
+	}
+
+	controlledProcessor.processEvent(t.Context(), work)
+	after, err := sqliteStore.GetReceipt(t.Context(), work.receiptID)
+	if err != nil {
+		t.Fatalf("GetReceipt after deferred delivery: %v", err)
+	}
+	if !bytes.Equal(after.RawPayload, request.RawJson) {
+		t.Fatalf("delivered raw payload = %q, want %q", after.RawPayload, request.RawJson)
+	}
+	pendingAudit, err := sqliteStore.store.ListPendingDeferredAudit(t.Context(), 0)
+	if err != nil {
+		t.Fatalf("ListPendingDeferredAudit: %v", err)
+	}
+	if len(pendingAudit) != 0 {
+		t.Fatalf("pending audit receipts = %v, want none", pendingAudit)
+	}
+}
 
 func TestEvaluateHookClosedInferenceErrorBlocksAndPersistsValidLayer(t *testing.T) {
 	setDaemonTestDirs(t)

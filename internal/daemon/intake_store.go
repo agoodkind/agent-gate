@@ -110,10 +110,14 @@ type sqliteIntakeStore struct {
 
 func newSQLiteIntakeStore(ctx context.Context, cfg *config.Config, log *slog.Logger) (*sqliteIntakeStore, error) {
 	path := intake.DefaultSQLitePath()
+	var policy config.AuditStoragePolicy
 	if cfg != nil {
 		path = cfg.AuditSQLitePath()
+		policy = cfg.AuditStoragePolicy()
 	}
-	store, err := intake.OpenSQLite(ctx, path, log)
+	store, err := intake.OpenSQLiteWithOptions(ctx, intake.SQLiteOptions{
+		Path: path, Policy: policy, Log: log,
+	})
 	if err != nil {
 		if log != nil {
 			log.WarnContext(ctx, "open sqlite intake store failed", "path", path, "err", err)
