@@ -136,6 +136,105 @@ func TestStoreListReturnsOrderedSafeTrainingExport(t *testing.T) {
 	}
 }
 
+func TestExportEvaluationsFiltersBeforeCheckingDetail(t *testing.T) {
+	_, database, path, first, second := newEvaluationQueryFixture(t)
+	deleteEvaluationDetail(t, database, first.Evaluation.EvaluationID)
+	if _, err := database.Exec(`
+		update gate_evaluations set detail_state = 'expired' where evaluation_id = ?
+	`, first.Evaluation.EvaluationID); err != nil {
+		t.Fatalf("mark evaluation detail expired: %v", err)
+	}
+
+	filtered, err := evaluation.Query(t.Context(), path, evaluation.QueryFilter{
+		System: "claude",
+		Limit:  1,
+	})
+	if err != nil {
+		t.Fatalf("Query filtered export: %v", err)
+	}
+	if filtered.Completeness.IncompleteCount != 0 {
+		t.Fatalf(
+			"filtered incomplete count = %d, want 0",
+			filtered.Completeness.IncompleteCount,
+		)
+	}
+	if filtered.Completeness.EarliestCompleteDetailAt == nil ||
+		!filtered.Completeness.EarliestCompleteDetailAt.Equal(second.Evaluation.CompletedAt) {
+		t.Fatalf(
+			"filtered earliest complete detail = %v, want %s",
+			filtered.Completeness.EarliestCompleteDetailAt,
+			second.Evaluation.CompletedAt,
+		)
+	}
+
+	paginated, err := evaluation.Query(t.Context(), path, evaluation.QueryFilter{Limit: 1})
+	if err != nil {
+		t.Fatalf("Query paginated export: %v", err)
+	}
+	if len(paginated.Records) != 1 ||
+		paginated.Records[0].EvaluationID != second.Evaluation.EvaluationID {
+		t.Fatalf("paginated records = %+v, want only %q", paginated.Records, second.Evaluation.EvaluationID)
+	}
+	if paginated.Completeness.IncompleteCount != 1 {
+		t.Fatalf(
+			"paginated incomplete count = %d, want 1",
+			paginated.Completeness.IncompleteCount,
+		)
+	}
+	if paginated.Completeness.EarliestCompleteDetailAt == nil ||
+		!paginated.Completeness.EarliestCompleteDetailAt.Equal(second.Evaluation.CompletedAt) {
+		t.Fatalf(
+			"paginated earliest complete detail = %v, want %s",
+			paginated.Completeness.EarliestCompleteDetailAt,
+			second.Evaluation.CompletedAt,
+		)
+	}
+}
+
+func TestQueryPreservesExpiredStateWhenDetailRowsRemain(t *testing.T) {
+	_, database, path, first, _ := newEvaluationQueryFixture(t)
+	if _, err := database.Exec(`
+		update gate_evaluations set detail_state = 'expired' where evaluation_id = ?
+	`, first.Evaluation.EvaluationID); err != nil {
+		t.Fatalf("mark evaluation detail expired: %v", err)
+	}
+
+	result, err := evaluation.Query(t.Context(), path, evaluation.QueryFilter{
+		EvaluationID: first.Evaluation.EvaluationID,
+	})
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	if result.Completeness.IncompleteCount != 1 ||
+		result.Completeness.EarliestCompleteDetailAt != nil {
+		t.Fatalf("completeness = %+v, want one incomplete record", result.Completeness)
+	}
+	if len(result.Records) != 1 ||
+		result.Records[0].Detail.State != auditstorage.DetailStateExpired {
+		t.Fatalf("records = %+v, want one expired record", result.Records)
+	}
+	if len(result.Records[0].Layers[0].Output) != 0 ||
+		len(result.Records[0].Layers[0].Metadata) != 0 {
+		t.Fatalf("expired evaluation content present: %+v", result.Records[0].Layers[0])
+	}
+}
+
+func deleteEvaluationDetail(t *testing.T, database *sql.DB, evaluationID string) {
+	t.Helper()
+	for _, table := range []string{
+		"gate_evaluation_label_details",
+		"gate_evaluation_layer_details",
+		"gate_evaluation_details",
+	} {
+		if _, err := database.Exec(
+			"delete from "+table+" where evaluation_id = ?",
+			evaluationID,
+		); err != nil {
+			t.Fatalf("delete %s: %v", table, err)
+		}
+	}
+}
+
 func TestQueryReportsExpiredEvaluationDetailAndOmitsContent(t *testing.T) {
 	_, database, path, first, _ := newEvaluationQueryFixture(t)
 	if _, err := database.Exec(

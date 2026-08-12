@@ -1297,6 +1297,14 @@ func runSeenQuery(args []string) int {
 }
 
 func parseEvaluationQueryFilter(command string, args []string) (evaluation.QueryFilter, bool, int) {
+	return parseEvaluationQueryFilterWithFlags(command, args, nil)
+}
+
+func parseEvaluationQueryFilterWithFlags(
+	command string,
+	args []string,
+	registerFlags func(*flag.FlagSet),
+) (evaluation.QueryFilter, bool, int) {
 	fs := flag.NewFlagSet("agent-gate "+command, flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	var filter evaluation.QueryFilter
@@ -1321,6 +1329,9 @@ func parseEvaluationQueryFilter(command string, args []string) (evaluation.Query
 	fs.StringVar(&filter.ModelName, "model", "", "filter by model")
 	fs.StringVar(&filter.FinalVerdict, "verdict", "", "filter by final verdict")
 	fs.IntVar(&filter.Offset, "offset", 0, "rows to skip")
+	if registerFlags != nil {
+		registerFlags(fs)
+	}
 	if err := fs.Parse(args); err != nil {
 		return filter, false, 2
 	}
@@ -1379,21 +1390,54 @@ func runEvaluationQuery(args []string) int {
 	return 0
 }
 
-// runExport emits the training export: one JSONL row per evaluation with its
-// ordered typed layers and labels, read from the read-only evaluation query.
+// runExport emits complete training rows and requires an explicit flag to omit
+// selected evaluations whose detail is unavailable.
 func runExport(args []string) int {
 	if len(args) == 0 || queryCommandName(args[0]) != queryCommandEvaluations {
 		fmt.Fprintln(os.Stderr, "usage: agent-gate export evaluations [flags]")
 		return 2
 	}
-	filter, _, code := parseEvaluationQueryFilter("export evaluations", args[1:])
+	skipExpiredDetail := false
+	filter, _, code := parseEvaluationQueryFilterWithFlags(
+		"export evaluations",
+		args[1:],
+		func(fs *flag.FlagSet) {
+			fs.BoolVar(
+				&skipExpiredDetail,
+				"skip-expired-detail",
+				false,
+				"omit evaluations without complete detail",
+			)
+		},
+	)
 	if code != 0 {
 		return code
 	}
 	filter.DetailMode = evaluation.QueryDetailFull
+	filter.CompleteDetailOnly = skipExpiredDetail
 	result, code := loadEvaluationQueryResult("export evaluations", filter)
 	if code != 0 {
 		return code
+	}
+	if result.Completeness.IncompleteCount > 0 && !skipExpiredDetail {
+		earliest := "none"
+		if result.Completeness.EarliestCompleteDetailAt != nil {
+			earliest = result.Completeness.EarliestCompleteDetailAt.Format(time.RFC3339Nano)
+		}
+		fmt.Fprintf(
+			os.Stderr,
+			"agent-gate export evaluations: %d selected evaluations lack complete detail; complete detail starts at %s\n",
+			result.Completeness.IncompleteCount,
+			earliest,
+		)
+		return 1
+	}
+	if result.Completeness.IncompleteCount > 0 {
+		fmt.Fprintf(
+			os.Stderr,
+			"agent-gate export evaluations: omitted %d selected evaluations with incomplete detail\n",
+			result.Completeness.IncompleteCount,
+		)
 	}
 	return encodeEvaluationJSONL("export evaluations", result)
 }
