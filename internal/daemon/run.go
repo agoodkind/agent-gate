@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sync"
 	"syscall"
 
 	"google.golang.org/grpc"
@@ -66,15 +67,100 @@ func Run(log *slog.Logger, cfg *config.Config) error {
 		grpcServer.GracefulStop()
 	})
 
-	log.InfoContext(ctx, "daemon listening", "socket", socketPath)
-	if err := grpcServer.Serve(listener); err != nil {
-		if errors.Is(err, grpc.ErrServerStopped) {
-			return nil
-		}
+	if err := serveAfterReadiness(grpcServer, listener, func() {
+		log.InfoContext(ctx, "daemon listening", "socket", socketPath)
+		srv.StartMaintenanceScheduler(ctx)
+	}); err != nil {
 		log.ErrorContext(ctx, "grpc serve failed", "err", err)
 		return fmt.Errorf("grpc serve: %w", err)
 	}
 	return nil
+}
+
+type readinessListener struct {
+	net.Listener
+	once    sync.Once
+	serving chan struct{}
+}
+
+type listenerAcceptError struct {
+	err error
+}
+
+type temporaryError interface {
+	error
+	Temporary() bool
+}
+
+func (err *listenerAcceptError) Error() string { return "accept daemon connection: " + err.err.Error() }
+func (err *listenerAcceptError) Unwrap() error { return err.err }
+func (err *listenerAcceptError) Timeout() bool {
+	var acceptErr net.Error
+	return errors.As(err.err, &acceptErr) && acceptErr.Timeout()
+}
+
+func (err *listenerAcceptError) Temporary() bool {
+	var acceptErr temporaryError
+	return errors.As(err.err, &acceptErr) && acceptErr.Temporary()
+}
+
+func newReadinessListener(listener net.Listener) *readinessListener {
+	return &readinessListener{
+		Listener: listener,
+		once:     sync.Once{},
+		serving:  make(chan struct{}),
+	}
+}
+
+func (listener *readinessListener) Accept() (net.Conn, error) {
+	listener.once.Do(func() { close(listener.serving) })
+	connection, err := listener.Listener.Accept()
+	if err != nil {
+		return nil, &listenerAcceptError{err: err}
+	}
+	return connection, nil
+}
+
+func (listener *readinessListener) Serving() <-chan struct{} {
+	return listener.serving
+}
+
+func serveAsync(server *grpc.Server, listener net.Listener) <-chan error {
+	result := make(chan error, 1)
+	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				slog.Error("grpc serve panic recovered", "err", recovered)
+				result <- fmt.Errorf("grpc serve panic: %v", recovered)
+			}
+		}()
+		result <- server.Serve(listener)
+	}()
+	return result
+}
+
+func serveAfterReadiness(server *grpc.Server, listener net.Listener, ready func()) error {
+	readyListener := newReadinessListener(listener)
+	serveResult := serveAsync(server, readyListener)
+	select {
+	case <-readyListener.Serving():
+		ready()
+	case err := <-serveResult:
+		select {
+		case <-readyListener.Serving():
+			ready()
+		default:
+		}
+		return normalizeServeError(err)
+	}
+	return normalizeServeError(<-serveResult)
+}
+
+func normalizeServeError(err error) error {
+	if errors.Is(err, grpc.ErrServerStopped) {
+		return nil
+	}
+	return err
 }
 
 func daemonListener(ctx context.Context, socketPath string) (net.Listener, error) {
