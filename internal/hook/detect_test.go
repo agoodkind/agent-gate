@@ -202,6 +202,36 @@ func TestClassifyReportsNonObjectAndMalformedInputAsInvalid(t *testing.T) {
 	}
 }
 
+func TestClassifyInvalidInputDoesNotResolveProvider(t *testing.T) {
+	classification := hook.Classify(
+		[]byte("{"),
+		hook.SystemClaude,
+		[]string{"agent-gate", "managed-hook", "claude"},
+		map[string]string{"CODEX_THREAD_ID": "inherited"},
+	)
+
+	if classification.ResolvedSystem() != hook.SystemUnknown {
+		t.Fatalf("resolved system = %q, want unknown", classification.ResolvedSystem())
+	}
+	if classification.Result != hook.ClassificationResultInvalid {
+		t.Fatalf("result = %q, want invalid", classification.Result)
+	}
+	if classification.Confidence != hook.ClassificationConfidenceNone {
+		t.Fatalf("confidence = %q, want none", classification.Confidence)
+	}
+	if len(classification.Conflicts) != 0 {
+		t.Fatalf("conflicts = %#v, want none", classification.Conflicts)
+	}
+	if len(classification.Evidence) == 0 {
+		t.Fatal("classification evidence is empty")
+	}
+	for _, evidence := range classification.Evidence {
+		if evidence.Result != "candidate" {
+			t.Fatalf("evidence = %#v, want candidate result", evidence)
+		}
+	}
+}
+
 func TestClassifyRecordsPayloadFieldsCasingAndProviderIdentifier(t *testing.T) {
 	classification := hook.ClassifyWithContext(
 		[]byte(`{"providerId":"gemini-cli","hook_event_name":"SessionStart","sessionId":"s1"}`),
