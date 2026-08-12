@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -12,6 +13,7 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 
+	"goodkind.io/agent-gate/internal/auditstorage"
 	"goodkind.io/agent-gate/internal/config"
 	"goodkind.io/agent-gate/internal/intake"
 )
@@ -236,6 +238,291 @@ func TestQueryIncludesNormalizedAndEnvJSONOnlyWhenRequested(t *testing.T) {
 	if strings.Contains(string(encodedWith), "secret") {
 		t.Fatalf("raw payload leaked in query JSON: %s", string(encodedWith))
 	}
+	if withJSON.Records[0].Detail.State != auditstorage.DetailStateAvailable {
+		t.Fatalf("detail state = %q, want available", withJSON.Records[0].Detail.State)
+	}
+}
+
+func TestQueryReportsExpiredDetailAndOmitsMissingContent(t *testing.T) {
+	store, path := newQueryTestStore(t)
+	result, err := store.Append(t.Context(), intake.Record{
+		EventID:            "evt-expired",
+		RecordedAt:         time.Date(2026, 5, 9, 21, 0, 0, 0, time.UTC),
+		System:             "codex",
+		SessionID:          "session-expired",
+		EventName:          "PreToolUse",
+		RawPayload:         []byte(`{"wire":true}`),
+		NormalizedJSON:     json.RawMessage(`{"normalized":true}`),
+		ClassificationJSON: json.RawMessage(`{"provider":"codex"}`),
+		EnvFingerprint:     map[string]string{"AI_AGENT": "codex"},
+	})
+	if err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	if _, err := store.Handle().Exec(`
+		delete from intake_event_details
+		where event_id = ? and detail_class in (?, ?, ?)
+	`, result.EventID, auditstorage.DetailClassNormalizedInput,
+		auditstorage.DetailClassProviderEvidence,
+		auditstorage.DetailClassEnvironmentEvidence); err != nil {
+		t.Fatalf("delete expired detail: %v", err)
+	}
+	if _, err := store.Handle().Exec(`
+		update intake_event_detail_manifest
+		set available_classes_json = '["wire_input"]', state = 'expired',
+			state_changed_at = '2026-05-10T00:00:00Z'
+		where event_id = ?
+	`, result.EventID); err != nil {
+		t.Fatalf("mark detail expired: %v", err)
+	}
+
+	queryResult, err := intake.Query(t.Context(), queryConfig(path), intake.QueryFilter{
+		EventID: result.EventID, IncludeNormalized: true, IncludeEnv: true,
+	})
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	encoded, err := json.Marshal(queryResult.Records[0])
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	text := string(encoded)
+	if !strings.Contains(text, `"detail":{"state":"expired"`) {
+		t.Fatalf("detail state missing: %s", text)
+	}
+	for _, missing := range []string{"classification", "normalized_json", "env_fingerprint"} {
+		if strings.Contains(text, `"`+missing+`"`) {
+			t.Fatalf("expired field %q present: %s", missing, text)
+		}
+	}
+}
+
+func TestQueryHonorsTerminalStateWhenDetailRowsRemain(t *testing.T) {
+	for _, terminalState := range []auditstorage.DetailState{
+		auditstorage.DetailStateExpired,
+		auditstorage.DetailStateNotRecorded,
+	} {
+		t.Run(string(terminalState), func(t *testing.T) {
+			store, path := newQueryTestStore(t)
+			eventID := appendDetailStateRecord(t, store, "evt-terminal-"+string(terminalState))
+			if _, err := store.Handle().Exec(`
+				update intake_event_detail_manifest set state = ? where event_id = ?
+			`, terminalState, eventID); err != nil {
+				t.Fatalf("mark detail %s: %v", terminalState, err)
+			}
+
+			result, err := intake.Query(t.Context(), queryConfig(path), intake.QueryFilter{
+				EventID: eventID, IncludeNormalized: true, IncludeEnv: true,
+			})
+			if err != nil {
+				t.Fatalf("Query: %v", err)
+			}
+			record := result.Records[0]
+			if record.Detail.State != terminalState {
+				t.Fatalf("detail state = %q, want %q", record.Detail.State, terminalState)
+			}
+			encoded, err := json.Marshal(record)
+			if err != nil {
+				t.Fatalf("Marshal: %v", err)
+			}
+			for _, field := range []string{
+				"classification", "normalized_json", "env_fingerprint",
+			} {
+				if strings.Contains(string(encoded), `"`+field+`"`) {
+					t.Fatalf("terminal field %q present: %s", field, encoded)
+				}
+			}
+		})
+	}
+}
+
+func TestQueryReportsProtectedAndNotRecordedDetail(t *testing.T) {
+	store, path := newQueryTestStore(t)
+	protected := appendDetailStateRecord(t, store, "evt-protected")
+	protectedReceipt, err := store.Get(t.Context(), protected)
+	if err != nil {
+		t.Fatalf("Get protected receipt: %v", err)
+	}
+	if err := store.MarkDeferredPending(
+		t.Context(), protected, protectedReceipt.ReceiptID,
+	); err != nil {
+		t.Fatalf("MarkDeferredPending: %v", err)
+	}
+	if _, err := store.Handle().Exec(`
+		update intake_event_detail_manifest set state = 'protected' where event_id = ?
+	`, protected); err != nil {
+		t.Fatalf("mark detail protected: %v", err)
+	}
+
+	notRecorded := appendDetailStateRecord(t, store, "evt-not-recorded")
+	if _, err := store.Handle().Exec(`
+		delete from intake_event_details
+		where event_id = ? and detail_class in (?, ?, ?)
+	`, notRecorded, auditstorage.DetailClassNormalizedInput,
+		auditstorage.DetailClassProviderEvidence,
+		auditstorage.DetailClassEnvironmentEvidence); err != nil {
+		t.Fatalf("delete not-recorded detail: %v", err)
+	}
+	if _, err := store.Handle().Exec(`
+		update intake_event_detail_manifest
+		set recorded_classes_json = '["wire_input"]',
+			available_classes_json = '["wire_input"]', state = 'not_recorded'
+		where event_id = ?
+	`, notRecorded); err != nil {
+		t.Fatalf("mark detail not recorded: %v", err)
+	}
+
+	for _, testCase := range []struct {
+		eventID string
+		state   auditstorage.DetailState
+		present bool
+	}{
+		{eventID: protected, state: auditstorage.DetailStateProtected, present: true},
+		{eventID: notRecorded, state: auditstorage.DetailStateNotRecorded, present: false},
+	} {
+		result, err := intake.Query(t.Context(), queryConfig(path), intake.QueryFilter{
+			EventID: testCase.eventID, IncludeNormalized: true, IncludeEnv: true,
+		})
+		if err != nil {
+			t.Fatalf("Query %s: %v", testCase.eventID, err)
+		}
+		record := result.Records[0]
+		if record.Detail.State != testCase.state {
+			t.Fatalf("%s detail state = %q, want %q", testCase.eventID, record.Detail.State, testCase.state)
+		}
+		contentPresent := len(record.Classification) > 0 && len(record.NormalizedJSON) > 0 &&
+			len(record.EnvFingerprint) > 0
+		if contentPresent != testCase.present {
+			t.Fatalf("%s content present = %t, want %t", testCase.eventID, contentPresent, testCase.present)
+		}
+	}
+}
+
+func TestQueryReportsAvailableWhenOnlyUnrequestedClassIsProtected(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sqlite", "audit.db")
+	configPath := filepath.Join(t.TempDir(), "config.toml")
+	configBody := `[audit.storage]
+profile = "balanced"
+
+[audit.storage.detail]
+wire_input = false
+normalized_input = false
+
+[audit.outputs.sqlite]
+path = "` + path + `"
+`
+	if err := os.WriteFile(configPath, []byte(configBody), 0o600); err != nil {
+		t.Fatalf("WriteFile config: %v", err)
+	}
+	cfg, err := config.LoadExisting(configPath)
+	if err != nil {
+		t.Fatalf("LoadExisting: %v", err)
+	}
+	store, err := intake.OpenSQLiteWithOptions(t.Context(), intake.SQLiteOptions{
+		Path: path, Policy: cfg.AuditStoragePolicy(), Log: nil,
+	})
+	if err != nil {
+		t.Fatalf("OpenSQLiteWithOptions: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	result, err := store.Append(t.Context(), intake.Record{
+		EventID: "evt-wire-protected", RecordedAt: time.Now().UTC(), System: "codex",
+		SessionID: "session-wire-protected", EventName: "PreToolUse",
+		RawPayload:         []byte(`{"wire":true}`),
+		NormalizedJSON:     json.RawMessage(`{"normalized":true}`),
+		ClassificationJSON: json.RawMessage(`{"provider":"codex"}`),
+	})
+	if err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+
+	queryResult, err := intake.Query(t.Context(), cfg, intake.QueryFilter{
+		EventID: result.EventID,
+	})
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	record := queryResult.Records[0]
+	if record.Detail.State != auditstorage.DetailStateAvailable {
+		t.Fatalf("detail state = %q, want available", record.Detail.State)
+	}
+	if string(record.Classification) != `{"provider":"codex"}` {
+		t.Fatalf("classification = %s, want recorded provider evidence", record.Classification)
+	}
+	protectedResult, err := intake.Query(t.Context(), cfg, intake.QueryFilter{
+		EventID: result.EventID, IncludeNormalized: true,
+	})
+	if err != nil {
+		t.Fatalf("Query protected class: %v", err)
+	}
+	if protectedResult.Records[0].Detail.State != auditstorage.DetailStateProtected {
+		t.Fatalf(
+			"requested protected detail state = %q, want protected",
+			protectedResult.Records[0].Detail.State,
+		)
+	}
+}
+
+func TestQueryReportsProtectedWhenLivePolicyDisablesAvailableClass(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sqlite", "audit.db")
+	store, err := intake.OpenSQLite(t.Context(), path, nil)
+	if err != nil {
+		t.Fatalf("OpenSQLite: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	result, err := store.Append(t.Context(), intake.Record{
+		EventID: "evt-policy-cutover", RecordedAt: time.Now().UTC(), System: "codex",
+		SessionID: "session-policy-cutover", EventName: "PreToolUse",
+		RawPayload:         []byte(`{"wire":true}`),
+		ClassificationJSON: json.RawMessage(`{"provider":"codex"}`),
+	})
+	if err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	configPath := filepath.Join(t.TempDir(), "config.toml")
+	configBody := `[audit.storage]
+profile = "minimal"
+
+[audit.outputs.sqlite]
+path = "` + path + `"
+`
+	if err := os.WriteFile(configPath, []byte(configBody), 0o600); err != nil {
+		t.Fatalf("WriteFile config: %v", err)
+	}
+	cfg, err := config.LoadExisting(configPath)
+	if err != nil {
+		t.Fatalf("LoadExisting: %v", err)
+	}
+
+	queryResult, err := intake.Query(t.Context(), cfg, intake.QueryFilter{
+		EventID: result.EventID,
+	})
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	record := queryResult.Records[0]
+	if record.Detail.State != auditstorage.DetailStateProtected {
+		t.Fatalf("detail state = %q, want protected", record.Detail.State)
+	}
+	if string(record.Classification) != `{"provider":"codex"}` {
+		t.Fatalf("classification = %s, want protected provider evidence", record.Classification)
+	}
+}
+
+func appendDetailStateRecord(t *testing.T, store *intake.Store, eventID string) string {
+	t.Helper()
+	result, err := store.Append(t.Context(), intake.Record{
+		EventID: eventID, RecordedAt: time.Now().UTC(), System: "codex",
+		SessionID: "session-detail", EventName: "PreToolUse",
+		RawPayload:         []byte(`{"wire":true}`),
+		NormalizedJSON:     json.RawMessage(`{"normalized":true}`),
+		ClassificationJSON: json.RawMessage(`{"provider":"codex"}`),
+		EnvFingerprint:     map[string]string{"AI_AGENT": "codex"},
+	})
+	if err != nil {
+		t.Fatalf("Append %s: %v", eventID, err)
+	}
+	return result.EventID
 }
 
 func TestQueryIncludesClassification(t *testing.T) {

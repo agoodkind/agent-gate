@@ -1363,6 +1363,11 @@ func runEvaluationQuery(args []string) int {
 	if code != 0 {
 		return code
 	}
+	if jsonOut {
+		filter.DetailMode = evaluation.QueryDetailFull
+	} else {
+		filter.DetailMode = evaluation.QueryDetailSummary
+	}
 	result, code := loadEvaluationQueryResult("query evaluations", filter)
 	if code != 0 {
 		return code
@@ -1385,6 +1390,7 @@ func runExport(args []string) int {
 	if code != 0 {
 		return code
 	}
+	filter.DetailMode = evaluation.QueryDetailFull
 	result, code := loadEvaluationQueryResult("export evaluations", filter)
 	if code != 0 {
 		return code
@@ -1399,9 +1405,9 @@ func parseQueryTime(s string) (time.Time, error) {
 	return time.Parse(time.RFC3339, s)
 }
 
-func printEventTable(source string, events []audit.Event) {
+func printEventTable(source string, events []audit.QueryRecord) {
 	_, _ = fmt.Fprintf(os.Stdout, "source=%s rows=%d\n", source, len(events))
-	_, _ = fmt.Fprintf(os.Stdout, "%-25s  %-8s  %-12s  %-12s  %-9s  %-24s  %s\n", "time", "system", "decision", "event", "tool", "rules", "command")
+	_, _ = fmt.Fprintf(os.Stdout, "%-25s  %-8s  %-12s  %-12s  %-9s  %-24s  %-12s  %s\n", "time", "system", "decision", "event", "tool", "rules", "detail", "command")
 	for _, event := range events {
 		rules := "-"
 		if len(event.Decision.RulesMatched) > 0 {
@@ -1412,13 +1418,14 @@ func printEventTable(source string, events []audit.Event) {
 			cmd = cmd[:77] + "..."
 		}
 		_, _ = fmt.Fprintf(
-			os.Stdout, "%-25s  %-8s  %-12s  %-12s  %-9s  %-24s  %s\n",
+			os.Stdout, "%-25s  %-8s  %-12s  %-12s  %-9s  %-24s  %-12s  %s\n",
 			event.Time,
 			event.System,
 			event.Decision.Kind,
 			event.EventName,
 			event.ToolName,
 			rules,
+			event.Detail.State,
 			cmd,
 		)
 	}
@@ -1429,20 +1436,21 @@ func printSeenTable(result intake.QueryResult) {
 	if result.Note != "" {
 		_, _ = fmt.Fprintf(os.Stdout, "note=%s\n", result.Note)
 	}
-	_, _ = fmt.Fprintf(os.Stdout, "%-25s  %-8s  %-12s  %-12s  %-9s  %-10s  %s\n", "recorded_at", "system", "state", "event", "tool", "session", "command")
+	_, _ = fmt.Fprintf(os.Stdout, "%-25s  %-8s  %-12s  %-12s  %-9s  %-10s  %-12s  %s\n", "recorded_at", "system", "state", "event", "tool", "session", "detail", "command")
 	for _, record := range result.Records {
 		cmd := record.Operation.Command
 		if len(cmd) > 80 {
 			cmd = cmd[:77] + "..."
 		}
 		_, _ = fmt.Fprintf(
-			os.Stdout, "%-25s  %-8s  %-12s  %-12s  %-9s  %-10s  %s\n",
+			os.Stdout, "%-25s  %-8s  %-12s  %-12s  %-9s  %-10s  %-12s  %s\n",
 			record.RecordedAt,
 			record.System,
 			record.Deferred.State,
 			record.EventName,
 			record.ToolName,
 			record.SessionID,
+			record.Detail.State,
 			cmd,
 		)
 	}
@@ -1455,7 +1463,7 @@ func printEvaluationTable(result evaluation.QueryResult) {
 	}
 	_, _ = fmt.Fprintf(
 		os.Stdout,
-		"%-25s  %-8s  %-9s  %-12s  %-12s  %-12s  %-8s  %-7s  %s\n",
+		"%-25s  %-8s  %-9s  %-12s  %-12s  %-12s  %-8s  %-7s  %-12s  %s\n",
 		"completed_at",
 		"system",
 		"mode",
@@ -1464,12 +1472,13 @@ func printEvaluationTable(result evaluation.QueryResult) {
 		"tool",
 		"receipt",
 		"layers",
+		"detail",
 		"evaluation_id",
 	)
 	for _, record := range result.Records {
 		_, _ = fmt.Fprintf(
 			os.Stdout,
-			"%-25s  %-8s  %-9s  %-12s  %-12s  %-12s  %-8d  %-7d  %s\n",
+			"%-25s  %-8s  %-9s  %-12s  %-12s  %-12s  %-8d  %-7d  %-12s  %s\n",
 			record.CompletedAt.Format(time.RFC3339Nano),
 			record.System,
 			record.Mode,
@@ -1478,6 +1487,7 @@ func printEvaluationTable(result evaluation.QueryResult) {
 			record.ToolName,
 			record.ReceiptID,
 			len(record.Layers),
+			record.Detail.State,
 			record.EvaluationID,
 		)
 	}

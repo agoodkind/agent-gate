@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -18,6 +19,7 @@ import (
 
 	"goodkind.io/agent-gate/api/daemonpb"
 	"goodkind.io/agent-gate/internal/audit"
+	"goodkind.io/agent-gate/internal/auditstorage"
 	"goodkind.io/agent-gate/internal/config"
 	"goodkind.io/agent-gate/internal/evaluation"
 	"goodkind.io/agent-gate/internal/hook"
@@ -512,6 +514,57 @@ func TestRunQuerySeenAcceptsSharedAndIntakeFilters(t *testing.T) {
 	}
 }
 
+func TestRunQuerySeenReportsExpiredDetailAndOmitsContent(t *testing.T) {
+	setupQueryEnvironment(t)
+	store, err := intake.OpenSQLite(t.Context(), config.DefaultAuditSQLitePath(), nil)
+	if err != nil {
+		t.Fatalf("OpenSQLite: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	result, err := store.Append(t.Context(), intake.Record{
+		EventID: "evt-cli-expired", RecordedAt: time.Now().UTC(), System: "codex",
+		SessionID: "session-expired", EventName: "PreToolUse",
+		RawPayload:         []byte(`{"wire":true}`),
+		NormalizedJSON:     json.RawMessage(`{"normalized":true}`),
+		ClassificationJSON: json.RawMessage(`{"provider":"codex"}`),
+		EnvFingerprint:     map[string]string{"AI_AGENT": "codex"},
+	})
+	if err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	if _, err := store.Handle().Exec(`
+		delete from intake_event_details
+		where event_id = ? and detail_class in (?, ?, ?)
+	`, result.EventID, auditstorage.DetailClassNormalizedInput,
+		auditstorage.DetailClassProviderEvidence,
+		auditstorage.DetailClassEnvironmentEvidence); err != nil {
+		t.Fatalf("delete expired detail: %v", err)
+	}
+	if _, err := store.Handle().Exec(`
+		update intake_event_detail_manifest
+		set available_classes_json = '["wire_input"]', state = 'expired',
+			state_changed_at = '2026-08-12T00:00:00Z'
+		where event_id = ?
+	`, result.EventID); err != nil {
+		t.Fatalf("mark detail expired: %v", err)
+	}
+
+	exitCode, stdout, stderr := captureRunQuery(t, []string{
+		"seen", "--event-id", result.EventID, "--include-normalized", "--include-env", "--json",
+	})
+	if exitCode != 0 || stderr != "" {
+		t.Fatalf("exitCode = %d, stderr = %q", exitCode, stderr)
+	}
+	if !strings.Contains(stdout, `"detail":{"state":"expired"`) {
+		t.Fatalf("expired detail state missing: %s", stdout)
+	}
+	for _, field := range []string{"classification", "normalized_json", "env_fingerprint"} {
+		if strings.Contains(stdout, `"`+field+`"`) {
+			t.Fatalf("expired field %q present: %s", field, stdout)
+		}
+	}
+}
+
 func TestRunQueryDecisionsPreservesAuditQueryBehavior(t *testing.T) {
 	setupQueryEnvironment(t)
 	logger, err := audit.NewEventLoggerWithOptions(context.Background(), &config.Config{}, nil, audit.LoggerOptions{QueueLimit: 0})
@@ -548,6 +601,108 @@ func TestRunQueryDecisionsPreservesAuditQueryBehavior(t *testing.T) {
 	}
 	if !strings.Contains(stdout, "use-make-not-go-direct") {
 		t.Fatalf("stdout = %q, want matched rule", stdout)
+	}
+}
+
+func TestRunQueryDecisionsReadsLegacyPayloadSchema(t *testing.T) {
+	setupQueryEnvironment(t)
+	fixturePath := filepath.Join(
+		"..", "..", "internal", "auditstorage", "testdata", "legacy_v1.sql",
+	)
+	fixture, err := os.ReadFile(fixturePath)
+	if err != nil {
+		t.Fatalf("ReadFile legacy fixture: %v", err)
+	}
+	databasePath := config.DefaultAuditSQLitePath()
+	if err := os.MkdirAll(filepath.Dir(databasePath), 0o700); err != nil {
+		t.Fatalf("MkdirAll audit state: %v", err)
+	}
+	database, err := sql.Open("sqlite3", databasePath)
+	if err != nil {
+		t.Fatalf("open legacy database: %v", err)
+	}
+	if _, err := database.Exec(string(fixture)); err != nil {
+		_ = database.Close()
+		t.Fatalf("load legacy fixture: %v", err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatalf("close legacy database: %v", err)
+	}
+
+	exitCode, stdout, stderr := captureRunQuery(t, []string{
+		"decisions", "--decision", "block", "--json",
+	})
+	if exitCode != 0 || stderr != "" {
+		t.Fatalf("exitCode = %d, stderr = %q", exitCode, stderr)
+	}
+	var record audit.QueryRecord
+	if err := json.Unmarshal([]byte(strings.TrimSpace(stdout)), &record); err != nil {
+		t.Fatalf("decode legacy decision: %v", err)
+	}
+	if record.EventID != "audit-legacy" {
+		t.Fatalf("event id = %q, want audit-legacy", record.EventID)
+	}
+	if record.Detail.State != auditstorage.DetailStateAvailable {
+		t.Fatalf("detail state = %q, want available", record.Detail.State)
+	}
+	if len(record.Detail.RecordedClasses) != 1 ||
+		record.Detail.RecordedClasses[0] != auditstorage.DetailClassDeferredAuditPayload {
+		t.Fatalf("recorded classes = %v, want deferred audit payload", record.Detail.RecordedClasses)
+	}
+}
+
+func TestRunQueryDecisionsRejectsAvailableHeaderWithoutPayload(t *testing.T) {
+	setupQueryEnvironment(t)
+	record := appendCLIQueryEvaluation(t)
+	database, err := sql.Open("sqlite3", config.DefaultAuditSQLitePath())
+	if err != nil {
+		t.Fatalf("open audit database: %v", err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	const auditEventID = "audit-missing-payload"
+	if _, err := database.Exec(`
+		insert into events (
+			event_id, schema_version, time, level, message, system, session_id,
+			turn_id, event_name, tool_use_id, tool_name, raw_payload_hash
+		) values (?, 1, '2026-07-11T01:00:02Z', 'info', 'hook.blocked',
+			'codex', 'session-cli', '', 'PreToolUse', '', 'exec_command', 'sha256:audit')
+	`, auditEventID); err != nil {
+		t.Fatalf("insert audit event: %v", err)
+	}
+	if _, err := database.Exec(`
+		insert into deferred_audit_outbox (
+			receipt_id, event_id, evaluation_id, state, created_at, completed_at,
+			claim_owner, claim_expires_at, claim_attempt
+		) values (?, ?, ?, 'complete', '2026-07-11T01:00:02Z',
+			'2026-07-11T01:00:03Z', null, null, 0)
+	`, record.Evaluation.ReceiptID, record.Evaluation.EventID,
+		record.Evaluation.EvaluationID); err != nil {
+		t.Fatalf("insert audit outbox: %v", err)
+	}
+	if _, err := database.Exec(`
+		insert into deferred_audit_outbox_entries (
+			receipt_id, entry_index, audit_event_id, delivered_at,
+			payload_recorded, payload_available, payload_state_changed_at
+		) values (?, 0, ?, '2026-07-11T01:00:03Z', 1, 1, '2026-07-11T01:00:03Z')
+	`, record.Evaluation.ReceiptID, auditEventID); err != nil {
+		t.Fatalf("insert audit outbox header: %v", err)
+	}
+
+	exitCode, stdout, stderr := captureRunQuery(t, []string{
+		"decisions", "--json", "--limit", "10",
+	})
+	if exitCode != 0 || stderr != "" {
+		t.Fatalf("exitCode = %d, stderr = %q", exitCode, stderr)
+	}
+	var got audit.QueryRecord
+	if err := json.Unmarshal([]byte(strings.TrimSpace(stdout)), &got); err != nil {
+		t.Fatalf("decode audit decision: %v", err)
+	}
+	if got.Detail.State != auditstorage.DetailStateExpired {
+		t.Fatalf("detail state = %q, want expired", got.Detail.State)
+	}
+	if len(got.Detail.AvailableClasses) != 0 {
+		t.Fatalf("available classes = %v, want none", got.Detail.AvailableClasses)
 	}
 }
 
@@ -631,6 +786,45 @@ func TestRunQueryEvaluationsPrintsSafeSummaryTable(t *testing.T) {
 	}
 }
 
+func TestRunQueryEvaluationsTableIgnoresCorruptDetail(t *testing.T) {
+	setupQueryEnvironment(t)
+	record := appendCLIQueryEvaluation(t)
+	store, err := intake.OpenSQLite(t.Context(), config.DefaultAuditSQLitePath(), nil)
+	if err != nil {
+		t.Fatalf("OpenSQLite: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	if _, err := store.Handle().Exec(`
+		update gate_evaluation_layer_details set metadata_json = '{'
+		where evaluation_id = ?
+	`, record.Evaluation.EvaluationID); err != nil {
+		t.Fatalf("corrupt evaluation metadata: %v", err)
+	}
+
+	exitCode, stdout, stderr := captureRunQuery(t, []string{
+		"evaluations", "--evaluation-id", record.Evaluation.EvaluationID,
+	})
+	if exitCode != 0 || stderr != "" {
+		t.Fatalf("table exitCode = %d, stderr = %q", exitCode, stderr)
+	}
+	for _, summary := range []string{
+		record.Evaluation.EvaluationID,
+		"block",
+		"available",
+	} {
+		if !strings.Contains(stdout, summary) {
+			t.Fatalf("table missing summary %q: %s", summary, stdout)
+		}
+	}
+
+	exitCode, _, stderr = captureRunQuery(t, []string{
+		"evaluations", "--evaluation-id", record.Evaluation.EvaluationID, "--json",
+	})
+	if exitCode != 1 || !strings.Contains(stderr, "metadata") {
+		t.Fatalf("JSON exitCode = %d, stderr = %q, want strict metadata failure", exitCode, stderr)
+	}
+}
+
 func TestRunQueryEvaluationsHandlesEmptyHistory(t *testing.T) {
 	setupQueryEnvironment(t)
 
@@ -644,7 +838,7 @@ func TestRunQueryEvaluationsHandlesEmptyHistory(t *testing.T) {
 	}
 }
 
-func TestExistingQueryTableRenderersRemainByteCompatible(t *testing.T) {
+func TestQueryTableRenderersPreserveColumnsAndAddDetail(t *testing.T) {
 	seen := intake.QueryResult{
 		Source: "sqlite",
 		Records: []intake.QueryRecord{
@@ -653,28 +847,34 @@ func TestExistingQueryTableRenderersRemainByteCompatible(t *testing.T) {
 				SessionID: "session-1", EventName: "PreToolUse", ToolName: "Shell",
 				Operation: intake.Operation{Command: "make test"},
 				Deferred:  intake.QueryDeferred{State: intake.DeferredStatePending},
+				Detail: auditstorage.DetailProjection{
+					State: auditstorage.DetailStateProtected,
+				},
 			},
 		},
 	}
 	seenOutput := captureStdoutCall(t, func() { printSeenTable(seen) })
 	wantSeen := "source=sqlite rows=1\n" +
-		fmt.Sprintf("%-25s  %-8s  %-12s  %-12s  %-9s  %-10s  %s\n", "recorded_at", "system", "state", "event", "tool", "session", "command") +
-		fmt.Sprintf("%-25s  %-8s  %-12s  %-12s  %-9s  %-10s  %s\n", "2026-07-11T01:02:03Z", "codex", "pending", "PreToolUse", "Shell", "session-1", "make test")
+		fmt.Sprintf("%-25s  %-8s  %-12s  %-12s  %-9s  %-10s  %-12s  %s\n", "recorded_at", "system", "state", "event", "tool", "session", "detail", "command") +
+		fmt.Sprintf("%-25s  %-8s  %-12s  %-12s  %-9s  %-10s  %-12s  %s\n", "2026-07-11T01:02:03Z", "codex", "pending", "PreToolUse", "Shell", "session-1", "protected", "make test")
 	if seenOutput != wantSeen {
 		t.Fatalf("seen table changed\ngot:  %q\nwant: %q", seenOutput, wantSeen)
 	}
 
-	events := []audit.Event{
+	events := []audit.QueryRecord{
 		{
-			Time: "2026-07-11T01:02:03Z", System: "codex", EventName: "PreToolUse",
-			ToolName: "Shell", Operation: audit.Operation{Command: "make test"},
-			Decision: audit.Decision{Kind: "block", RulesMatched: []string{"rule-1"}},
+			Event: audit.Event{
+				Time: "2026-07-11T01:02:03Z", System: "codex", EventName: "PreToolUse",
+				ToolName: "Shell", Operation: audit.Operation{Command: "make test"},
+				Decision: audit.Decision{Kind: "block", RulesMatched: []string{"rule-1"}},
+			},
+			Detail: auditstorage.DetailProjection{State: auditstorage.DetailStateAvailable},
 		},
 	}
 	eventOutput := captureStdoutCall(t, func() { printEventTable("sqlite", events) })
 	wantEvent := "source=sqlite rows=1\n" +
-		fmt.Sprintf("%-25s  %-8s  %-12s  %-12s  %-9s  %-24s  %s\n", "time", "system", "decision", "event", "tool", "rules", "command") +
-		fmt.Sprintf("%-25s  %-8s  %-12s  %-12s  %-9s  %-24s  %s\n", "2026-07-11T01:02:03Z", "codex", "block", "PreToolUse", "Shell", "rule-1", "make test")
+		fmt.Sprintf("%-25s  %-8s  %-12s  %-12s  %-9s  %-24s  %-12s  %s\n", "time", "system", "decision", "event", "tool", "rules", "detail", "command") +
+		fmt.Sprintf("%-25s  %-8s  %-12s  %-12s  %-9s  %-24s  %-12s  %s\n", "2026-07-11T01:02:03Z", "codex", "block", "PreToolUse", "Shell", "rule-1", "available", "make test")
 	if eventOutput != wantEvent {
 		t.Fatalf("decision table changed\ngot:  %q\nwant: %q", eventOutput, wantEvent)
 	}

@@ -14,6 +14,7 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 
+	"goodkind.io/agent-gate/internal/auditstorage"
 	"goodkind.io/agent-gate/internal/config"
 )
 
@@ -42,20 +43,21 @@ type QueryResult struct {
 // QueryRecord is the public query projection for a durable intake record.
 // It intentionally omits raw payload bytes.
 type QueryRecord struct {
-	EventID        string            `json:"event_id"`
-	RecordedAt     string            `json:"recorded_at"`
-	System         string            `json:"system"`
-	SessionID      string            `json:"session_id"`
-	TurnID         string            `json:"turn_id,omitempty"`
-	EventName      string            `json:"event_name"`
-	ToolName       string            `json:"tool_name,omitempty"`
-	ToolUseID      string            `json:"tool_use_id,omitempty"`
-	Operation      Operation         `json:"operation"`
-	RawPayloadHash string            `json:"raw_payload_hash"`
-	Classification json.RawMessage   `json:"classification"`
-	Deferred       QueryDeferred     `json:"deferred"`
-	NormalizedJSON json.RawMessage   `json:"normalized_json,omitempty"`
-	EnvFingerprint map[string]string `json:"env_fingerprint,omitempty"`
+	EventID        string                        `json:"event_id"`
+	RecordedAt     string                        `json:"recorded_at"`
+	System         string                        `json:"system"`
+	SessionID      string                        `json:"session_id"`
+	TurnID         string                        `json:"turn_id,omitempty"`
+	EventName      string                        `json:"event_name"`
+	ToolName       string                        `json:"tool_name,omitempty"`
+	ToolUseID      string                        `json:"tool_use_id,omitempty"`
+	Operation      Operation                     `json:"operation"`
+	RawPayloadHash string                        `json:"raw_payload_hash"`
+	Classification json.RawMessage               `json:"classification,omitempty"`
+	Deferred       QueryDeferred                 `json:"deferred"`
+	Detail         auditstorage.DetailProjection `json:"detail"`
+	NormalizedJSON json.RawMessage               `json:"normalized_json,omitempty"`
+	EnvFingerprint map[string]string             `json:"env_fingerprint,omitempty"`
 }
 
 // QueryDeferred is the read projection of deferred replay state.
@@ -138,7 +140,11 @@ func Query(ctx context.Context, cfg *config.Config, filter QueryFilter) (QueryRe
 		result.Note = "clamped lower bound to seen-event history start " + formatTime(start)
 	}
 
-	records, err := queryRecords(ctx, db, filter, hasDeferredTable)
+	var policy config.AuditStoragePolicy
+	if cfg != nil {
+		policy = cfg.AuditStoragePolicy()
+	}
+	records, err := queryRecords(ctx, db, filter, hasDeferredTable, policy)
 	if err != nil {
 		return QueryResult{}, err
 	}
@@ -193,13 +199,14 @@ func queryRecords(
 	db *sql.DB,
 	filter QueryFilter,
 	hasDeferredTable bool,
+	policy config.AuditStoragePolicy,
 ) ([]QueryRecord, error) {
 	where, args := intakeQueryWhere(filter, hasDeferredTable)
 	limit := ""
 	if filter.Limit > 0 {
 		limit = " limit " + strconv.Itoa(filter.Limit)
 	}
-	query := intakeQuerySelect(hasDeferredTable)
+	query := intakeQuerySelect(hasDeferredTable, filter)
 	allArgs := make([]queryArgument, 0, len(args)+1)
 	if hasDeferredTable {
 		allArgs = append(allArgs, queryArgument{Value: string(DeferredStateNone)})
@@ -215,7 +222,7 @@ func queryRecords(
 
 	records := make([]QueryRecord, 0)
 	for rows.Next() {
-		record, err := scanQueryRecord(ctx, rows, filter)
+		record, err := scanQueryRecord(ctx, rows, filter, policy)
 		if err != nil {
 			return nil, err
 		}
@@ -227,14 +234,51 @@ func queryRecords(
 	return records, nil
 }
 
-func intakeQuerySelect(hasDeferredTable bool) string {
+func intakeQuerySelect(hasDeferredTable bool, filter QueryFilter) string {
+	normalizedColumn := "null"
+	if filter.IncludeNormalized {
+		normalizedColumn = `(select content from intake_event_details
+			where event_id = e.event_id and detail_class = 'normalized_input')`
+	}
+	environmentColumn := "null"
+	if filter.IncludeEnv {
+		environmentColumn = `(select content from intake_event_details
+			where event_id = e.event_id and detail_class = 'environment_evidence')`
+	}
 	detailColumns := `
-		(select content from intake_event_details
-			where event_id = e.event_id and detail_class = 'normalized_input'),
+		` + normalizedColumn + `,
 		(select content from intake_event_details
 			where event_id = e.event_id and detail_class = 'provider_evidence'),
-		(select content from intake_event_details
-			where event_id = e.event_id and detail_class = 'environment_evidence'),`
+		` + environmentColumn + `,
+		manifest.recorded_classes_json,
+		manifest.available_classes_json,
+		manifest.state,
+		manifest.state_changed_at,
+		case when exists (
+			select 1 from intake_receipts protected_receipt
+			where protected_receipt.event_id = e.event_id and (
+				not exists (
+					select 1 from gate_evaluations hot
+					where hot.receipt_id = protected_receipt.receipt_id
+						and hot.mode = 'hot'
+				)
+				or exists (
+					select 1 from intake_deferred pending
+					where pending.receipt_id = protected_receipt.receipt_id
+						and pending.state = 'pending'
+				)
+				or exists (
+					select 1 from deferred_audit_outbox pending_outbox
+					where pending_outbox.receipt_id = protected_receipt.receipt_id
+						and pending_outbox.state = 'pending'
+				)
+				or exists (
+					select 1 from deferred_audit_outbox_entries undelivered
+					where undelivered.receipt_id = protected_receipt.receipt_id
+						and undelivered.delivered_at is null
+				)
+			)
+		) then 1 else 0 end,`
 	if !hasDeferredTable {
 		return `
 			select
@@ -257,6 +301,7 @@ func intakeQuerySelect(hasDeferredTable bool) string {
 			null as last_replay_at,
 			0
 		from intake_events e
+		join intake_event_detail_manifest manifest on manifest.event_id = e.event_id
 	`
 	}
 	return `
@@ -280,6 +325,7 @@ func intakeQuerySelect(hasDeferredTable bool) string {
 			d.last_replay_at,
 			coalesce(d.replay_count, 0)
 		from intake_events e
+		join intake_event_detail_manifest manifest on manifest.event_id = e.event_id
 		left join intake_receipts r on r.receipt_id = (
 			select max(receipt_id) from intake_receipts where event_id = e.event_id
 		)
@@ -341,16 +387,26 @@ func queryIntakeRows(ctx context.Context, db *sql.DB, query string, args []query
 	return rows, nil
 }
 
-func scanQueryRecord(ctx context.Context, rows *sql.Rows, filter QueryFilter) (QueryRecord, error) {
+func scanQueryRecord(
+	ctx context.Context,
+	rows *sql.Rows,
+	filter QueryFilter,
+	policy config.AuditStoragePolicy,
+) (QueryRecord, error) {
 	var (
-		record         QueryRecord
-		normalized     string
-		classification string
-		envFingerprint string
-		state          string
-		pendingAt      sql.NullString
-		completedAt    sql.NullString
-		lastReplayAt   sql.NullString
+		record           QueryRecord
+		normalized       sql.NullString
+		classification   sql.NullString
+		envFingerprint   sql.NullString
+		recordedClasses  string
+		availableClasses string
+		detailState      auditstorage.DetailState
+		stateChangedAt   string
+		protected        int
+		state            string
+		pendingAt        sql.NullString
+		completedAt      sql.NullString
+		lastReplayAt     sql.NullString
 	)
 	err := rows.Scan(
 		&record.EventID,
@@ -369,6 +425,11 @@ func scanQueryRecord(ctx context.Context, rows *sql.Rows, filter QueryFilter) (Q
 		&normalized,
 		&classification,
 		&envFingerprint,
+		&recordedClasses,
+		&availableClasses,
+		&detailState,
+		&stateChangedAt,
+		&protected,
 		&state,
 		&pendingAt,
 		&completedAt,
@@ -382,18 +443,97 @@ func scanQueryRecord(ctx context.Context, rows *sql.Rows, filter QueryFilter) (Q
 	record.Deferred.PendingAt = nullStringValue(pendingAt)
 	record.Deferred.CompletedAt = nullStringValue(completedAt)
 	record.Deferred.LastReplayAt = nullStringValue(lastReplayAt)
-	record.Classification = json.RawMessage(classification)
+	recorded, err := decodeDetailClasses(ctx, recordedClasses)
+	if err != nil {
+		return QueryRecord{}, err
+	}
+	available, err := decodeDetailClasses(ctx, availableClasses)
+	if err != nil {
+		return QueryRecord{}, err
+	}
+	requested := []auditstorage.DetailClass{auditstorage.DetailClassProviderEvidence}
 	if filter.IncludeNormalized {
-		record.NormalizedJSON = json.RawMessage(normalized)
+		requested = append(requested, auditstorage.DetailClassNormalizedInput)
 	}
 	if filter.IncludeEnv {
-		env, err := unmarshalEnvFingerprint(envFingerprint)
+		requested = append(requested, auditstorage.DetailClassEnvironmentEvidence)
+	}
+	protectedClasses := protectedIntakeClasses(
+		policy, requested, detailState, protected != 0,
+	)
+	record.Detail = auditstorage.ProjectDetail(
+		recorded, available, requested, detailState, stateChangedAt, protectedClasses,
+	)
+	detailReadable := record.Detail.State == auditstorage.DetailStateAvailable ||
+		record.Detail.State == auditstorage.DetailStateProtected
+	if detailReadable && classification.Valid && classification.String != "" {
+		record.Classification = json.RawMessage(classification.String)
+	}
+	if detailReadable && filter.IncludeNormalized && normalized.Valid && normalized.String != "" {
+		record.NormalizedJSON = json.RawMessage(normalized.String)
+	}
+	if detailReadable && filter.IncludeEnv && envFingerprint.Valid && envFingerprint.String != "" {
+		env, err := unmarshalEnvFingerprint(envFingerprint.String)
 		if err != nil {
 			return QueryRecord{}, err
 		}
 		record.EnvFingerprint = env
 	}
 	return record, nil
+}
+
+func protectedIntakeClasses(
+	policy config.AuditStoragePolicy,
+	requested []auditstorage.DetailClass,
+	storedState auditstorage.DetailState,
+	liveProtected bool,
+) []auditstorage.DetailClass {
+	protectedClasses := make([]auditstorage.DetailClass, 0, len(requested))
+	if !liveProtected {
+		return protectedClasses
+	}
+	if policy.Profile == "" {
+		if storedState == auditstorage.DetailStateProtected {
+			return append(protectedClasses, requested...)
+		}
+		return protectedClasses
+	}
+	for _, requestedClass := range requested {
+		if !intakeDetailClassEnabled(policy.Detail, requestedClass) {
+			protectedClasses = append(protectedClasses, requestedClass)
+		}
+	}
+	return protectedClasses
+}
+
+func intakeDetailClassEnabled(
+	policy config.AuditStorageDetailPolicy,
+	detailClass auditstorage.DetailClass,
+) bool {
+	switch detailClass {
+	case auditstorage.DetailClassWireInput:
+		return policy.WireInput
+	case auditstorage.DetailClassNormalizedInput:
+		return policy.NormalizedInput
+	case auditstorage.DetailClassProviderEvidence:
+		return policy.ProviderEvidence
+	case auditstorage.DetailClassEnvironmentEvidence:
+		return policy.EnvironmentEvidence
+	case auditstorage.DetailClassEvaluationContent,
+		auditstorage.DetailClassDeferredAuditPayload:
+		return true
+	}
+	return true
+}
+
+func decodeDetailClasses(ctx context.Context, encoded string) ([]auditstorage.DetailClass, error) {
+	classes := make([]auditstorage.DetailClass, 0)
+	if err := json.Unmarshal([]byte(encoded), &classes); err != nil {
+		return nil, wrapLoggedError(
+			ctx, slog.Default(), "decode intake detail classes", err,
+		)
+	}
+	return classes, nil
 }
 
 func nullStringValue(value sql.NullString) string {

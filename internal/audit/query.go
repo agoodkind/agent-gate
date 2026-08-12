@@ -13,8 +13,15 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 
+	"goodkind.io/agent-gate/internal/auditstorage"
 	"goodkind.io/agent-gate/internal/config"
 )
+
+// QueryRecord is the public query projection of an audit event.
+type QueryRecord struct {
+	Event
+	Detail auditstorage.DetailProjection `json:"detail"`
+}
 
 // QueryFilter narrows the set of audit events returned by [Query].
 type QueryFilter struct {
@@ -36,7 +43,7 @@ type queryArg struct {
 // Query returns audit events matching filter from the SQLite audit store. The
 // returned source name is always "sqlite"; it is retained for callers that
 // surface which backend served the query.
-func Query(cfg *config.Config, filter QueryFilter) ([]Event, string, error) {
+func Query(cfg *config.Config, filter QueryFilter) ([]QueryRecord, string, error) {
 	events, err := querySQLite(cfg, filter)
 	if err != nil {
 		return nil, "sqlite", err
@@ -44,7 +51,7 @@ func Query(cfg *config.Config, filter QueryFilter) ([]Event, string, error) {
 	return events, "sqlite", nil
 }
 
-func querySQLite(cfg *config.Config, filter QueryFilter) ([]Event, error) {
+func querySQLite(cfg *config.Config, filter QueryFilter) ([]QueryRecord, error) {
 	ctx := context.Background()
 	log := slog.Default()
 	path := config.DefaultAuditSQLitePath()
@@ -67,50 +74,189 @@ func querySQLite(cfg *config.Config, filter QueryFilter) ([]Event, error) {
 	if filter.Limit > 0 {
 		limit = fmt.Sprintf(" limit %d", filter.Limit)
 	}
+	payloadColumns, err := auditPayloadProjectionColumns(ctx, db)
+	if err != nil {
+		return nil, err
+	}
 	const baseQuery = `select e.event_id, e.schema_version, e.time, e.level, e.message, e.system, e.session_id, e.turn_id, e.event_name, e.tool_use_id, e.tool_name, e.raw_payload_hash,
 		coalesce(o.cwd, ''), coalesce(o.effective_cwd, ''), coalesce(o.command, ''), coalesce(o.file_path, ''),
-		coalesce(d.kind, ''), coalesce(d.can_block, 0), coalesce(d.rules_checked_json, '[]'), coalesce(d.rules_matched_json, '[]')
+		coalesce(d.kind, ''), coalesce(d.can_block, 0), coalesce(d.rules_checked_json, '[]'), coalesce(d.rules_matched_json, '[]'),`
+	const queryFrom = `
 		from events e
 		left join operations o on o.event_id = e.event_id
 		left join decisions d on d.event_id = e.event_id
 		`
-	// where + limit are derived from a closed enum filter and a positive int;
-	// they cannot carry user-supplied SQL fragments, so concatenation is safe
-	// here. Placeholders are still used for filter values via args.
-	rows, err := queryAuditRows(ctx, db, baseQuery+where+` order by e.time desc`+limit, args)
+	rows, err := queryAuditRows(
+		ctx,
+		db,
+		baseQuery+payloadColumns+queryFrom+where+` order by e.time desc`+limit,
+		args,
+	)
 	if err != nil {
 		log.WarnContext(ctx, "query audit events failed", slog.String("path", path), slog.Any("err", err))
 		return nil, fmt.Errorf("query audit events: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
-	var out []Event
+	var out []QueryRecord
 	for rows.Next() {
-		var event Event
+		var record QueryRecord
 		var checked, matched string
 		var canBlock int
-		if err := rows.Scan(&event.EventID, &event.SchemaVersion, &event.Time, &event.Level, &event.Message,
-			&event.System, &event.SessionID, &event.TurnID, &event.EventName, &event.ToolUseID, &event.ToolName, &event.RawPayloadHash,
-			&event.Operation.CWD, &event.Operation.EffectiveCWD, &event.Operation.Command, &event.Operation.FilePath,
-			&event.Decision.Kind, &canBlock, &checked, &matched); err != nil {
+		var payloadRecorded sql.NullInt64
+		var payloadAvailable sql.NullInt64
+		var stateChangedAt sql.NullString
+		var protected sql.NullInt64
+		if err := rows.Scan(&record.EventID, &record.SchemaVersion, &record.Time, &record.Level, &record.Message,
+			&record.System, &record.SessionID, &record.TurnID, &record.EventName, &record.ToolUseID, &record.ToolName, &record.RawPayloadHash,
+			&record.Operation.CWD, &record.Operation.EffectiveCWD, &record.Operation.Command, &record.Operation.FilePath,
+			&record.Decision.Kind, &canBlock, &checked, &matched, &payloadRecorded,
+			&payloadAvailable, &stateChangedAt, &protected); err != nil {
 			log.WarnContext(ctx, "scan audit event row failed", slog.String("path", path), slog.Any("err", err))
 			return nil, fmt.Errorf("scan audit event row: %w", err)
 		}
-		event.Decision.CanBlock = canBlock != 0
-		_ = json.Unmarshal([]byte(checked), &event.Decision.RulesChecked)
-		_ = json.Unmarshal([]byte(matched), &event.Decision.RulesMatched)
-		violations, err := sqliteViolations(ctx, db, event.EventID)
+		record.Decision.CanBlock = canBlock != 0
+		_ = json.Unmarshal([]byte(checked), &record.Decision.RulesChecked)
+		_ = json.Unmarshal([]byte(matched), &record.Decision.RulesMatched)
+		violations, err := sqliteViolations(ctx, db, record.EventID)
 		if err != nil {
 			return nil, err
 		}
-		event.Violations = violations
-		out = append(out, event)
+		record.Violations = violations
+		record.Detail = projectAuditPayloadDetail(
+			payloadRecorded, payloadAvailable, stateChangedAt, protected,
+		)
+		out = append(out, record)
 	}
 	if err := rows.Err(); err != nil {
 		log.WarnContext(ctx, "iterate audit event rows failed", slog.String("path", path), slog.Any("err", err))
 		return nil, fmt.Errorf("iterate audit events: %w", err)
 	}
 	return out, nil
+}
+
+func auditPayloadProjectionColumns(ctx context.Context, database *sql.DB) (string, error) {
+	hasRecordedState, err := auditColumnExists(
+		ctx, database, "deferred_audit_outbox_entries", "payload_recorded",
+	)
+	if err != nil {
+		return "", err
+	}
+	if hasRecordedState {
+		return `
+		(select payload_recorded from deferred_audit_outbox_entries payload_header
+			where payload_header.audit_event_id = e.event_id
+			order by payload_header.receipt_id desc limit 1),
+		(select case when payload_header.payload_available = 1 and exists (
+				select 1 from deferred_audit_outbox_entry_details payload_detail
+				where payload_detail.receipt_id = payload_header.receipt_id
+					and payload_detail.entry_index = payload_header.entry_index
+			) then 1 else 0 end
+			from deferred_audit_outbox_entries payload_header
+			where payload_header.audit_event_id = e.event_id
+			order by payload_header.receipt_id desc limit 1),
+		(select payload_state_changed_at from deferred_audit_outbox_entries payload_header
+			where payload_header.audit_event_id = e.event_id
+			order by payload_header.receipt_id desc limit 1),
+		exists (
+			select 1 from deferred_audit_outbox_entries protected_entry
+			join deferred_audit_outbox protected_outbox
+				on protected_outbox.receipt_id = protected_entry.receipt_id
+			where protected_entry.audit_event_id = e.event_id
+				and (protected_outbox.state = 'pending'
+					or protected_entry.delivered_at is null)
+				and exists (
+					select 1 from deferred_audit_outbox_entry_details protected_detail
+					where protected_detail.receipt_id = protected_entry.receipt_id
+						and protected_detail.entry_index = protected_entry.entry_index
+				)
+		)`, nil
+	}
+	hasCompatibilityPayload, err := auditColumnExists(
+		ctx, database, "deferred_audit_outbox_entries", "payload_json",
+	)
+	if err != nil {
+		return "", err
+	}
+	if hasCompatibilityPayload {
+		return `
+		(select 1 from deferred_audit_outbox_entries compatibility_entry
+			where compatibility_entry.audit_event_id = e.event_id
+				and compatibility_entry.payload_json is not null limit 1),
+		(select 1 from deferred_audit_outbox_entries compatibility_entry
+			where compatibility_entry.audit_event_id = e.event_id
+				and compatibility_entry.payload_json is not null limit 1),
+		null,
+		0`, nil
+	}
+	return "cast(null as integer), cast(null as integer), cast(null as text), 0", nil
+}
+
+func auditColumnExists(
+	ctx context.Context,
+	database *sql.DB,
+	tableName string,
+	columnName string,
+) (bool, error) {
+	var exists int
+	err := database.QueryRowContext(ctx, `
+		select 1 from pragma_table_info(?) where name = ?
+	`, tableName, columnName).Scan(&exists)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		log := slog.Default()
+		log.WarnContext(
+			ctx,
+			"query audit column metadata failed",
+			slog.String("table", tableName),
+			slog.String("column", columnName),
+			slog.Any("err", err),
+		)
+		return false, fmt.Errorf("query audit column metadata: %w", err)
+	}
+	return exists == 1, nil
+}
+
+func projectAuditPayloadDetail(
+	payloadRecorded sql.NullInt64,
+	payloadAvailable sql.NullInt64,
+	stateChangedAt sql.NullString,
+	protected sql.NullInt64,
+) auditstorage.DetailProjection {
+	if !payloadRecorded.Valid {
+		return auditstorage.ProjectDetail(nil, nil, nil, auditstorage.DetailStateAvailable, "", nil)
+	}
+	requested := []auditstorage.DetailClass{auditstorage.DetailClassDeferredAuditPayload}
+	recorded := make([]auditstorage.DetailClass, 0, 1)
+	if payloadRecorded.Int64 != 0 {
+		recorded = append(recorded, auditstorage.DetailClassDeferredAuditPayload)
+	}
+	available := make([]auditstorage.DetailClass, 0, 1)
+	if payloadAvailable.Int64 != 0 {
+		available = append(available, auditstorage.DetailClassDeferredAuditPayload)
+	}
+	storedState := auditstorage.DetailStateAvailable
+	if payloadRecorded.Int64 == 0 {
+		storedState = auditstorage.DetailStateNotRecorded
+	}
+	if payloadRecorded.Int64 != 0 && payloadAvailable.Int64 == 0 {
+		storedState = auditstorage.DetailStateExpired
+	}
+	if payloadRecorded.Int64 == 0 && payloadAvailable.Int64 != 0 {
+		storedState = auditstorage.DetailStateProtected
+	}
+	protectedClasses := make([]auditstorage.DetailClass, 0, 1)
+	if protected.Valid && protected.Int64 != 0 {
+		protectedClasses = append(
+			protectedClasses, auditstorage.DetailClassDeferredAuditPayload,
+		)
+	}
+	return auditstorage.ProjectDetail(
+		recorded, available, requested, storedState, stateChangedAt.String,
+		protectedClasses,
+	)
 }
 
 func queryWhere(filter QueryFilter) (string, []queryArg) {
