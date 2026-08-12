@@ -26,34 +26,42 @@ const (
 	QueryDetailSummary = "summary"
 )
 
-// QueryFilter narrows complete evaluation records and their joined intake metadata.
+// QueryFilter narrows evaluation records and their joined intake metadata.
 type QueryFilter struct {
-	EvaluationID string
-	EventID      string
-	ReceiptID    int64
-	Mode         string
-	Since        time.Time
-	Until        time.Time
-	System       string
-	SessionID    string
-	EventName    string
-	ToolName     string
-	RuleName     string
-	LayerName    string
-	LayerKind    string
-	LayerOutcome string
-	ModelName    string
-	FinalVerdict string
-	DetailMode   string
-	Limit        int
-	Offset       int
+	EvaluationID       string
+	EventID            string
+	ReceiptID          int64
+	Mode               string
+	Since              time.Time
+	Until              time.Time
+	System             string
+	SessionID          string
+	EventName          string
+	ToolName           string
+	RuleName           string
+	LayerName          string
+	LayerKind          string
+	LayerOutcome       string
+	ModelName          string
+	FinalVerdict       string
+	DetailMode         string
+	CompleteDetailOnly bool
+	Limit              int
+	Offset             int
 }
 
-// QueryResult is a read-only page of complete evaluation exports.
+// DetailCompleteness reports missing evaluation detail across a filtered selection.
+type DetailCompleteness struct {
+	IncompleteCount          int
+	EarliestCompleteDetailAt *time.Time
+}
+
+// QueryResult is a read-only page plus completeness for the full filtered selection.
 type QueryResult struct {
-	Records []QueryRecord
-	Source  string
-	Note    string
+	Records      []QueryRecord
+	Source       string
+	Note         string
+	Completeness DetailCompleteness
 }
 
 // QueryRecord contains safe evaluation and intake metadata plus ordered children.
@@ -131,7 +139,7 @@ type queryArgument struct {
 	Value string
 }
 
-// List returns a bounded page of complete evaluations from an initialized store.
+// List returns a bounded page of evaluations from an initialized store.
 func (s *Store) List(ctx context.Context, filter QueryFilter) ([]QueryRecord, error) {
 	if s == nil || s.database == nil {
 		return nil, errors.New("evaluation store is unavailable")
@@ -141,7 +149,14 @@ func (s *Store) List(ctx context.Context, filter QueryFilter) ([]QueryRecord, er
 
 // Query reads evaluations from an existing SQLite path without creating or migrating it.
 func Query(ctx context.Context, path string, filter QueryFilter) (QueryResult, error) {
-	result := QueryResult{Records: make([]QueryRecord, 0), Source: "sqlite", Note: ""}
+	result := QueryResult{
+		Records: make([]QueryRecord, 0),
+		Source:  "sqlite",
+		Note:    "",
+		Completeness: DetailCompleteness{
+			IncompleteCount: 0, EarliestCompleteDetailAt: nil,
+		},
+	}
 	if _, err := os.Stat(path); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			result.Note = "no evaluation history exists yet"
@@ -197,7 +212,12 @@ func Query(ctx context.Context, path string, filter QueryFilter) (QueryResult, e
 	if err != nil {
 		return QueryResult{}, err
 	}
+	completeness, err := queryDetailCompleteness(ctx, database, filter, hasOutcome, hasSplitDetail)
+	if err != nil {
+		return QueryResult{}, err
+	}
 	result.Records = records
+	result.Completeness = completeness
 	return result, nil
 }
 
@@ -214,7 +234,7 @@ func listQueryRecords(
 	if err != nil {
 		return nil, err
 	}
-	where, arguments := evaluationQueryWhere(normalized, hasOutcome, hasSplitDetail)
+	where, arguments := evaluationRecordWhere(normalized, hasOutcome, hasSplitDetail)
 	arguments = append(
 		arguments,
 		queryArgument{Value: strconv.Itoa(normalized.Limit)},
@@ -306,18 +326,7 @@ func evaluationQuerySelect(hasChildCounts bool, hasSplitDetail bool) string {
 	if hasSplitDetail {
 		detailColumns = `g.detail_state,
 			case when g.detail_state != 'not_recorded' then 1 else 0 end,
-			case when exists (
-				select 1 from gate_evaluation_details evaluation_detail
-				where evaluation_detail.evaluation_id = g.evaluation_id
-			) and (select count(*) from gate_evaluation_layer_details layer_detail
-				where layer_detail.evaluation_id = g.evaluation_id) =
-				(select count(*) from gate_evaluation_layers layer_summary
-					where layer_summary.evaluation_id = g.evaluation_id)
-			and (select count(*) from gate_evaluation_label_details label_detail
-				where label_detail.evaluation_id = g.evaluation_id) =
-				(select count(*) from gate_evaluation_labels label_summary
-					where label_summary.evaluation_id = g.evaluation_id)
-			then 1 else 0 end,
+			case when ` + evaluationCompleteDetailPredicate(true) + ` then 1 else 0 end,
 			case when g.detail_state = 'protected' and (
 				exists (select 1 from intake_deferred pending
 					where pending.receipt_id = g.receipt_id and pending.state = 'pending')
@@ -338,6 +347,56 @@ func evaluationQuerySelect(hasChildCounts bool, hasSplitDetail bool) string {
 	from gate_evaluations g
 	join intake_events e on e.event_id = g.event_id
 `
+}
+
+func evaluationCompleteDetailPredicate(hasSplitDetail bool) string {
+	if !hasSplitDetail {
+		return "1 = 1"
+	}
+	return `g.detail_state in ('available', 'protected')
+		and exists (
+			select 1 from gate_evaluation_details evaluation_detail
+			where evaluation_detail.evaluation_id = g.evaluation_id
+		)
+		and (select count(*) from gate_evaluation_layer_details layer_detail
+			where layer_detail.evaluation_id = g.evaluation_id) =
+			(select count(*) from gate_evaluation_layers layer_summary
+				where layer_summary.evaluation_id = g.evaluation_id)
+		and (select count(*) from gate_evaluation_label_details label_detail
+			where label_detail.evaluation_id = g.evaluation_id) =
+			(select count(*) from gate_evaluation_labels label_summary
+				where label_summary.evaluation_id = g.evaluation_id)`
+}
+
+func queryDetailCompleteness(ctx context.Context, database *sql.DB, filter QueryFilter, hasOutcome bool, hasSplitDetail bool) (DetailCompleteness, error) {
+	normalized, err := normalizeQueryFilter(filter)
+	if err != nil {
+		return DetailCompleteness{}, err
+	}
+	where, arguments := evaluationQueryWhere(normalized, hasOutcome, hasSplitDetail)
+	predicate := evaluationCompleteDetailPredicate(hasSplitDetail)
+	query := `select
+		count(*) - coalesce(sum(case when ` + predicate + ` then 1 else 0 end), 0),
+		min(case when ` + predicate + ` then g.completed_at end)
+	from gate_evaluations g
+	join intake_events e on e.event_id = g.event_id` + where
+	values := make([]any, 0, len(arguments))
+	for _, argument := range arguments {
+		values = append(values, argument.Value)
+	}
+	var completeness DetailCompleteness
+	var earliestCompleteDetailAt sql.NullString
+	if err := database.QueryRowContext(ctx, query, values...).Scan(&completeness.IncompleteCount, &earliestCompleteDetailAt); err != nil {
+		return DetailCompleteness{}, wrapError("query evaluation detail completeness", err)
+	}
+	if earliestCompleteDetailAt.Valid {
+		parsed, err := parseTime(earliestCompleteDetailAt.String)
+		if err != nil {
+			return DetailCompleteness{}, err
+		}
+		completeness.EarliestCompleteDetailAt = &parsed
+	}
+	return completeness, nil
 }
 
 func normalizeQueryFilter(filter QueryFilter) (QueryFilter, error) {

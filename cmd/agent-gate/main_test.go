@@ -760,6 +760,222 @@ func TestRunQueryEvaluationsEmitsSafeNestedJSONLWithFilters(t *testing.T) {
 	}
 }
 
+func TestExportEvaluationsWritesCompleteDetail(t *testing.T) {
+	setupQueryEnvironment(t)
+	completedAt := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	record := appendCLIExportEvaluation(
+		t,
+		"eval-export-complete",
+		"evt-export-complete",
+		"codex",
+		"session-export-complete",
+		completedAt,
+	)
+
+	exitCode, stdout, stderr := captureRunExport(t, []string{
+		"evaluations", "--evaluation-id", record.Evaluation.EvaluationID,
+	})
+
+	if exitCode != 0 || stderr != "" {
+		t.Fatalf("exitCode = %d, stderr = %q", exitCode, stderr)
+	}
+	if !strings.Contains(stdout, `"evaluation_id":"eval-export-complete"`) {
+		t.Fatalf("stdout = %q, want complete export row", stdout)
+	}
+}
+
+func TestExportEvaluationsRejectsIncompleteDetail(t *testing.T) {
+	for _, state := range []auditstorage.DetailState{
+		auditstorage.DetailStateExpired,
+		auditstorage.DetailStateNotRecorded,
+	} {
+		t.Run(string(state), func(t *testing.T) {
+			setupQueryEnvironment(t)
+			record := appendCLIExportEvaluation(
+				t,
+				"eval-export-"+string(state),
+				"evt-export-"+string(state),
+				"codex",
+				"session-export-"+string(state),
+				time.Date(2026, 8, 4, 13, 0, 0, 0, time.UTC),
+			)
+			setCLIExportDetailState(t, record.Evaluation.EvaluationID, state)
+
+			exitCode, stdout, stderr := captureRunExport(t, []string{
+				"evaluations", "--evaluation-id", record.Evaluation.EvaluationID,
+			})
+
+			if exitCode != 1 || stdout != "" {
+				t.Fatalf("exitCode = %d, stdout = %q, stderr = %q", exitCode, stdout, stderr)
+			}
+			want := "1 selected evaluations lack complete detail; complete detail starts at none"
+			if !strings.Contains(stderr, want) {
+				t.Fatalf("stderr = %q, want %q", stderr, want)
+			}
+		})
+	}
+}
+
+func TestExportEvaluationsRejectsExpiredStateWithDetailRows(t *testing.T) {
+	setupQueryEnvironment(t)
+	record := appendCLIExportEvaluation(
+		t,
+		"eval-export-contradictory-expired",
+		"evt-export-contradictory-expired",
+		"codex",
+		"session-export-contradictory-expired",
+		time.Date(2026, 8, 4, 13, 0, 0, 0, time.UTC),
+	)
+	setCLIExportStoredDetailState(
+		t,
+		record.Evaluation.EvaluationID,
+		auditstorage.DetailStateExpired,
+	)
+
+	exitCode, stdout, stderr := captureRunExport(t, []string{
+		"evaluations", "--evaluation-id", record.Evaluation.EvaluationID,
+	})
+
+	if exitCode != 1 || stdout != "" {
+		t.Fatalf("exitCode = %d, stdout = %q, stderr = %q", exitCode, stdout, stderr)
+	}
+	want := "1 selected evaluations lack complete detail; complete detail starts at none"
+	if !strings.Contains(stderr, want) {
+		t.Fatalf("stderr = %q, want %q", stderr, want)
+	}
+}
+
+func TestExportEvaluationsSkipExpiredDetailReportsCount(t *testing.T) {
+	setupQueryEnvironment(t)
+	complete := appendCLIExportEvaluation(
+		t,
+		"eval-export-complete",
+		"evt-export-complete",
+		"claude",
+		"session-export-complete",
+		time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC),
+	)
+	expired := appendCLIExportEvaluation(
+		t,
+		"eval-export-expired",
+		"evt-export-expired",
+		"codex",
+		"session-export-expired",
+		time.Date(2026, 8, 4, 13, 0, 0, 0, time.UTC),
+	)
+	notRecorded := appendCLIExportEvaluation(
+		t,
+		"eval-export-not-recorded",
+		"evt-export-not-recorded",
+		"gemini",
+		"session-export-not-recorded",
+		time.Date(2026, 8, 4, 14, 0, 0, 0, time.UTC),
+	)
+	setCLIExportDetailState(t, expired.Evaluation.EvaluationID, auditstorage.DetailStateExpired)
+	setCLIExportDetailState(
+		t,
+		notRecorded.Evaluation.EvaluationID,
+		auditstorage.DetailStateNotRecorded,
+	)
+
+	exitCode, stdout, stderr := captureRunExport(t, []string{"evaluations"})
+	if exitCode != 1 || stdout != "" {
+		t.Fatalf("default exitCode = %d, stdout = %q, stderr = %q", exitCode, stdout, stderr)
+	}
+	wantDefault := "2 selected evaluations lack complete detail; complete detail starts at 2026-08-04T12:00:00Z"
+	if !strings.Contains(stderr, wantDefault) {
+		t.Fatalf("default stderr = %q, want %q", stderr, wantDefault)
+	}
+
+	exitCode, stdout, stderr = captureRunExport(t, []string{
+		"evaluations", "--skip-expired-detail",
+	})
+	if exitCode != 0 {
+		t.Fatalf("skip exitCode = %d, stderr = %q", exitCode, stderr)
+	}
+	if !strings.Contains(stdout, `"evaluation_id":"`+complete.Evaluation.EvaluationID+`"`) ||
+		strings.Contains(stdout, expired.Evaluation.EvaluationID) ||
+		strings.Contains(stdout, notRecorded.Evaluation.EvaluationID) {
+		t.Fatalf("skip stdout = %q, want only complete record", stdout)
+	}
+	if !strings.Contains(stderr, "omitted 2 selected evaluations with incomplete detail") {
+		t.Fatalf("skip stderr = %q, want omitted count", stderr)
+	}
+}
+
+func TestExportEvaluationsSkipsIncompleteDetailBeforePagination(t *testing.T) {
+	setupQueryEnvironment(t)
+	complete := appendCLIExportEvaluation(
+		t,
+		"eval-export-older-complete",
+		"evt-export-older-complete",
+		"claude",
+		"session-export-older-complete",
+		time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC),
+	)
+	incomplete := appendCLIExportEvaluation(
+		t,
+		"eval-export-newer-incomplete",
+		"evt-export-newer-incomplete",
+		"codex",
+		"session-export-newer-incomplete",
+		time.Date(2026, 8, 4, 13, 0, 0, 0, time.UTC),
+	)
+	setCLIExportDetailState(
+		t,
+		incomplete.Evaluation.EvaluationID,
+		auditstorage.DetailStateExpired,
+	)
+
+	exitCode, stdout, stderr := captureRunExport(t, []string{
+		"evaluations", "--skip-expired-detail", "--limit", "1",
+	})
+
+	if exitCode != 0 {
+		t.Fatalf("exitCode = %d, stderr = %q", exitCode, stderr)
+	}
+	if !strings.Contains(stdout, complete.Evaluation.EvaluationID) ||
+		strings.Contains(stdout, incomplete.Evaluation.EvaluationID) {
+		t.Fatalf("stdout = %q, want only older complete record", stdout)
+	}
+	if !strings.Contains(stderr, "omitted 1 selected evaluations with incomplete detail") {
+		t.Fatalf("stderr = %q, want full selection incomplete count", stderr)
+	}
+}
+
+func TestExportEvaluationsFiltersBeforeCheckingDetail(t *testing.T) {
+	setupQueryEnvironment(t)
+	complete := appendCLIExportEvaluation(
+		t,
+		"eval-export-complete",
+		"evt-export-complete",
+		"claude",
+		"session-export-complete",
+		time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC),
+	)
+	incomplete := appendCLIExportEvaluation(
+		t,
+		"eval-export-expired",
+		"evt-export-expired",
+		"codex",
+		"session-export-expired",
+		time.Date(2026, 8, 4, 13, 0, 0, 0, time.UTC),
+	)
+	setCLIExportDetailState(t, incomplete.Evaluation.EvaluationID, auditstorage.DetailStateExpired)
+
+	exitCode, stdout, stderr := captureRunExport(t, []string{
+		"evaluations", "--system", "claude",
+	})
+
+	if exitCode != 0 || stderr != "" {
+		t.Fatalf("exitCode = %d, stderr = %q", exitCode, stderr)
+	}
+	if !strings.Contains(stdout, complete.Evaluation.EvaluationID) ||
+		strings.Contains(stdout, incomplete.Evaluation.EvaluationID) {
+		t.Fatalf("stdout = %q, want only filtered complete record", stdout)
+	}
+}
+
 func TestRunQueryEvaluationsPrintsSafeSummaryTable(t *testing.T) {
 	setupQueryEnvironment(t)
 	record := appendCLIQueryEvaluation(t)
@@ -881,6 +1097,24 @@ func TestQueryTableRenderersPreserveColumnsAndAddDetail(t *testing.T) {
 }
 
 func appendCLIQueryEvaluation(t *testing.T) evaluation.Record {
+	return appendCLIExportEvaluation(
+		t,
+		"eval-cli",
+		"evt-cli-evaluation",
+		"codex",
+		"session-cli",
+		time.Date(2026, 7, 11, 1, 0, 1, 0, time.UTC).Add(time.Millisecond),
+	)
+}
+
+func appendCLIExportEvaluation(
+	t *testing.T,
+	evaluationID string,
+	eventID string,
+	system string,
+	sessionID string,
+	completedAt time.Time,
+) evaluation.Record {
 	t.Helper()
 	ctx := context.Background()
 	store, err := intake.OpenSQLite(ctx, config.DefaultAuditSQLitePath(), nil)
@@ -893,21 +1127,21 @@ func appendCLIQueryEvaluation(t *testing.T) evaluation.Record {
 		}
 	})
 	receipt, err := store.Append(ctx, intake.Record{
-		EventID: "evt-cli-evaluation", RecordedAt: time.Date(2026, 7, 11, 1, 0, 0, 0, time.UTC),
-		System: "codex", SessionID: "session-cli", EventName: "PreToolUse",
+		EventID: eventID, RecordedAt: completedAt.Add(-time.Second),
+		System: system, SessionID: sessionID, EventName: "PreToolUse",
 		ToolName: "exec_command", RawPayload: []byte(`{"authorization":"raw"}`),
 		NormalizedJSON: json.RawMessage(`{"command":"make check"}`),
 	})
 	if err != nil {
 		t.Fatalf("Append: %v", err)
 	}
-	startedAt := time.Date(2026, 7, 11, 1, 0, 1, 0, time.UTC)
+	startedAt := completedAt.Add(-time.Millisecond)
 	record := evaluation.Record{
 		Evaluation: evaluation.Evaluation{
-			EvaluationID: "eval-cli", ReceiptID: receipt.ReceiptID, EventID: receipt.EventID,
+			EvaluationID: evaluationID, ReceiptID: receipt.ReceiptID, EventID: receipt.EventID,
 			Attempt: 1, Mode: "hot", ConfigHash: "sha256:config", EngineVersion: "v1",
 			EngineCommit: "commit", EngineBuildHash: "sha256:build", InputHash: "sha256:input",
-			StartedAt: startedAt, CompletedAt: startedAt.Add(time.Millisecond),
+			StartedAt: startedAt, CompletedAt: completedAt,
 			FinalVerdict: "block", FinalSource: "inference", EnforcementAction: "deny",
 			Enforced: true, TotalLatencyUS: 1000, ErrorJSON: json.RawMessage(`{}`),
 		},
@@ -945,6 +1179,70 @@ func appendCLIQueryEvaluation(t *testing.T) evaluation.Record {
 		t.Fatalf("RecordCompleted: %v", err)
 	}
 	return record
+}
+
+func setCLIExportDetailState(
+	t *testing.T,
+	evaluationID string,
+	state auditstorage.DetailState,
+) {
+	t.Helper()
+	database, err := sql.Open("sqlite3", config.DefaultAuditSQLitePath())
+	if err != nil {
+		t.Fatalf("open audit database: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := database.Close(); err != nil {
+			t.Fatalf("close audit database: %v", err)
+		}
+	})
+	for _, table := range []string{
+		"gate_evaluation_label_details",
+		"gate_evaluation_layer_details",
+		"gate_evaluation_details",
+	} {
+		if _, err := database.Exec(
+			"delete from "+table+" where evaluation_id = ?",
+			evaluationID,
+		); err != nil {
+			t.Fatalf("delete %s: %v", table, err)
+		}
+	}
+	setCLIExportStoredDetailStateWithDatabase(t, database, evaluationID, state)
+}
+
+func setCLIExportStoredDetailState(
+	t *testing.T,
+	evaluationID string,
+	state auditstorage.DetailState,
+) {
+	t.Helper()
+	database, err := sql.Open("sqlite3", config.DefaultAuditSQLitePath())
+	if err != nil {
+		t.Fatalf("open audit database: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := database.Close(); err != nil {
+			t.Fatalf("close audit database: %v", err)
+		}
+	})
+	setCLIExportStoredDetailStateWithDatabase(t, database, evaluationID, state)
+}
+
+func setCLIExportStoredDetailStateWithDatabase(
+	t *testing.T,
+	database *sql.DB,
+	evaluationID string,
+	state auditstorage.DetailState,
+) {
+	t.Helper()
+	if _, err := database.Exec(
+		`update gate_evaluations set detail_state = ? where evaluation_id = ?`,
+		state,
+		evaluationID,
+	); err != nil {
+		t.Fatalf("mark evaluation detail %s: %v", state, err)
+	}
 }
 
 func cliQueryOutputHash(value json.RawMessage) string {
@@ -1029,6 +1327,31 @@ func captureRunQuery(t *testing.T, args []string) (int, string, string) {
 	}()
 
 	exitCode := runQuery(args)
+	stdout := readCapturedFile(t, stdoutFile)
+	stderr := readCapturedFile(t, stderrFile)
+	return exitCode, stdout, stderr
+}
+
+func captureRunExport(t *testing.T, args []string) (int, string, string) {
+	t.Helper()
+	stdoutFile, err := os.CreateTemp(t.TempDir(), "stdout-*")
+	if err != nil {
+		t.Fatalf("CreateTemp stdout: %v", err)
+	}
+	stderrFile, err := os.CreateTemp(t.TempDir(), "stderr-*")
+	if err != nil {
+		t.Fatalf("CreateTemp stderr: %v", err)
+	}
+	originalStdout := os.Stdout
+	originalStderr := os.Stderr
+	os.Stdout = stdoutFile
+	os.Stderr = stderrFile
+	defer func() {
+		os.Stdout = originalStdout
+		os.Stderr = originalStderr
+	}()
+
+	exitCode := runExport(args)
 	stdout := readCapturedFile(t, stdoutFile)
 	stderr := readCapturedFile(t, stderrFile)
 	return exitCode, stdout, stderr
