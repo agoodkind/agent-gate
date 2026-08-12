@@ -9,12 +9,12 @@ import (
 
 // DatabaseSize reports physical and compacted audit storage usage.
 type DatabaseSize struct {
-	DatabaseBytes       int64
-	WALBytes            int64
-	PageSizeBytes       int64
-	PageCount           int64
-	FreePages           int64
-	CompactedUsageBytes int64
+	DatabaseBytes       int64 `json:"database_bytes"`
+	WALBytes            int64 `json:"wal_bytes"`
+	PageSizeBytes       int64 `json:"page_size_bytes"`
+	PageCount           int64 `json:"page_count"`
+	FreePages           int64 `json:"free_pages"`
+	CompactedUsageBytes int64 `json:"compacted_usage_bytes"`
 }
 
 // MeasureDatabaseSize checkpoints available WAL frames and measures live storage.

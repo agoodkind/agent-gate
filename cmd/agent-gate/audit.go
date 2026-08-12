@@ -13,7 +13,16 @@ import (
 
 	"goodkind.io/agent-gate/internal/auditmaintenance"
 	"goodkind.io/agent-gate/internal/config"
+	installer "goodkind.io/agent-gate/internal/install"
 )
+
+var auditExecutablePath = os.Executable
+var auditInspectService = installer.InspectService
+var auditCommandContext = func() (context.Context, context.CancelFunc) {
+	return signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+}
+
+const auditServiceStatusTimeout = 30 * time.Second
 
 type auditCommandName string
 
@@ -56,17 +65,26 @@ func runAuditCompact(
 	flags.SetOutput(stderr)
 	var dryRun bool
 	var apply bool
+	var full bool
 	flags.BoolVar(&dryRun, "dry-run", false, "preview compaction without writing")
 	flags.BoolVar(&apply, "apply", false, "apply incremental compaction")
+	flags.BoolVar(&full, "full", false, "preflight full offline compaction")
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
 	if flags.NArg() != 0 || dryRun == apply {
-		fmt.Fprintln(stderr, "usage: agent-gate audit compact --dry-run | --apply")
+		fmt.Fprintln(stderr, "usage: agent-gate audit compact [--full] --dry-run | --apply")
 		return 2
+	}
+	if full && apply {
+		fmt.Fprintln(stderr, "agent-gate audit compact: full compaction apply is not implemented")
+		return 1
 	}
 	policy := cfg.AuditStoragePolicy()
 	if dryRun {
+		if full {
+			return runAuditFullCompactDryRun(stdout, stderr, cfg)
+		}
 		plan, err := auditmaintenance.PreviewCompact(
 			context.Background(),
 			cfg.AuditSQLitePath(),
@@ -91,6 +109,54 @@ func runAuditCompact(
 	}
 	writeAuditCompactResult(stdout, result)
 	return 0
+}
+
+func runAuditFullCompactDryRun(stdout io.Writer, stderr io.Writer, cfg *config.Config) int {
+	ctx, stop := auditCommandContext()
+	defer stop()
+	executablePath, err := auditExecutablePath()
+	if err != nil {
+		fmt.Fprintf(stderr, "agent-gate audit compact: locate executable: %v\n", err)
+		return 1
+	}
+	canonicalExecutable, err := installer.CanonicalExecutablePath(executablePath)
+	if err != nil {
+		fmt.Fprintf(stderr, "agent-gate audit compact: resolve executable: %v\n", err)
+		return 1
+	}
+	serviceCtx, cancelService := context.WithTimeout(ctx, auditServiceStatusTimeout)
+	service, err := auditInspectService(serviceCtx, installer.ServiceStatusOptions{
+		BinaryPath: canonicalExecutable,
+	})
+	cancelService()
+	if err != nil {
+		fmt.Fprintf(stderr, "agent-gate audit compact: service status: %v\n", err)
+		return 1
+	}
+	plan, err := auditmaintenance.PreviewFullCompact(
+		ctx,
+		auditmaintenance.FullCompactOptions{Path: cfg.AuditSQLitePath(), Service: service},
+	)
+	if err != nil {
+		fmt.Fprintf(stderr, "agent-gate audit compact: full preflight: %v\n", err)
+		return 1
+	}
+	writeAuditFullCompactPlan(stdout, plan)
+	return 0
+}
+
+func writeAuditFullCompactPlan(writer io.Writer, plan auditmaintenance.FullCompactPlan) {
+	fmt.Fprintf(writer, "database path: %s\n", plan.DatabasePath)
+	fmt.Fprintf(writer, "database bytes: %d\n", plan.DatabaseSize.DatabaseBytes)
+	fmt.Fprintf(writer, "write-ahead log bytes: %d\n", plan.DatabaseSize.WALBytes)
+	fmt.Fprintf(writer, "free bytes: %d\n", plan.FreeBytes)
+	fmt.Fprintf(writer, "required free bytes: %d\n", plan.RequiredFreeBytes)
+	fmt.Fprintf(writer, "service platform: %s\n", plan.Service.Platform)
+	fmt.Fprintf(writer, "managed: %t\n", plan.Service.Managed)
+	fmt.Fprintf(writer, "running: %t\n", plan.Service.Running)
+	fmt.Fprintf(writer, "service binary: %s\n", plan.Service.BinaryPath)
+	fmt.Fprintln(writer, "integrity: ok")
+	fmt.Fprintf(writer, "hook impact: %s; stop the managed daemon before full apply\n", plan.HookImpact)
 }
 
 func runAuditStatus(
