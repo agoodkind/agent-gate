@@ -37,6 +37,7 @@ func writeUserLine(writer io.Writer, line string) {
 type commandName string
 
 const (
+	commandAudit       commandName = "audit"
 	commandConfig      commandName = "config"
 	commandCopilotHook commandName = "copilot-hook"
 	commandCodexHook   commandName = "codex-hook"
@@ -158,6 +159,8 @@ func runCLIWithHook(
 			}
 		}
 		return runDaemon(stderr)
+	case commandAudit:
+		return runAudit(args[1:], stdout, stderr)
 	case commandCodexHook:
 		return hookRunner(hookRoute{ProviderHint: hook.SystemCodex})
 	case commandCopilotHook:
@@ -197,6 +200,7 @@ func writeUsage(writer io.Writer) {
 	_, _ = io.WriteString(writer, `Usage: agent-gate [command]
 
 Commands:
+  audit          Inspect and maintain audit storage
   config         Check configuration
   copilot-hook   Handle a GitHub Copilot hook event
   codex-hook     Handle a Codex hook event

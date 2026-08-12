@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -130,6 +131,25 @@ func TestRunCLIHelpDoesNotEnterHookMode(t *testing.T) {
 	}
 }
 
+func TestRunCLIHelpListsAuditCommands(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := runCLIWithHook(
+		[]string{"--help"},
+		&stdout,
+		&stderr,
+		func(hookRoute) int { return 0 },
+	)
+
+	if exitCode != 0 || stderr.Len() != 0 {
+		t.Fatalf("exit code/stderr = %d/%q, want 0/empty", exitCode, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "audit          Inspect and maintain audit storage") {
+		t.Fatalf("stdout = %q, want audit command", stdout.String())
+	}
+}
+
 func TestRunCLIUnknownCommandDoesNotEnterHookMode(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -156,6 +176,25 @@ func TestRunCLIUnknownCommandDoesNotEnterHookMode(t *testing.T) {
 	}
 	if stdout.Len() != 0 {
 		t.Fatalf("stdout = %q, want empty", stdout.String())
+	}
+}
+
+func TestAgentGateIgnoresSnapshotHelperEnvironmentWithoutDescriptors(t *testing.T) {
+	binaryPath := filepath.Join(t.TempDir(), "agent-gate")
+	build := exec.CommandContext(t.Context(), "go", "build", "-o", binaryPath, ".")
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build agent-gate: %v\n%s", err, output)
+	}
+	command := exec.CommandContext(t.Context(), binaryPath, "help")
+	command.Env = append(os.Environ(), "AGENT_GATE_SNAPSHOT_LOCK_HELPER=1")
+
+	output, err := command.CombinedOutput()
+
+	if err != nil {
+		t.Fatalf("agent-gate help with helper marker: %v\n%s", err, output)
+	}
+	if !bytes.Contains(output, []byte("Usage: agent-gate")) {
+		t.Fatalf("output = %q, want normal help", output)
 	}
 }
 
