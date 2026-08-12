@@ -90,19 +90,55 @@ path = "` + databasePath + `"
 	}
 
 	controlledProcessor.processEvent(t.Context(), work)
-	after, err := sqliteStore.GetReceipt(t.Context(), work.receiptID)
-	if err != nil {
-		t.Fatalf("GetReceipt after deferred delivery: %v", err)
-	}
-	if !bytes.Equal(after.RawPayload, request.RawJson) {
-		t.Fatalf("delivered raw payload = %q, want %q", after.RawPayload, request.RawJson)
-	}
 	pendingAudit, err := sqliteStore.store.ListPendingDeferredAudit(t.Context(), 0)
 	if err != nil {
 		t.Fatalf("ListPendingDeferredAudit: %v", err)
 	}
 	if len(pendingAudit) != 0 {
 		t.Fatalf("pending audit receipts = %v, want none", pendingAudit)
+	}
+	var intakeDetailCount int
+	if err := sqliteStore.Handle().QueryRowContext(t.Context(), `
+		select manifest.state,
+			(select count(*) from intake_event_details detail
+				where detail.event_id = manifest.event_id)
+		from intake_event_detail_manifest manifest where manifest.event_id = ?
+	`, work.eventID).Scan(&state, &intakeDetailCount); err != nil {
+		t.Fatalf("query terminal daemon detail: %v", err)
+	}
+	if state != auditstorage.DetailStateNotRecorded || intakeDetailCount != 0 {
+		t.Fatalf(
+			"terminal daemon detail = state %q rows %d, want not_recorded and 0",
+			state,
+			intakeDetailCount,
+		)
+	}
+	var outboxEntries int
+	var availablePayloads int
+	var payloadDetails int
+	if err := sqliteStore.Handle().QueryRowContext(t.Context(), `
+		select count(*), coalesce(sum(entry.payload_available), 0),
+			(select count(*)
+			from deferred_audit_outbox_entry_details detail
+			join deferred_audit_outbox outbox on outbox.receipt_id = detail.receipt_id
+			where outbox.event_id = ?)
+		from deferred_audit_outbox_entries entry
+		join deferred_audit_outbox outbox on outbox.receipt_id = entry.receipt_id
+		where outbox.event_id = ?
+	`, work.eventID, work.eventID).Scan(
+		&outboxEntries,
+		&availablePayloads,
+		&payloadDetails,
+	); err != nil {
+		t.Fatalf("query terminal deferred audit payload: %v", err)
+	}
+	if outboxEntries == 0 || availablePayloads != 0 || payloadDetails != 0 {
+		t.Fatalf(
+			"terminal outbox payload = entries %d available %d details %d",
+			outboxEntries,
+			availablePayloads,
+			payloadDetails,
+		)
 	}
 }
 

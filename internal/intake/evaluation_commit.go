@@ -3,11 +3,13 @@ package intake
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"strings"
 	"time"
 
 	"goodkind.io/agent-gate/internal/audit"
+	"goodkind.io/agent-gate/internal/auditstorage"
 	"goodkind.io/agent-gate/internal/evaluation"
 )
 
@@ -49,6 +51,14 @@ func (s *Store) CommitHotEvaluation(
 	}
 	if err := s.evaluations.RecordCompletedInTx(ctx, transaction, record); err != nil {
 		return wrapLoggedError(ctx, s.log, "record completed hot evaluation", err)
+	}
+	if err := s.demoteDisabledDetailIfTerminal(
+		ctx,
+		transaction,
+		canonicalEventID,
+		intakeNow().UTC(),
+	); err != nil {
+		return err
 	}
 	if err := transaction.Commit(); err != nil {
 		return wrapLoggedError(ctx, s.log, "commit hot evaluation transaction", err)
@@ -211,13 +221,176 @@ func (s *Store) CommitDeferredEvaluation(
 	if err := s.evaluations.RecordCompletedInTx(ctx, transaction, record); err != nil {
 		return wrapLoggedError(ctx, s.log, "record completed deferred evaluation", err)
 	}
-	if err := insertDeferredAuditOutbox(
+	if err := s.insertDeferredAuditOutbox(
 		ctx, transaction, claim, record.Evaluation.EvaluationID, auditEntries,
 	); err != nil {
 		return err
 	}
+	if err := s.demoteDisabledDetailIfTerminal(ctx, transaction, claim.EventID, now); err != nil {
+		return err
+	}
 	if err := transaction.Commit(); err != nil {
 		return wrapLoggedError(ctx, s.log, "commit deferred evaluation transaction", err)
+	}
+	return nil
+}
+
+func (s *Store) demoteDisabledDetailIfTerminal(
+	ctx context.Context,
+	transaction *sql.Tx,
+	eventID string,
+	changedAt time.Time,
+) error {
+	var liveReceiptCount int
+	if err := transaction.QueryRowContext(ctx, `
+		select count(*)
+		from intake_receipts receipt
+		where receipt.event_id = ?
+			and (
+				not exists (
+					select 1 from gate_evaluations hot_evaluation
+					where hot_evaluation.receipt_id = receipt.receipt_id
+						and hot_evaluation.mode = 'hot'
+				)
+				or exists (
+					select 1 from intake_deferred deferred
+					where deferred.receipt_id = receipt.receipt_id
+						and deferred.state = 'pending'
+				)
+				or exists (
+					select 1 from deferred_audit_outbox outbox
+					where outbox.receipt_id = receipt.receipt_id
+						and outbox.state = 'pending'
+				)
+				or exists (
+					select 1
+					from deferred_audit_outbox_entries entry
+					join deferred_audit_outbox outbox
+						on outbox.receipt_id = entry.receipt_id
+					where outbox.receipt_id = receipt.receipt_id
+						and entry.delivered_at is null
+				)
+			)
+	`, eventID).Scan(&liveReceiptCount); err != nil {
+		return wrapError("check terminal audit graph", err)
+	}
+	if liveReceiptCount != 0 {
+		return nil
+	}
+	if err := s.demoteDisabledIntakeDetail(ctx, transaction, eventID, changedAt); err != nil {
+		return err
+	}
+	if err := s.demoteDisabledEvaluationDetail(ctx, transaction, eventID); err != nil {
+		return err
+	}
+	if s.policy.FullDetailRetention > 0 {
+		return nil
+	}
+	if _, err := transaction.ExecContext(ctx, `
+		delete from deferred_audit_outbox_entry_details
+		where exists (
+			select 1 from deferred_audit_outbox_entries entry
+			join deferred_audit_outbox outbox on outbox.receipt_id = entry.receipt_id
+			where entry.receipt_id = deferred_audit_outbox_entry_details.receipt_id
+				and entry.entry_index = deferred_audit_outbox_entry_details.entry_index
+				and outbox.event_id = ?
+				and entry.payload_recorded = 0
+		)
+	`, eventID); err != nil {
+		return wrapError("demote deferred audit payload detail", err)
+	}
+	if _, err := transaction.ExecContext(ctx, `
+		update deferred_audit_outbox_entries
+		set payload_available = 0, payload_state_changed_at = ?
+		where payload_recorded = 0
+			and exists (
+				select 1 from deferred_audit_outbox outbox
+				where outbox.receipt_id = deferred_audit_outbox_entries.receipt_id
+					and outbox.event_id = ?
+			)
+	`, formatDeferredTime(changedAt), eventID); err != nil {
+		return wrapError("mark deferred audit payload not recorded", err)
+	}
+	return nil
+}
+
+func (s *Store) demoteDisabledIntakeDetail(
+	ctx context.Context,
+	transaction *sql.Tx,
+	eventID string,
+	changedAt time.Time,
+) error {
+	enabledClasses := make([]auditstorage.DetailClass, 0, 4)
+	detailPolicies := []struct {
+		class   auditstorage.DetailClass
+		enabled bool
+	}{
+		{class: auditstorage.DetailClassWireInput, enabled: s.policy.Detail.WireInput},
+		{class: auditstorage.DetailClassNormalizedInput, enabled: s.policy.Detail.NormalizedInput},
+		{class: auditstorage.DetailClassProviderEvidence, enabled: s.policy.Detail.ProviderEvidence},
+		{
+			class:   auditstorage.DetailClassEnvironmentEvidence,
+			enabled: s.policy.Detail.EnvironmentEvidence,
+		},
+	}
+	for _, detailPolicy := range detailPolicies {
+		if detailPolicy.enabled {
+			enabledClasses = append(enabledClasses, detailPolicy.class)
+			continue
+		}
+		if _, err := transaction.ExecContext(ctx, `
+			delete from intake_event_details where event_id = ? and detail_class = ?
+		`, eventID, detailPolicy.class); err != nil {
+			return wrapError("demote disabled intake detail", err)
+		}
+	}
+	if len(enabledClasses) == len(detailPolicies) {
+		return nil
+	}
+	encodedClasses, err := json.Marshal(enabledClasses)
+	if err != nil {
+		return wrapError("encode retained intake detail classes", err)
+	}
+	if _, err := transaction.ExecContext(ctx, `
+		update intake_event_detail_manifest
+		set recorded_classes_json = ?, available_classes_json = ?,
+			state = ?, state_changed_at = ?
+		where event_id = ?
+	`, encodedClasses, encodedClasses, auditstorage.DetailStateNotRecorded,
+		formatDeferredTime(changedAt), eventID); err != nil {
+		return wrapError("mark disabled intake detail not recorded", err)
+	}
+	return nil
+}
+
+func (s *Store) demoteDisabledEvaluationDetail(
+	ctx context.Context,
+	transaction *sql.Tx,
+	eventID string,
+) error {
+	if s.policy.Detail.EvaluationContent {
+		return nil
+	}
+	statements := []string{
+		`delete from gate_evaluation_label_details where evaluation_id in (
+			select evaluation_id from gate_evaluations where event_id = ?
+		)`,
+		`delete from gate_evaluation_layer_details where evaluation_id in (
+			select evaluation_id from gate_evaluations where event_id = ?
+		)`,
+		`delete from gate_evaluation_details where evaluation_id in (
+			select evaluation_id from gate_evaluations where event_id = ?
+		)`,
+	}
+	for _, statement := range statements {
+		if _, err := transaction.ExecContext(ctx, statement, eventID); err != nil {
+			return wrapError("demote disabled evaluation detail", err)
+		}
+	}
+	if _, err := transaction.ExecContext(ctx, `
+		update gate_evaluations set detail_state = ? where event_id = ?
+	`, auditstorage.DetailStateNotRecorded, eventID); err != nil {
+		return wrapError("mark disabled evaluation detail not recorded", err)
 	}
 	return nil
 }
