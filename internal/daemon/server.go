@@ -86,11 +86,17 @@ type Server struct {
 }
 
 // zeroConfig returns a fully-specified empty Config for a nil caller. Every
-// field is named so a new config section cannot be silently defaulted here.
+// top-level field is named so a new config section cannot be silently defaulted.
 func zeroConfig() *config.Config {
+	var emptyAuditStorage config.AuditStorage
 	return &config.Config{
-		Log:   config.Log{Level: ""},
-		Audit: config.Audit{Enabled: nil, Level: "", Outputs: config.AuditOutput{SQLite: config.AuditSQLiteOutput{Path: ""}}},
+		Log: config.Log{Level: ""},
+		Audit: config.Audit{
+			Enabled: nil,
+			Level:   "",
+			Outputs: config.AuditOutput{SQLite: config.AuditSQLiteOutput{Path: ""}},
+			Storage: emptyAuditStorage,
+		},
 		Paths: config.Paths{ConversationsDir: ""},
 		Performance: config.Performance{
 			Hook: config.HookPerformance{
@@ -442,9 +448,17 @@ func (s *Server) reloadConfig(ctx context.Context) error {
 		s.log.WarnContext(ctx, "config load or compile failed", "path", s.configPath, "err", err)
 		return fmt.Errorf("config load or compile failed: %w", err)
 	}
+	if candidate.Unusable() {
+		return fmt.Errorf("config did not decode; keeping previous config: %s", candidate.Failures()[0].Reason)
+	}
 	for _, failure := range candidate.Failures() {
 		s.log.ErrorContext(ctx, "config degraded on reload", "path", s.configPath,
 			"kind", failure.Kind, "scope", failure.Scope, "err", failure.Reason)
+		// Startup can retain all detail with maintenance disabled. Reload cannot
+		// replace a valid active storage plan with that degraded fallback.
+		if failure.Kind == config.LoadFailureSection && failure.Scope == "audit.storage" {
+			return fmt.Errorf("audit storage config invalid: %s", failure.Reason)
+		}
 	}
 	if errs := hook.ValidateConfig(candidate); len(errs) > 0 {
 		s.log.WarnContext(ctx, "hook config validation failed", "path", s.configPath, "err", errs[0])

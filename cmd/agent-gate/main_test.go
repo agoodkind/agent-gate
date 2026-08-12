@@ -865,6 +865,93 @@ violation_message = "blocked"
 	}
 }
 
+func TestRunConfigCheckPrintsEffectiveAuditStoragePolicy(t *testing.T) {
+	setupQueryEnvironment(t)
+	configPath := config.Path()
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
+		t.Fatalf("MkdirAll config: %v", err)
+	}
+	if err := os.WriteFile(configPath, []byte("[audit]\nenabled = true\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile config: %v", err)
+	}
+
+	exitCode, stdout, stderr := captureRunConfig(t, []string{"check"})
+	if exitCode != 0 {
+		t.Fatalf("runConfig() exit code = %d, want 0; stderr = %q", exitCode, stderr)
+	}
+	want := "" +
+		"agent-gate: config ok\n" +
+		"audit storage: balanced\n" +
+		"full detail: 168h0m0s\n" +
+		"summary: 720h0m0s\n" +
+		"size target: disabled\n" +
+		"maintenance: every 24h0m0s, 1000 rows per batch\n"
+	if stdout != want {
+		t.Fatalf("runConfig() stdout = %q, want %q", stdout, want)
+	}
+	if stderr != "" {
+		t.Fatalf("runConfig() stderr = %q, want empty", stderr)
+	}
+}
+
+func TestRunConfigCheckPrintsConfiguredAuditStorageSize(t *testing.T) {
+	setupQueryEnvironment(t)
+	configPath := config.Path()
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
+		t.Fatalf("MkdirAll config: %v", err)
+	}
+	body := `
+[audit.storage]
+profile = "full"
+maintenance_interval = "12h"
+max_size_mb = 25
+maintenance_batch_rows = 123
+`
+	if err := os.WriteFile(configPath, []byte(body), 0o600); err != nil {
+		t.Fatalf("WriteFile config: %v", err)
+	}
+
+	exitCode, stdout, stderr := captureRunConfig(t, []string{"check"})
+	if exitCode != 0 {
+		t.Fatalf("runConfig() exit code = %d, want 0; stderr = %q", exitCode, stderr)
+	}
+	want := "" +
+		"agent-gate: config ok\n" +
+		"audit storage: full\n" +
+		"full detail: 720h0m0s\n" +
+		"summary: 720h0m0s\n" +
+		"size target: 25000000 bytes\n" +
+		"maintenance: every 12h0m0s, 123 rows per batch\n"
+	if stdout != want {
+		t.Fatalf("runConfig() stdout = %q, want %q", stdout, want)
+	}
+	if stderr != "" {
+		t.Fatalf("runConfig() stderr = %q, want empty", stderr)
+	}
+}
+
+func TestRunConfigCheckRejectsInvalidAuditStorage(t *testing.T) {
+	setupQueryEnvironment(t)
+	configPath := config.Path()
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
+		t.Fatalf("MkdirAll config: %v", err)
+	}
+	if err := os.WriteFile(configPath, []byte("[audit.storage]\nmax_size_mb = -1\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile config: %v", err)
+	}
+
+	exitCode, stdout, stderr := captureRunConfig(t, []string{"check"})
+	if exitCode != 1 {
+		t.Fatalf("runConfig() exit code = %d, want 1", exitCode)
+	}
+	if stdout != "" {
+		t.Fatalf("runConfig() stdout = %q, want empty", stdout)
+	}
+	if !strings.Contains(stderr, "audit.storage.max_size_mb must not be negative") {
+		t.Fatalf("runConfig() stderr = %q, want audit storage validation error", stderr)
+	}
+}
+
 func captureRunConfig(t *testing.T, args []string) (int, string, string) {
 	t.Helper()
 	stdoutFile, err := os.CreateTemp(t.TempDir(), "stdout-*")

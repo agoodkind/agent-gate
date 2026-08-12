@@ -1882,6 +1882,101 @@ violation_message = "invalid"
 	assertCommandDecision(t, srv, "beta", 0, "")
 }
 
+func TestReloadConfigInvalidAuditStorageKeepsPreviousSnapshot(t *testing.T) {
+	setDaemonTestDirs(t)
+	configPath := config.Path()
+	writeConfig(t, configPath, `
+[audit]
+enabled = false
+
+[[rules]]
+name = "block-alpha"
+codex_events = ["PreToolUse"]
+field_paths = ["tool_input.command"]
+pattern = "alpha"
+action = "block"
+violation_message = "alpha blocked"
+`)
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	srv, err := New(newDiscardLogger(), cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer srv.Close()
+	previousSnapshot := srv.runtime.Load()
+
+	writeConfig(t, configPath, `
+[audit]
+enabled = false
+
+[audit.storage]
+max_size_mb = -1
+
+[[rules]]
+name = "block-beta"
+codex_events = ["PreToolUse"]
+field_paths = ["tool_input.command"]
+pattern = "beta"
+action = "block"
+violation_message = "beta blocked"
+`)
+	if err := srv.reloadConfig(context.Background()); err == nil {
+		t.Fatal("reloadConfig succeeded, want audit storage error")
+	}
+	if currentSnapshot := srv.runtime.Load(); currentSnapshot != previousSnapshot {
+		t.Fatal("reloadConfig replaced the active runtime snapshot")
+	}
+
+	assertCommandDecision(t, srv, "alpha", 0, "block-alpha")
+	assertCommandDecision(t, srv, "beta", 0, "")
+}
+
+func TestReloadConfigWrongTypeAuditStorageKeepsPreviousSnapshot(t *testing.T) {
+	setDaemonTestDirs(t)
+	configPath := config.Path()
+	writeConfig(t, configPath, `
+[audit]
+enabled = false
+
+[[rules]]
+name = "block-alpha"
+codex_events = ["PreToolUse"]
+field_paths = ["tool_input.command"]
+pattern = "alpha"
+action = "block"
+violation_message = "alpha blocked"
+`)
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	srv, err := New(newDiscardLogger(), cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer srv.Close()
+	previousSnapshot := srv.runtime.Load()
+
+	writeConfig(t, configPath, `
+[audit.storage]
+max_size_mb = "25"
+`)
+	reloadErr := srv.reloadConfig(context.Background())
+	if reloadErr == nil {
+		t.Error("reloadConfig succeeded, want document decode error")
+	}
+	if currentSnapshot := srv.runtime.Load(); currentSnapshot != previousSnapshot {
+		t.Error("reloadConfig replaced the active runtime snapshot")
+	}
+
+	assertCommandDecision(t, srv, "alpha", 0, "block-alpha")
+}
+
 func TestReloadConfigMissingFileKeepsPreviousConfig(t *testing.T) {
 	setDaemonTestDirs(t)
 	configPath := config.Path()
