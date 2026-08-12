@@ -14,6 +14,26 @@ level = "info" # debug | info | warn | error
 enabled = true
 level = "info"
 
+[audit.storage]
+profile = "balanced" # balanced | full | minimal
+maintenance_interval = "24h"
+max_size_mb = 0 # Zero disables size pruning.
+maintenance_batch_rows = 1000
+compact_after_maintenance = true
+
+# Optional profile overrides must be positive. Summary retention must be at
+# least full-detail retention.
+# full_detail_retention = "168h"
+# summary_retention = "720h"
+
+[audit.storage.detail]
+# Optional profile overrides. Disabled detail remains until terminal completion.
+# wire_input = true
+# normalized_input = true
+# provider_evidence = true
+# environment_evidence = true
+# evaluation_content = true
+
 [audit.outputs.sqlite]
 # Empty selects ${XDG_STATE_HOME:-$HOME/.local/state}/agent-gate/sqlite/audit.db.
 # The database owns durable intake, derived decisions, and evaluator records.

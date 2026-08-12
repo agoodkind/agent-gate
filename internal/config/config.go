@@ -28,9 +28,10 @@ type Log struct {
 // are persisted to SQLite only; the operational agent-gate.jsonl log is for
 // debugging agent-gate itself, not audit output.
 type Audit struct {
-	Enabled *bool       `toml:"enabled"`
-	Level   string      `toml:"level"`
-	Outputs AuditOutput `toml:"outputs"`
+	Enabled *bool        `toml:"enabled"`
+	Level   string       `toml:"level"`
+	Outputs AuditOutput  `toml:"outputs"`
+	Storage AuditStorage `toml:"storage"`
 }
 
 // AuditOutput selects audit destinations. SQLite is the sole sink.
@@ -522,7 +523,8 @@ type Config struct {
 	Inference map[string]InferencePoint `toml:"inference,omitempty"`
 	Rules     []Rule                    `toml:"rules"`
 
-	sourceIdentity string
+	sourceIdentity     string
+	auditStoragePolicy AuditStoragePolicy
 	// loadFailures records the rules and settings blocks a degraded load had to
 	// drop or default. A strict load leaves it empty, because it fails instead.
 	loadFailures []LoadFailure

@@ -54,6 +54,11 @@ func loadPath(path string, requireExisting bool, strict bool) (*Config, error) {
 
 	if _, err := os.Stat(path); err != nil {
 		if os.IsNotExist(err) && !requireExisting {
+			policy, resolveErr := resolveAuditStorage(cfg.Audit.Storage)
+			if resolveErr != nil {
+				return nil, resolveErr
+			}
+			cfg.auditStoragePolicy = policy
 			return &cfg, nil
 		}
 		log.Error("stat config failed", "path", path, "err", err)
@@ -74,6 +79,7 @@ func loadPath(path string, requireExisting bool, strict bool) (*Config, error) {
 	// empty config keeps the caller's Failures the single description of what
 	// happened.
 	if cfg.Unusable() {
+		cfg.auditStoragePolicy = safeDegradedAuditStoragePolicy()
 		return &cfg, nil
 	}
 	if err := validateSections(log, &cfg, recordOrFail); err != nil {
@@ -140,6 +146,15 @@ type sectionRecorder func(kind string, scope string, err error, fallback func())
 // the block is what makes every accessor return the documented default, so the
 // daemon runs on known-good numbers instead of not running at all.
 func validateSections(log *slog.Logger, cfg *Config, record sectionRecorder) error {
+	storagePolicy, storageErr := resolveAuditStorage(cfg.Audit.Storage)
+	if err := record(LoadFailureSection, "audit.storage", storageErr,
+		func() { cfg.auditStoragePolicy = safeDegradedAuditStoragePolicy() },
+	); err != nil {
+		return err
+	}
+	if storageErr == nil {
+		cfg.auditStoragePolicy = storagePolicy
+	}
 	if err := record(LoadFailureSection, "performance.hook",
 		validateHookPerformance(cfg.Performance.Hook, cfg.Performance.Limits),
 		func() { cfg.Performance.Hook = zeroHookPerformance },
