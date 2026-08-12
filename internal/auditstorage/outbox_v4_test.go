@@ -28,8 +28,8 @@ func TestOutboxV4MigratesPayloadIntoDetail(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SchemaVersion: %v", err)
 	}
-	if version != 4 {
-		t.Fatalf("schema version = %d, want 4", version)
+	if version != 5 {
+		t.Fatalf("schema version = %d, want 5", version)
 	}
 	var payload []byte
 	if err := database.QueryRowContext(t.Context(), `

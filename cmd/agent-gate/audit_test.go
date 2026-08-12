@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
@@ -92,6 +93,98 @@ func TestRunAuditMaintainDryRunDoesNotWriteDatabase(t *testing.T) {
 	after := snapshotAuditFiles(t, config.DefaultAuditSQLitePath())
 	if !reflect.DeepEqual(after, before) {
 		t.Fatalf("SQLite files changed during dry run: before %#v after %#v", before, after)
+	}
+}
+
+func TestRunAuditMaintainApplyDeletesEligibleGraphs(t *testing.T) {
+	setupAuditCommandEnvironment(t, `[audit.storage]
+full_detail_retention = "1h"
+summary_retention = "2h"
+`)
+	createCompletedAuditCommandDatabase(t)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := runAudit([]string{"maintain", "--apply"}, &stdout, &stderr)
+
+	if exitCode != 0 || stderr.Len() != 0 {
+		t.Fatalf("exit code/stderr = %d/%q, want 0/empty", exitCode, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "result: success") ||
+		!strings.Contains(stdout.String(), "next due at:") {
+		t.Fatalf("stdout = %q, want successful result and next due time", stdout.String())
+	}
+	database, err := sql.Open("sqlite3", config.DefaultAuditSQLitePath())
+	if err != nil {
+		t.Fatalf("open maintained database: %v", err)
+	}
+	defer func() { _ = database.Close() }()
+	var count int
+	if err := database.QueryRow(`select count(*) from intake_events`).Scan(&count); err != nil {
+		t.Fatalf("count maintained events: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("maintained events = %d, want 0", count)
+	}
+}
+
+func TestRunAuditMaintainApplyDefersDuringSchemaMigrationContention(t *testing.T) {
+	setupAuditCommandEnvironment(t, "[audit.storage]\n")
+	createAuditCommandDatabase(t)
+	blocker, err := sql.Open("sqlite3", config.DefaultAuditSQLitePath())
+	if err != nil {
+		t.Fatalf("open migration blocker: %v", err)
+	}
+	defer func() { _ = blocker.Close() }()
+	if _, err := blocker.ExecContext(t.Context(), `
+		drop table audit_maintenance_runs;
+		drop table audit_maintenance_lease;
+		delete from audit_schema_migrations where version = 5;
+		pragma user_version = 4;
+	`); err != nil {
+		t.Fatalf("restore version four schema: %v", err)
+	}
+	connection, err := blocker.Conn(t.Context())
+	if err != nil {
+		t.Fatalf("reserve migration blocker: %v", err)
+	}
+	defer func() { _ = connection.Close() }()
+	if _, err := connection.ExecContext(t.Context(), `begin immediate`); err != nil {
+		t.Fatalf("begin migration blocker: %v", err)
+	}
+	defer func() { _, _ = connection.ExecContext(context.Background(), `rollback`) }()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	startedAt := time.Now()
+	exitCode := runAudit([]string{"maintain", "--apply"}, &stdout, &stderr)
+
+	if exitCode != 0 || stderr.Len() != 0 {
+		t.Fatalf("exit code/stderr = %d/%q, want 0/empty", exitCode, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "maintenance deferred:") {
+		t.Fatalf("stdout = %q, want deferred maintenance", stdout.String())
+	}
+	if strings.Contains(stdout.String(), "run id:") {
+		t.Fatalf("stdout = %q, want no empty run identifier", stdout.String())
+	}
+	if elapsed := time.Since(startedAt); elapsed >= time.Second {
+		t.Fatalf("maintenance deferred after %s, want less than one second", elapsed)
+	}
+}
+
+func TestRunAuditMaintainRequiresExactlyOneMode(t *testing.T) {
+	setupAuditCommandEnvironment(t, "[audit.storage]\n")
+	createAuditCommandDatabase(t)
+	for _, args := range [][]string{
+		{"maintain"},
+		{"maintain", "--dry-run", "--apply"},
+	} {
+		var stdout bytes.Buffer
+		var stderr bytes.Buffer
+		if exitCode := runAudit(args, &stdout, &stderr); exitCode != 2 {
+			t.Fatalf("runAudit(%v) exit code = %d, want 2", args, exitCode)
+		}
 	}
 }
 
@@ -280,6 +373,37 @@ func createAuditCommandDatabase(t *testing.T) {
 	if _, err := store.Handle().ExecContext(t.Context(), `pragma wal_checkpoint(truncate)`); err != nil {
 		_ = store.Close()
 		t.Fatalf("checkpoint: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+}
+
+func createCompletedAuditCommandDatabase(t *testing.T) {
+	t.Helper()
+	store, err := intake.OpenSQLite(t.Context(), config.DefaultAuditSQLitePath(), nil)
+	if err != nil {
+		t.Fatalf("OpenSQLite: %v", err)
+	}
+	receipt, err := store.Append(t.Context(), intake.Record{
+		EventID: "audit-command-complete", RecordedAt: time.Now().Add(-24 * time.Hour),
+		System: "codex", SessionID: "session", EventName: "PreToolUse",
+		RawPayload:     []byte(`{"command":"make check"}`),
+		NormalizedJSON: json.RawMessage(`{"command":"make check"}`),
+	})
+	if err != nil {
+		_ = store.Close()
+		t.Fatalf("Append: %v", err)
+	}
+	insertCommandCompletedEvaluation(t, store.Handle(), receipt.ReceiptID, receipt.EventID)
+	if _, err := store.Handle().ExecContext(
+		t.Context(),
+		`update intake_receipts set received_at = ? where receipt_id = ?`,
+		time.Now().Add(-24*time.Hour).UTC().Format(time.RFC3339Nano),
+		receipt.ReceiptID,
+	); err != nil {
+		_ = store.Close()
+		t.Fatalf("age command receipt: %v", err)
 	}
 	if err := store.Close(); err != nil {
 		t.Fatalf("Close: %v", err)

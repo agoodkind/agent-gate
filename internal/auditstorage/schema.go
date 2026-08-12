@@ -18,16 +18,26 @@ var migrations = []Migration{
 	{Version: 2, ForeignKeysDisabled: true, Apply: migrateIntakeV2},
 	{Version: 3, ForeignKeysDisabled: true, Apply: migrateEvaluationV3},
 	{Version: 4, ForeignKeysDisabled: true, Apply: migrateOutboxV4},
+	{Version: 5, ForeignKeysDisabled: false, Apply: migrateMaintenanceV5},
 }
 
 var migrationNow = time.Now
 
 // Migrate applies every pending audit schema version in order.
 func Migrate(ctx context.Context, database *sql.DB) error {
+	return migrate(ctx, database, 5000)
+}
+
+// MigrateNonblocking applies pending versions without waiting for another writer.
+func MigrateNonblocking(ctx context.Context, database *sql.DB) error {
+	return migrate(ctx, database, 0)
+}
+
+func migrate(ctx context.Context, database *sql.DB, busyTimeoutMilliseconds int) error {
 	if database == nil {
 		return errors.New("audit storage database is required")
 	}
-	if err := configureDatabase(ctx, database); err != nil {
+	if err := configureDatabase(ctx, database, busyTimeoutMilliseconds); err != nil {
 		return err
 	}
 	version, err := SchemaVersion(ctx, database)
@@ -103,7 +113,11 @@ func MigrationAppliedAt(
 	return appliedAt, nil
 }
 
-func configureDatabase(ctx context.Context, database *sql.DB) error {
+func configureDatabase(
+	ctx context.Context,
+	database *sql.DB,
+	busyTimeoutMilliseconds int,
+) error {
 	newDatabase, err := hasNoApplicationTables(ctx, database)
 	if err != nil {
 		return err
@@ -114,7 +128,7 @@ func configureDatabase(ctx context.Context, database *sql.DB) error {
 		}
 	}
 	statements := []string{
-		`pragma busy_timeout = 5000`,
+		fmt.Sprintf("pragma busy_timeout = %d", busyTimeoutMilliseconds),
 		`pragma journal_mode = wal`,
 		`pragma foreign_keys = on`,
 	}
