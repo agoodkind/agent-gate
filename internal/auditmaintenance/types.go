@@ -11,6 +11,8 @@ import (
 type SizeState string
 
 const (
+	// SizeStateUnknown means maintenance could not measure the configured size target.
+	SizeStateUnknown SizeState = "unknown"
 	// SizeStateDisabled means no size target is configured.
 	SizeStateDisabled SizeState = "disabled"
 	// SizeStateWithinTarget means current storage fits the target.
@@ -59,6 +61,7 @@ type Status struct {
 	OldestDetailAt    *time.Time                `json:"oldest_detail_at,omitempty"`
 	OldestSummaryAt   *time.Time                `json:"oldest_summary_at,omitempty"`
 	ProtectedGraphs   int64                     `json:"protected_graphs"`
+	ProtectedBytes    int64                     `json:"protected_bytes"`
 	ReclaimablePages  int64                     `json:"reclaimable_pages"`
 	FullCompactNeeded bool                      `json:"full_compact_needed"`
 	IntegrityOK       bool                      `json:"integrity_ok"`

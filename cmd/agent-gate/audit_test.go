@@ -96,6 +96,76 @@ func TestRunAuditMaintainDryRunDoesNotWriteDatabase(t *testing.T) {
 	}
 }
 
+func TestRunAuditMaintainDryRunPredictsSizeDrivenApplyAndStoredPlan(t *testing.T) {
+	setupAuditCommandEnvironment(t, `
+[audit.storage]
+maintenance_interval = "200000h"
+full_detail_retention = "200000h"
+summary_retention = "200000h"
+max_size_mb = 1
+`)
+	store, err := intake.OpenSQLite(t.Context(), config.DefaultAuditSQLitePath(), nil)
+	if err != nil {
+		t.Fatalf("OpenSQLite: %v", err)
+	}
+	receipt, err := store.Append(t.Context(), intake.Record{
+		EventID: "recent-large-eligible", RecordedAt: time.Now().UTC(), System: "codex",
+		SessionID: "session", EventName: "PreToolUse", ToolName: "exec_command",
+		RawPayload:     bytes.Repeat([]byte("x"), 2_000_000),
+		NormalizedJSON: json.RawMessage(`{"command":"make check"}`),
+	})
+	if err != nil {
+		_ = store.Close()
+		t.Fatalf("Append eligible graph: %v", err)
+	}
+	insertCommandCompletedEvaluation(t, store.Handle(), receipt.ReceiptID, receipt.EventID)
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	before := snapshotAuditFiles(t, config.DefaultAuditSQLitePath())
+	var dryRunOutput bytes.Buffer
+	var stderr bytes.Buffer
+
+	if exitCode := runAudit([]string{"maintain", "--dry-run"}, &dryRunOutput, &stderr); exitCode != 0 {
+		t.Fatalf("dry-run exit/stderr = %d/%q, want 0/empty", exitCode, stderr.String())
+	}
+	if !strings.Contains(dryRunOutput.String(), "summary candidate graphs: 1") {
+		t.Fatalf("dry-run stdout = %q, want one size candidate", dryRunOutput.String())
+	}
+	after := snapshotAuditFiles(t, config.DefaultAuditSQLitePath())
+	if !reflect.DeepEqual(after, before) {
+		t.Fatalf("dry-run changed SQLite files: before %#v after %#v", before, after)
+	}
+	var applyOutput bytes.Buffer
+	stderr.Reset()
+	if exitCode := runAudit([]string{"maintain", "--apply"}, &applyOutput, &stderr); exitCode != 0 {
+		t.Fatalf("apply exit/stderr = %d/%q, want 0/empty", exitCode, stderr.String())
+	}
+	if !strings.Contains(applyOutput.String(), "summary graphs: 1") {
+		t.Fatalf("apply stdout = %q, want one deleted graph", applyOutput.String())
+	}
+	database, err := sql.Open("sqlite3", config.DefaultAuditSQLitePath())
+	if err != nil {
+		t.Fatalf("open maintained database: %v", err)
+	}
+	defer func() { _ = database.Close() }()
+	var planJSON string
+	if err := database.QueryRowContext(t.Context(), `
+		select plan_json from audit_maintenance_runs order by started_at desc limit 1
+	`).Scan(&planJSON); err != nil {
+		t.Fatalf("read stored plan: %v", err)
+	}
+	var plan struct {
+		SummaryCandidateGraphs int64 `json:"summary_candidate_graphs"`
+	}
+	if err := json.Unmarshal([]byte(planJSON), &plan); err != nil {
+		t.Fatalf("decode stored plan: %v", err)
+	}
+	if plan.SummaryCandidateGraphs != 1 {
+		t.Fatalf("stored summary candidates = %d, want 1", plan.SummaryCandidateGraphs)
+	}
+}
+
 func TestRunAuditMaintainApplyDeletesEligibleGraphs(t *testing.T) {
 	setupAuditCommandEnvironment(t, `[audit.storage]
 full_detail_retention = "1h"
@@ -111,8 +181,9 @@ summary_retention = "2h"
 		t.Fatalf("exit code/stderr = %d/%q, want 0/empty", exitCode, stderr.String())
 	}
 	if !strings.Contains(stdout.String(), "result: success") ||
-		!strings.Contains(stdout.String(), "next due at:") {
-		t.Fatalf("stdout = %q, want successful result and next due time", stdout.String())
+		!strings.Contains(stdout.String(), "next due at:") ||
+		!strings.Contains(stdout.String(), "size state: disabled") {
+		t.Fatalf("stdout = %q, want successful result, size state, and next due time", stdout.String())
 	}
 	database, err := sql.Open("sqlite3", config.DefaultAuditSQLitePath())
 	if err != nil {
@@ -242,6 +313,79 @@ max_size_mb = 1
 	}
 	if !strings.Contains(stdout.String(), "size state: constrained") {
 		t.Fatalf("stdout = %q, want constrained size state", stdout.String())
+	}
+}
+
+func TestRunAuditStatusReportsProtectedBytesInPlainAndJSON(t *testing.T) {
+	setupAuditCommandEnvironment(t, `
+[audit.storage]
+maintenance_interval = "200000h"
+max_size_mb = 1
+`)
+	store := createActiveAuditCommandDatabase(t, bytes.Repeat([]byte("x"), 2_000_000))
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close constrained audit store: %v", err)
+	}
+	var plain bytes.Buffer
+	var stderr bytes.Buffer
+	if exitCode := runAudit([]string{"status"}, &plain, &stderr); exitCode != 0 {
+		t.Fatalf("plain status exit/stderr = %d/%q, want 0/empty", exitCode, stderr.String())
+	}
+	if !strings.Contains(plain.String(), "protected bytes estimate:") ||
+		strings.Contains(plain.String(), "protected bytes estimate: 0\n") {
+		t.Fatalf("plain status = %q, want nonzero protected bytes estimate", plain.String())
+	}
+	var jsonOutput bytes.Buffer
+	stderr.Reset()
+	if exitCode := runAudit([]string{"status", "--json"}, &jsonOutput, &stderr); exitCode != 0 {
+		t.Fatalf("JSON status exit/stderr = %d/%q, want 0/empty", exitCode, stderr.String())
+	}
+	var status struct {
+		ProtectedBytes int64  `json:"protected_bytes"`
+		SizeState      string `json:"size_state"`
+	}
+	if err := json.Unmarshal(jsonOutput.Bytes(), &status); err != nil {
+		t.Fatalf("decode status JSON: %v", err)
+	}
+	if status.ProtectedBytes == 0 || status.SizeState != "constrained" {
+		t.Fatalf("JSON status = %#v, want protected bytes and constrained", status)
+	}
+}
+
+func TestRunAuditStatusCheckFailsCurrentUnconstrainedTarget(t *testing.T) {
+	setupAuditCommandEnvironment(t, `
+[audit.storage]
+maintenance_interval = "200000h"
+max_size_mb = 1
+`)
+	store, err := intake.OpenSQLite(t.Context(), config.DefaultAuditSQLitePath(), nil)
+	if err != nil {
+		t.Fatalf("OpenSQLite: %v", err)
+	}
+	receipt, err := store.Append(t.Context(), intake.Record{
+		EventID: "large-eligible", RecordedAt: time.Now().UTC(), System: "codex",
+		SessionID: "session", EventName: "PreToolUse", ToolName: "exec_command",
+		RawPayload:     bytes.Repeat([]byte("x"), 2_000_000),
+		NormalizedJSON: json.RawMessage(`{"command":"make check"}`),
+	})
+	if err != nil {
+		_ = store.Close()
+		t.Fatalf("Append eligible graph: %v", err)
+	}
+	insertCommandCompletedEvaluation(t, store.Handle(), receipt.ReceiptID, receipt.EventID)
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := runAudit([]string{"status", "--check"}, &stdout, &stderr)
+
+	if exitCode != 1 || stderr.Len() != 0 {
+		t.Fatalf("exit code/stderr = %d/%q, want 1/empty", exitCode, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "size state: over_target") {
+		t.Fatalf("stdout = %q, want over_target size state", stdout.String())
 	}
 }
 

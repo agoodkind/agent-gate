@@ -19,7 +19,13 @@ import (
 	"goodkind.io/agent-gate/internal/config"
 )
 
-const runIDBytes = 16
+const (
+	logAuditSizeMeasurementFailed   = "audit size measurement failed"
+	logMeasureAuditSize             = "measure audit size"
+	logMaintenanceStartRecordFailed = "audit maintenance start record failed"
+	logRecordMaintenanceStart       = "record audit maintenance start"
+	runIDBytes                      = 16
+)
 
 var maintenanceNow = time.Now
 
@@ -39,6 +45,7 @@ type Result struct {
 	Plan          Plan       `json:"plan"`
 	DetailGraphs  int64      `json:"detail_graphs"`
 	SummaryGraphs int64      `json:"summary_graphs"`
+	SizeState     SizeState  `json:"size_state"`
 	Result        string     `json:"result"`
 	ErrorClass    string     `json:"error_class,omitempty"`
 	NextDueAt     *time.Time `json:"next_due_at,omitempty"`
@@ -54,7 +61,7 @@ func Apply(ctx context.Context, options ApplyOptions) (result Result, returnErr 
 		return Result{}, err
 	}
 	if err := ctx.Err(); err != nil {
-		return Result{}, wrapError("start audit maintenance", err)
+		return unknownResult(), wrapError("start audit maintenance", err)
 	}
 	fileLock, err := acquireFileLock(options.Path)
 	if errors.Is(err, ErrMaintenanceBusy) {
@@ -94,7 +101,8 @@ func Apply(ctx context.Context, options ApplyOptions) (result Result, returnErr 
 	}
 	result = Result{
 		RunID: runID, Plan: plan, DetailGraphs: 0, SummaryGraphs: 0,
-		Result: "running", ErrorClass: "", NextDueAt: nil, Err: nil,
+		SizeState: SizeStateUnknown, Result: "running", ErrorClass: "",
+		NextDueAt: nil, Err: nil,
 	}
 	startedAt := options.Now.UTC()
 	lease := maintenanceLease{owner: options.Owner, runID: runID, ttl: options.LeaseTTL}
@@ -110,12 +118,15 @@ func Apply(ctx context.Context, options ApplyOptions) (result Result, returnErr 
 	if err := validateApplyDatabase(ctx, database); err != nil {
 		return finishUnstartedApply(ctx, database, options, result, err)
 	}
-	plan, err = previewDatabase(ctx, database, options.Policy, options.Now)
+	plan, err = previewApplyPlan(ctx, options)
 	if err != nil {
 		return finishUnstartedApply(ctx, database, options, result, err)
 	}
 	result.Plan = plan
-	if err := recordRunStart(ctx, database, result, startedAt); err != nil {
+	if err := lease.renew(ctx, database, maintenanceNow().UTC()); err != nil {
+		return finishUnstartedApply(ctx, database, options, result, err)
+	}
+	if err := recordRunStartLogged(ctx, database, result, startedAt, options.Log); err != nil {
 		return finishUnstartedApply(ctx, database, options, result, err)
 	}
 
@@ -124,7 +135,41 @@ func Apply(ctx context.Context, options ApplyOptions) (result Result, returnErr 
 	if err == nil {
 		result.SummaryGraphs, err = applySummaryBatches(ctx, database, lease, options)
 	}
+	if err == nil {
+		var sizeGraphs int64
+		sizeGraphs, result.SizeState, err = applySizeBatches(
+			ctx,
+			database,
+			lease,
+			options,
+		)
+		result.SummaryGraphs += sizeGraphs
+	}
 	return finishApply(ctx, database, options, result, err)
+}
+
+func unknownResult() Result {
+	return Result{
+		RunID: "",
+		Plan: Plan{
+			PlannedAt: time.Time{}, PolicyHash: "", DetailCutoff: nil,
+			SummaryCutoff: time.Time{}, DetailCandidateGraphs: 0,
+			SummaryCandidateGraphs: 0, ProtectedGraphs: 0, ProtectedBytes: 0,
+			EstimatedDeleteBytes: 0,
+		},
+		DetailGraphs: 0, SummaryGraphs: 0,
+		SizeState: SizeStateUnknown, Result: "", ErrorClass: "",
+		NextDueAt: nil, Err: nil,
+	}
+}
+
+func previewApplyPlan(ctx context.Context, options ApplyOptions) (Plan, error) {
+	snapshot, err := openDatabaseSnapshot(ctx, options.Path)
+	if err != nil {
+		return Plan{}, err
+	}
+	defer snapshot.cleanup()
+	return previewDatabase(ctx, snapshot.database, options.Policy, options.Now)
 }
 
 func initialRunPlan(policy config.AuditStoragePolicy, now time.Time) (Plan, error) {
@@ -243,6 +288,9 @@ func validateApplyOptions(options ApplyOptions) error {
 	}
 	if options.Policy.MaintenanceBatchRows <= 0 {
 		return errors.New("audit maintenance batch size must be positive")
+	}
+	if options.Policy.MaxSizeBytes < 0 {
+		return errors.New("audit maintenance size target must not be negative")
 	}
 	if options.Policy.FullDetailRetention < 0 || options.Policy.SummaryRetention <= 0 {
 		return errors.New("audit retention durations are invalid")
@@ -416,6 +464,114 @@ func applySummaryBatch(
 	return count, nil
 }
 
+func applySizeBatches(
+	ctx context.Context,
+	database *sql.DB,
+	lease maintenanceLease,
+	options ApplyOptions,
+) (int64, SizeState, error) {
+	if options.Policy.MaxSizeBytes <= 0 {
+		return 0, SizeStateDisabled, nil
+	}
+	var total int64
+	candidateQueuePrepared := false
+	for {
+		if err := ctx.Err(); err != nil {
+			return total, SizeStateUnknown, wrapError("apply audit size batches", err)
+		}
+		if err := lease.renew(ctx, database, maintenanceNow().UTC()); err != nil {
+			return total, SizeStateUnknown, err
+		}
+		options.Log.DebugContext(ctx, logMeasureAuditSize)
+		size, err := measureApplyDatabaseSize(ctx, database, options.Path)
+		if err != nil {
+			options.Log.DebugContext(ctx, logAuditSizeMeasurementFailed, "err", err)
+			return total, SizeStateUnknown, err
+		}
+		if size.CompactedUsageBytes <= options.Policy.MaxSizeBytes {
+			physicalBytes := size.DatabaseBytes + size.WALBytes
+			if physicalBytes > options.Policy.MaxSizeBytes {
+				return total, SizeStateReclaimPending, nil
+			}
+			return total, SizeStateWithinTarget, nil
+		}
+		if !candidateQueuePrepared {
+			if err := prepareSizeCandidateQueue(ctx, database); err != nil {
+				return total, SizeStateUnknown, err
+			}
+			candidateQueuePrepared = true
+		}
+		count, err := applyOldestSizeGraph(ctx, database)
+		if err != nil {
+			return total, SizeStateUnknown, err
+		}
+		if count == 0 {
+			protectedGraphs, err := readCurrentProtectedGraphCount(ctx, database)
+			if err != nil {
+				return total, SizeStateUnknown, err
+			}
+			if protectedGraphs > 0 {
+				return total, SizeStateConstrained, nil
+			}
+			return total, SizeStateOverTarget, nil
+		}
+		total += count
+	}
+}
+
+func prepareSizeCandidateQueue(ctx context.Context, database *sql.DB) error {
+	if _, err := database.ExecContext(ctx, prepareSizeCandidateQueueSQL); err != nil {
+		return classifyMaintenanceWriteError("prepare audit size candidate queue", err)
+	}
+	return nil
+}
+
+func readCurrentProtectedGraphCount(ctx context.Context, database *sql.DB) (int64, error) {
+	var count int64
+	if err := database.QueryRowContext(ctx, `
+		select count(*) from intake_events event
+		where not (`+protectedGraphPredicate+`)
+	`).Scan(&count); err != nil {
+		return 0, wrapError("count protected audit size graphs", err)
+	}
+	return count, nil
+}
+
+func applyOldestSizeGraph(ctx context.Context, database *sql.DB) (int64, error) {
+	transaction, err := database.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, classifyMaintenanceWriteError("begin audit size batch", err)
+	}
+	defer func() { _ = transaction.Rollback() }()
+	if err := prepareSelectedGraphs(ctx, transaction); err != nil {
+		return 0, err
+	}
+	result, err := transaction.ExecContext(ctx, selectOldestSizeGraphSQL)
+	if err != nil {
+		return 0, classifyMaintenanceWriteError("select audit size batch", err)
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return 0, wrapError("count audit size batch", err)
+	}
+	if count == 0 {
+		return 0, nil
+	}
+	if _, err := transaction.ExecContext(ctx, `
+		delete from maintenance_size_candidate_queue
+		where event_id in (select event_id from maintenance_selected_event_ids)
+	`); err != nil {
+		return 0, classifyMaintenanceWriteError("advance audit size candidate queue", err)
+	}
+	if err := deleteSelectedSummaries(ctx, transaction); err != nil {
+		return 0, err
+	}
+	if err := transaction.Commit(); err != nil {
+		return 0, classifyMaintenanceWriteError("commit audit size batch", err)
+	}
+	return count, nil
+}
+
 func prepareSelectedGraphs(ctx context.Context, transaction *sql.Tx) error {
 	if _, err := transaction.ExecContext(ctx, `
 		create temp table if not exists maintenance_selected_event_ids (
@@ -485,6 +641,29 @@ const selectSummaryGraphsSQL = `
 	order by (select max(julianday(receipt.received_at))
 		from intake_receipts receipt where receipt.event_id = event.event_id), event.event_id
 	limit ?`
+
+const prepareSizeCandidateQueueSQL = `
+	drop table if exists temp.maintenance_size_candidate_queue;
+	create temp table maintenance_size_candidate_queue (
+		sequence integer primary key autoincrement,
+		event_id text not null unique
+	);
+	insert into maintenance_size_candidate_queue(event_id)
+	select event.event_id
+	from intake_events event
+	where ` + protectedGraphPredicate + `
+	order by (select max(julianday(receipt.received_at))
+		from intake_receipts receipt where receipt.event_id = event.event_id), event.event_id;
+`
+
+const selectOldestSizeGraphSQL = `
+	insert into maintenance_selected_event_ids(event_id)
+	select event.event_id
+	from maintenance_size_candidate_queue candidate
+	join intake_events event on event.event_id = candidate.event_id
+	where ` + protectedGraphPredicate + `
+	order by candidate.sequence
+	limit 1`
 
 func demoteSelectedDetail(
 	ctx context.Context,
@@ -628,6 +807,21 @@ func recordRunStart(
 		return classifyMaintenanceWriteError("record audit maintenance start", err)
 	}
 	return nil
+}
+
+func recordRunStartLogged(
+	ctx context.Context,
+	database *sql.DB,
+	result Result,
+	startedAt time.Time,
+	log *slog.Logger,
+) error {
+	log.DebugContext(ctx, logRecordMaintenanceStart)
+	err := recordRunStart(ctx, database, result, startedAt)
+	if err != nil {
+		log.DebugContext(ctx, logMaintenanceStartRecordFailed, "err", err)
+	}
+	return err
 }
 
 func recordTerminalRunBounded(
@@ -774,7 +968,8 @@ func deferredResult(err error) Result {
 			EstimatedDeleteBytes: 0,
 		},
 		DetailGraphs: 0, SummaryGraphs: 0,
-		Result: "deferred", ErrorClass: "busy", NextDueAt: nil, Err: err,
+		SizeState: SizeStateUnknown, Result: "deferred", ErrorClass: "busy",
+		NextDueAt: nil, Err: err,
 	}
 }
 

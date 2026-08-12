@@ -64,7 +64,12 @@ func ReadStatus(
 		return Status{}, err
 	}
 	defer snapshot.cleanup()
-	plan, err := previewDatabase(ctx, snapshot.database, policy, now)
+	planningSnapshot, err := openDatabaseSnapshot(ctx, snapshot.path)
+	if err != nil {
+		return Status{}, err
+	}
+	plan, err := previewDatabase(ctx, planningSnapshot.database, policy, now)
+	planningSnapshot.cleanup()
 	if err != nil {
 		return Status{}, err
 	}
@@ -72,7 +77,8 @@ func ReadStatus(
 	status := Status{
 		Policy: policy, DatabaseBytes: 0, WALBytes: 0,
 		OldestDetailAt: nil, OldestSummaryAt: nil,
-		ProtectedGraphs: plan.ProtectedGraphs, ReclaimablePages: 0,
+		ProtectedGraphs: plan.ProtectedGraphs, ProtectedBytes: plan.ProtectedBytes,
+		ReclaimablePages:  0,
 		FullCompactNeeded: false, IntegrityOK: false, IntegrityError: "",
 		LastRun: nil, MaintenanceDueAt: nil, NextAttemptAt: nil,
 		Overdue: false, SizeState: SizeStateDisabled,
@@ -145,36 +151,22 @@ func readPageState(
 	database *sql.DB,
 	status *Status,
 ) (int64, error) {
-	var busy int64
-	var walFrames int64
-	var checkpointedFrames int64
-	if err := database.QueryRowContext(ctx, `pragma wal_checkpoint(passive)`).Scan(
-		&busy,
-		&walFrames,
-		&checkpointedFrames,
-	); err != nil {
-		return 0, wrapError("measure audit live write-ahead log frames", err)
+	size, err := measureDatabaseSize(
+		ctx,
+		database,
+		status.DatabaseBytes,
+		status.WALBytes,
+	)
+	if err != nil {
+		return 0, err
 	}
-	if err := database.QueryRowContext(ctx, `pragma freelist_count`).Scan(
-		&status.ReclaimablePages,
-	); err != nil {
-		return 0, wrapError("read audit reclaimable pages", err)
-	}
-	var pageSize int64
-	var pageCount int64
-	if err := database.QueryRowContext(ctx, `pragma page_size`).Scan(&pageSize); err != nil {
-		return 0, wrapError("read audit page size", err)
-	}
-	if err := database.QueryRowContext(ctx, `pragma page_count`).Scan(&pageCount); err != nil {
-		return 0, wrapError("read audit page count", err)
-	}
+	status.ReclaimablePages = size.FreePages
 	var autoVacuumMode int
 	if err := database.QueryRowContext(ctx, `pragma auto_vacuum`).Scan(&autoVacuumMode); err != nil {
 		return 0, wrapError("read audit auto-vacuum mode", err)
 	}
 	status.FullCompactNeeded = autoVacuumMode != 2
-	liveFrames := max(walFrames-checkpointedFrames, 0)
-	return (pageCount-status.ReclaimablePages)*pageSize + liveFrames*pageSize, nil
+	return size.CompactedUsageBytes, nil
 }
 
 func readIntegrity(ctx context.Context, database *sql.DB, status *Status) error {

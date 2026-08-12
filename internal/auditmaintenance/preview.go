@@ -133,6 +133,7 @@ type databaseSnapshot struct {
 	database      *sql.DB
 	databaseBytes int64
 	walBytes      int64
+	path          string
 	cleanup       func()
 }
 
@@ -209,7 +210,69 @@ func previewDatabase(
 	); err != nil {
 		return Plan{}, wrapError("preview audit maintenance", err)
 	}
+	if policy.MaxSizeBytes > 0 {
+		summaryCandidates, err := simulateRetention(ctx, database, policy, now)
+		if err != nil {
+			return Plan{}, err
+		}
+		plan.SummaryCandidateGraphs = summaryCandidates
+	}
 	return plan, nil
+}
+
+func simulateRetention(
+	ctx context.Context,
+	database *sql.DB,
+	policy config.AuditStoragePolicy,
+	now time.Time,
+) (int64, error) {
+	options := ApplyOptions{
+		Path: "", Policy: policy, Now: now, Owner: "", LeaseTTL: 0, Log: slog.Default(),
+	}
+	for {
+		count, err := applyDetailBatch(ctx, database, options)
+		if err != nil {
+			return 0, err
+		}
+		if count == 0 {
+			break
+		}
+	}
+	var summaryCandidates int64
+	for {
+		count, err := applySummaryBatch(ctx, database, options)
+		if err != nil {
+			return 0, err
+		}
+		summaryCandidates += count
+		if count == 0 {
+			break
+		}
+	}
+	candidateQueuePrepared := false
+	for {
+		size, err := measureDatabaseSize(ctx, database, 0, 0)
+		if err != nil {
+			return 0, err
+		}
+		if size.CompactedUsageBytes <= policy.MaxSizeBytes {
+			return summaryCandidates, nil
+		}
+		if !candidateQueuePrepared {
+			if err := prepareSizeCandidateQueue(ctx, database); err != nil {
+				return 0, err
+			}
+			candidateQueuePrepared = true
+		}
+		count, err := applyOldestSizeGraph(ctx, database)
+		if err != nil {
+			return 0, err
+		}
+		if count == 0 {
+			return summaryCandidates, nil
+		}
+		summaryCandidates += count
+	}
 }
 
 func validateReceiptTimestamps(ctx context.Context, database *sql.DB) error {
@@ -315,6 +378,7 @@ func copyDatabaseSnapshot(
 	return databaseSnapshot{
 		database:      database,
 		databaseBytes: sourceInfo.Size(), walBytes: wal.size,
+		path: snapshotPath,
 		cleanup: func() {
 			_ = database.Close()
 			cleanup()
@@ -324,7 +388,7 @@ func copyDatabaseSnapshot(
 
 func emptySnapshot(cleanup func()) databaseSnapshot {
 	return databaseSnapshot{
-		database: nil, databaseBytes: 0, walBytes: 0, cleanup: cleanup,
+		database: nil, databaseBytes: 0, walBytes: 0, path: "", cleanup: cleanup,
 	}
 }
 
