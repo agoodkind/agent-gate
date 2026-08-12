@@ -18,13 +18,14 @@ import (
 type auditCommandName string
 
 const (
+	auditCommandCompact  auditCommandName = "compact"
 	auditCommandMaintain auditCommandName = "maintain"
 	auditCommandStatus   auditCommandName = "status"
 )
 
 func runAudit(args []string, stdout io.Writer, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "usage: agent-gate audit status | maintain --dry-run")
+		fmt.Fprintln(stderr, "usage: agent-gate audit status | maintain | compact")
 		return 2
 	}
 	cfg, err := config.Load()
@@ -33,6 +34,8 @@ func runAudit(args []string, stdout io.Writer, stderr io.Writer) int {
 		return 1
 	}
 	switch auditCommandName(args[0]) {
+	case auditCommandCompact:
+		return runAuditCompact(args[1:], stdout, stderr, cfg)
 	case auditCommandStatus:
 		return runAuditStatus(args[1:], stdout, stderr, cfg)
 	case auditCommandMaintain:
@@ -41,6 +44,53 @@ func runAudit(args []string, stdout io.Writer, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "agent-gate audit: unknown subcommand %q\n", args[0])
 		return 2
 	}
+}
+
+func runAuditCompact(
+	args []string,
+	stdout io.Writer,
+	stderr io.Writer,
+	cfg *config.Config,
+) int {
+	flags := flag.NewFlagSet("audit compact", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	var dryRun bool
+	var apply bool
+	flags.BoolVar(&dryRun, "dry-run", false, "preview compaction without writing")
+	flags.BoolVar(&apply, "apply", false, "apply incremental compaction")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 || dryRun == apply {
+		fmt.Fprintln(stderr, "usage: agent-gate audit compact --dry-run | --apply")
+		return 2
+	}
+	policy := cfg.AuditStoragePolicy()
+	if dryRun {
+		plan, err := auditmaintenance.PreviewCompact(
+			context.Background(),
+			cfg.AuditSQLitePath(),
+			policy.MaintenanceBatchRows,
+		)
+		if err != nil {
+			fmt.Fprintf(stderr, "agent-gate audit compact: %v\n", err)
+			return 1
+		}
+		writeAuditCompactPlan(stdout, plan)
+		return 0
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	result, err := auditmaintenance.Compact(ctx, auditmaintenance.ApplyOptions{
+		Path: cfg.AuditSQLitePath(), Policy: policy, Now: time.Now().UTC(),
+		Owner: "agent-gate-cli", LeaseTTL: 5 * time.Minute, Log: nil,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "agent-gate audit compact: %v\n", err)
+		return 1
+	}
+	writeAuditCompactResult(stdout, result)
+	return 0
 }
 
 func runAuditStatus(
@@ -140,12 +190,29 @@ func writeAuditResult(writer io.Writer, result auditmaintenance.Result) {
 	_, _ = fmt.Fprintf(writer, "detail graphs: %d\n", result.DetailGraphs)
 	_, _ = fmt.Fprintf(writer, "summary graphs: %d\n", result.SummaryGraphs)
 	_, _ = fmt.Fprintf(writer, "size state: %s\n", result.SizeState)
+	_, _ = fmt.Fprintf(writer, "reclaimed bytes: %d\n", result.ReclaimedBytes)
 	if result.ErrorClass != "" {
 		_, _ = fmt.Fprintf(writer, "error class: %s\n", result.ErrorClass)
 	}
 	if result.NextDueAt != nil {
 		_, _ = fmt.Fprintf(writer, "next due at: %s\n", result.NextDueAt.Format(time.RFC3339Nano))
 	}
+}
+
+func writeAuditCompactPlan(writer io.Writer, plan auditmaintenance.CompactPlan) {
+	_, _ = fmt.Fprintf(writer, "auto-vacuum mode: %d\n", plan.AutoVacuumMode)
+	_, _ = fmt.Fprintf(writer, "free pages: %d\n", plan.FreePages)
+	_, _ = fmt.Fprintf(writer, "pages to reclaim: %d\n", plan.PagesToReclaim)
+	if plan.FullModeRequired {
+		_, _ = fmt.Fprintln(writer, "full compaction needed: yes")
+	} else {
+		_, _ = fmt.Fprintln(writer, "full compaction needed: no")
+	}
+}
+
+func writeAuditCompactResult(writer io.Writer, result auditmaintenance.Result) {
+	writeAuditCompactPlan(writer, result.CompactPlan)
+	writeAuditResult(writer, result)
 }
 
 func writeAuditStatus(writer io.Writer, status auditmaintenance.Status) {

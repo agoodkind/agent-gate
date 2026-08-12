@@ -41,15 +41,17 @@ type ApplyOptions struct {
 
 // Result describes committed work and its immutable plan.
 type Result struct {
-	RunID         string     `json:"run_id"`
-	Plan          Plan       `json:"plan"`
-	DetailGraphs  int64      `json:"detail_graphs"`
-	SummaryGraphs int64      `json:"summary_graphs"`
-	SizeState     SizeState  `json:"size_state"`
-	Result        string     `json:"result"`
-	ErrorClass    string     `json:"error_class,omitempty"`
-	NextDueAt     *time.Time `json:"next_due_at,omitempty"`
-	Err           error      `json:"-"`
+	RunID          string      `json:"run_id"`
+	Plan           Plan        `json:"plan"`
+	CompactPlan    CompactPlan `json:"compact_plan"`
+	DetailGraphs   int64       `json:"detail_graphs"`
+	SummaryGraphs  int64       `json:"summary_graphs"`
+	ReclaimedBytes int64       `json:"reclaimed_bytes"`
+	SizeState      SizeState   `json:"size_state"`
+	Result         string      `json:"result"`
+	ErrorClass     string      `json:"error_class,omitempty"`
+	NextDueAt      *time.Time  `json:"next_due_at,omitempty"`
+	Err            error       `json:"-"`
 }
 
 // Apply demotes and deletes eligible audit graphs in bounded transactions.
@@ -100,7 +102,8 @@ func Apply(ctx context.Context, options ApplyOptions) (result Result, returnErr 
 		return Result{}, err
 	}
 	result = Result{
-		RunID: runID, Plan: plan, DetailGraphs: 0, SummaryGraphs: 0,
+		RunID: runID, Plan: plan, CompactPlan: emptyCompactPlan(),
+		DetailGraphs: 0, SummaryGraphs: 0, ReclaimedBytes: 0,
 		SizeState: SizeStateUnknown, Result: "running", ErrorClass: "",
 		NextDueAt: nil, Err: nil,
 	}
@@ -145,19 +148,22 @@ func Apply(ctx context.Context, options ApplyOptions) (result Result, returnErr 
 		)
 		result.SummaryGraphs += sizeGraphs
 	}
+	if err == nil {
+		err = compactAfterApply(ctx, database, lease, options, &result)
+	}
 	return finishApply(ctx, database, options, result, err)
 }
 
 func unknownResult() Result {
 	return Result{
-		RunID: "",
+		RunID: "", CompactPlan: emptyCompactPlan(),
 		Plan: Plan{
 			PlannedAt: time.Time{}, PolicyHash: "", DetailCutoff: nil,
 			SummaryCutoff: time.Time{}, DetailCandidateGraphs: 0,
 			SummaryCandidateGraphs: 0, ProtectedGraphs: 0, ProtectedBytes: 0,
 			EstimatedDeleteBytes: 0,
 		},
-		DetailGraphs: 0, SummaryGraphs: 0,
+		DetailGraphs: 0, SummaryGraphs: 0, ReclaimedBytes: 0,
 		SizeState: SizeStateUnknown, Result: "", ErrorClass: "",
 		NextDueAt: nil, Err: nil,
 	}
@@ -863,11 +869,11 @@ func recordTerminalRun(
 		insert into audit_maintenance_runs (
 			run_id, planned_at, started_at, completed_at, policy_hash, plan_json,
 			detail_graphs, summary_graphs, reclaimed_bytes, result, error_class
-		) values (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+		) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, result.RunID, result.Plan.PlannedAt.Format(time.RFC3339Nano),
 		result.Plan.PlannedAt.Format(time.RFC3339Nano),
 		completedAt.UTC().Format(time.RFC3339Nano), result.Plan.PolicyHash,
-		string(planJSON), result.DetailGraphs, result.SummaryGraphs,
+		string(planJSON), result.DetailGraphs, result.SummaryGraphs, result.ReclaimedBytes,
 		result.Result, result.ErrorClass)
 	if err != nil {
 		return classifyMaintenanceWriteError("record terminal audit maintenance run", err)
@@ -890,11 +896,12 @@ func recordRunCompletion(
 	}
 	_, err := database.ExecContext(ctx, `
 		update audit_maintenance_runs set completed_at = ?, detail_graphs = ?,
-			summary_graphs = ?, reclaimed_bytes = 0, result = ?, error_class = ?,
+			summary_graphs = ?, reclaimed_bytes = ?, result = ?, error_class = ?,
 			next_due_at = ?
 		where run_id = ?
 	`, completedAt.UTC().Format(time.RFC3339Nano), result.DetailGraphs,
-		result.SummaryGraphs, result.Result, result.ErrorClass, nextDue, result.RunID)
+		result.SummaryGraphs, result.ReclaimedBytes, result.Result, result.ErrorClass,
+		nextDue, result.RunID)
 	if err != nil {
 		return classifyMaintenanceWriteError("record audit maintenance completion", err)
 	}
@@ -960,14 +967,14 @@ func classifyRunError(err error) string {
 
 func deferredResult(err error) Result {
 	return Result{
-		RunID: "",
+		RunID: "", CompactPlan: emptyCompactPlan(),
 		Plan: Plan{
 			PlannedAt: time.Time{}, PolicyHash: "", DetailCutoff: nil,
 			SummaryCutoff: time.Time{}, DetailCandidateGraphs: 0,
 			SummaryCandidateGraphs: 0, ProtectedGraphs: 0, ProtectedBytes: 0,
 			EstimatedDeleteBytes: 0,
 		},
-		DetailGraphs: 0, SummaryGraphs: 0,
+		DetailGraphs: 0, SummaryGraphs: 0, ReclaimedBytes: 0,
 		SizeState: SizeStateUnknown, Result: "deferred", ErrorClass: "busy",
 		NextDueAt: nil, Err: err,
 	}
