@@ -3,6 +3,7 @@ package daemon
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -488,6 +489,54 @@ func TestRuntimeSnapshotReplayFailureDoesNotAbortStartup(t *testing.T) {
 	if err := openedStore.Handle().PingContext(context.Background()); err != nil {
 		t.Fatalf("intake store should stay open after a background replay failure: %v", err)
 	}
+}
+
+func TestDaemonStartsAfterLegacyOrphanQuarantine(t *testing.T) {
+	setDaemonTestDirs(t)
+	databasePath := installDaemonLegacyOrphanFixture(t)
+	cfg := daemonTestConfig(t)
+	cfg.Audit.Outputs.SQLite.Path = databasePath
+
+	server, err := New(newDiscardLogger(), cfg)
+	if err != nil {
+		t.Fatalf("New with legacy orphan database: %v", err)
+	}
+	t.Cleanup(func() { server.Close() })
+
+	store := daemonSQLiteStore(t, server)
+	var count int
+	if err := store.Handle().QueryRowContext(t.Context(), `
+		select count(*) from audit_migration_quarantined_evaluations
+	`).Scan(&count); err != nil {
+		t.Fatalf("count daemon legacy quarantine: %v", err)
+	}
+	if count != 20 {
+		t.Fatalf("daemon quarantined evaluations = %d, want 20", count)
+	}
+}
+
+func installDaemonLegacyOrphanFixture(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "audit.db")
+	database, err := sql.Open("sqlite3", path)
+	if err != nil {
+		t.Fatalf("open legacy orphan database: %v", err)
+	}
+	for _, name := range []string{"legacy_v1.sql", "legacy_orphan_evaluations.sql"} {
+		fixture, err := os.ReadFile(filepath.Join("..", "auditstorage", "testdata", name))
+		if err != nil {
+			_ = database.Close()
+			t.Fatalf("read %s: %v", name, err)
+		}
+		if _, err := database.ExecContext(t.Context(), string(fixture)); err != nil {
+			_ = database.Close()
+			t.Fatalf("install %s: %v", name, err)
+		}
+	}
+	if err := database.Close(); err != nil {
+		t.Fatalf("close legacy orphan database: %v", err)
+	}
+	return path
 }
 
 func emdashDaemonTestConfig(t testing.TB) *config.Config {

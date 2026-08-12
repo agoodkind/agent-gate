@@ -12,6 +12,7 @@ type Migration struct {
 	Version             int
 	ForeignKeysDisabled bool
 	Apply               func(context.Context, *sql.Tx) error
+	AfterCommit         func(context.Context, *sql.Conn)
 }
 
 // DetailState describes whether stored detail can be returned safely.

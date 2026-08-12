@@ -14,11 +14,14 @@ const migrationTimeFormat = time.RFC3339Nano
 const migrationCleanupTimeout = 5 * time.Second
 
 var migrations = []Migration{
-	{Version: 1, ForeignKeysDisabled: false, Apply: migrateV1},
-	{Version: 2, ForeignKeysDisabled: true, Apply: migrateIntakeV2},
-	{Version: 3, ForeignKeysDisabled: true, Apply: migrateEvaluationV3},
-	{Version: 4, ForeignKeysDisabled: true, Apply: migrateOutboxV4},
-	{Version: 5, ForeignKeysDisabled: false, Apply: migrateMaintenanceV5},
+	{
+		Version: 1, ForeignKeysDisabled: false, Apply: migrateV1,
+		AfterCommit: reportLegacyQuarantine,
+	},
+	{Version: 2, ForeignKeysDisabled: true, Apply: migrateIntakeV2, AfterCommit: nil},
+	{Version: 3, ForeignKeysDisabled: true, Apply: migrateEvaluationV3, AfterCommit: nil},
+	{Version: 4, ForeignKeysDisabled: true, Apply: migrateOutboxV4, AfterCommit: nil},
+	{Version: 5, ForeignKeysDisabled: false, Apply: migrateMaintenanceV5, AfterCommit: nil},
 }
 
 var migrationNow = time.Now
@@ -256,6 +259,9 @@ func applyMigrationOnConnection(
 	}
 	if err := transaction.Commit(); err != nil {
 		return wrapError(fmt.Sprintf("commit audit migration %d", migration.Version), err)
+	}
+	if migration.AfterCommit != nil {
+		migration.AfterCommit(context.WithoutCancel(ctx), connection)
 	}
 	return nil
 }
