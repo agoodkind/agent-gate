@@ -6,6 +6,9 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"goodkind.io/agent-gate/internal/auditmaintenance"
@@ -91,13 +94,29 @@ func runAuditMaintain(
 	flags := flag.NewFlagSet("audit maintain", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	var dryRun bool
+	var apply bool
 	flags.BoolVar(&dryRun, "dry-run", false, "preview maintenance without writing")
+	flags.BoolVar(&apply, "apply", false, "apply maintenance")
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
-	if flags.NArg() != 0 || !dryRun {
-		fmt.Fprintln(stderr, "usage: agent-gate audit maintain --dry-run")
+	if flags.NArg() != 0 || dryRun == apply {
+		fmt.Fprintln(stderr, "usage: agent-gate audit maintain --dry-run | --apply")
 		return 2
+	}
+	if apply {
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		result, err := auditmaintenance.Apply(ctx, auditmaintenance.ApplyOptions{
+			Path: cfg.AuditSQLitePath(), Policy: cfg.AuditStoragePolicy(),
+			Now: time.Now().UTC(), Owner: "agent-gate-cli", LeaseTTL: 5 * time.Minute,
+		})
+		if err != nil {
+			fmt.Fprintf(stderr, "agent-gate audit maintain: %v\n", err)
+			return 1
+		}
+		writeAuditResult(stdout, result)
+		return 0
 	}
 	plan, err := auditmaintenance.Preview(
 		context.Background(), cfg.AuditSQLitePath(), cfg.AuditStoragePolicy(), time.Now().UTC(),
@@ -108,6 +127,24 @@ func runAuditMaintain(
 	}
 	writeAuditPlan(stdout, plan)
 	return 0
+}
+
+func writeAuditResult(writer io.Writer, result auditmaintenance.Result) {
+	if result.Result == "deferred" {
+		_, _ = fmt.Fprintln(writer, "maintenance deferred: another maintenance run or database writer is active")
+	}
+	if result.RunID != "" {
+		_, _ = fmt.Fprintf(writer, "run id: %s\n", result.RunID)
+	}
+	_, _ = fmt.Fprintf(writer, "result: %s\n", result.Result)
+	_, _ = fmt.Fprintf(writer, "detail graphs: %d\n", result.DetailGraphs)
+	_, _ = fmt.Fprintf(writer, "summary graphs: %d\n", result.SummaryGraphs)
+	if result.ErrorClass != "" {
+		_, _ = fmt.Fprintf(writer, "error class: %s\n", result.ErrorClass)
+	}
+	if result.NextDueAt != nil {
+		_, _ = fmt.Fprintf(writer, "next due at: %s\n", result.NextDueAt.Format(time.RFC3339Nano))
+	}
 }
 
 func writeAuditStatus(writer io.Writer, status auditmaintenance.Status) {

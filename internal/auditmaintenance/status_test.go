@@ -103,25 +103,16 @@ func TestReadStatusUsesLastSuccessfulCompletionForDueTime(t *testing.T) {
 	fixture := createMaintenanceFixture(t)
 	database := openReadWriteDatabase(t, fixture.path)
 	if _, err := database.ExecContext(t.Context(), `
-		create table audit_maintenance_runs (
-			run_id text primary key,
-			planned_at text not null,
-			started_at text not null,
-			completed_at text,
-			policy_hash text not null,
-			plan_json text not null,
-			detail_graphs integer not null default 0,
-			summary_graphs integer not null default 0,
-			reclaimed_bytes integer not null default 0,
-			result text not null,
-			error_class text not null default '',
-			next_due_at text
-		);
-		insert into audit_maintenance_runs values
+		delete from audit_maintenance_runs;
+		insert into audit_maintenance_runs (
+			run_id, planned_at, started_at, completed_at, policy_hash, plan_json,
+			detail_graphs, summary_graphs, reclaimed_bytes, result, error_class,
+			next_due_at
+		) values
 			('success', '2030-08-28T09:00:00Z', '2030-08-28T09:00:01Z',
 			 '2030-08-28T09:00:02Z', 'policy', '{}', 1, 0, 0, 'success', '', null),
 			('failed', '2030-08-30T09:00:00Z', '2030-08-30T09:00:01Z',
-			 '2030-08-30T09:00:02Z', 'policy', '{}', 0, 0, 0, 'error', 'busy', null)
+			 '2030-08-30T09:00:02Z', 'policy', '{}', 0, 0, 0, 'failed', 'busy', null)
 	`); err != nil {
 		t.Fatalf("insert maintenance runs: %v", err)
 	}
