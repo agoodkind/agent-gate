@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"goodkind.io/go-makefile/selfupdate"
@@ -68,6 +69,33 @@ func TestReleaseAssetFindsCurrentPlatform(t *testing.T) {
 	}
 	if asset.BrowserDownloadURL != "amd" {
 		t.Fatalf("URL = %q, want %q", asset.BrowserDownloadURL, "amd")
+	}
+}
+
+func TestPrepareDirectoriesUsesWorkflowRepository(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	check := &updateCheck{
+		environment: environment{repository: "fork-owner/agent-gate"},
+		testRoot:    root,
+		testHome:    filepath.Join(root, "home"),
+		installBin:  filepath.Join(root, "bin", "agent-gate"),
+		stateRoot:   filepath.Join(root, "state"),
+		configRoot:  filepath.Join(root, "config"),
+		cacheRoot:   filepath.Join(root, "cache"),
+		runtimeRoot: filepath.Join(root, "run"),
+	}
+
+	if err := check.prepareDirectories(); err != nil {
+		t.Fatalf("prepareDirectories() error = %v", err)
+	}
+	configPath := filepath.Join(check.configRoot, "agent-gate", "config.toml")
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if !strings.Contains(string(content), `repo = "fork-owner/agent-gate"`) {
+		t.Fatalf("config = %q, want workflow repository", content)
 	}
 }
 

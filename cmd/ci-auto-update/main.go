@@ -38,14 +38,14 @@ const (
 	testRootPattern     = "agent-gate-auto-update-"
 )
 
-const daemonConfig = `[audit]
+const daemonConfigTemplate = `[audit]
 enabled = false
 
 [update]
 enabled = true
 mode = "apply"
 interval = "24h"
-repo = "agoodkind/agent-gate"
+repo = %q
 allow_prerelease = true
 `
 
@@ -341,6 +341,7 @@ func (check *updateCheck) prepareDirectories() error {
 		slog.Warn("ci.auto_update.config_directory_create_failed", "path", configPath, "err", err)
 		return fmt.Errorf("create daemon config directory: %w", err)
 	}
+	daemonConfig := fmt.Sprintf(daemonConfigTemplate, check.environment.repository)
 	if err := os.WriteFile(configPath, []byte(daemonConfig), 0o600); err != nil {
 		slog.Warn("ci.auto_update.config_write_failed", "path", configPath, "err", err)
 		return fmt.Errorf("write daemon config: %w", err)
