@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 
@@ -55,7 +56,7 @@ func TestOpenSQLiteMigratesLegacyIntakeDetail(t *testing.T) {
 		}
 		assertLegacyDetailValues(t, legacy)
 		assertDetailRows(t, store.Handle(), legacy.EventID, auditstorage.DetailStateAvailable)
-		assertSchemaVersion(t, store.Handle(), 3)
+		assertSchemaVersion(t, store.Handle(), 4)
 		appliedAt, err := auditstorage.MigrationAppliedAt(t.Context(), store.Handle(), 2)
 		if err != nil {
 			t.Fatalf("MigrationAppliedAt first open: %v", err)
@@ -172,6 +173,53 @@ func TestPendingReplayProtectsDisabledIntakeDetail(t *testing.T) {
 		t.Fatalf("replayed receipt = %d, want %d", replayed.ReceiptID, result.ReceiptID)
 	}
 	assertRecordDetailEqual(t, replayed, record)
+}
+
+func TestDuplicateAppendRestoresDemotedDetailForDeferredReplay(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.db")
+	store := openDetailStore(t, path, minimalDetailPolicy())
+	record := populatedDetailRecord("event-duplicate-replay")
+	first, err := store.Append(t.Context(), record)
+	if err != nil {
+		t.Fatalf("Append first: %v", err)
+	}
+	hotEvaluation := atomicEvaluationRecord(first, "evaluation-duplicate-first", "hot", 1)
+	if err := store.CommitHotEvaluation(
+		t.Context(), first.EventID, first.ReceiptID, false, hotEvaluation,
+	); err != nil {
+		t.Fatalf("CommitHotEvaluation: %v", err)
+	}
+	assertDisabledGraphDetailDemoted(t, store.Handle(), first.EventID, 1)
+
+	duplicate, err := store.Append(t.Context(), record)
+	if err != nil {
+		t.Fatalf("Append duplicate: %v", err)
+	}
+	if duplicate.Inserted || duplicate.EventID != first.EventID ||
+		duplicate.ReceiptID <= first.ReceiptID {
+		t.Fatalf("duplicate append = %+v, first = %+v", duplicate, first)
+	}
+	if err := store.MarkDeferredPending(
+		t.Context(), duplicate.EventID, duplicate.ReceiptID,
+	); err != nil {
+		t.Fatalf("MarkDeferredPending duplicate: %v", err)
+	}
+	replayed, claim, err := store.ClaimDeferred(
+		t.Context(), duplicate.ReceiptID, "duplicate-owner", 30*time.Second,
+	)
+	if err != nil {
+		t.Fatalf("ClaimDeferred duplicate: %v", err)
+	}
+	if claim.ReceiptID != duplicate.ReceiptID || claim.EventID != first.EventID {
+		t.Fatalf("duplicate claim = %+v", claim)
+	}
+	assertRecordDetailEqual(t, replayed, record)
+	assertDetailRows(
+		t,
+		store.Handle(),
+		first.EventID,
+		auditstorage.DetailStateProtected,
+	)
 }
 
 func TestAppendRollsBackSummaryWhenDetailWriteFails(t *testing.T) {

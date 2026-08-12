@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -16,6 +17,9 @@ var ErrDeferredAuditClaimUnavailable = errors.New("deferred audit claim unavaila
 
 // ErrDeferredAuditClaimLost means a processor no longer owns the delivery attempt.
 var ErrDeferredAuditClaimLost = errors.New("deferred audit claim lost")
+
+// ErrDeferredAuditIntegrity means required live delivery detail is missing.
+var ErrDeferredAuditIntegrity = errors.New("deferred audit integrity error")
 
 // ListPendingDeferredAudit returns receipt ids with undelivered audit entries.
 func (s *Store) ListPendingDeferredAudit(ctx context.Context, limit int) ([]int64, error) {
@@ -109,9 +113,13 @@ func readDeferredAuditEntries(
 	receiptID int64,
 ) ([]DeferredAuditEntry, error) {
 	rows, err := transaction.QueryContext(ctx, `
-		select entry_index, audit_event_id, payload_json
-		from deferred_audit_outbox_entries
-		where receipt_id = ? and delivered_at is null order by entry_index
+		select entry.entry_index, entry.audit_event_id, detail.payload_json
+		from deferred_audit_outbox_entries entry
+		left join deferred_audit_outbox_entry_details detail
+			on detail.receipt_id = entry.receipt_id
+			and detail.entry_index = entry.entry_index
+		where entry.receipt_id = ? and entry.delivered_at is null
+		order by entry.entry_index
 	`, receiptID)
 	if err != nil {
 		return nil, wrapError("read deferred audit entries", err)
@@ -124,6 +132,13 @@ func readDeferredAuditEntries(
 		var payload []byte
 		if err := rows.Scan(&entry.Index, &auditEventID, &payload); err != nil {
 			return nil, wrapError("scan deferred audit entry", err)
+		}
+		if payload == nil {
+			integrityErr := fmt.Errorf(
+				"%w: receipt %d entry %d has no live payload",
+				ErrDeferredAuditIntegrity, receiptID, entry.Index,
+			)
+			return nil, wrapError("read deferred audit entry integrity", integrityErr)
 		}
 		if err := json.Unmarshal(payload, &entry.Entry); err != nil {
 			return nil, wrapError("decode deferred audit entry", err)
@@ -189,7 +204,12 @@ func (s *Store) MarkDeferredAuditEntryDelivered(
 // CompleteDeferredAudit completes an outbox after every entry is delivered.
 func (s *Store) CompleteDeferredAudit(ctx context.Context, claim DeferredAuditClaim) error {
 	now := intakeNow().UTC()
-	result, err := s.db.ExecContext(ctx, `
+	transaction, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return wrapLoggedError(ctx, s.log, "begin deferred audit completion", err)
+	}
+	defer func() { _ = transaction.Rollback() }()
+	result, err := transaction.ExecContext(ctx, `
 		update deferred_audit_outbox
 		set state = 'complete', completed_at = ?, claim_owner = null, claim_expires_at = null
 		where receipt_id = ? and event_id = ? and state = 'pending'
@@ -204,7 +224,21 @@ func (s *Store) CompleteDeferredAudit(ctx context.Context, claim DeferredAuditCl
 	if err != nil {
 		return wrapLoggedError(ctx, s.log, "complete deferred audit", err)
 	}
-	return deferredAuditClaimResult(result)
+	if err := deferredAuditClaimResult(result); err != nil {
+		return err
+	}
+	if err := s.demoteDisabledDetailIfTerminal(
+		ctx,
+		transaction,
+		claim.EventID,
+		now,
+	); err != nil {
+		return err
+	}
+	if err := transaction.Commit(); err != nil {
+		return wrapLoggedError(ctx, s.log, "commit deferred audit completion", err)
+	}
+	return nil
 }
 
 // ReleaseDeferredAuditClaim makes failed delivery immediately retryable.
@@ -231,7 +265,7 @@ func deferredAuditClaimResult(result sql.Result) error {
 	return nil
 }
 
-func insertDeferredAuditOutbox(
+func (s *Store) insertDeferredAuditOutbox(
 	ctx context.Context,
 	transaction *sql.Tx,
 	claim DeferredClaim,
@@ -258,12 +292,21 @@ func insertDeferredAuditOutbox(
 		if err != nil {
 			return wrapError("encode deferred audit entry", err)
 		}
+		payloadRecorded := s.policy.FullDetailRetention > 0
 		if _, err := transaction.ExecContext(ctx, `
 			insert into deferred_audit_outbox_entries (
-				receipt_id, entry_index, audit_event_id, payload_json, delivered_at
-			) values (?, ?, ?, ?, null)
-		`, claim.ReceiptID, index, entry.Event.EventID, payload); err != nil {
+				receipt_id, entry_index, audit_event_id, delivered_at,
+				payload_recorded, payload_available, payload_state_changed_at
+			) values (?, ?, ?, null, ?, 1, ?)
+		`, claim.ReceiptID, index, entry.Event.EventID, payloadRecorded, now); err != nil {
 			return wrapError("insert deferred audit entry", err)
+		}
+		if _, err := transaction.ExecContext(ctx, `
+			insert into deferred_audit_outbox_entry_details (
+				receipt_id, entry_index, payload_json
+			) values (?, ?, ?)
+		`, claim.ReceiptID, index, payload); err != nil {
+			return wrapError("insert deferred audit entry detail", err)
 		}
 	}
 	return nil

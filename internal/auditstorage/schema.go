@@ -11,10 +11,13 @@ import (
 
 const migrationTimeFormat = time.RFC3339Nano
 
+const migrationCleanupTimeout = 5 * time.Second
+
 var migrations = []Migration{
 	{Version: 1, ForeignKeysDisabled: false, Apply: migrateV1},
 	{Version: 2, ForeignKeysDisabled: true, Apply: migrateIntakeV2},
 	{Version: 3, ForeignKeysDisabled: true, Apply: migrateEvaluationV3},
+	{Version: 4, ForeignKeysDisabled: true, Apply: migrateOutboxV4},
 }
 
 var migrationNow = time.Now
@@ -161,20 +164,49 @@ func applyMigration(
 	database *sql.DB,
 	migration Migration,
 ) (returnErr error) {
+	connection, err := database.Conn(ctx)
+	if err != nil {
+		return wrapError(fmt.Sprintf("reserve audit migration %d connection", migration.Version), err)
+	}
+	defer func() {
+		if err := connection.Close(); err != nil && returnErr == nil {
+			returnErr = wrapError(
+				fmt.Sprintf("close audit migration %d connection", migration.Version),
+				err,
+			)
+		}
+	}()
+	return applyMigrationOnConnection(ctx, connection, migration)
+}
+
+func applyMigrationOnConnection(
+	ctx context.Context,
+	connection *sql.Conn,
+	migration Migration,
+) (returnErr error) {
 	if migration.ForeignKeysDisabled {
-		if _, err := database.ExecContext(ctx, `pragma foreign_keys = off`); err != nil {
+		if _, err := connection.ExecContext(ctx, `pragma foreign_keys = off`); err != nil {
 			return wrapError(fmt.Sprintf("disable audit migration %d foreign keys", migration.Version), err)
 		}
 		defer func() {
-			if _, err := database.ExecContext(ctx, `pragma foreign_keys = on`); err != nil && returnErr == nil {
-				returnErr = wrapError(
-					fmt.Sprintf("restore audit migration %d foreign keys", migration.Version),
-					err,
-				)
+			cleanupContext, cancel := context.WithTimeout(
+				context.WithoutCancel(ctx),
+				migrationCleanupTimeout,
+			)
+			defer cancel()
+			if err := restoreMigrationForeignKeys(
+				cleanupContext,
+				connection,
+				migration.Version,
+			); err != nil {
+				returnErr = errors.Join(returnErr, err)
 			}
 		}()
 	}
-	transaction, err := database.BeginTx(ctx, nil)
+	if err := ctx.Err(); err != nil {
+		return wrapError(fmt.Sprintf("begin audit migration %d", migration.Version), err)
+	}
+	transaction, err := connection.BeginTx(context.WithoutCancel(ctx), nil)
 	if err != nil {
 		return wrapError(fmt.Sprintf("begin audit migration %d", migration.Version), err)
 	}
@@ -205,8 +237,29 @@ func applyMigration(
 	if _, err := transaction.ExecContext(ctx, userVersionStatement); err != nil {
 		return wrapError(fmt.Sprintf("record audit user version %d", migration.Version), err)
 	}
+	if err := ctx.Err(); err != nil {
+		return wrapError(fmt.Sprintf("commit audit migration %d", migration.Version), err)
+	}
 	if err := transaction.Commit(); err != nil {
 		return wrapError(fmt.Sprintf("commit audit migration %d", migration.Version), err)
+	}
+	return nil
+}
+
+func restoreMigrationForeignKeys(
+	ctx context.Context,
+	connection *sql.Conn,
+	version int,
+) error {
+	if _, err := connection.ExecContext(ctx, `pragma foreign_keys = on`); err != nil {
+		return wrapError(fmt.Sprintf("restore audit migration %d foreign keys", version), err)
+	}
+	var enabled int
+	if err := connection.QueryRowContext(ctx, `pragma foreign_keys`).Scan(&enabled); err != nil {
+		return wrapError(fmt.Sprintf("verify audit migration %d foreign keys", version), err)
+	}
+	if enabled != 1 {
+		return fmt.Errorf("audit migration %d foreign keys remain disabled", version)
 	}
 	return nil
 }

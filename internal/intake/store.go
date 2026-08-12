@@ -304,10 +304,8 @@ func (s *Store) Append(ctx context.Context, record Record) (AppendResult, error)
 		return AppendResult{}, wrapLoggedError(ctx, s.log, "read intake append rows", err)
 	}
 	receivedAt := intakeNow().UTC()
-	if rowsAffected == 1 {
-		if err := s.insertDetail(ctx, tx, record, receivedAt); err != nil {
-			return AppendResult{}, err
-		}
+	if err := s.insertDetail(ctx, tx, record, receivedAt); err != nil {
+		return AppendResult{}, err
 	}
 	receiptResult, err := tx.ExecContext(ctx, `
 			insert into intake_receipts (event_id, received_at)
@@ -352,6 +350,7 @@ func (s *Store) insertDetail(
 		if _, err := transaction.ExecContext(ctx, `
 			insert into intake_event_details (event_id, detail_class, content)
 			values (?, ?, ?)
+			on conflict(event_id, detail_class) do nothing
 		`, record.EventID, detail.class, detail.content); err != nil {
 			return wrapLoggedError(ctx, s.log, "insert intake event detail", err)
 		}
@@ -365,6 +364,11 @@ func (s *Store) insertDetail(
 		insert into intake_event_detail_manifest (
 			event_id, recorded_classes_json, available_classes_json, state, state_changed_at
 		) values (?, ?, ?, ?, ?)
+		on conflict(event_id) do update set
+			recorded_classes_json = excluded.recorded_classes_json,
+			available_classes_json = excluded.available_classes_json,
+			state = excluded.state,
+			state_changed_at = excluded.state_changed_at
 	`, record.EventID, intakeDetailClassesJSON, intakeDetailClassesJSON, state,
 		changedAt.Format(time.RFC3339Nano)); err != nil {
 		return wrapLoggedError(ctx, s.log, "insert intake event detail manifest", err)

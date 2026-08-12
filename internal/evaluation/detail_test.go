@@ -39,8 +39,8 @@ func TestOpenSQLiteMigratesLegacyEvaluationDetail(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SchemaVersion: %v", err)
 	}
-	if version != 3 {
-		t.Fatalf("schema version = %d, want 3", version)
+	if version != 4 {
+		t.Fatalf("schema version = %d, want 4", version)
 	}
 	assertLegacyEvaluationDetail(t, store.Handle())
 	assertLegacyEvaluationRecord(t, store)
