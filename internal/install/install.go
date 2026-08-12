@@ -40,6 +40,20 @@ const (
 	defaultGenericJSONHooks = `{}`
 )
 
+const codexHookTrustGuidance = `agent-gate install: Codex hooks require review before they can run.
+Codex Desktop:
+  1. Open Settings > Hooks.
+  2. Click Reload hooks.
+  3. Under From Config, open User config.
+  4. Click Trust for each agent-gate hook marked New hook or Hook changed since last trusted.
+Codex CLI:
+  1. Restart Codex CLI.
+  2. Run /hooks.
+  3. Select each event containing an agent-gate hook and press Enter.
+  4. Select each agent-gate hook and press t to trust it.
+OpenAI docs: https://developers.openai.com/codex/hooks/
+`
+
 type servicePlatform string
 
 const (
@@ -217,6 +231,9 @@ func ApplyHookInstallation(plan *HookInstallationPlan) error {
 			write.targetPath,
 			write.provider,
 		)
+		if write.provider == "codex" {
+			_, _ = fmt.Fprint(plan.writer, codexHookTrustGuidance)
+		}
 	}
 	return nil
 }

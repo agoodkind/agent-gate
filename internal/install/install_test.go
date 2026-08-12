@@ -552,6 +552,45 @@ func eventCommands(t *testing.T, event json.RawMessage) []string {
 	return commands
 }
 
+func TestInstallHooksPrintsCodexTrustInstructionsOnEveryRun(t *testing.T) {
+	binPath := writeExecutable(t, filepath.Join(t.TempDir(), "agent-gate"))
+	homeDir := t.TempDir()
+	configPath := filepath.Join(homeDir, ".codex", "config.toml")
+	var output strings.Builder
+
+	options := DefaultHooksOptions(binPath)
+	options.HomeDir = homeDir
+	options.Stdout = &output
+	options.InstallClaude = false
+	options.InstallCursor = false
+	options.InstallGemini = false
+	options.InstallCopilot = false
+
+	want := "agent-gate install: updated " + configPath + " (codex hooks)\n" + `agent-gate install: Codex hooks require review before they can run.
+Codex Desktop:
+  1. Open Settings > Hooks.
+  2. Click Reload hooks.
+  3. Under From Config, open User config.
+  4. Click Trust for each agent-gate hook marked New hook or Hook changed since last trusted.
+Codex CLI:
+  1. Restart Codex CLI.
+  2. Run /hooks.
+  3. Select each event containing an agent-gate hook and press Enter.
+  4. Select each agent-gate hook and press t to trust it.
+OpenAI docs: https://developers.openai.com/codex/hooks/
+`
+
+	for runNumber := 1; runNumber <= 2; runNumber++ {
+		output.Reset()
+		if err := installHooks(options); err != nil {
+			t.Fatalf("InstallHooks run %d: %v", runNumber, err)
+		}
+		if got := output.String(); got != want {
+			t.Fatalf("run %d output = %q, want %q", runNumber, got, want)
+		}
+	}
+}
+
 func TestInstallHooksUpdatesCodexTomlIdempotently(t *testing.T) {
 	binPath := writeExecutable(t, filepath.Join(t.TempDir(), "agent-gate"))
 	homeDir := t.TempDir()
