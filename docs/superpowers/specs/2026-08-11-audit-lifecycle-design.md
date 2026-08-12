@@ -390,6 +390,22 @@ command prints an exact recovery path for either failure phase.
 An installation without `[audit.storage]` resolves to `balanced`. The daemon
 does not preserve the former unlimited behavior implicitly.
 
+Pre-versioned databases can contain completed evaluations whose durable intake
+parent is missing. Version one preserves each recognized orphan evaluation and
+its layers, labels, deferred audit header, and deferred audit entries in typed
+quarantine tables. It verifies each copied row before removing the invalid
+canonical graph.
+
+The repair runs inside the version-one transaction. A later failure restores
+the original rows and removes the incomplete quarantine. A successful repair
+records the missing parent reason, reports the retained evaluation count, and
+keeps the preserved values available for direct SQLite inspection.
+
+Only an evaluation missing its intake event or matching receipt qualifies for
+this repair. The migration still checks every foreign key before commit. An
+unrecognized violation fails startup and maintenance without deleting its
+source row. Foreign key enforcement remains active for every new write.
+
 The schema migration is transactional and idempotent. It creates summary and
 detail storage, moves existing values, adds retention metadata, verifies foreign
 keys, and records its schema version before maintenance can run.
@@ -469,7 +485,8 @@ tests establish the commands themselves.
 The four epics share this contract and decompose into small vertical issues:
 
 1. AGATE-31 adds the policy, summary and detail boundary, migration, and query
-   behavior.
+   behavior. AGATE-57 repairs recognized pre-versioned evaluation orphans before
+   later retention work can open the database.
 2. AGATE-32 adds pruning, scheduling, status, compaction, and external command
    support.
 3. AGATE-29 adds setup orchestration and end-to-end verification.

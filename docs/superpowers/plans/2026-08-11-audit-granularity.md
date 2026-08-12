@@ -13,6 +13,7 @@ The [approved design](../specs/2026-08-11-audit-lifecycle-design.md) defines the
 ## Global Constraints
 
 - Implement AGATE-33, AGATE-34, AGATE-35, AGATE-54, AGATE-55, AGATE-36, and AGATE-37 in that order.
+- Implement AGATE-57 before AGATE-41 so startup and maintenance can open affected pre-versioned databases.
 - Keep hook receipt writes durable before evaluation.
 - Preserve every pending, claimed, retryable, or undelivered payload.
 - Store cost inputs in summary rows.
@@ -120,6 +121,18 @@ internal/evaluation/query.go
 internal/evaluation/query_test.go
 cmd/agent-gate/main.go
 cmd/agent-gate/main_test.go
+~~~
+
+AGATE-57:
+
+~~~text
+internal/auditstorage/legacy_quarantine.go
+internal/auditstorage/legacy_quarantine_test.go
+internal/auditstorage/schema.go
+internal/auditstorage/v1.go
+internal/auditstorage/testdata/legacy_orphan_evaluations.sql
+internal/intake/v1_test.go
+internal/daemon/server_test.go
 ~~~
 
 ## Task 1: Resolve audit storage profiles and overrides
@@ -774,6 +787,141 @@ git add internal/evaluation cmd/agent-gate
 git commit -S -m "Guard evaluation exports against missing detail" -m "Co-authored-by: Codex <noreply@openai.com>"
 ~~~
 
+## Task 8: Repair recognized legacy foreign key violations
+
+**Ticket:** AGATE-57
+
+**Depends on:** AGATE-34
+
+**Blocks:** AGATE-41
+
+**Files:** Use the AGATE-57 file set above.
+
+- [ ] **Step 1: Reproduce the production startup failure**
+
+Create a pre-versioned SQLite fixture with 20 `gate_evaluations` rows whose
+intake event and receipt parents are absent. Give one evaluation a layer and
+label. Use a second fixture to add its deferred audit header and deferred audit
+entry with binary payload content for the fidelity test.
+
+~~~go
+func TestOpenSQLiteQuarantinesLegacyOrphanEvaluations(t *testing.T)
+func TestDaemonStartsAfterLegacyOrphanQuarantine(t *testing.T)
+~~~
+
+Open the fixture through `intake.OpenSQLiteWithOptions` and `daemon.New`. Assert
+that current code returns the version-one foreign key error before either store
+becomes available.
+
+Run:
+
+~~~sh
+go test ./internal/intake ./internal/daemon -run LegacyOrphan
+~~~
+
+Expected: FAIL with a `gate_evaluations` foreign key violation.
+
+- [ ] **Step 2: Preserve complete orphan graphs in typed quarantine**
+
+Add typed quarantine tables for evaluations, layers, labels, deferred audit
+headers, and deferred audit entries. Preserve every legacy column byte for byte.
+The evaluation row also records its source row identifier and one of these exact
+reasons:
+
+~~~text
+missing intake event
+missing intake receipt
+missing intake event and receipt
+~~~
+
+Use one version-one transaction for detection, copying, copy-count verification,
+canonical deletion, the existing full foreign key check, and migration ledger
+commit. Delete an invalid canonical evaluation only after every related copy
+matches the source row count.
+
+~~~go
+type LegacyQuarantineSummary struct {
+    EvaluationCount  int
+    LayerCount       int
+    LabelCount       int
+    OutboxCount      int
+    OutboxEntryCount int
+}
+
+func LegacyQuarantine(
+    ctx context.Context,
+    transaction *sql.Tx,
+) (LegacyQuarantineSummary, error)
+~~~
+
+The version-one migration calls this function after it ensures the legacy
+evaluation and outbox schemas. A nonzero summary produces one warning only after
+the version-one commit succeeds.
+
+- [ ] **Step 3: Keep unrecognized corruption fatal**
+
+Add a fixture whose `intake_receipts` row references a missing intake event.
+Assert migration fails, retains all canonical and quarantine source rows, records
+no schema version, and leaves `pragma user_version` unchanged.
+
+After a successful recognized repair, attempt a new orphan evaluation insert.
+Assert SQLite rejects it because foreign key enforcement remains enabled.
+
+~~~go
+func TestMigrationRejectsUnrecognizedLegacyForeignKeyViolation(t *testing.T)
+func TestMigrationEnforcesForeignKeysAfterLegacyQuarantine(t *testing.T)
+~~~
+
+- [ ] **Step 4: Prove fidelity, rollback, and idempotence**
+
+Compare every preserved scalar, text, JSON, and blob value with the fixture.
+Reopen the migrated database and assert the migration timestamp and quarantine
+counts do not change.
+
+Inject a schema failure after quarantine but before version-one commit. Assert
+the transaction restores all 20 canonical evaluations and leaves no quarantine
+table or migration ledger.
+
+Run:
+
+~~~sh
+go test ./internal/auditstorage ./internal/intake ./internal/daemon -run "LegacyOrphan|Quarantine"
+~~~
+
+Expected: PASS.
+
+- [ ] **Step 5: Verify maintenance can open the repaired database**
+
+Run the public maintenance command against the migrated fixture. Assert it
+passes migration, reports its normal maintenance result, preserves quarantine,
+and leaves `pragma foreign_key_check` empty.
+
+~~~go
+func TestAuditMaintainApplyAcceptsQuarantinedLegacyEvaluations(t *testing.T)
+~~~
+
+Run:
+
+~~~sh
+go test ./cmd/agent-gate -run QuarantinedLegacy
+make test
+make lint
+make check
+~~~
+
+Expected: all commands exit zero.
+
+- [ ] **Step 6: Commit**
+
+Stage only the AGATE-57 files. Create one signed Graphite branch with this
+message:
+
+~~~text
+Repair legacy audit foreign key violations
+
+Co-authored-by: Codex <noreply@openai.com>
+~~~
+
 ## Epic Acceptance
 
 - [ ] A config without an audit storage table resolves to balanced.
@@ -784,4 +932,6 @@ git commit -S -m "Guard evaluation exports against missing detail" -m "Co-author
 - [ ] Cost queries work through the summary window.
 - [ ] Queries expose accurate detail state.
 - [ ] Training export fails safely unless skipping is explicit.
+- [ ] Recognized legacy evaluation orphans remain queryable after migration.
+- [ ] Unrecognized foreign key violations remain fatal and unchanged.
 - [ ] Every ticket commit passes make check.

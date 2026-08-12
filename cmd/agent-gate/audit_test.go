@@ -199,6 +199,44 @@ summary_retention = "2h"
 	}
 }
 
+func TestAuditMaintainApplyAcceptsQuarantinedLegacyEvaluations(t *testing.T) {
+	setupAuditCommandEnvironment(t, "[audit.storage]\n")
+	installAuditCommandLegacyOrphanFixture(t)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := runAudit([]string{"maintain", "--apply"}, &stdout, &stderr)
+
+	if exitCode != 0 || stderr.Len() != 0 {
+		t.Fatalf("exit code/stderr = %d/%q, want 0/empty", exitCode, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "result: success") {
+		t.Fatalf("stdout = %q, want successful maintenance", stdout.String())
+	}
+	database, err := sql.Open("sqlite3", config.DefaultAuditSQLitePath())
+	if err != nil {
+		t.Fatalf("open maintained legacy database: %v", err)
+	}
+	defer func() { _ = database.Close() }()
+	var count int
+	if err := database.QueryRowContext(t.Context(), `
+		select count(*) from audit_migration_quarantined_evaluations
+	`).Scan(&count); err != nil {
+		t.Fatalf("count maintained legacy quarantine: %v", err)
+	}
+	if count != 20 {
+		t.Fatalf("maintained quarantined evaluations = %d, want 20", count)
+	}
+	rows, err := database.QueryContext(t.Context(), `pragma foreign_key_check`)
+	if err != nil {
+		t.Fatalf("foreign_key_check: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+	if rows.Next() {
+		t.Fatal("foreign_key_check returned a violation after maintenance")
+	}
+}
+
 func TestRunAuditMaintainApplyDefersDuringSchemaMigrationContention(t *testing.T) {
 	setupAuditCommandEnvironment(t, "[audit.storage]\n")
 	createAuditCommandDatabase(t)
@@ -520,6 +558,31 @@ func createAuditCommandDatabase(t *testing.T) {
 	}
 	if err := store.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
+	}
+}
+
+func installAuditCommandLegacyOrphanFixture(t *testing.T) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(config.DefaultAuditSQLitePath()), 0o700); err != nil {
+		t.Fatalf("create legacy audit command directory: %v", err)
+	}
+	database, err := sql.Open("sqlite3", config.DefaultAuditSQLitePath())
+	if err != nil {
+		t.Fatalf("open legacy audit command database: %v", err)
+	}
+	for _, name := range []string{"legacy_v1.sql", "legacy_orphan_evaluations.sql"} {
+		fixture, err := os.ReadFile(filepath.Join("..", "..", "internal", "auditstorage", "testdata", name))
+		if err != nil {
+			_ = database.Close()
+			t.Fatalf("read %s: %v", name, err)
+		}
+		if _, err := database.ExecContext(t.Context(), string(fixture)); err != nil {
+			_ = database.Close()
+			t.Fatalf("install %s: %v", name, err)
+		}
+	}
+	if err := database.Close(); err != nil {
+		t.Fatalf("close legacy audit command database: %v", err)
 	}
 }
 

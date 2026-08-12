@@ -142,6 +142,7 @@ func TestMigrationRestoresForeignKeysAfterCancellation(t *testing.T) {
 	migration := Migration{
 		Version:             99,
 		ForeignKeysDisabled: true,
+		AfterCommit:         nil,
 		Apply: func(context.Context, *sql.Tx) error {
 			cancel()
 			return migrationErr
