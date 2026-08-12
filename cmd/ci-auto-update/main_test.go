@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -61,6 +62,22 @@ func TestAuthenticatedProxyAddsTokenAndPreservesRequest(t *testing.T) {
 	}
 	if got := receivedRequest.URL.String(); got != "https://api.github.com/repos/fork/agent-gate/releases?per_page=100" {
 		t.Fatalf("URL = %q", got)
+	}
+}
+
+func TestStartAuthenticatedProxyUsesLocalhost(t *testing.T) {
+	t.Parallel()
+	check := &updateCheck{environment: environment{token: "ci-token"}}
+	if err := check.startAuthenticatedProxy(context.Background()); err != nil {
+		t.Fatalf("startAuthenticatedProxy() error = %v", err)
+	}
+	t.Cleanup(check.apiProxy.Close)
+	proxyURL, err := url.Parse(check.apiProxy.URL)
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if proxyURL.Hostname() != "localhost" {
+		t.Fatalf("hostname = %q, want localhost", proxyURL.Hostname())
 	}
 }
 

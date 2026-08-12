@@ -405,14 +405,21 @@ func (check *updateCheck) startAuthenticatedProxy(ctx context.Context) error {
 		slog.WarnContext(ctx, "ci.auto_update.api_proxy_url_invalid", "err", err)
 		return fmt.Errorf("parse GitHub API URL: %w", err)
 	}
-	listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp6", "[::1]:0")
+	listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", "localhost:0")
 	if err != nil {
 		slog.WarnContext(ctx, "ci.auto_update.api_proxy_listen_failed", "err", err)
 		return fmt.Errorf("listen for authenticated GitHub API proxy: %w", err)
 	}
+	_, port, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		err = errors.Join(err, listener.Close())
+		slog.WarnContext(ctx, "ci.auto_update.api_proxy_address_failed", "err", err)
+		return fmt.Errorf("resolve authenticated GitHub API proxy address: %w", err)
+	}
 	server := httptest.NewUnstartedServer(authenticatedProxy(target, check.environment.token))
 	server.Listener = listener
 	server.Start()
+	server.URL = "http://localhost:" + port
 	check.apiProxy = server
 	return nil
 }
