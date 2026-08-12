@@ -3,7 +3,6 @@ package evaluation_test
 import (
 	"context"
 	"database/sql"
-	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -18,7 +17,12 @@ const costLayerSchema = `create table gate_evaluation_layers (
 	layer_index integer not null,
 	kind text not null,
 	model_name text not null default '',
-	metadata_json blob not null default '{}',
+	upstream_metadata_status text not null default '',
+	request_id text not null default '',
+	requested_model text not null default '',
+	prompt_tokens integer not null default 0,
+	cached_tokens integer not null default 0,
+	completion_tokens integer not null default 0,
 	completed_at text not null,
 	cache_status text not null default '',
 	cache_key_hash text not null default '',
@@ -30,23 +34,15 @@ type costLayerRow struct {
 	layerIndex   int
 	kind         string
 	model        string
-	metadata     string
+	status       string
+	requestID    string
+	requested    string
+	prompt       int64
+	cached       int64
+	completion   int64
 	completedAt  string
 	cacheStatus  string
 	cacheKey     string
-}
-
-// presentTokenMetadata renders the v2 layer metadata the daemon records when the
-// backend returns usage, matching the snake_case protojson raw keys in live data.
-func presentTokenMetadata(requestID string, promptTokens, completionTokens int64) string {
-	return fmt.Sprintf(`{"schema_version":2,"upstream_metadata":{"source":"inference_reply",`+
-		`"trust":"untrusted","status":"present","raw":{"request_id":%q,`+
-		`"prompt_tokens":"%d","completion_tokens":"%d","total_tokens":"%d"}}}`,
-		requestID, promptTokens, completionTokens, promptTokens+completionTokens)
-}
-
-func absentTokenMetadata() string {
-	return `{"schema_version":2,"upstream_metadata":{"source":"inference_reply","trust":"untrusted","status":"absent"}}`
 }
 
 func newCostFixture(t *testing.T, rows []costLayerRow) string {
@@ -64,9 +60,12 @@ func newCostFixture(t *testing.T, rows []costLayerRow) string {
 	}
 	for _, row := range rows {
 		if _, err := database.Exec(`insert into gate_evaluation_layers
-			(evaluation_id, layer_index, kind, model_name, metadata_json, completed_at, cache_status, cache_key_hash)
-			values (?, ?, ?, ?, ?, ?, ?, ?)`,
-			row.evaluationID, row.layerIndex, row.kind, row.model, row.metadata,
+			(evaluation_id, layer_index, kind, model_name, upstream_metadata_status,
+			 request_id, requested_model, prompt_tokens, cached_tokens, completion_tokens,
+			 completed_at, cache_status, cache_key_hash)
+			values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			row.evaluationID, row.layerIndex, row.kind, row.model, row.status,
+			row.requestID, row.requested, row.prompt, row.cached, row.completion,
 			row.completedAt, row.cacheStatus, row.cacheKey,
 		); err != nil {
 			t.Fatalf("insert fixture row: %v", err)
@@ -86,14 +85,14 @@ func TestCostReportDeduplicatesBatchCallsAndPrices(t *testing.T) {
 	day := "2026-07-11"
 	rows := []costLayerRow{
 		// One mini batch call copied across two rule layers: must bill once.
-		{"eval-1", 1, "inference", "gpt-5.4-mini", presentTokenMetadata("req-mini-1", 3508, 202), day + "T01:00:00Z", "miss", "ckh-mini-1"},
-		{"eval-1", 2, "inference", "gpt-5.4-mini", presentTokenMetadata("req-mini-1", 3508, 202), day + "T01:00:00Z", "miss", "ckh-mini-1"},
+		{"eval-1", 1, "inference", "gpt-5.4-mini", "present", "req-mini-1", "gpt-5.4-mini", 3508, 0, 202, day + "T01:00:00Z", "miss", "ckh-mini-1"},
+		{"eval-1", 2, "inference", "gpt-5.4-mini", "present", "req-mini-1", "gpt-5.4-mini", 3508, 0, 202, day + "T01:00:00Z", "miss", "ckh-mini-1"},
 		// A distinct mini call the same day.
-		{"eval-2", 1, "inference", "gpt-5.4-mini", presentTokenMetadata("req-mini-2", 1000, 100), day + "T02:00:00Z", "miss", "ckh-mini-2"},
+		{"eval-2", 1, "inference", "gpt-5.4-mini", "present", "req-mini-2", "gpt-5.4-mini", 1000, 0, 100, day + "T02:00:00Z", "miss", "ckh-mini-2"},
 		// A free v4 call.
-		{"eval-2", 2, "inference", "agentgate/agent-gate-judge-v4", presentTokenMetadata("req-v4-1", 471, 1), day + "T02:00:01Z", "", ""},
+		{"eval-2", 2, "inference", "agentgate/agent-gate-judge-v4", "present", "req-v4-1", "agentgate/agent-gate-judge-v4", 471, 0, 1, day + "T02:00:01Z", "", ""},
 		// Absent-token layer contributes no cost and no call.
-		{"eval-3", 1, "inference", "gpt-5.4-mini", absentTokenMetadata(), day + "T03:00:00Z", "", ""},
+		{"eval-3", 1, "inference", "gpt-5.4-mini", "absent", "", "gpt-5.4-mini", 0, 0, 0, day + "T03:00:00Z", "", ""},
 	}
 	path := newCostFixture(t, rows)
 
@@ -134,11 +133,11 @@ func TestCostReportDedupCacheStats(t *testing.T) {
 	day := "2026-07-11"
 	rows := []costLayerRow{
 		// A batch decision with a hit reused across two layers: count once.
-		{"eval-1", 1, "inference", "gpt-5.4-mini", absentTokenMetadata(), day + "T01:00:00Z", "hit", "ckh-1"},
-		{"eval-1", 2, "inference", "gpt-5.4-mini", absentTokenMetadata(), day + "T01:00:00Z", "hit", "ckh-1"},
+		{"eval-1", 1, "inference", "gpt-5.4-mini", "absent", "", "gpt-5.4-mini", 0, 0, 0, day + "T01:00:00Z", "hit", "ckh-1"},
+		{"eval-1", 2, "inference", "gpt-5.4-mini", "absent", "", "gpt-5.4-mini", 0, 0, 0, day + "T01:00:00Z", "hit", "ckh-1"},
 		// Two distinct misses.
-		{"eval-2", 1, "inference", "gpt-5.4-mini", presentTokenMetadata("r2", 10, 1), day + "T02:00:00Z", "miss", "ckh-2"},
-		{"eval-3", 1, "inference", "gpt-5.4-mini", presentTokenMetadata("r3", 10, 1), day + "T03:00:00Z", "miss", "ckh-3"},
+		{"eval-2", 1, "inference", "gpt-5.4-mini", "present", "r2", "gpt-5.4-mini", 10, 0, 1, day + "T02:00:00Z", "miss", "ckh-2"},
+		{"eval-3", 1, "inference", "gpt-5.4-mini", "present", "r3", "gpt-5.4-mini", 10, 0, 1, day + "T03:00:00Z", "miss", "ckh-3"},
 	}
 	path := newCostFixture(t, rows)
 	result, err := evaluation.CostReport(context.Background(), path, costPricing(), evaluation.CostFilter{})
@@ -155,8 +154,8 @@ func TestCostReportDedupCacheStats(t *testing.T) {
 
 func TestCostReportAppliesWindowFilter(t *testing.T) {
 	rows := []costLayerRow{
-		{"eval-in", 1, "inference", "gpt-5.4-mini", presentTokenMetadata("in", 1000, 0), "2026-07-11T12:00:00Z", "miss", "ckh-in"},
-		{"eval-out", 1, "inference", "gpt-5.4-mini", presentTokenMetadata("out", 5000, 0), "2026-07-20T12:00:00Z", "miss", "ckh-out"},
+		{"eval-in", 1, "inference", "gpt-5.4-mini", "present", "in", "gpt-5.4-mini", 1000, 0, 0, "2026-07-11T12:00:00Z", "miss", "ckh-in"},
+		{"eval-out", 1, "inference", "gpt-5.4-mini", "present", "out", "gpt-5.4-mini", 5000, 0, 0, "2026-07-20T12:00:00Z", "miss", "ckh-out"},
 	}
 	path := newCostFixture(t, rows)
 	filter := evaluation.CostFilter{

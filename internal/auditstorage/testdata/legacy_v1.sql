@@ -210,16 +210,23 @@ insert into intake_deferred values (
 insert into gate_evaluations values (
     'eval-legacy', 1, 'event-legacy', 1, 'hot', 'config-hash', '1.0.0',
     'commit', 'build-hash', 'input-hash', '2026-05-09T19:26:33Z',
-    '2026-05-09T19:26:34Z', 'block', 'rule', 'deny', 1, 1000, x'', 1, 1
+    '2026-05-09T19:26:34Z', 'block', 'rule', 'deny', 1, 1000,
+    cast('{"evaluation_error":"legacy"}' as blob), 1, 1
 );
 insert into gate_evaluation_layers values (
-    'eval-legacy', 0, null, 'rule', 'legacy-rule', 'completed', 'matched',
-    'block', 'normalized', x'7b7d', 'input-hash', 'output-hash', x'7b7d',
-    x'7b7d', '2026-05-09T19:26:33Z', '2026-05-09T19:26:34Z', 500,
-    '', '', '', '', '', '', 'miss', '', null, null, '', '', 0
+    'eval-legacy', 0, null, 'inference', 'legacy-layer', 'complete', 'match',
+    'block', 'normalized', cast('{"input":"legacy"}' as blob),
+    'input-hash-legacy', 'output-hash-legacy', cast('{"output":"legacy"}' as blob),
+    cast('{"schema_version":2,"rule_name":"legacy-rule-filter","condition_index":3,"verified_provenance":{"requested_model":"model-legacy","reported_prompt_hash_status":"absent","reported_schema_hash_status":"absent"},"upstream_metadata":{"source":"inference_reply","trust":"untrusted","status":"present","raw":{"request_id":"request-legacy","requested_model":"model-legacy","prompt_tokens":"101","cached_tokens":"17","completion_tokens":"19"}}}' as blob),
+    '2026-05-09T19:26:33Z', '2026-05-09T19:26:34Z', 500,
+    'service-legacy', 'service-version-legacy', 'model-summary-legacy',
+    'model-version-legacy', 'prompt-hash-legacy', 'schema-hash-legacy',
+    'miss', 'cache-key-legacy', 23, '2026-05-10T19:26:34Z',
+    'error-code-legacy', 'legacy layer error', 29
 );
 insert into gate_evaluation_labels values (
-    'eval-legacy', 'operator', 1, 'block', 'review', 1.0, 'confirmed',
+    'eval-legacy', 'operator', 1, 'block', 'review', 1.0,
+    'legacy label rationale',
     '2026-05-09T19:26:35Z'
 );
 insert into deferred_audit_outbox values (

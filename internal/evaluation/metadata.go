@@ -53,6 +53,109 @@ type normalizedLayerMetadataV2 struct {
 	GenerationOptions  json.RawMessage          `json:"generation_options,omitempty"`
 }
 
+// CostMetadata is the durable billing projection of one evaluation layer.
+type CostMetadata struct {
+	UpstreamMetadataStatus string
+	RequestID              string
+	RequestedModel         string
+	PromptTokens           int64
+	CachedTokens           int64
+	CompletionTokens       int64
+	CacheStatus            string
+	CacheKeyHash           string
+}
+
+type ruleFilterMetadata struct {
+	RuleName     string          `json:"rule_name"`
+	CheckedRules json.RawMessage `json:"checked_rules"`
+}
+
+func emptyCostMetadata() CostMetadata {
+	return CostMetadata{
+		UpstreamMetadataStatus: "",
+		RequestID:              "",
+		RequestedModel:         "",
+		PromptTokens:           0,
+		CachedTokens:           0,
+		CompletionTokens:       0,
+		CacheStatus:            "",
+		CacheKeyHash:           "",
+	}
+}
+
+// ProjectCostMetadata validates a layer metadata envelope and returns its
+// summary-only billing fields.
+func ProjectCostMetadata(raw json.RawMessage) (CostMetadata, error) {
+	normalized, err := UnmarshalLayerMetadata(raw)
+	if err != nil {
+		return emptyCostMetadata(), err
+	}
+	var version layerMetadataVersion
+	if err := json.Unmarshal(normalized, &version); err != nil {
+		return emptyCostMetadata(), fmt.Errorf("decode cost metadata version: %s", err.Error())
+	}
+	if version.SchemaVersion != 2 {
+		return emptyCostMetadata(), nil
+	}
+	var metadata normalizedLayerMetadataV2
+	if err := json.Unmarshal(normalized, &metadata); err != nil {
+		return emptyCostMetadata(), fmt.Errorf("decode cost metadata: %s", err.Error())
+	}
+	projected := CostMetadata{
+		UpstreamMetadataStatus: string(metadata.UpstreamMetadata.Status),
+		RequestID:              "",
+		RequestedModel:         metadata.VerifiedProvenance.RequestedModel,
+		PromptTokens:           0,
+		CachedTokens:           0,
+		CompletionTokens:       0,
+		CacheStatus:            "",
+		CacheKeyHash:           metadata.VerifiedProvenance.CacheKeyHash,
+	}
+	if metadata.UpstreamMetadata.Status != rules.UpstreamMetadataPresent {
+		return projected, nil
+	}
+	invocation := new(inferencepb.InvocationMetadata)
+	if err := (protojson.UnmarshalOptions{DiscardUnknown: false}).Unmarshal(
+		metadata.UpstreamMetadata.Raw,
+		invocation,
+	); err != nil {
+		return emptyCostMetadata(), fmt.Errorf(
+			"decode projected invocation metadata: %s",
+			err.Error(),
+		)
+	}
+	projected.RequestID = invocation.GetRequestId()
+	if invocation.GetRequestedModel() != "" {
+		projected.RequestedModel = invocation.GetRequestedModel()
+	}
+	if invocation.PromptTokens != nil {
+		projected.PromptTokens = invocation.GetPromptTokens()
+	}
+	if invocation.CachedTokens != nil {
+		projected.CachedTokens = invocation.GetCachedTokens()
+	}
+	if invocation.CompletionTokens != nil {
+		projected.CompletionTokens = invocation.GetCompletionTokens()
+	}
+	return projected, nil
+}
+
+func projectRuleFilters(raw json.RawMessage) (string, json.RawMessage, error) {
+	normalized, err := UnmarshalLayerMetadata(raw)
+	if err != nil {
+		return "", nil, err
+	}
+	var metadata ruleFilterMetadata
+	if err := json.Unmarshal(normalized, &metadata); err != nil {
+		return "", nil, fmt.Errorf("decode rule filter metadata: %s", err.Error())
+	}
+	checkedRules := metadata.CheckedRules
+	if len(checkedRules) == 0 {
+		checkedRules = json.RawMessage(`[]`)
+	}
+	return metadata.RuleName, checkedRules, nil
+}
+
 // UnmarshalLayerMetadata validates metadata and returns its safe export encoding.
 func UnmarshalLayerMetadata(raw json.RawMessage) (json.RawMessage, error) {
 	if len(raw) == 0 || len(raw) > maxLayerMetadataJSONBytes || !json.Valid(raw) {

@@ -32,7 +32,7 @@ func TestOpenSQLiteMigrationRecordsLegacyAuditSchemaVersion(t *testing.T) {
 	}
 	firstSummary := readLegacyAuditSummary(t, store)
 	assertLegacySummaryFidelity(t, firstSummary)
-	assertSchemaVersion(t, store.Handle(), 2)
+	assertSchemaVersion(t, store.Handle(), 3)
 	assertForeignKeysClean(t, store.Handle())
 	firstAppliedAt, err := auditstorage.MigrationAppliedAt(t.Context(), store.Handle(), 1)
 	if err != nil {

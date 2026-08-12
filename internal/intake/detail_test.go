@@ -55,7 +55,7 @@ func TestOpenSQLiteMigratesLegacyIntakeDetail(t *testing.T) {
 		}
 		assertLegacyDetailValues(t, legacy)
 		assertDetailRows(t, store.Handle(), legacy.EventID, auditstorage.DetailStateAvailable)
-		assertSchemaVersion(t, store.Handle(), 2)
+		assertSchemaVersion(t, store.Handle(), 3)
 		appliedAt, err := auditstorage.MigrationAppliedAt(t.Context(), store.Handle(), 2)
 		if err != nil {
 			t.Fatalf("MigrationAppliedAt first open: %v", err)

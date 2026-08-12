@@ -179,7 +179,7 @@ func openSQLite(ctx context.Context, options SQLiteOptions) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
-	store.evaluations, err = evaluation.NewStore(ctx, db)
+	store.evaluations, err = evaluation.NewStoreWithPolicy(ctx, db, options.Policy)
 	if err != nil {
 		_ = db.Close()
 		return nil, wrapLoggedError(ctx, options.Log, "init evaluation store", err)
