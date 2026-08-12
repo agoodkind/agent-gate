@@ -384,9 +384,10 @@ func TestRunAuditMaintainApplyDefersDuringSchemaMigrationContention(t *testing.T
 	}
 	defer func() { _ = blocker.Close() }()
 	if _, err := blocker.ExecContext(t.Context(), `
+		drop table audit_maintenance_schedule;
 		drop table audit_maintenance_runs;
 		drop table audit_maintenance_lease;
-		delete from audit_schema_migrations where version = 5;
+		delete from audit_schema_migrations where version >= 5;
 		pragma user_version = 4;
 	`); err != nil {
 		t.Fatalf("restore version four schema: %v", err)

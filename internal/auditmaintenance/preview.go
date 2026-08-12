@@ -315,13 +315,6 @@ func copyDatabaseSnapshot(
 	sourcePath string,
 ) (databaseSnapshot, bool, error) {
 	slog.DebugContext(ctx, "copy audit database snapshot", "path", sourcePath)
-	sourceInfo, err := os.Stat(sourcePath)
-	if err != nil {
-		return databaseSnapshot{}, false, wrapError("stat audit database snapshot source", err)
-	}
-	if !sourceInfo.Mode().IsRegular() {
-		return databaseSnapshot{}, false, errors.New("audit database must be a regular file")
-	}
 	directory, err := os.MkdirTemp("", "agent-gate-audit-snapshot-*")
 	if err != nil {
 		return databaseSnapshot{}, false, wrapError("create audit database snapshot directory", err)
@@ -339,6 +332,15 @@ func copyDatabaseSnapshot(
 			_ = releaseLock()
 		}
 	}()
+	sourceInfo, err := os.Stat(sourcePath)
+	if err != nil {
+		cleanup()
+		return databaseSnapshot{}, false, wrapError("stat audit database snapshot source", err)
+	}
+	if !sourceInfo.Mode().IsRegular() {
+		cleanup()
+		return databaseSnapshot{}, false, errors.New("audit database must be a regular file")
+	}
 	if err := streamCopyFile(ctx, sourcePath, snapshotPath, sourceInfo.Size()); err != nil {
 		cleanup()
 		return databaseSnapshot{}, false, err

@@ -22,6 +22,7 @@ var migrations = []Migration{
 	{Version: 3, ForeignKeysDisabled: true, Apply: migrateEvaluationV3, AfterCommit: nil},
 	{Version: 4, ForeignKeysDisabled: true, Apply: migrateOutboxV4, AfterCommit: nil},
 	{Version: 5, ForeignKeysDisabled: false, Apply: migrateMaintenanceV5, AfterCommit: nil},
+	{Version: 6, ForeignKeysDisabled: false, Apply: migrateScheduleV6, AfterCommit: nil},
 }
 
 var migrationNow = time.Now

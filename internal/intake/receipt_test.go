@@ -411,3 +411,18 @@ func assertTableCount(t *testing.T, path string, table string, want int) {
 		t.Fatalf("%s count = %d, want %d", table, count, want)
 	}
 }
+
+func TestOpenSQLiteMigratesMaintenanceScheduleToVersionSix(t *testing.T) {
+	store, path := newReceiptTestStore(t)
+	var version int
+	if err := store.Handle().QueryRowContext(
+		t.Context(),
+		`select coalesce(max(version), 0) from audit_schema_migrations`,
+	).Scan(&version); err != nil {
+		t.Fatalf("read audit schema version: %v", err)
+	}
+	if version != 6 {
+		t.Fatalf("audit schema version = %d, want 6", version)
+	}
+	assertTableCount(t, path, "audit_maintenance_schedule", 0)
+}

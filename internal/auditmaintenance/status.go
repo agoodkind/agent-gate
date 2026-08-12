@@ -293,7 +293,7 @@ func maintenanceBaseTime(
 	}
 	var appliedAt string
 	err := database.QueryRowContext(ctx, `
-		select applied_at from audit_schema_migrations order by version desc limit 1
+		select applied_at from audit_schema_migrations order by version limit 1
 	`).Scan(&appliedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil

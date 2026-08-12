@@ -14,8 +14,8 @@ func TestMaintenanceV5CreatesLeaseAndRunMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SchemaVersion: %v", err)
 	}
-	if version != 5 {
-		t.Fatalf("schema version = %d, want 5", version)
+	if version != 6 {
+		t.Fatalf("schema version = %d, want 6", version)
 	}
 	for _, table := range []string{"audit_maintenance_lease", "audit_maintenance_runs"} {
 		if !schemaTableExists(t, database, table) {

@@ -22,6 +22,7 @@ import (
 
 	"goodkind.io/agent-gate/api/daemonpb"
 	"goodkind.io/agent-gate/internal/audit"
+	"goodkind.io/agent-gate/internal/auditmaintenance"
 	"goodkind.io/agent-gate/internal/config"
 	"goodkind.io/agent-gate/internal/gitbranch"
 	"goodkind.io/agent-gate/internal/hook"
@@ -69,17 +70,25 @@ func (sink *inferenceTraceSink) snapshot() []rules.InferenceTrace {
 type Server struct {
 	daemonpb.UnimplementedAgentGateDServer
 
-	log           *slog.Logger
-	cfgMu         sync.RWMutex
-	runtimeMu     sync.RWMutex
-	runtime       atomic.Pointer[runtimeSnapshot]
-	configWatcher *fsnotify.Watcher
-	configPath    string
-	hotKV         *hotkv.Store
-	inferRuntime  *rules.InferRuntime
-	closing       bool
-	updateCancel  context.CancelFunc
-	stopDaemon    func()
+	log                         *slog.Logger
+	cfgMu                       sync.RWMutex
+	runtimeMu                   sync.RWMutex
+	runtime                     atomic.Pointer[runtimeSnapshot]
+	configWatcher               *fsnotify.Watcher
+	configPath                  string
+	hotKV                       *hotkv.Store
+	inferRuntime                *rules.InferRuntime
+	closing                     bool
+	updateCancel                context.CancelFunc
+	stopDaemon                  func()
+	maintenanceStartMu          sync.Mutex
+	maintenanceCancel           context.CancelFunc
+	maintenanceDone             <-chan struct{}
+	maintenanceStarted          bool
+	maintenanceNow              func() time.Time
+	maintenanceTimerFactory     func(time.Duration) maintenanceTimer
+	maintenanceRunner           maintenanceRunner
+	maintenanceWriteNextAttempt func(context.Context, string, time.Time) error
 
 	overloadLogMu       sync.Mutex
 	lastOverloadLogTime time.Time
@@ -186,6 +195,14 @@ func New(log *slog.Logger, cfg *config.Config) (*Server, error) {
 		closing:                       false,
 		updateCancel:                  nil,
 		stopDaemon:                    nil,
+		maintenanceStartMu:            sync.Mutex{},
+		maintenanceCancel:             nil,
+		maintenanceDone:               nil,
+		maintenanceStarted:            false,
+		maintenanceNow:                time.Now,
+		maintenanceTimerFactory:       newMaintenanceTimer,
+		maintenanceRunner:             runAuditMaintenance,
+		maintenanceWriteNextAttempt:   auditmaintenance.WriteNextAttempt,
 		overloadLogMu:                 sync.Mutex{},
 		lastOverloadLogTime:           time.Time{},
 	}
@@ -323,31 +340,6 @@ func (s *runtimeSnapshot) close(ctx context.Context, log *slog.Logger) {
 	}
 }
 
-// Close shuts down daemon-owned resources.
-func (s *Server) Close() {
-	s.cfgMu.Lock()
-	s.closing = true
-	s.runtimeMu.Lock()
-	snapshot := s.runtime.Swap(nil)
-	s.runtimeMu.Unlock()
-	s.cfgMu.Unlock()
-
-	if s.configWatcher != nil {
-		_ = s.configWatcher.Close()
-	}
-	if s.updateCancel != nil {
-		s.updateCancel()
-	}
-	snapshot.close(context.Background(), s.log)
-	if s.inferRuntime != nil {
-		s.inferRuntime.Close()
-	}
-	if s.hotKV != nil {
-		s.hotKV.Close()
-	}
-	s.log.InfoContext(context.Background(), "daemon closed")
-}
-
 func (s *Server) startConfigWatcher() error {
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
@@ -473,12 +465,18 @@ func (s *Server) reloadConfig(ctx context.Context) error {
 		return fmt.Errorf("failed to create runtime snapshot for reloaded config: %w", err)
 	}
 
+	s.maintenanceStartMu.Lock()
+	defer s.maintenanceStartMu.Unlock()
 	s.cfgMu.Lock()
 	if s.closing {
 		s.cfgMu.Unlock()
 		newSnapshot.close(ctx, s.log)
 		return nil
 	}
+	s.cfgMu.Unlock()
+	maintenanceStarted := s.stopMaintenanceSchedulerForReloadLocked()
+
+	s.cfgMu.Lock()
 	if s.hotKV != nil {
 		s.hotKV.Configure(hotKVOptions(candidate))
 	}
@@ -488,6 +486,7 @@ func (s *Server) reloadConfig(ctx context.Context) error {
 	updateCancel := s.updateCancel
 	stopDaemon := s.stopDaemon
 	s.cfgMu.Unlock()
+	s.restartMaintenanceSchedulerAfterReloadLocked(ctx, newSnapshot, maintenanceStarted)
 
 	if updateCancel != nil {
 		updateCancel()
