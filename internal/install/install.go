@@ -77,11 +77,16 @@ func (ExecRunner) Run(name string, args ...string) error {
 
 // Output executes a command and returns stdout plus stderr.
 func (ExecRunner) Output(name string, args ...string) ([]byte, error) {
-	command := exec.CommandContext(context.Background(), name, args...)
+	return ExecRunner{}.OutputContext(context.Background(), name, args...)
+}
+
+// OutputContext executes a command until it completes or its context ends.
+func (ExecRunner) OutputContext(ctx context.Context, name string, args ...string) ([]byte, error) {
+	command := exec.CommandContext(ctx, name, args...)
 	output, err := command.CombinedOutput()
 	if err != nil {
 		wrappedErr := fmt.Errorf("%s %s: %w", name, strings.Join(args, " "), err)
-		slog.Debug("install command output failed", "command", name, "args", args, "err", wrappedErr)
+		slog.DebugContext(ctx, "install command output failed", "command", name, "args", args, "err", wrappedErr)
 		return output, wrappedErr
 	}
 	return output, nil

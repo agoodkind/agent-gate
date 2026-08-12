@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"goodkind.io/agent-gate/internal/config"
+	installer "goodkind.io/agent-gate/internal/install"
 	"goodkind.io/agent-gate/internal/intake"
 )
 
@@ -116,6 +117,143 @@ func TestRunAuditCompactDryRunReportsPlanWithoutWriting(t *testing.T) {
 	after := snapshotAuditFiles(t, config.DefaultAuditSQLitePath())
 	if !reflect.DeepEqual(after, before) {
 		t.Fatalf("compact dry-run changed SQLite files: before %#v after %#v", before, after)
+	}
+}
+
+func TestFullCompactDryRunDoesNotWriteDatabase(t *testing.T) {
+	stubFullCompactServiceStatus(t)
+	setupAuditCommandEnvironment(t, "[audit.storage]\n")
+	createAuditCommandDatabase(t)
+	before := snapshotAuditFiles(t, config.DefaultAuditSQLitePath())
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := runAudit([]string{"compact", "--full", "--dry-run"}, &stdout, &stderr)
+
+	if exitCode != 0 || stderr.Len() != 0 {
+		t.Fatalf("exit code/stderr = %d/%q, want 0/empty", exitCode, stderr.String())
+	}
+	for _, text := range []string{
+		"database path:",
+		"required free bytes:",
+		"managed: true",
+		"integrity: ok",
+		"operator-controlled offline interval",
+	} {
+		if !strings.Contains(stdout.String(), text) {
+			t.Fatalf("stdout = %q, want %q", stdout.String(), text)
+		}
+	}
+	after := snapshotAuditFiles(t, config.DefaultAuditSQLitePath())
+	if !reflect.DeepEqual(after, before) {
+		t.Fatalf("full dry-run changed SQLite files: before %#v after %#v", before, after)
+	}
+}
+
+func TestFullCompactDryRunCancelsServiceInspection(t *testing.T) {
+	stubCanceledAuditCommandContext(t)
+	originalInspect := auditInspectService
+	auditInspectService = func(
+		ctx context.Context,
+		_ installer.ServiceStatusOptions,
+	) (installer.ServiceState, error) {
+		return installer.ServiceState{}, ctx.Err()
+	}
+	t.Cleanup(func() {
+		auditInspectService = originalInspect
+	})
+	setupAuditCommandEnvironment(t, "[audit.storage]\n")
+	createAuditCommandDatabase(t)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := runAudit([]string{"compact", "--full", "--dry-run"}, &stdout, &stderr)
+
+	if exitCode != 1 || !strings.Contains(stderr.String(), "service status: context canceled") {
+		t.Fatalf("exit code/stderr = %d/%q, want canceled service status", exitCode, stderr.String())
+	}
+}
+
+func TestFullCompactDryRunCancelsIntegrityPreflight(t *testing.T) {
+	stubCanceledAuditCommandContext(t)
+	stubFullCompactServiceStatus(t)
+	setupAuditCommandEnvironment(t, "[audit.storage]\n")
+	createAuditCommandDatabase(t)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := runAudit([]string{"compact", "--full", "--dry-run"}, &stdout, &stderr)
+
+	if exitCode != 1 || !strings.Contains(stderr.String(), "full preflight: start full audit compaction preflight: context canceled") {
+		t.Fatalf("exit code/stderr = %d/%q, want canceled full preflight", exitCode, stderr.String())
+	}
+}
+
+func stubCanceledAuditCommandContext(t *testing.T) {
+	t.Helper()
+	originalContext := auditCommandContext
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	auditCommandContext = func() (context.Context, context.CancelFunc) {
+		return ctx, func() {}
+	}
+	t.Cleanup(func() {
+		auditCommandContext = originalContext
+	})
+}
+
+func stubFullCompactServiceStatus(t *testing.T) {
+	t.Helper()
+	originalInspect := auditInspectService
+	auditInspectService = func(
+		context.Context,
+		installer.ServiceStatusOptions,
+	) (installer.ServiceState, error) {
+		return installer.ServiceState{
+			Platform: "launchd", Managed: true, Running: true, BinaryPath: "/opt/agent-gate",
+		}, nil
+	}
+	t.Cleanup(func() {
+		auditInspectService = originalInspect
+	})
+}
+
+func TestFullCompactApplyFailsWithoutIncrementalFallback(t *testing.T) {
+	setupAuditCommandEnvironment(t, "[audit.storage]\nmaintenance_batch_rows = 1000\n")
+	createAuditCommandDatabase(t)
+	createAuditCommandFreePages(t, 1<<20)
+	before := snapshotAuditFiles(t, config.DefaultAuditSQLitePath())
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := runAudit([]string{"compact", "--full", "--apply"}, &stdout, &stderr)
+
+	if exitCode != 1 || !strings.Contains(stderr.String(), "full compaction apply is not implemented") {
+		t.Fatalf("exit code/stderr = %d/%q, want visible unavailable error", exitCode, stderr.String())
+	}
+	after := snapshotAuditFiles(t, config.DefaultAuditSQLitePath())
+	if !reflect.DeepEqual(after, before) {
+		t.Fatalf("full apply fallback changed SQLite files: before %#v after %#v", before, after)
+	}
+}
+
+func TestFullCompactPublicCLILeavesActiveWALByteIdentical(t *testing.T) {
+	stubFullCompactServiceStatus(t)
+	setupAuditCommandEnvironment(t, "[audit.storage]\n")
+	store := createActiveAuditCommandDatabase(t, []byte(`{"command":"make check"}`))
+	defer func() { _ = store.Close() }()
+	before := snapshotAuditFiles(t, config.DefaultAuditSQLitePath())
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := runAudit([]string{"compact", "--full", "--dry-run"}, &stdout, &stderr)
+
+	if exitCode != 0 || stderr.Len() != 0 || !strings.Contains(stdout.String(), "running: true") {
+		t.Fatalf("exit/stdout/stderr = %d/%q/%q", exitCode, stdout.String(), stderr.String())
+	}
+	after := snapshotAuditFiles(t, config.DefaultAuditSQLitePath())
+	if !reflect.DeepEqual(after, before) {
+		t.Fatalf("public full dry-run changed active SQLite files: before %#v after %#v", before, after)
 	}
 }
 
@@ -225,7 +363,12 @@ func TestRunAuditCompactApplyDefersForReaderPinnedLiveWAL(t *testing.T) {
 func TestRunAuditCompactRequiresExactlyOneMode(t *testing.T) {
 	setupAuditCommandEnvironment(t, "[audit.storage]\n")
 	createAuditCommandDatabase(t)
-	for _, args := range [][]string{{"compact"}, {"compact", "--dry-run", "--apply"}} {
+	for _, args := range [][]string{
+		{"compact"},
+		{"compact", "--full"},
+		{"compact", "--dry-run", "--apply"},
+		{"compact", "--full", "--dry-run", "--apply"},
+	} {
 		var stdout bytes.Buffer
 		var stderr bytes.Buffer
 		if exitCode := runAudit(args, &stdout, &stderr); exitCode != 2 {
