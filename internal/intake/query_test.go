@@ -68,6 +68,21 @@ func TestQueryHandlesMissingIntakeTablesAsEmptyHistory(t *testing.T) {
 	}
 }
 
+func TestQueryRequiresMigrationForLegacyMixedDetail(t *testing.T) {
+	path := installLegacyAuditFixture(t)
+	result, err := intake.Query(context.Background(), queryConfig(path), intake.QueryFilter{
+		EventID:           "event-legacy",
+		IncludeNormalized: true,
+		IncludeEnv:        true,
+	})
+	if err == nil {
+		t.Fatalf("Query error = nil, returned legacy detail: %#v", result.Records)
+	}
+	if !strings.Contains(err.Error(), "requires migration") {
+		t.Fatalf("Query error = %q, want migration-required error", err)
+	}
+}
+
 func TestQueryClampsRangesToFirstIntakeRecord(t *testing.T) {
 	store, path := newQueryTestStore(t)
 	firstRecordedAt := time.Date(2026, 5, 9, 19, 30, 0, 0, time.UTC)

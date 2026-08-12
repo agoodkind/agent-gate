@@ -114,6 +114,13 @@ func Query(ctx context.Context, cfg *config.Config, filter QueryFilter) (QueryRe
 	if err != nil {
 		return QueryResult{}, err
 	}
+	hasDetailTable, err := tableExists(ctx, db, "intake_event_details")
+	if err != nil {
+		return QueryResult{}, err
+	}
+	if !hasDetailTable {
+		return QueryResult{}, errors.New("intake query requires migration before reading legacy detail")
+	}
 	start, hasRows, err := intakeStart(ctx, db)
 	if err != nil {
 		return QueryResult{}, err
@@ -181,7 +188,12 @@ func intakeStart(ctx context.Context, db *sql.DB) (time.Time, bool, error) {
 	return parsed, true, nil
 }
 
-func queryRecords(ctx context.Context, db *sql.DB, filter QueryFilter, hasDeferredTable bool) ([]QueryRecord, error) {
+func queryRecords(
+	ctx context.Context,
+	db *sql.DB,
+	filter QueryFilter,
+	hasDeferredTable bool,
+) ([]QueryRecord, error) {
 	where, args := intakeQueryWhere(filter, hasDeferredTable)
 	limit := ""
 	if filter.Limit > 0 {
@@ -216,9 +228,16 @@ func queryRecords(ctx context.Context, db *sql.DB, filter QueryFilter, hasDeferr
 }
 
 func intakeQuerySelect(hasDeferredTable bool) string {
+	detailColumns := `
+		(select content from intake_event_details
+			where event_id = e.event_id and detail_class = 'normalized_input'),
+		(select content from intake_event_details
+			where event_id = e.event_id and detail_class = 'provider_evidence'),
+		(select content from intake_event_details
+			where event_id = e.event_id and detail_class = 'environment_evidence'),`
 	if !hasDeferredTable {
 		return `
-		select
+			select
 			e.event_id,
 			e.recorded_at,
 			e.system,
@@ -231,10 +250,7 @@ func intakeQuerySelect(hasDeferredTable bool) string {
 			e.effective_cwd,
 			e.command,
 			e.file_path,
-			e.raw_payload_hash,
-			e.normalized_json,
-			e.classification_json,
-			e.env_fingerprint_json,
+				e.raw_payload_hash,` + detailColumns + `
 			'none',
 			null as pending_at,
 			null as completed_at,
@@ -257,10 +273,7 @@ func intakeQuerySelect(hasDeferredTable bool) string {
 			e.effective_cwd,
 			e.command,
 			e.file_path,
-			e.raw_payload_hash,
-			e.normalized_json,
-			e.classification_json,
-			e.env_fingerprint_json,
+				e.raw_payload_hash,` + detailColumns + `
 			coalesce(d.state, ?),
 			d.pending_at,
 			d.completed_at,
