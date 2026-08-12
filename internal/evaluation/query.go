@@ -128,7 +128,7 @@ func (s *Store) List(ctx context.Context, filter QueryFilter) ([]QueryRecord, er
 	if s == nil || s.database == nil {
 		return nil, errors.New("evaluation store is unavailable")
 	}
-	return listQueryRecords(ctx, s.database, filter, true, true, true)
+	return listQueryRecords(ctx, s.database, filter, true, true, true, true)
 }
 
 // Query reads evaluations from an existing SQLite path without creating or migrating it.
@@ -179,7 +179,13 @@ func Query(ctx context.Context, path string, filter QueryFilter) (QueryResult, e
 	if err != nil {
 		return QueryResult{}, err
 	}
-	records, err := listQueryRecords(ctx, database, filter, hasOutcome, hasChildCounts, hasVerdict)
+	hasSplitDetail, err := queryTableExists(ctx, database, "gate_evaluation_layer_details")
+	if err != nil {
+		return QueryResult{}, err
+	}
+	records, err := listQueryRecords(
+		ctx, database, filter, hasOutcome, hasChildCounts, hasVerdict, hasSplitDetail,
+	)
 	if err != nil {
 		return QueryResult{}, err
 	}
@@ -194,12 +200,13 @@ func listQueryRecords(
 	hasOutcome bool,
 	hasChildCounts bool,
 	hasVerdict bool,
+	hasSplitDetail bool,
 ) ([]QueryRecord, error) {
 	normalized, err := normalizeQueryFilter(filter)
 	if err != nil {
 		return nil, err
 	}
-	where, arguments := evaluationQueryWhere(normalized, hasOutcome)
+	where, arguments := evaluationQueryWhere(normalized, hasOutcome, hasSplitDetail)
 	arguments = append(
 		arguments,
 		queryArgument{Value: strconv.Itoa(normalized.Limit)},
@@ -240,6 +247,7 @@ func listQueryRecords(
 			hasOutcome,
 			outcomeKnown,
 			hasVerdict,
+			hasSplitDetail,
 		)
 		if err != nil {
 			return nil, err
@@ -305,7 +313,11 @@ func normalizeQueryFilter(filter QueryFilter) (QueryFilter, error) {
 	return filter, nil
 }
 
-func evaluationQueryWhere(filter QueryFilter, hasOutcome bool) (string, []queryArgument) {
+func evaluationQueryWhere(
+	filter QueryFilter,
+	hasOutcome bool,
+	hasSplitDetail bool,
+) (string, []queryArgument) {
 	clauses := make([]string, 0)
 	arguments := make([]queryArgument, 0)
 	add := func(clause string, value string) {
@@ -342,7 +354,7 @@ func evaluationQueryWhere(filter QueryFilter, hasOutcome bool) (string, []queryA
 	if filter.ToolName != "" {
 		add("e.tool_name = ?", filter.ToolName)
 	}
-	addLayerQueryFilters(filter, hasOutcome, &clauses, &arguments)
+	addLayerQueryFilters(filter, hasOutcome, hasSplitDetail, &clauses, &arguments)
 	if filter.FinalVerdict != "" {
 		add("g.final_verdict = ?", filter.FinalVerdict)
 	}
@@ -355,6 +367,7 @@ func evaluationQueryWhere(filter QueryFilter, hasOutcome bool) (string, []queryA
 func addLayerQueryFilters(
 	filter QueryFilter,
 	hasOutcome bool,
+	hasSplitDetail bool,
 	clauses *[]string,
 	arguments *[]queryArgument,
 ) {
@@ -369,14 +382,25 @@ func addLayerQueryFilters(
 		layerArguments = append(layerArguments, queryArgument{Value: value})
 	}
 	if filter.RuleName != "" {
-		layerClauses = append(layerClauses, `(
+		ruleFilter := `(
 			json_extract(filtered_layer.metadata_json, '$.rule_name') = ?
 			or exists (
 				select 1
 				from json_each(filtered_layer.metadata_json, '$.checked_rules') checked_rule
 				where json_extract(checked_rule.value, '$.rule_name') = ?
 			)
-		)`)
+		)`
+		if hasSplitDetail {
+			ruleFilter = `(
+				filtered_layer.rule_name = ?
+				or exists (
+					select 1
+					from json_each(filtered_layer.checked_rules_json) checked_rule
+					where json_extract(checked_rule.value, '$.rule_name') = ?
+				)
+			)`
+		}
+		layerClauses = append(layerClauses, ruleFilter)
 		layerArguments = append(
 			layerArguments,
 			queryArgument{Value: filter.RuleName},
@@ -474,6 +498,7 @@ func querySafeLayers(
 	hasOutcome bool,
 	outcomeKnown bool,
 	hasVerdict bool,
+	hasSplitDetail bool,
 ) ([]QueryLayer, error) {
 	outcomeColumn := "''"
 	if hasOutcome {
@@ -483,12 +508,22 @@ func querySafeLayers(
 	if hasVerdict {
 		verdictColumn = "verdict"
 	}
-	query := `select layer_index, parent_layer_index, kind, name, status, ` + outcomeColumn + `, ` + verdictColumn + `,
+	detailColumns := "output_json, metadata_json"
+	detailJoin := ""
+	if hasSplitDetail {
+		detailColumns = "detail.output_json, detail.metadata_json"
+		detailJoin = ` join gate_evaluation_layer_details detail
+			on detail.evaluation_id = layer.evaluation_id
+			and detail.layer_index = layer.layer_index`
+	}
+	query := `select layer.layer_index, layer.parent_layer_index, layer.kind, layer.name, layer.status, ` + outcomeColumn + `, ` + verdictColumn + `,
 		input_reference, input_hash, output_hash, output_json, metadata_json,
 		started_at, completed_at, latency_us, service_name, service_version,
 		model_name, model_version, prompt_hash, schema_hash, cache_status,
 		cache_key_hash, cache_entry_version, cache_expires_at, error_code, retry_count
-		from gate_evaluation_layers where evaluation_id = ? order by layer_index`
+		from gate_evaluation_layers layer` + detailJoin + `
+		where layer.evaluation_id = ? order by layer.layer_index`
+	query = strings.Replace(query, "output_json, metadata_json", detailColumns, 1)
 	rows, err := database.QueryContext(ctx, query, evaluationID)
 	if err != nil {
 		return nil, wrapError("query safe evaluation layers", err)

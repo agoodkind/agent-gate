@@ -218,7 +218,7 @@ func TestStoreListRejectsMissingAndCorruptChildRows(t *testing.T) {
 			name: "corrupt metadata",
 			mutate: func(t *testing.T, database *sql.DB, evaluationID string) {
 				t.Helper()
-				if _, err := database.Exec(`update gate_evaluation_layers set metadata_json = '{' where evaluation_id = ? and layer_index = 1`, evaluationID); err != nil {
+				if _, err := database.Exec(`update gate_evaluation_layer_details set metadata_json = '{' where evaluation_id = ? and layer_index = 1`, evaluationID); err != nil {
 					t.Fatalf("corrupt metadata: %v", err)
 				}
 			},
@@ -236,7 +236,7 @@ func TestStoreListRejectsMissingAndCorruptChildRows(t *testing.T) {
 			name: "mismatched output hash",
 			mutate: func(t *testing.T, database *sql.DB, evaluationID string) {
 				t.Helper()
-				if _, err := database.Exec(`update gate_evaluation_layers set output_json = '{"decision":"allow"}' where evaluation_id = ? and layer_index = 1`, evaluationID); err != nil {
+				if _, err := database.Exec(`update gate_evaluation_layer_details set output_json = '{"decision":"allow"}' where evaluation_id = ? and layer_index = 1`, evaluationID); err != nil {
 					t.Fatalf("corrupt output JSON: %v", err)
 				}
 			},
@@ -259,7 +259,7 @@ func TestStoreListRejectsMissingAndCorruptChildRows(t *testing.T) {
 func TestStoreListRejectsUnknownV2MetadataAfterRead(t *testing.T) {
 	store, database, _, first, _ := newEvaluationQueryFixture(t)
 	if _, err := database.Exec(`
-		update gate_evaluation_layers
+		update gate_evaluation_layer_details
 		set metadata_json = json_set(metadata_json, '$.prompt', 'prohibited')
 		where evaluation_id = ? and layer_index = 1
 	`, first.Evaluation.EvaluationID); err != nil {

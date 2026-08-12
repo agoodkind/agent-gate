@@ -40,8 +40,8 @@ func TestNewStoreMigrationRecordsSharedSchemaVersion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SchemaVersion: %v", err)
 	}
-	if version != 2 {
-		t.Fatalf("schema version = %d, want 2", version)
+	if version != 3 {
+		t.Fatalf("schema version = %d, want 3", version)
 	}
 }
 
@@ -58,69 +58,6 @@ func TestStoreRoundTripsCompletedEvaluation(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, record) {
 		t.Fatalf("round trip mismatch\ngot:  %#v\nwant: %#v", got, record)
-	}
-}
-
-func TestStoreMigratesPopulatedLayerMetadata(t *testing.T) {
-	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "audit.db")
-	intakeStore, err := intake.OpenSQLite(ctx, path, nil)
-	if err != nil {
-		t.Fatalf("OpenSQLite: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := intakeStore.Close(); err != nil {
-			t.Fatalf("Close: %v", err)
-		}
-	})
-	receipt, err := intakeStore.Append(ctx, intake.Record{
-		EventID:        "evt-legacy-evaluation",
-		System:         "codex",
-		SessionID:      "session-legacy",
-		EventName:      "PreToolUse",
-		RawPayload:     []byte(`{"command":"make test"}`),
-		NormalizedJSON: json.RawMessage(`{"command":"make test"}`),
-	})
-	if err != nil {
-		t.Fatalf("Append: %v", err)
-	}
-	record := completeRecord(receipt)
-	record.Evaluation.EvaluationID = "eval-legacy"
-	if err := intakeStore.Evaluations().RecordCompleted(ctx, record); err != nil {
-		t.Fatalf("RecordCompleted legacy row: %v", err)
-	}
-	if _, err := intakeStore.Handle().ExecContext(
-		ctx,
-		`alter table gate_evaluation_layers drop column metadata_json`,
-	); err != nil {
-		t.Fatalf("remove post-Task-6 metadata column: %v", err)
-	}
-	resetAuditSchemaVersion(t, intakeStore.Handle())
-
-	migratedStore, err := evaluation.NewStore(ctx, intakeStore.Handle())
-	if err != nil {
-		t.Fatalf("NewStore migration: %v", err)
-	}
-	var metadataJSON []byte
-	err = intakeStore.Handle().QueryRowContext(ctx, `
-		select metadata_json
-		from gate_evaluation_layers
-		where evaluation_id = ? and layer_index = 0
-	`, record.Evaluation.EvaluationID).Scan(&metadataJSON)
-	if err != nil {
-		t.Fatalf("read migrated metadata: %v", err)
-	}
-	if string(metadataJSON) != "{}" {
-		t.Fatalf("migrated metadata = %q, want %q", metadataJSON, "{}")
-	}
-	got, err := migratedStore.Get(ctx, record.Evaluation.EvaluationID)
-	if err != nil {
-		t.Fatalf("Get migrated evaluation: %v", err)
-	}
-	for _, layer := range got.Layers {
-		if string(layer.MetadataJSON) != "{}" {
-			t.Fatalf("layer %d metadata = %q, want %q", layer.LayerIndex, layer.MetadataJSON, "{}")
-		}
 	}
 }
 
@@ -416,6 +353,9 @@ func TestStoreSchemaHasForeignKeysAndIndices(t *testing.T) {
 	assertForeignKey(t, database, "gate_evaluation_layers", "gate_evaluations")
 	assertForeignKey(t, database, "gate_evaluation_layers", "gate_evaluation_layers")
 	assertForeignKey(t, database, "gate_evaluation_labels", "gate_evaluations")
+	assertForeignKey(t, database, "gate_evaluation_details", "gate_evaluations")
+	assertForeignKey(t, database, "gate_evaluation_layer_details", "gate_evaluation_layers")
+	assertForeignKey(t, database, "gate_evaluation_label_details", "gate_evaluation_labels")
 	assertIndex(t, database, "gate_evaluations", "gate_evaluations_event_id_idx")
 	assertIndex(t, database, "gate_evaluations", "gate_evaluations_receipt_id_idx")
 	assertIndex(t, database, "gate_evaluation_layers", "gate_evaluation_layers_kind_name_idx")

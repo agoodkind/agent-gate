@@ -14,6 +14,7 @@ const migrationTimeFormat = time.RFC3339Nano
 var migrations = []Migration{
 	{Version: 1, ForeignKeysDisabled: false, Apply: migrateV1},
 	{Version: 2, ForeignKeysDisabled: true, Apply: migrateIntakeV2},
+	{Version: 3, ForeignKeysDisabled: true, Apply: migrateEvaluationV3},
 }
 
 var migrationNow = time.Now

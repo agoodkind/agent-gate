@@ -2,6 +2,8 @@ package intake_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"path/filepath"
@@ -10,6 +12,7 @@ import (
 	"time"
 
 	"goodkind.io/agent-gate/internal/audit"
+	"goodkind.io/agent-gate/internal/config"
 	"goodkind.io/agent-gate/internal/evaluation"
 	"goodkind.io/agent-gate/internal/intake"
 )
@@ -37,6 +40,95 @@ func TestCommitHotEvaluationRollsBackPendingWhenLedgerInsertFails(t *testing.T) 
 	}
 	if len(pending) != 0 {
 		t.Fatalf("pending records = %+v, want rollback", pending)
+	}
+}
+
+func TestEvaluationDetailFailureRollsBackSummary(t *testing.T) {
+	store := newTestStore(t)
+	receipt := appendAtomicRecord(t, store, "event-detail-rollback")
+	if _, err := store.Handle().Exec(`
+		create trigger fail_evaluation_layer_detail
+		before insert on gate_evaluation_layer_details
+		begin select raise(abort, 'forced evaluation detail failure'); end
+	`); err != nil {
+		t.Fatalf("create failure trigger: %v", err)
+	}
+	record := atomicEvaluationRecord(receipt, "eval-detail-rollback", "hot", 1)
+	record.Layers = []evaluation.Layer{atomicEvaluationLayer()}
+
+	err := store.CommitHotEvaluation(
+		t.Context(), receipt.EventID, receipt.ReceiptID, true, record,
+	)
+	if err == nil {
+		t.Fatal("CommitHotEvaluation succeeded with failing detail trigger")
+	}
+	for _, table := range []string{
+		"gate_evaluations", "gate_evaluation_details", "gate_evaluation_layers",
+		"gate_evaluation_layer_details",
+	} {
+		var count int
+		if err := store.Handle().QueryRow("select count(*) from " + table).Scan(&count); err != nil {
+			t.Fatalf("count %s: %v", table, err)
+		}
+		if count != 0 {
+			t.Fatalf("%s rows = %d, want rollback", table, count)
+		}
+	}
+	pending, err := store.ListDeferredPending(t.Context(), 0)
+	if err != nil {
+		t.Fatalf("ListDeferredPending: %v", err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("pending records = %+v, want rollback", pending)
+	}
+}
+
+func TestDisabledEvaluationDetailRemainsProtectedWhileReceiptCanRetry(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.db")
+	policy := config.AuditStoragePolicy{
+		Profile: config.AuditStorageProfileMinimal,
+		Detail: config.AuditStorageDetailPolicy{
+			WireInput: false, NormalizedInput: false, ProviderEvidence: false,
+			EnvironmentEvidence: false, EvaluationContent: false,
+		},
+	}
+	store, err := intake.OpenSQLiteWithOptions(t.Context(), intake.SQLiteOptions{
+		Path: path, Policy: policy,
+	})
+	if err != nil {
+		t.Fatalf("OpenSQLiteWithOptions: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	})
+	receipt := appendAtomicRecord(t, store, "event-protected-evaluation")
+	record := atomicEvaluationRecord(receipt, "eval-protected", "hot", 1)
+	record.Layers = []evaluation.Layer{atomicEvaluationLayer()}
+	if err := store.CommitHotEvaluation(
+		t.Context(), receipt.EventID, receipt.ReceiptID, true, record,
+	); err != nil {
+		t.Fatalf("CommitHotEvaluation: %v", err)
+	}
+	var state string
+	var detailCount int
+	if err := store.Handle().QueryRow(`
+		select detail_state,
+			(select count(*) from gate_evaluation_layer_details where evaluation_id = ?)
+		from gate_evaluations where evaluation_id = ?
+	`, record.Evaluation.EvaluationID, record.Evaluation.EvaluationID).Scan(
+		&state, &detailCount,
+	); err != nil {
+		t.Fatalf("read protected evaluation: %v", err)
+	}
+	if state != "protected" || detailCount != 1 {
+		t.Fatalf("evaluation detail = state %q rows %d, want protected and 1", state, detailCount)
+	}
+	if _, _, err := store.ClaimDeferred(
+		t.Context(), receipt.ReceiptID, "retry-owner", 30*time.Second,
+	); err != nil {
+		t.Fatalf("ClaimDeferred: %v", err)
 	}
 }
 
@@ -405,6 +497,24 @@ func atomicEvaluationRecord(
 		},
 		Layers: make([]evaluation.Layer, 0), Labels: make([]evaluation.Label, 0),
 	}
+}
+
+func atomicEvaluationLayer() evaluation.Layer {
+	content := json.RawMessage(`{"decision":"allow"}`)
+	return evaluation.Layer{
+		LayerIndex: 0, Kind: "deterministic", Name: "rules", Status: "complete",
+		Outcome: "nonmatch", InputReference: "normalized_payload",
+		InputJSON: json.RawMessage(`{"command":"make check"}`),
+		InputHash: "sha256:layer-input", OutputJSON: content,
+		OutputHash: evaluationOutputHash(content), MetadataJSON: json.RawMessage(`{"schema_version":1}`),
+		StartedAt:   time.Date(2026, 7, 11, 4, 0, 0, 0, time.UTC),
+		CompletedAt: time.Date(2026, 7, 11, 4, 0, 1, 0, time.UTC),
+	}
+}
+
+func evaluationOutputHash(value json.RawMessage) string {
+	digest := sha256.Sum256(value)
+	return "sha256:" + hex.EncodeToString(digest[:])
 }
 
 func atomicAuditEntries(eventID string) []audit.NormalizedEntry {

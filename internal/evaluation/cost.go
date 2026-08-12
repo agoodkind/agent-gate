@@ -117,9 +117,9 @@ func estimatedCostMicros(promptTokens, cachedTokens, completionTokens int64, pri
 
 // CostReport reads recorded judge inference layers from an existing SQLite path
 // and returns per-model and per-day estimated cost plus the dedup cache-hit rate,
-// without creating or migrating the database. Tokens come from the recorded
-// upstream metadata and are deduplicated by upstream request id so a batch call
-// copied across rule layers is billed once.
+// without creating or migrating the database. Tokens come from durable summary
+// columns and are deduplicated by upstream request id so a batch call copied
+// across rule layers is billed once.
 func CostReport(
 	ctx context.Context,
 	path string,
@@ -192,17 +192,17 @@ func queryCostAggregates(
 	const query = `
 		with calls as (
 			select
-				json_extract(metadata_json, '$.upstream_metadata.raw.request_id') as request_id,
-				max(coalesce(nullif(model_name, ''), json_extract(metadata_json, '$.upstream_metadata.raw.requested_model'))) as model_name,
-				max(cast(json_extract(metadata_json, '$.upstream_metadata.raw.prompt_tokens') as integer)) as prompt_tokens,
-				max(cast(json_extract(metadata_json, '$.upstream_metadata.raw.completion_tokens') as integer)) as completion_tokens,
-				max(cast(coalesce(json_extract(metadata_json, '$.upstream_metadata.raw.cached_tokens'), 0) as integer)) as cached_tokens,
+				request_id,
+				max(coalesce(nullif(model_name, ''), requested_model)) as model_name,
+				max(prompt_tokens) as prompt_tokens,
+				max(completion_tokens) as completion_tokens,
+				max(cached_tokens) as cached_tokens,
 				min(completed_at) as first_at
 			from gate_evaluation_layers
 			where kind = 'inference'
-				and json_extract(metadata_json, '$.upstream_metadata.status') = 'present'
-				and coalesce(json_extract(metadata_json, '$.upstream_metadata.raw.request_id'), '') != ''
-				and coalesce(nullif(model_name, ''), json_extract(metadata_json, '$.upstream_metadata.raw.requested_model'), '') != ''
+				and upstream_metadata_status = 'present'
+				and request_id != ''
+				and coalesce(nullif(model_name, ''), requested_model, '') != ''
 				and (? = '' or completed_at >= ?)
 				and (? = '' or completed_at <= ?)
 			group by request_id
