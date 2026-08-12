@@ -213,8 +213,13 @@ func ClassifyWithContext(
 
 	classification := resolveClassification(input, candidates)
 	if parseErr != nil {
+		classification.ResolvedProvider = SystemUnknown.String()
 		classification.Result = ClassificationResultInvalid
 		classification.Confidence = ClassificationConfidenceNone
+		classification.Conflicts = nil
+		for i := range classification.Evidence {
+			classification.Evidence[i].Result = "candidate"
+		}
 	}
 	return classification
 }
