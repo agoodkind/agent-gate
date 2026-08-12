@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -154,6 +155,9 @@ func TestApplyStopsOnBusyWithoutBreakingConcurrentAppend(t *testing.T) {
 	if result.Result != "deferred" || !errors.Is(result.Err, auditmaintenance.ErrMaintenanceBusy) {
 		t.Fatalf("result = %#v, want deferred busy", result)
 	}
+	if result.SizeState != auditmaintenance.SizeStateUnknown {
+		t.Fatalf("size state = %q, want unknown", result.SizeState)
+	}
 	if _, err := connection.ExecContext(t.Context(), `commit`); err != nil {
 		t.Fatalf("commit competing write: %v", err)
 	}
@@ -176,6 +180,29 @@ func TestApplyDefersWhenRunRecordMeetsConcurrentWriter(t *testing.T) {
 	fixture := createMaintenanceFixture(t)
 	database := openReadWriteDatabase(t, fixture.path)
 	insertProtectedPreviewGraphs(t, fixture, database)
+	connection, err := database.Conn(t.Context())
+	if err != nil {
+		t.Fatalf("reserve concurrent writer: %v", err)
+	}
+	defer func() { _ = connection.Close() }()
+	var startErr error
+	var releaseErr error
+	transactionActive := false
+	defer func() {
+		if transactionActive {
+			_, _ = connection.ExecContext(t.Context(), `rollback`)
+		}
+	}()
+	log := slog.New(runRecordBoundaryHandler{
+		start: func() {
+			_, startErr = connection.ExecContext(t.Context(), `begin immediate`)
+			transactionActive = startErr == nil
+		},
+		release: func() {
+			_, releaseErr = connection.ExecContext(t.Context(), `commit`)
+			transactionActive = false
+		},
+	})
 
 	type applyOutcome struct {
 		result auditmaintenance.Result
@@ -183,25 +210,19 @@ func TestApplyDefersWhenRunRecordMeetsConcurrentWriter(t *testing.T) {
 	}
 	outcome := make(chan applyOutcome, 1)
 	go func() {
-		result, err := auditmaintenance.Apply(t.Context(), applyOptions(fixture))
+		options := applyOptions(fixture)
+		options.Log = log
+		result, err := auditmaintenance.Apply(t.Context(), options)
 		outcome <- applyOutcome{result: result, err: err}
 	}()
 
-	waitForMaintenanceLease(t, database)
-	connection, err := database.Conn(t.Context())
-	if err != nil {
-		t.Fatalf("reserve concurrent writer: %v", err)
-	}
-	defer func() { _ = connection.Close() }()
-	if _, err := connection.ExecContext(t.Context(), `begin immediate`); err != nil {
-		t.Fatalf("begin concurrent writer: %v", err)
-	}
-	time.Sleep(500 * time.Millisecond)
-	if _, err := connection.ExecContext(t.Context(), `commit`); err != nil {
-		t.Fatalf("commit concurrent writer: %v", err)
-	}
-
 	completed := <-outcome
+	if startErr != nil {
+		t.Fatalf("begin concurrent writer: %v", startErr)
+	}
+	if releaseErr != nil {
+		t.Fatalf("commit concurrent writer: %v", releaseErr)
+	}
 	if completed.err != nil {
 		t.Fatalf("Apply: %v", completed.err)
 	}
@@ -213,21 +234,102 @@ func TestApplyDefersWhenRunRecordMeetsConcurrentWriter(t *testing.T) {
 	assertRecordedPlan(t, database, completed.result.RunID, completed.result.Plan)
 }
 
+func TestApplyRenewsExpiredLeaseAfterPlanning(t *testing.T) {
+	fixture := createMaintenanceFixture(t)
+	database := openReadWriteDatabase(t, fixture.path)
+	insertProtectedPreviewGraphs(t, fixture, database)
+	fixture.now = time.Now().UTC().Add(-time.Hour)
+	var stealErr error
+	var stolen bool
+	log := slog.New(runRecordBoundaryHandler{
+		start: func() {
+			result, err := database.ExecContext(t.Context(), `
+				update audit_maintenance_lease
+				set owner = 'competitor', run_id = 'competitor-run', expires_at = ?
+				where expires_at <= ?
+			`, time.Now().UTC().Add(time.Minute).Format(time.RFC3339Nano),
+				time.Now().UTC().Format(time.RFC3339Nano))
+			if err != nil {
+				stealErr = err
+				return
+			}
+			changed, err := result.RowsAffected()
+			if err != nil {
+				stealErr = err
+				return
+			}
+			stolen = changed != 0
+		},
+		release: func() {},
+	})
+	options := applyOptions(fixture)
+	options.Log = log
+
+	result, err := auditmaintenance.Apply(t.Context(), options)
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if stealErr != nil {
+		t.Fatalf("attempt competing lease acquisition: %v", stealErr)
+	}
+	if stolen {
+		t.Fatal("planning lease expired before the run record")
+	}
+	if result.Result != "success" {
+		t.Fatalf("result = %q, want success", result.Result)
+	}
+}
+
+type runRecordBoundaryHandler struct {
+	start   func()
+	release func()
+}
+
+func (handler runRecordBoundaryHandler) Enabled(context.Context, slog.Level) bool {
+	return true
+}
+
+func (handler runRecordBoundaryHandler) Handle(_ context.Context, record slog.Record) error {
+	if record.Message == auditmaintenance.TestLogRecordMaintenanceStart {
+		handler.start()
+	}
+	if record.Message == auditmaintenance.TestLogMaintenanceStartRecordFailed {
+		handler.release()
+	}
+	return nil
+}
+
+func (handler runRecordBoundaryHandler) WithAttrs([]slog.Attr) slog.Handler {
+	return handler
+}
+
+func (handler runRecordBoundaryHandler) WithGroup(string) slog.Handler {
+	return handler
+}
+
 func TestApplyReleasesLeaseAndFileLockAfterCancellation(t *testing.T) {
 	fixture := createMaintenanceFixture(t)
 	database := openReadWriteDatabase(t, fixture.path)
 	insertProtectedPreviewGraphs(t, fixture, database)
 	ctx, cancel := context.WithCancel(t.Context())
-	completed := make(chan error, 1)
+	type applyOutcome struct {
+		result auditmaintenance.Result
+		err    error
+	}
+	completed := make(chan applyOutcome, 1)
 	go func() {
-		_, err := auditmaintenance.Apply(ctx, applyOptions(fixture))
-		completed <- err
+		result, err := auditmaintenance.Apply(ctx, applyOptions(fixture))
+		completed <- applyOutcome{result: result, err: err}
 	}()
 
 	waitForMaintenanceLease(t, database)
 	cancel()
-	if err := <-completed; !errors.Is(err, context.Canceled) {
-		t.Fatalf("Apply error = %v, want context canceled", err)
+	outcome := <-completed
+	if !errors.Is(outcome.err, context.Canceled) {
+		t.Fatalf("Apply error = %v, want context canceled", outcome.err)
+	}
+	if outcome.result.SizeState != auditmaintenance.SizeStateUnknown {
+		t.Fatalf("size state = %q, want unknown", outcome.result.SizeState)
 	}
 	var leases int
 	if err := database.QueryRowContext(
@@ -505,7 +607,20 @@ func TestApplyRejectsOverlappingLease(t *testing.T) {
 	if !errors.Is(result.Err, auditmaintenance.ErrMaintenanceBusy) || result.Result != "deferred" {
 		t.Fatalf("result = %#v, want deferred maintenance busy", result)
 	}
+	if result.SizeState != auditmaintenance.SizeStateUnknown {
+		t.Fatalf("size state = %q, want unknown", result.SizeState)
+	}
 	assertGraphCount(t, database, "old-summary", 1)
+}
+
+func TestApplyRejectsNegativeSizeTarget(t *testing.T) {
+	fixture := createMaintenanceFixture(t)
+	fixture.policy.MaxSizeBytes = -1
+
+	_, err := auditmaintenance.Apply(t.Context(), applyOptions(fixture))
+	if err == nil || !strings.Contains(err.Error(), "size target must not be negative") {
+		t.Fatalf("Apply error = %v, want negative size target", err)
+	}
 }
 
 func TestApplyReleasesOwnedLeaseAfterSuccess(t *testing.T) {
@@ -628,9 +743,12 @@ func TestApplyCancellationDoesNotDeleteProtectedGraph(t *testing.T) {
 	fixture := createMaintenanceFixture(t)
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	_, err := auditmaintenance.Apply(ctx, applyOptions(fixture))
+	result, err := auditmaintenance.Apply(ctx, applyOptions(fixture))
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("Apply error = %v, want context canceled", err)
+	}
+	if result.SizeState != auditmaintenance.SizeStateUnknown {
+		t.Fatalf("size state = %q, want unknown", result.SizeState)
 	}
 	database := openReadWriteDatabase(t, fixture.path)
 	assertGraphCount(t, database, "old-summary", 1)

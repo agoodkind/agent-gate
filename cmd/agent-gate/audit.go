@@ -139,6 +139,7 @@ func writeAuditResult(writer io.Writer, result auditmaintenance.Result) {
 	_, _ = fmt.Fprintf(writer, "result: %s\n", result.Result)
 	_, _ = fmt.Fprintf(writer, "detail graphs: %d\n", result.DetailGraphs)
 	_, _ = fmt.Fprintf(writer, "summary graphs: %d\n", result.SummaryGraphs)
+	_, _ = fmt.Fprintf(writer, "size state: %s\n", result.SizeState)
 	if result.ErrorClass != "" {
 		_, _ = fmt.Fprintf(writer, "error class: %s\n", result.ErrorClass)
 	}
@@ -151,6 +152,7 @@ func writeAuditStatus(writer io.Writer, status auditmaintenance.Status) {
 	_, _ = fmt.Fprintf(writer, "database bytes: %d\n", status.DatabaseBytes)
 	_, _ = fmt.Fprintf(writer, "write-ahead log bytes: %d\n", status.WALBytes)
 	_, _ = fmt.Fprintf(writer, "protected graphs: %d\n", status.ProtectedGraphs)
+	_, _ = fmt.Fprintf(writer, "protected bytes estimate: %d\n", status.ProtectedBytes)
 	_, _ = fmt.Fprintf(writer, "reclaimable pages: %d\n", status.ReclaimablePages)
 	_, _ = fmt.Fprintf(writer, "size state: %s\n", status.SizeState)
 	if status.IntegrityOK {
