@@ -163,7 +163,8 @@
       "hooks": [
         {
           "type": "command",
-          "command": "__AGENT_GATE_BIN__ managed-hook claude"
+          "command": "__AGENT_GATE_BIN__ managed-hook claude",
+          "timeout": 5
         }
       ],
       "failClosed": false

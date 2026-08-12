@@ -16,6 +16,7 @@ import (
 type intakeStore interface {
 	deferredAuditStore
 	Append(context.Context, intake.Record) (intake.AppendResult, error)
+	AppendPending(context.Context, intake.Record) (intake.AppendResult, error)
 	Get(context.Context, string) (intake.Record, error)
 	GetReceipt(context.Context, int64) (intake.Record, error)
 	ClaimDeferred(
@@ -137,6 +138,23 @@ func (s *sqliteIntakeStore) Append(ctx context.Context, record intake.Record) (i
 			s.log.WarnContext(ctx, "append intake record failed", "err", err)
 		}
 		return intake.AppendResult{}, fmt.Errorf("append intake record: %w", err)
+	}
+	return result, nil
+}
+
+func (s *sqliteIntakeStore) AppendPending(
+	ctx context.Context,
+	record intake.Record,
+) (intake.AppendResult, error) {
+	if s == nil || s.store == nil {
+		return intake.AppendResult{}, fmt.Errorf("intake store is nil")
+	}
+	result, err := s.store.AppendPending(ctx, record)
+	if err != nil {
+		if s.log != nil {
+			s.log.WarnContext(ctx, "append pending intake record failed", "err", err)
+		}
+		return intake.AppendResult{}, fmt.Errorf("append pending intake record: %w", err)
 	}
 	return result, nil
 }

@@ -1741,6 +1741,19 @@ func TestEvaluateHook_CodexStopBlockingRuleDowngradesToAudit(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	defer srv.Close()
+	snapshot := srv.runtime.Load()
+	originalHotEvaluate := snapshot.hotEvaluate
+	hotEvaluationCalled := false
+	snapshot.hotEvaluate = func(
+		ctx context.Context,
+		input hook.EvaluationInput,
+		syncConfig *config.Config,
+		getenv func(string) string,
+		eventID string,
+	) hook.HotEvaluation {
+		hotEvaluationCalled = true
+		return originalHotEvaluate(ctx, input, syncConfig, getenv, eventID)
+	}
 
 	rawJSON := []byte(`{"session_id":"s1","hook_event_name":"Stop","turn_id":"t1","cwd":"/repo","stop_hook_active":false,"last_assistant_message":"this--is ugly"}`)
 	resp, err := srv.EvaluateHook(context.Background(), &daemonpb.EvaluateHookRequest{
@@ -1755,6 +1768,9 @@ func TestEvaluateHook_CodexStopBlockingRuleDowngradesToAudit(t *testing.T) {
 	if string(resp.StdoutData) != "{}\n" {
 		t.Fatalf("stdout = %q, want allow response", string(resp.StdoutData))
 	}
+	if hotEvaluationCalled {
+		t.Fatal("observe-only Stop ran synchronously")
+	}
 	waitForNoPendingIntake(t, srv)
 	waitForAuditMessages(t, cfg, "hook.audit_violation", "hook.allowed")
 	events, _, err := audit.Query(cfg, audit.QueryFilter{Limit: 20})
@@ -1766,6 +1782,42 @@ func TestEvaluateHook_CodexStopBlockingRuleDowngradesToAudit(t *testing.T) {
 			t.Fatalf("unexpected hook.blocked event: %+v", event)
 		}
 	}
+}
+
+func TestEvaluateHook_ClaudeSessionEndReturnsAfterDurableIntake(t *testing.T) {
+	setDaemonTestDirs(t)
+	cfg := codexStopAuditDaemonTestConfig(t)
+	srv, err := New(newDiscardLogger(), cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer srv.Close()
+	snapshot := srv.runtime.Load()
+	snapshot.hotEvaluate = func(
+		context.Context,
+		hook.EvaluationInput,
+		*config.Config,
+		func(string) string,
+		string,
+	) hook.HotEvaluation {
+		t.Fatal("observe-only SessionEnd ran synchronously")
+		return hook.HotEvaluation{}
+	}
+
+	rawJSON := []byte(`{"session_id":"s1","hook_event_name":"SessionEnd","cwd":"/repo","reason":"exit"}`)
+	resp, err := srv.EvaluateHook(context.Background(), &daemonpb.EvaluateHookRequest{
+		RawJson:      rawJSON,
+		ProviderHint: "claude",
+		Cwd:          "/repo",
+	})
+	if err != nil {
+		t.Fatalf("EvaluateHook: %v", err)
+	}
+	if string(resp.StdoutData) != "{}\n" {
+		t.Fatalf("stdout = %q, want allow response", string(resp.StdoutData))
+	}
+	waitForNoPendingIntake(t, srv)
+	waitForAuditMessages(t, cfg, "hook.allowed")
 }
 
 func TestStatusReportsProcessMetadata(t *testing.T) {

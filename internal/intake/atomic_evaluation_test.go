@@ -18,6 +18,52 @@ import (
 	"goodkind.io/agent-gate/internal/intake"
 )
 
+func TestAppendPendingCommitsReceiptAndDeferredStateTogether(t *testing.T) {
+	store := openAtomicStore(t, filepath.Join(t.TempDir(), "audit.db"))
+	receipt, err := store.AppendPending(
+		t.Context(),
+		atomicIntakeRecord("event-append-pending"),
+	)
+	if err != nil {
+		t.Fatalf("AppendPending: %v", err)
+	}
+
+	pending, err := store.ListDeferredPending(t.Context(), 0)
+	if err != nil {
+		t.Fatalf("ListDeferredPending: %v", err)
+	}
+	if len(pending) != 1 || pending[0].ReceiptID != receipt.ReceiptID {
+		t.Fatalf("pending records = %+v, want receipt %d", pending, receipt.ReceiptID)
+	}
+}
+
+func TestAppendPendingRollsBackReceiptWhenDeferredInsertFails(t *testing.T) {
+	store := openAtomicStore(t, filepath.Join(t.TempDir(), "audit.db"))
+	if _, err := store.Handle().Exec(`
+		create trigger fail_append_pending before insert on intake_deferred
+		begin select raise(abort, 'forced deferred failure'); end
+	`); err != nil {
+		t.Fatalf("create failure trigger: %v", err)
+	}
+
+	_, err := store.AppendPending(
+		t.Context(),
+		atomicIntakeRecord("event-append-pending-rollback"),
+	)
+	if err == nil {
+		t.Fatal("AppendPending succeeded with failing deferred trigger")
+	}
+	for _, table := range []string{"intake_events", "intake_receipts", "intake_deferred"} {
+		var count int
+		if err := store.Handle().QueryRow("select count(*) from " + table).Scan(&count); err != nil {
+			t.Fatalf("count %s: %v", table, err)
+		}
+		if count != 0 {
+			t.Fatalf("%s rows = %d, want rollback", table, count)
+		}
+	}
+}
+
 func TestCommitHotEvaluationRollsBackPendingWhenLedgerInsertFails(t *testing.T) {
 	store := newTestStore(t)
 	receipt := appendAtomicRecord(t, store, "event-hot-rollback")
@@ -536,15 +582,19 @@ func appendAtomicRecord(
 	eventID string,
 ) intake.AppendResult {
 	t.Helper()
-	receipt, err := store.Append(context.Background(), intake.Record{
-		EventID: eventID, System: "codex", SessionID: "session",
-		EventName: "PreToolUse", RawPayload: []byte(`{}`),
-		NormalizedJSON: json.RawMessage(`{}`),
-	})
+	receipt, err := store.Append(context.Background(), atomicIntakeRecord(eventID))
 	if err != nil {
 		t.Fatalf("Append: %v", err)
 	}
 	return receipt
+}
+
+func atomicIntakeRecord(eventID string) intake.Record {
+	return intake.Record{
+		EventID: eventID, System: "codex", SessionID: "session",
+		EventName: "PreToolUse", RawPayload: []byte(`{}`),
+		NormalizedJSON: json.RawMessage(`{}`),
+	}
 }
 
 func openAtomicStore(t *testing.T, path string) *intake.Store {

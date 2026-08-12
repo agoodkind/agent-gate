@@ -240,6 +240,19 @@ func (s *Store) Close() error {
 
 // Append inserts one durable intake record, deduping by stable event id.
 func (s *Store) Append(ctx context.Context, record Record) (AppendResult, error) {
+	return s.append(ctx, record, false)
+}
+
+// AppendPending inserts one durable intake record ready for deferred evaluation.
+func (s *Store) AppendPending(ctx context.Context, record Record) (AppendResult, error) {
+	return s.append(ctx, record, true)
+}
+
+func (s *Store) append(
+	ctx context.Context,
+	record Record,
+	deferredPending bool,
+) (AppendResult, error) {
 	normalizedJSON, err := normalizeJSON(record.NormalizedJSON)
 	if err != nil {
 		return AppendResult{}, wrapLoggedError(ctx, s.log, "normalize intake payload", err)
@@ -318,6 +331,11 @@ func (s *Store) Append(ctx context.Context, record Record) (AppendResult, error)
 	if err != nil {
 		return AppendResult{}, wrapLoggedError(ctx, s.log, "read intake receipt id", err)
 	}
+	if err := markDeferredPendingIfRequested(
+		ctx, tx, deferredPending, receiptID, record.EventID, receivedAt,
+	); err != nil {
+		return AppendResult{}, err
+	}
 	if err := tx.Commit(); err != nil {
 		return AppendResult{}, wrapLoggedError(ctx, s.log, "commit intake append tx", err)
 	}
@@ -326,6 +344,20 @@ func (s *Store) Append(ctx context.Context, record Record) (AppendResult, error)
 		EventID:   record.EventID,
 		Inserted:  rowsAffected == 1,
 	}, nil
+}
+
+func markDeferredPendingIfRequested(
+	ctx context.Context,
+	transaction *sql.Tx,
+	deferredPending bool,
+	receiptID int64,
+	eventID string,
+	receivedAt time.Time,
+) error {
+	if !deferredPending {
+		return nil
+	}
+	return markDeferredPendingInTx(ctx, transaction, receiptID, eventID, receivedAt)
 }
 
 func (s *Store) insertDetail(

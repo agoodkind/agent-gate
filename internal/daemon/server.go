@@ -537,7 +537,6 @@ func (s *Server) EvaluateHook(ctx context.Context, req *daemonpb.EvaluateHookReq
 	}
 	defer s.releaseEvaluateSlot(snapshot)
 
-	ctx, traceSink := hookEvaluationContext(ctx, snapshot)
 	envFingerprint := req.GetEnvFingerprint()
 	evaluationInput, normalizationErr := prepareHookEvaluationInput(req)
 
@@ -549,26 +548,20 @@ func (s *Server) EvaluateHook(ctx context.Context, req *daemonpb.EvaluateHookReq
 	}
 
 	evalStart := hotEvalNow()
-	intakeRecord, intakeErr := buildClassifiedIntakeRecord(
-		evaluationInput.WireBytes,
-		evaluationInput.NormalizedJSON,
-		evaluationInput.Classification,
-		envFingerprint,
+	intakeRecord, intakeErr := prepareIntakeRecord(
+		evaluationInput, normalizationErr, envFingerprint,
 	)
-	if normalizationErr != nil {
-		intakeErr = normalizationErr
-	}
-	if intakeErr != nil {
-		intakeRecord = buildInvalidIntakeRecord(
-			evaluationInput.WireBytes,
-			evaluationInput.Classification,
-			envFingerprint,
-		)
-	}
 
-	appendResult, err := snapshot.intakeStore.Append(ctx, intakeRecord)
+	system := evaluationInput.Classification.ResolvedSystem()
+	deferEvaluation := shouldDeferHookEvaluation(system, intakeRecord.EventName, intakeErr)
+	appendResult, err := appendHookIntake(
+		ctx,
+		requestLog,
+		snapshot.intakeStore,
+		intakeRecord,
+		deferEvaluation,
+	)
 	if err != nil {
-		requestLog.WarnContext(ctx, "append hook intake failed; failing open", "err", err)
 		return s.unevaluated(ctx, req, hook.FailOpenReasonIntakeWriteFailed, err.Error()), nil
 	}
 	if intakeErr == nil {
@@ -580,6 +573,11 @@ func (s *Server) EvaluateHook(ctx context.Context, req *daemonpb.EvaluateHookReq
 		)
 	}
 
+	if deferEvaluation {
+		return deferObservedHook(snapshot, appendResult, system, intakeRecord.EventName), nil
+	}
+
+	ctx, traceSink := hookEvaluationContext(ctx, snapshot)
 	syncCfg := hook.SyncConfig(snapshot.cfg)
 	result := snapshot.hotEvaluate(
 		ctx,
@@ -615,42 +613,6 @@ func hookEvaluationContext(
 		ctx = rules.WithInferenceTraceCollector(ctx, traceSink)
 	}
 	return ctx, traceSink
-}
-
-func prepareHookEvaluationInput(
-	request *daemonpb.EvaluateHookRequest,
-) (hook.EvaluationInput, error) {
-	wireInput := cloneBytes(request.GetRawJson())
-	classification := hook.ClassifyWithContext(
-		wireInput,
-		request.GetProviderHint(),
-		request.GetArgv(),
-		request.GetEnvFingerprint(),
-		invocationContextFromProto(request.GetInvocationContext()),
-	)
-	normalizedJSON := cloneBytes(wireInput)
-	if cwd := request.GetCwd(); cwd != "" {
-		normalizedJSON = injectCWD(normalizedJSON, cwd)
-	}
-	if classification.ResolvedSystem() == hook.SystemCopilot {
-		var err error
-		normalizedJSON, err = hook.NormalizeCopilotPayload(
-			normalizedJSON,
-			copilotEventHint(request.GetArgv()),
-		)
-		if err != nil {
-			return hook.EvaluationInput{
-				WireBytes:      wireInput,
-				NormalizedJSON: cloneBytes(wireInput),
-				Classification: classification,
-			}, wrapServerError("normalize Copilot payload", err)
-		}
-	}
-	return hook.EvaluationInput{
-		WireBytes:      wireInput,
-		NormalizedJSON: normalizedJSON,
-		Classification: classification,
-	}, nil
 }
 
 func observeUserPrompt(

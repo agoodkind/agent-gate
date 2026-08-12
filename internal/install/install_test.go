@@ -198,6 +198,23 @@ func TestInstallHooksRemovesClaudeWorktreeFactoryHooks(t *testing.T) {
 	if !reflect.DeepEqual(sessionStartCommands, wantSessionStartCommands) {
 		t.Fatalf("SessionStart commands = %v, want %v", sessionStartCommands, wantSessionStartCommands)
 	}
+	var sessionEndGroups []struct {
+		Hooks []struct {
+			Timeout int `json:"timeout"`
+		} `json:"hooks"`
+	}
+	if err := json.Unmarshal(settings.Hooks["SessionEnd"], &sessionEndGroups); err != nil {
+		t.Fatalf("Unmarshal SessionEnd hooks: %v", err)
+	}
+	if len(sessionEndGroups) != 1 || len(sessionEndGroups[0].Hooks) != 1 {
+		t.Fatalf("SessionEnd groups = %+v, want one hook", sessionEndGroups)
+	}
+	if sessionEndGroups[0].Hooks[0].Timeout != 5 {
+		t.Fatalf(
+			"SessionEnd timeout = %d, want 5",
+			sessionEndGroups[0].Hooks[0].Timeout,
+		)
+	}
 	if !strings.Contains(string(settings.Hooks["SessionStart"]), "empty-external") {
 		t.Fatalf("preexisting empty external group was removed: %s", settings.Hooks["SessionStart"])
 	}
