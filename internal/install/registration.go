@@ -13,6 +13,8 @@ import (
 	"github.com/pelletier/go-toml/v2"
 )
 
+var errManagedLifecycleEventMissing = errors.New("managed lifecycle event missing")
+
 // ManagedHookCommand is one installed observe-only lifecycle command.
 type ManagedHookCommand struct {
 	Provider   Provider
@@ -45,6 +47,61 @@ type codexHookConfiguration struct {
 // ReadManagedLifecycleCommand reads and validates one installed lifecycle command.
 func ReadManagedLifecycleCommand(options HooksOptions, provider Provider) (ManagedHookCommand, error) {
 	return ReadManagedLifecycleCommandContext(context.Background(), options, provider)
+}
+
+// HasManagedLifecycleRegistration reports whether the provider has one complete managed lifecycle registration.
+func HasManagedLifecycleRegistration(options HooksOptions, provider Provider) (bool, error) {
+	if !isKnownProvider(provider) {
+		return false, fmt.Errorf("unknown provider %q", provider)
+	}
+	homeDir, err := resolvedHomeDir(options.HomeDir)
+	if err != nil {
+		return false, err
+	}
+	eventName, matchers, arguments := lifecycleRegistration(provider)
+	groups, err := readLifecycleGroups(context.Background(), homeDir, provider, eventName)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) || errors.Is(err, errManagedLifecycleEventMissing) {
+			return false, nil
+		}
+		return false, err
+	}
+	if len(groups) == 0 {
+		return false, nil
+	}
+	managed, err := containsManagedLifecycleCommand(groups, provider, arguments)
+	if err != nil {
+		return false, err
+	}
+	if !managed {
+		return false, nil
+	}
+	if _, _, err := validateLifecycleGroups(provider, groups, matchers, "", arguments); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func containsManagedLifecycleCommand(
+	groups []lifecycleCommandGroup,
+	provider Provider,
+	expectedArguments []string,
+) (bool, error) {
+	managedMarker := " managed-hook " + string(provider)
+	for _, group := range groups {
+		for _, hook := range groupCommands(group) {
+			_, managed, err := parseManagedLifecycleCommand(hook.Command, managedMarker, expectedArguments)
+			if err != nil {
+				wrappedErr := fmt.Errorf("%s: %w", provider, err)
+				slog.Warn("managed lifecycle presence validation failed", "provider", provider, "err", wrappedErr)
+				return false, wrappedErr
+			}
+			if managed {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
 }
 
 // ReadManagedLifecycleCommandContext reads and validates one installed lifecycle command.
@@ -138,7 +195,7 @@ func readLifecycleGroups(
 	}
 	event, ok := configuration.Hooks[eventName]
 	if !ok {
-		return nil, fmt.Errorf("%s: missing lifecycle event %s", provider, eventName)
+		return nil, fmt.Errorf("%w: %s: missing lifecycle event %s", errManagedLifecycleEventMissing, provider, eventName)
 	}
 	var groups []lifecycleCommandGroup
 	if err := json.Unmarshal(event, &groups); err != nil {
@@ -282,7 +339,38 @@ func parseManagedLifecycleCommand(
 	if commandArguments != strings.Join(expectedArguments, " ") {
 		return "", true, errors.New("conflicting lifecycle commands")
 	}
-	return command[:markerIndex], true, nil
+	executable, err := parseShellCommandArgument(strings.TrimSpace(command[:markerIndex]))
+	if err != nil {
+		wrappedErr := fmt.Errorf("parse lifecycle executable: %w", err)
+		slog.Warn("lifecycle executable parse failed", "err", wrappedErr)
+		return "", true, wrappedErr
+	}
+	return executable, true, nil
+}
+
+func parseShellCommandArgument(value string) (string, error) {
+	if value == "" || value[0] != '\'' {
+		return value, nil
+	}
+	var output strings.Builder
+	index := 1
+	for {
+		closingOffset := strings.IndexByte(value[index:], '\'')
+		if closingOffset < 0 {
+			return "", errors.New("unterminated quoted executable")
+		}
+		closingIndex := index + closingOffset
+		output.WriteString(value[index:closingIndex])
+		index = closingIndex + 1
+		if index == len(value) {
+			return output.String(), nil
+		}
+		if !strings.HasPrefix(value[index:], "\"'\"'") {
+			return "", errors.New("invalid quoted executable")
+		}
+		output.WriteByte('\'')
+		index += len("\"'\"'")
+	}
 }
 
 func groupCommands(group lifecycleCommandGroup) []lifecycleCommandHook {

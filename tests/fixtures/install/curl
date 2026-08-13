@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 set -euo pipefail
 
 HOSTED_INSTALLER_URL="https://raw.githubusercontent.com/agoodkind/go-makefile/main/install.sh"
@@ -6,8 +6,35 @@ readonly HOSTED_INSTALLER_URL
 
 printf '%s\0' "$@" >"$CAPTURE_DIR/curl-args"
 
-if [[ "${!#}" != "$HOSTED_INSTALLER_URL" ]]; then
-    exit 86
+output_path=""
+url=""
+while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+        -o)
+            output_path="$2"
+            shift 2
+            ;;
+        -* )
+            shift
+            ;;
+        *)
+            url="$1"
+            shift
+            ;;
+    esac
+done
+
+if [[ "$url" != "$HOSTED_INSTALLER_URL" || -z "$output_path" ]]; then
+	 exit 86
 fi
 
-printf '%s\n' '# hosted installer sentinel'
+printf '%s\n' "$output_path" >"$CAPTURE_DIR/download-path"
+if [[ "$BLOCK_DOWNLOAD" == 1 ]]; then
+    printf '%s\n' "$$" >"$CAPTURE_DIR/curl-pid"
+    touch "$CAPTURE_DIR/curl-ready"
+    trap 'exit 143' TERM
+    while true; do
+        sleep 1
+    done
+fi
+cp "$FAKE_HOSTED_INSTALLER" "$output_path"

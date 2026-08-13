@@ -82,6 +82,47 @@ func TestReadManagedLifecycleCommandDerivesInstalledExecutable(t *testing.T) {
 	}
 }
 
+func TestHasManagedLifecycleRegistrationIgnoresUnrelatedExpectedEventCommands(t *testing.T) {
+	for _, provider := range AllProviders() {
+		t.Run(string(provider), func(t *testing.T) {
+			binPath := writeExecutable(t, filepath.Join(t.TempDir(), "agent-gate"))
+			homeDir := t.TempDir()
+			options := DefaultHooksOptions(binPath)
+			options.HomeDir = homeDir
+			options.Providers = []Provider{provider}
+			plan, err := PrepareHookInstallation(options)
+			if err != nil {
+				t.Fatalf("PrepareHookInstallation: %v", err)
+			}
+			if err := ApplyHookInstallation(plan); err != nil {
+				t.Fatalf("ApplyHookInstallation: %v", err)
+			}
+			path := lifecycleConfigurationPath(homeDir, provider)
+			content, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("ReadFile: %v", err)
+			}
+			content = []byte(strings.ReplaceAll(
+				string(content),
+				"managed-hook "+string(provider),
+				"unrelated "+string(provider),
+			))
+			if err := os.WriteFile(path, content, 0o600); err != nil {
+				t.Fatalf("WriteFile: %v", err)
+			}
+
+			options.BinPath = ""
+			managed, err := HasManagedLifecycleRegistration(options, provider)
+			if err != nil {
+				t.Fatalf("HasManagedLifecycleRegistration: %v", err)
+			}
+			if managed {
+				t.Fatal("unrelated expected-event command detected as managed")
+			}
+		})
+	}
+}
+
 func TestReadManagedLifecycleCommandRejectsMissingInstalledExecutable(t *testing.T) {
 	binPath := writeExecutable(t, filepath.Join(t.TempDir(), "agent-gate"))
 	homeDir := t.TempDir()

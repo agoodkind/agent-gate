@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+printf '%s\0' "$@" >"$CAPTURE_DIR/setup-args"
+printf '%s\n' "$$" >"$CAPTURE_DIR/setup-pid"
+if [[ "$EXPECT_TTY" == 1 ]]; then
+    if [[ ! -t 0 ]]; then
+        printf 'setup input is not a terminal\n' >&2
+        exit 88
+    fi
+elif [[ -t 0 ]]; then
+    printf 'setup unexpectedly received a terminal\n' >&2
+    exit 89
+fi
+
+if [[ "${READ_SETUP_INPUT:-0}" == 1 ]]; then
+    IFS= read -r setup_input
+    printf '%s\n' "$setup_input" >"$CAPTURE_DIR/setup-input"
+fi
+
+if [[ "${BLOCK_SETUP:-0}" == 1 ]]; then
+    printf 'ready\n' >"$CAPTURE_DIR/setup-ready"
+    trap 'exit 143' TERM
+    trap 'exit 130' INT
+    while true; do
+        sleep 1
+    done
+fi
+
+exit "$FAKE_AGENT_GATE_EXIT_CODE"

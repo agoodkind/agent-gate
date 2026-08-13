@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+printf '%s\0' "$@" >"$CAPTURE_DIR/hosted-args"
+
+post_arguments=()
+separator_found=false
+for argument in "$@"; do
+    if [[ "$separator_found" == true ]]; then
+        post_arguments+=("$argument")
+    elif [[ "$argument" == "--" ]]; then
+        separator_found=true
+    fi
+done
+
+if [[ "$separator_found" != true ]]; then
+    exit 87
+fi
+
+"$FAKE_AGENT_GATE" "${post_arguments[@]}"
