@@ -139,6 +139,9 @@ func CostReport(
 		Source:                 "sqlite",
 		Note:                   "",
 	}
+	if err := guardEvaluationDatabasePath(path); err != nil {
+		return CostReportResult{}, err
+	}
 	if _, err := os.Stat(path); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			result.Note = "no evaluation history exists yet"

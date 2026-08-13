@@ -41,6 +41,9 @@ func migrate(ctx context.Context, database *sql.DB, busyTimeoutMilliseconds int)
 	if database == nil {
 		return errors.New("audit storage database is required")
 	}
+	if err := GuardDatabase(ctx, database); err != nil {
+		return err
+	}
 	if err := configureDatabase(ctx, database, busyTimeoutMilliseconds); err != nil {
 		return err
 	}

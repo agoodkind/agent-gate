@@ -4,11 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 
+	"goodkind.io/agent-gate/internal/auditstorage"
 	"goodkind.io/agent-gate/internal/evaluation"
 )
 
@@ -43,6 +45,33 @@ type costLayerRow struct {
 	completedAt  string
 	cacheStatus  string
 	cacheKey     string
+}
+
+func TestCostReportRejectsUnresolvedCutover(t *testing.T) {
+	path := newCostFixture(t, nil)
+	if err := auditstorage.WriteCutoverJournal(auditstorage.CutoverJournal{
+		DatabasePath: path, RunID: "run", Phase: auditstorage.CutoverInstalled,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, err := evaluation.CostReport(t.Context(), path, costPricing(), evaluation.CostFilter{})
+	if err == nil || !strings.Contains(err.Error(), "recovery is required") {
+		t.Fatalf("CostReport error = %v, want recovery required", err)
+	}
+}
+
+func TestCostReportRejectsUnresolvedCutoverWhenDatabaseIsMissing(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.db")
+	if err := auditstorage.WriteCutoverJournal(auditstorage.CutoverJournal{
+		DatabasePath: path, RunID: "run", Phase: auditstorage.CutoverOriginalRenamed,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := evaluation.CostReport(t.Context(), path, costPricing(), evaluation.CostFilter{})
+	if err == nil || !strings.Contains(err.Error(), "recovery is required") {
+		t.Fatalf("CostReport error = %v, want recovery required", err)
+	}
 }
 
 func newCostFixture(t *testing.T, rows []costLayerRow) string {

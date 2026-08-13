@@ -161,6 +161,9 @@ func openSQLite(ctx context.Context, options SQLiteOptions) (*Store, error) {
 	if options.Log == nil {
 		options.Log = slog.Default()
 	}
+	if err := auditstorage.GuardDatabasePath(options.Path); err != nil {
+		return nil, wrapLoggedError(ctx, options.Log, "guard intake sqlite cutover", err)
+	}
 	if err := os.MkdirAll(filepath.Dir(options.Path), 0o755); err != nil {
 		return nil, wrapLoggedError(ctx, options.Log, "create intake sqlite dir", err)
 	}
@@ -179,7 +182,7 @@ func openSQLite(ctx context.Context, options SQLiteOptions) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
-	store.evaluations, err = evaluation.NewStoreWithPolicy(ctx, db, options.Policy)
+	store.evaluations, err = evaluation.NewStoreWithPolicy(ctx, options.Path, db, options.Policy)
 	if err != nil {
 		_ = db.Close()
 		return nil, wrapLoggedError(ctx, options.Log, "init evaluation store", err)

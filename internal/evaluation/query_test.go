@@ -406,6 +406,20 @@ func TestQueryHandlesMissingAndLegacyEvaluationHistory(t *testing.T) {
 	}
 }
 
+func TestQueryRejectsUnresolvedCutoverWhenDatabaseIsMissing(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.db")
+	if err := auditstorage.WriteCutoverJournal(auditstorage.CutoverJournal{
+		DatabasePath: path, RunID: "run", Phase: auditstorage.CutoverOriginalRenamed,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := evaluation.Query(t.Context(), path, evaluation.QueryFilter{})
+	if err == nil || !strings.Contains(err.Error(), "recovery is required") {
+		t.Fatalf("Query error = %v, want recovery required", err)
+	}
+}
+
 func TestStoreListRejectsMissingAndCorruptChildRows(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -490,10 +504,10 @@ func TestStoreListRejectsUnknownV2MetadataAfterRead(t *testing.T) {
 }
 
 func TestStoreMigratesEvaluationQueryColumns(t *testing.T) {
-	_, database, _, first, _ := newEvaluationQueryFixture(t)
+	_, database, path, first, _ := newEvaluationQueryFixture(t)
 	dropEvaluationQueryColumns(t, database)
 
-	migrated, err := evaluation.NewStore(context.Background(), database)
+	migrated, err := evaluation.NewStore(context.Background(), path, database)
 	if err != nil {
 		t.Fatalf("NewStore migration: %v", err)
 	}
@@ -544,7 +558,7 @@ func TestQueryReadsPopulatedLegacyEvaluationsBeforeAndAfterMigration(t *testing.
 		t.Fatalf("combined legacy filter records = %+v, want empty", combined.Records)
 	}
 
-	migrated, err := evaluation.NewStore(ctx, database)
+	migrated, err := evaluation.NewStore(ctx, path, database)
 	if err != nil {
 		t.Fatalf("NewStore migration: %v", err)
 	}

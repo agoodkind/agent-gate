@@ -20,6 +20,7 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 
+	"goodkind.io/agent-gate/internal/auditstorage"
 	"goodkind.io/agent-gate/internal/config"
 )
 
@@ -294,6 +295,9 @@ func validateReceiptTimestamps(ctx context.Context, database *sql.DB) error {
 }
 
 func openDatabaseSnapshot(ctx context.Context, path string) (databaseSnapshot, error) {
+	if err := auditstorage.GuardDatabasePath(path); err != nil {
+		return databaseSnapshot{}, wrapError("guard audit snapshot source cutover", err)
+	}
 	if _, err := os.Stat(path); err != nil {
 		return databaseSnapshot{}, wrapError("stat audit database", err)
 	}
@@ -395,6 +399,9 @@ func emptySnapshot(cleanup func()) databaseSnapshot {
 }
 
 func openSnapshotDatabase(ctx context.Context, path string) (*sql.DB, error) {
+	if err := auditstorage.GuardDatabasePath(path); err != nil {
+		return nil, wrapError("guard audit snapshot cutover", err)
+	}
 	uri := url.URL{Scheme: "file", Path: path}
 	query := url.Values{}
 	query.Set("mode", "rw")

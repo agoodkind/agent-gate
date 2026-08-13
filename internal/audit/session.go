@@ -227,17 +227,17 @@ func (el *EventLogger) configureOutputs(ctx context.Context, cfg *config.Config,
 	// is supplied the sink writes through the intake store's connection pool so
 	// the two writers serialize instead of contending.
 	el.rawHash = true
+	sqlitePath := config.DefaultAuditSQLitePath()
+	if cfg != nil {
+		sqlitePath = cfg.AuditSQLitePath()
+	}
 	if el.sharedDB != nil {
-		s, err := newSQLiteEventSinkFromDB(ctx, el.sharedDB, log)
+		s, err := newSQLiteEventSinkFromDB(ctx, sqlitePath, el.sharedDB, log)
 		if err != nil {
 			return err
 		}
 		el.outputs = append(el.outputs, s)
 		return nil
-	}
-	sqlitePath := config.DefaultAuditSQLitePath()
-	if cfg != nil {
-		sqlitePath = cfg.AuditSQLitePath()
 	}
 	s, err := newSQLiteEventSink(ctx, sqlitePath, log)
 	if err != nil {
@@ -645,6 +645,9 @@ func newSQLiteEventSink(ctx context.Context, path string, log *slog.Logger) (*sq
 	if log == nil {
 		log = slog.Default()
 	}
+	if err := auditstorage.GuardDatabasePath(path); err != nil {
+		return nil, fmt.Errorf("guard audit sqlite cutover: %w", err)
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		log.WarnContext(ctx, "create audit sqlite dir failed", slog.String("path", path), slog.Any("err", err))
 		return nil, fmt.Errorf("create audit sqlite dir: %w", err)
@@ -673,9 +676,19 @@ func newSQLiteEventSink(ctx context.Context, path string, log *slog.Logger) (*sq
 // shared handle (the intake store's). It does not own the handle, so Close
 // leaves it open for the owner to close. Sharing one pool serializes audit and
 // intake writes and removes their cross-pool lock contention.
-func newSQLiteEventSinkFromDB(ctx context.Context, db *sql.DB, log *slog.Logger) (*sqliteEventSink, error) {
+func newSQLiteEventSinkFromDB(
+	ctx context.Context,
+	path string,
+	db *sql.DB,
+	log *slog.Logger,
+) (*sqliteEventSink, error) {
 	if log == nil {
 		log = slog.Default()
+	}
+	if err := auditstorage.GuardDatabasePath(path); err != nil {
+		result := fmt.Errorf("guard shared audit sqlite cutover: %w", err)
+		log.WarnContext(ctx, "guard shared audit sqlite cutover failed", slog.Any("err", result))
+		return nil, result
 	}
 	s := &sqliteEventSink{db: db, log: log, ownsDB: false}
 	if err := s.init(ctx); err != nil {

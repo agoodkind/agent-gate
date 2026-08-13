@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -156,6 +155,9 @@ func Query(ctx context.Context, path string, filter QueryFilter) (QueryResult, e
 		Completeness: DetailCompleteness{
 			IncompleteCount: 0, EarliestCompleteDetailAt: nil,
 		},
+	}
+	if err := guardEvaluationDatabasePath(path); err != nil {
+		return QueryResult{}, err
 	}
 	if _, err := os.Stat(path); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -989,12 +991,4 @@ func queryChildCountColumnsExist(ctx context.Context, database *sql.DB) (bool, e
 		return false, wrapError("iterate evaluation child count metadata", err)
 	}
 	return foundLayerCount && foundLabelCount, nil
-}
-
-func queryReadOnlySQLiteDSN(path string) string {
-	value := url.URL{Scheme: "file", Path: path}
-	query := url.Values{}
-	query.Set("mode", "ro")
-	value.RawQuery = query.Encode()
-	return value.String()
 }

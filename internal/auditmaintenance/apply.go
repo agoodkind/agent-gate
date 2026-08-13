@@ -305,6 +305,9 @@ func validateApplyOptions(options ApplyOptions) error {
 }
 
 func openApplyDatabase(ctx context.Context, path string) (*sql.DB, error) {
+	if err := auditstorage.GuardDatabasePath(path); err != nil {
+		return nil, wrapError("guard audit maintenance cutover", err)
+	}
 	uri := url.URL{Scheme: "file", Path: path}
 	query := url.Values{}
 	query.Set("mode", "rw")

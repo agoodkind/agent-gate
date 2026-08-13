@@ -24,7 +24,12 @@ type Store struct {
 }
 
 // NewStore initializes evaluation storage over a database owned by its caller.
-func NewStore(ctx context.Context, database *sql.DB) (*Store, error) {
+func NewStore(ctx context.Context, databasePath string, database *sql.DB) (*Store, error) {
+	if err := auditstorage.GuardDatabasePath(databasePath); err != nil {
+		result := fmt.Errorf("guard evaluation sqlite cutover: %w", err)
+		slog.WarnContext(ctx, "guard evaluation sqlite cutover failed", "err", result)
+		return nil, result
+	}
 	store := &Store{database: database, policy: config.AuditStoragePolicy{
 		Profile:                 config.AuditStorageProfileBalanced,
 		MaintenanceInterval:     24 * time.Hour,
@@ -47,10 +52,11 @@ func NewStore(ctx context.Context, database *sql.DB) (*Store, error) {
 // NewStoreWithPolicy initializes evaluation storage with one immutable policy.
 func NewStoreWithPolicy(
 	ctx context.Context,
+	databasePath string,
 	database *sql.DB,
 	policy config.AuditStoragePolicy,
 ) (*Store, error) {
-	store, err := NewStore(ctx, database)
+	store, err := NewStore(ctx, databasePath, database)
 	if err != nil {
 		return nil, err
 	}
