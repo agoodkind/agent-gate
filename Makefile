@@ -172,7 +172,6 @@ smoke-build:
 	echo "smoke-built: $$out"
 
 deploy:
-	$(MAKE) BUILD_CHECKS=false install
 	$(MAKE) deploy-service
 	$(MAKE) daemon-wait
 	$(MAKE) daemon-status
