@@ -37,7 +37,7 @@ func TestPrepareInstallationValidatesEveryLayerBeforeWrites(t *testing.T) {
 	}
 	hooks := DefaultHooksOptions(binPath)
 	hooks.HomeDir = homeDir
-	hooks.InstallCopilot = false
+	hooks.Providers = []Provider{ProviderClaude, ProviderCodex, ProviderCursor, ProviderGemini}
 	service := ServiceOptions{
 		BinPath:    binPath,
 		HomeDir:    homeDir,
@@ -84,10 +84,7 @@ func TestPrepareInstallationClosesConfigPlanAfterHookFailure(t *testing.T) {
 	}
 	hooks := DefaultHooksOptions(binPath)
 	hooks.HomeDir = homeDir
-	hooks.InstallClaude = false
-	hooks.InstallCodex = false
-	hooks.InstallCursor = false
-	hooks.InstallCopilot = false
+	hooks.Providers = []Provider{ProviderGemini}
 	baseline := openInstallerFileDescriptorCount(t)
 	for range 20 {
 		if _, err := PrepareInstallation(InstallationOptions{
@@ -150,10 +147,7 @@ func TestApplyInstallationUsesPreparedBytes(t *testing.T) {
 	}
 	hooks := DefaultHooksOptions(binPath)
 	hooks.HomeDir = homeDir
-	hooks.InstallClaude = false
-	hooks.InstallCodex = false
-	hooks.InstallGemini = false
-	hooks.InstallCopilot = false
+	hooks.Providers = []Provider{ProviderCursor}
 	service := ServiceOptions{
 		BinPath:             binPath,
 		ServiceTemplatesDir: serviceTemplatesDir,
@@ -249,13 +243,9 @@ func TestApplyInstallationRepairCommandsRetainPreparedChoices(t *testing.T) {
 			AuditProfile:   config.AuditStorageProfileMinimal,
 		},
 		Hooks: &HooksOptions{
-			BinPath:        binPath,
-			TemplatesDir:   hookTemplatesDir,
-			InstallClaude:  false,
-			InstallCodex:   false,
-			InstallCursor:  true,
-			InstallGemini:  false,
-			InstallCopilot: false,
+			BinPath:      binPath,
+			TemplatesDir: hookTemplatesDir,
+			Providers:    []Provider{ProviderCursor},
 		},
 		Service: &ServiceOptions{
 			BinPath:             binPath,
@@ -268,7 +258,7 @@ func TestApplyInstallationRepairCommandsRetainPreparedChoices(t *testing.T) {
 			"--auto-update check",
 			"--audit-profile minimal",
 			"--no-service",
-			"--no-cursor",
+			"--providers ''",
 		},
 		StageService: {
 			"--bin-path '" + binPath + "'",
@@ -277,10 +267,7 @@ func TestApplyInstallationRepairCommandsRetainPreparedChoices(t *testing.T) {
 		StageHooks: {
 			"--bin-path '" + binPath + "'",
 			"--templates '" + hookTemplatesDir + "'",
-			"--no-claude",
-			"--no-codex",
-			"--no-gemini",
-			"--no-copilot",
+			"--providers cursor",
 		},
 	}
 	for stage, fragments := range wants {

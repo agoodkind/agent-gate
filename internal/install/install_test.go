@@ -28,16 +28,119 @@ func TestPrepareHookInstallationRejectsInvalidTemplateWithoutWrites(t *testing.T
 	options := DefaultHooksOptions(binPath)
 	options.HomeDir = homeDir
 	options.TemplatesDir = templatesDir
-	options.InstallClaude = false
-	options.InstallCodex = false
-	options.InstallGemini = false
-	options.InstallCopilot = false
+	options.Providers = []Provider{ProviderCursor}
 
 	if _, err := PrepareHookInstallation(options); err == nil {
 		t.Fatal("PrepareHookInstallation returned nil")
 	}
 	if _, err := os.Stat(filepath.Join(homeDir, ".cursor", "hooks.json")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("cursor hook was written during validation: %v", err)
+	}
+}
+
+func TestPrepareHooksIgnoresMalformedUnselectedProvider(t *testing.T) {
+	binPath := writeExecutable(t, filepath.Join(t.TempDir(), "agent-gate"))
+	homeDir := t.TempDir()
+	claudePath := filepath.Join(homeDir, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(claudePath), 0o700); err != nil {
+		t.Fatalf("MkdirAll Claude directory: %v", err)
+	}
+	malformed := []byte(`{"hooks":`)
+	if err := os.WriteFile(claudePath, malformed, 0o600); err != nil {
+		t.Fatalf("WriteFile Claude settings: %v", err)
+	}
+
+	options := DefaultHooksOptions(binPath)
+	options.HomeDir = homeDir
+	options.Providers = []Provider{ProviderCursor}
+	plan, err := PrepareHookInstallation(options)
+	if err != nil {
+		t.Fatalf("PrepareHookInstallation: %v", err)
+	}
+	if err := ApplyHookInstallation(plan); err != nil {
+		t.Fatalf("ApplyHookInstallation: %v", err)
+	}
+	got, err := os.ReadFile(claudePath)
+	if err != nil {
+		t.Fatalf("ReadFile Claude settings: %v", err)
+	}
+	if string(got) != string(malformed) {
+		t.Fatalf("unselected Claude settings changed: %s", got)
+	}
+	if _, err := os.Stat(filepath.Join(homeDir, ".cursor", "hooks.json")); err != nil {
+		t.Fatalf("selected Cursor hooks were not installed: %v", err)
+	}
+}
+
+func TestInstallHooksProvidersChangesOnlySelectedFiles(t *testing.T) {
+	binPath := writeExecutable(t, filepath.Join(t.TempDir(), "agent-gate"))
+	homeDir := t.TempDir()
+	files := map[string][]byte{
+		filepath.Join(homeDir, ".claude", "settings.json"):             []byte(`{"theme":"claude"}`),
+		filepath.Join(homeDir, ".codex", "config.toml"):                []byte("model = \"codex\"\n"),
+		filepath.Join(homeDir, ".cursor", "hooks.json"):                []byte(`{"version":1,"theme":"cursor"}`),
+		filepath.Join(homeDir, ".gemini", "settings.json"):             []byte(`{"theme":"gemini"}`),
+		filepath.Join(homeDir, ".copilot", "hooks", "agent-gate.json"): []byte(`{"theme":"copilot"}`),
+	}
+	for path, content := range files {
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatalf("MkdirAll %s: %v", path, err)
+		}
+		if err := os.WriteFile(path, content, 0o600); err != nil {
+			t.Fatalf("WriteFile %s: %v", path, err)
+		}
+	}
+
+	options := DefaultHooksOptions(binPath)
+	options.HomeDir = homeDir
+	options.Providers = []Provider{ProviderGemini, ProviderCursor}
+	if err := installHooks(options); err != nil {
+		t.Fatalf("installHooks: %v", err)
+	}
+	for path, original := range files {
+		content, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("ReadFile %s: %v", path, err)
+		}
+		selected := path == filepath.Join(homeDir, ".cursor", "hooks.json") ||
+			path == filepath.Join(homeDir, ".gemini", "settings.json")
+		if selected && string(content) == string(original) {
+			t.Errorf("selected file %s was unchanged", path)
+		}
+		if !selected && string(content) != string(original) {
+			t.Errorf("unselected file %s changed\nwant: %s\ngot: %s", path, original, content)
+		}
+	}
+}
+
+func TestPrepareHooksExplicitEmptySelectionReadsAndWritesNothing(t *testing.T) {
+	binPath := writeExecutable(t, filepath.Join(t.TempDir(), "agent-gate"))
+	homeDir := t.TempDir()
+	claudePath := filepath.Join(homeDir, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(claudePath), 0o700); err != nil {
+		t.Fatalf("MkdirAll Claude directory: %v", err)
+	}
+	malformed := []byte(`{"hooks":`)
+	if err := os.WriteFile(claudePath, malformed, 0o600); err != nil {
+		t.Fatalf("WriteFile Claude settings: %v", err)
+	}
+
+	options := DefaultHooksOptions(binPath)
+	options.HomeDir = homeDir
+	options.Providers = []Provider{}
+	plan, err := PrepareHookInstallation(options)
+	if err != nil {
+		t.Fatalf("PrepareHookInstallation: %v", err)
+	}
+	if err := ApplyHookInstallation(plan); err != nil {
+		t.Fatalf("ApplyHookInstallation: %v", err)
+	}
+	got, err := os.ReadFile(claudePath)
+	if err != nil {
+		t.Fatalf("ReadFile Claude settings: %v", err)
+	}
+	if string(got) != string(malformed) {
+		t.Fatalf("provider file changed for empty selection: %s", got)
 	}
 }
 
@@ -56,10 +159,7 @@ func TestInstallHooksUpdatesCursorJSONIdempotently(t *testing.T) {
 
 	options := DefaultHooksOptions(binPath)
 	options.HomeDir = homeDir
-	options.InstallClaude = false
-	options.InstallCodex = false
-	options.InstallGemini = false
-	options.InstallCopilot = false
+	options.Providers = []Provider{ProviderCursor}
 	if err := installHooks(options); err != nil {
 		t.Fatalf("InstallHooks first run: %v", err)
 	}
@@ -141,10 +241,7 @@ func TestInstallHooksRemovesClaudeWorktreeFactoryHooks(t *testing.T) {
 
 	options := DefaultHooksOptions(binPath)
 	options.HomeDir = homeDir
-	options.InstallCodex = false
-	options.InstallCursor = false
-	options.InstallGemini = false
-	options.InstallCopilot = false
+	options.Providers = []Provider{ProviderClaude}
 	if err := installHooks(options); err != nil {
 		t.Fatalf("InstallHooks first run: %v", err)
 	}
@@ -220,10 +317,7 @@ func TestInstallHooksMergesGeminiJSONIdempotently(t *testing.T) {
 
 	options := DefaultHooksOptions(binPath)
 	options.HomeDir = homeDir
-	options.InstallClaude = false
-	options.InstallCodex = false
-	options.InstallCursor = false
-	options.InstallCopilot = false
+	options.Providers = []Provider{ProviderGemini}
 	if err := installHooks(options); err != nil {
 		t.Fatalf("InstallHooks first run: %v", err)
 	}
@@ -281,10 +375,7 @@ func TestInstallHooksRejectsMalformedExistingJSONWithoutChangingIt(t *testing.T)
 
 	options := DefaultHooksOptions(binPath)
 	options.HomeDir = homeDir
-	options.InstallCodex = false
-	options.InstallCursor = false
-	options.InstallGemini = false
-	options.InstallCopilot = false
+	options.Providers = []Provider{ProviderClaude}
 	if err := installHooks(options); err == nil {
 		t.Fatal("InstallHooks returned nil for malformed existing JSON")
 	}
@@ -345,10 +436,7 @@ func TestPrepareHookInstallationRejectsMalformedCodexManagedBlockWithoutWrites(t
 	}
 	options := DefaultHooksOptions(binPath)
 	options.HomeDir = homeDir
-	options.InstallClaude = false
-	options.InstallCursor = false
-	options.InstallGemini = false
-	options.InstallCopilot = false
+	options.Providers = []Provider{ProviderCodex}
 
 	if _, err := PrepareHookInstallation(options); err == nil {
 		t.Fatal("PrepareHookInstallation returned nil for malformed Codex managed block")
@@ -376,10 +464,7 @@ func TestInstallHooksFullyReplacesCopilotFile(t *testing.T) {
 
 	options := DefaultHooksOptions(binPath)
 	options.HomeDir = homeDir
-	options.InstallClaude = false
-	options.InstallCodex = false
-	options.InstallCursor = false
-	options.InstallGemini = false
+	options.Providers = []Provider{ProviderCopilot}
 	if err := installHooks(options); err != nil {
 		t.Fatalf("InstallHooks: %v", err)
 	}
@@ -404,10 +489,7 @@ func TestInstallCopilotHooksRegistersResponseEventsWithHints(t *testing.T) {
 	homeDir := t.TempDir()
 	options := DefaultHooksOptions(binPath)
 	options.HomeDir = homeDir
-	options.InstallClaude = false
-	options.InstallCodex = false
-	options.InstallCursor = false
-	options.InstallGemini = false
+	options.Providers = []Provider{ProviderCopilot}
 	if err := installHooks(options); err != nil {
 		t.Fatalf("installHooks() error: %v", err)
 	}
@@ -493,10 +575,7 @@ old = "block"
 
 	options := DefaultHooksOptions(binPath)
 	options.HomeDir = homeDir
-	options.InstallClaude = false
-	options.InstallCursor = false
-	options.InstallGemini = false
-	options.InstallCopilot = false
+	options.Providers = []Provider{ProviderCodex}
 	if err := installHooks(options); err != nil {
 		t.Fatalf("InstallHooks first run: %v", err)
 	}
@@ -549,10 +628,7 @@ hooks = false
 
 	options := DefaultHooksOptions(binPath)
 	options.HomeDir = homeDir
-	options.InstallClaude = false
-	options.InstallCursor = false
-	options.InstallGemini = false
-	options.InstallCopilot = false
+	options.Providers = []Provider{ProviderCodex}
 	if err := installHooks(options); err != nil {
 		t.Fatalf("InstallHooks: %v", err)
 	}
@@ -575,10 +651,7 @@ func TestInstallHooksReplacesNestedJSONCommands(t *testing.T) {
 	homeDir := t.TempDir()
 	options := DefaultHooksOptions(binPath)
 	options.HomeDir = homeDir
-	options.InstallClaude = false
-	options.InstallCodex = false
-	options.InstallCursor = false
-	options.InstallCopilot = false
+	options.Providers = []Provider{ProviderGemini}
 	if err := installHooks(options); err != nil {
 		t.Fatalf("InstallHooks: %v", err)
 	}
@@ -695,10 +768,7 @@ func TestInstallRendersCanonicalExecutablePathFromSymlink(t *testing.T) {
 	homeDir := t.TempDir()
 	hookOptions := DefaultHooksOptions(linkPath)
 	hookOptions.HomeDir = homeDir
-	hookOptions.InstallClaude = false
-	hookOptions.InstallCodex = false
-	hookOptions.InstallGemini = false
-	hookOptions.InstallCopilot = false
+	hookOptions.Providers = []Provider{ProviderCursor}
 	if err := installHooks(hookOptions); err != nil {
 		t.Fatalf("InstallHooks: %v", err)
 	}

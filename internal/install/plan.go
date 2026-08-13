@@ -23,7 +23,7 @@ const (
 )
 
 const (
-	configRepairCommand  = "agent-gate install all --no-service --no-claude --no-codex --no-cursor --no-gemini --no-copilot"
+	configRepairCommand  = "agent-gate install all --no-service --providers ''"
 	serviceRepairCommand = "agent-gate install service"
 	hooksRepairCommand   = "agent-gate install hooks"
 )
@@ -253,22 +253,15 @@ func appendCommandOption(parts []string, name string, value string) []string {
 }
 
 func appendHookSelection(parts []string, options HooksOptions) []string {
-	selections := []struct {
-		selected bool
-		flag     string
-	}{
-		{selected: options.InstallClaude, flag: "--no-claude"},
-		{selected: options.InstallCodex, flag: "--no-codex"},
-		{selected: options.InstallCursor, flag: "--no-cursor"},
-		{selected: options.InstallGemini, flag: "--no-gemini"},
-		{selected: options.InstallCopilot, flag: "--no-copilot"},
+	providers, err := selectedProviders(options.Providers)
+	if err != nil {
+		providers = options.Providers
 	}
-	for _, selection := range selections {
-		if !selection.selected {
-			parts = append(parts, selection.flag)
-		}
+	names := make([]string, 0, len(providers))
+	for _, provider := range providers {
+		names = append(names, string(provider))
 	}
-	return parts
+	return append(parts, "--providers", shellCommandArgument(strings.Join(names, ",")))
 }
 
 func shellCommandArgument(value string) string {
