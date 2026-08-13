@@ -524,9 +524,124 @@ func TestRunInstallAllHonorsOptOutFlags(t *testing.T) {
 			readinessCalled,
 		)
 	}
-	if hooks.InstallClaude || hooks.InstallCodex || hooks.InstallCursor ||
-		hooks.InstallGemini || hooks.InstallCopilot {
-		t.Fatalf("provider opt-outs not preserved: %+v", hooks)
+	if hooks.Providers == nil || len(hooks.Providers) != 0 {
+		t.Fatalf("provider opt-outs = %#v, want nonnil empty selection", hooks.Providers)
+	}
+}
+
+func TestRunInstallProvidersUseCanonicalOrder(t *testing.T) {
+	binPath := writeCommandExecutable(t)
+	dependencies := successfulInstallDependencies(binPath)
+	var hooks agentinstall.HooksOptions
+	dependencies.prepareHooks = func(options agentinstall.HooksOptions) (*agentinstall.HookInstallationPlan, error) {
+		hooks = options
+		return &agentinstall.HookInstallationPlan{}, nil
+	}
+
+	exitCode := runInstallWithDependencies(
+		[]string{"hooks", "--providers", "gemini,claude,cursor"},
+		dependencies,
+	)
+	if exitCode != 0 {
+		t.Fatalf("exitCode = %d, want 0", exitCode)
+	}
+	want := []agentinstall.Provider{
+		agentinstall.ProviderClaude,
+		agentinstall.ProviderCursor,
+		agentinstall.ProviderGemini,
+	}
+	if !reflect.DeepEqual(hooks.Providers, want) {
+		t.Fatalf("providers = %v, want %v", hooks.Providers, want)
+	}
+}
+
+func TestRunInstallRejectsMixedProviderSelectionForms(t *testing.T) {
+	binPath := writeCommandExecutable(t)
+	for _, flagName := range []string{
+		"--no-claude",
+		"--no-claude=false",
+		"--no-codex",
+		"--no-cursor",
+		"--no-gemini",
+		"--no-copilot",
+	} {
+		t.Run(flagName, func(t *testing.T) {
+			dependencies := successfulInstallDependencies(binPath)
+			prepareCalled := false
+			dependencies.prepareHooks = func(agentinstall.HooksOptions) (*agentinstall.HookInstallationPlan, error) {
+				prepareCalled = true
+				return &agentinstall.HookInstallationPlan{}, nil
+			}
+
+			exitCode, stderr := captureInstallStderrWithDependencies(
+				t,
+				[]string{"hooks", "--providers", "cursor", flagName},
+				dependencies,
+			)
+			if exitCode != 2 {
+				t.Fatalf("exitCode = %d, want 2", exitCode)
+			}
+			if prepareCalled {
+				t.Fatal("hooks were prepared after conflicting selection flags")
+			}
+			wantFlag := strings.TrimSuffix(flagName, "=false")
+			if !strings.Contains(stderr, "--providers cannot be used with "+wantFlag) {
+				t.Fatalf("stderr = %q, want mixed selection error", stderr)
+			}
+		})
+	}
+}
+
+func TestRunInstallAllSharedPlanPreservesAllLegacyProviderOptOuts(t *testing.T) {
+	binPath := writeCommandExecutable(t)
+	dependencies := successfulInstallDependencies(binPath)
+	dependencies.prepareInstallation = func(
+		options agentinstall.InstallationOptions,
+	) (*agentinstall.InstallationPlan, error) {
+		if options.Hooks == nil {
+			t.Fatal("hook options are nil")
+		}
+		if options.Hooks.Providers == nil || len(options.Hooks.Providers) != 0 {
+			t.Fatalf("providers = %#v, want nonnil empty selection", options.Hooks.Providers)
+		}
+		return &agentinstall.InstallationPlan{}, nil
+	}
+	dependencies.applyInstallation = func(
+		*agentinstall.InstallationPlan,
+	) (agentinstall.ApplyResult, error) {
+		return agentinstall.ApplyResult{}, nil
+	}
+
+	exitCode := runInstallWithDependencies([]string{
+		"all", "--no-config", "--no-service", "--no-claude", "--no-codex",
+		"--no-cursor", "--no-gemini", "--no-copilot",
+	}, dependencies)
+	if exitCode != 0 {
+		t.Fatalf("exitCode = %d, want 0", exitCode)
+	}
+}
+
+func TestRunInstallRejectsInvalidProvidersBeforePreparation(t *testing.T) {
+	binPath := writeCommandExecutable(t)
+	for _, value := range []string{"cursor,other", "cursor,cursor"} {
+		t.Run(value, func(t *testing.T) {
+			dependencies := successfulInstallDependencies(binPath)
+			prepareCalled := false
+			dependencies.prepareHooks = func(agentinstall.HooksOptions) (*agentinstall.HookInstallationPlan, error) {
+				prepareCalled = true
+				return &agentinstall.HookInstallationPlan{}, nil
+			}
+			exitCode := runInstallWithDependencies(
+				[]string{"hooks", "--providers", value},
+				dependencies,
+			)
+			if exitCode != 2 {
+				t.Fatalf("exitCode = %d, want 2", exitCode)
+			}
+			if prepareCalled {
+				t.Fatal("hooks were prepared after invalid provider selection")
+			}
+		})
 	}
 }
 

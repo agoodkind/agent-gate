@@ -93,15 +93,11 @@ func (ExecRunner) OutputContext(ctx context.Context, name string, args ...string
 
 // HooksOptions configures hook file installation.
 type HooksOptions struct {
-	BinPath        string
-	TemplatesDir   string
-	HomeDir        string
-	Stdout         io.Writer
-	InstallClaude  bool
-	InstallCodex   bool
-	InstallCursor  bool
-	InstallGemini  bool
-	InstallCopilot bool
+	BinPath      string
+	TemplatesDir string
+	HomeDir      string
+	Stdout       io.Writer
+	Providers    []Provider
 }
 
 // HookInstallationPlan contains fully prepared hook file updates.
@@ -112,27 +108,27 @@ type HookInstallationPlan struct {
 
 type hookInstallationWrite struct {
 	targetPath string
-	provider   string
+	provider   Provider
 	content    []byte
 }
 
 // DefaultHooksOptions returns hook options matching install.sh defaults.
 func DefaultHooksOptions(binPath string) HooksOptions {
 	return HooksOptions{
-		BinPath:        binPath,
-		TemplatesDir:   "",
-		HomeDir:        "",
-		Stdout:         nil,
-		InstallClaude:  true,
-		InstallCodex:   true,
-		InstallCursor:  true,
-		InstallGemini:  true,
-		InstallCopilot: true,
+		BinPath:      binPath,
+		TemplatesDir: "",
+		HomeDir:      "",
+		Stdout:       nil,
+		Providers:    nil,
 	}
 }
 
 // PrepareHookInstallation reads and validates every selected hook update without writing files.
 func PrepareHookInstallation(options HooksOptions) (*HookInstallationPlan, error) {
+	providers, err := selectedProviders(options.Providers)
+	if err != nil {
+		return nil, err
+	}
 	canonicalBinPath, err := CanonicalExecutablePath(options.BinPath)
 	if err != nil {
 		return nil, err
@@ -149,47 +145,61 @@ func PrepareHookInstallation(options HooksOptions) (*HookInstallationPlan, error
 		writer = io.Discard
 	}
 	plan := &HookInstallationPlan{writes: nil, writer: writer}
-	if options.InstallClaude {
-		targetPath := filepath.Join(homeDir, ".claude", "settings.json")
-		content, prepareErr := prepareJSONHooks(options.TemplatesDir, "claude", canonicalBinPath, targetPath, false)
-		if prepareErr != nil {
-			return nil, prepareErr
+	for _, provider := range providers {
+		if err := prepareProviderHooks(plan, options, provider, homeDir, canonicalBinPath); err != nil {
+			return nil, err
 		}
-		plan.addWrite(targetPath, "claude", content)
-	}
-	if options.InstallCodex {
-		targetPath := filepath.Join(homeDir, ".codex", "config.toml")
-		content, prepareErr := prepareCodexHooks(options.TemplatesDir, canonicalBinPath, targetPath)
-		if prepareErr != nil {
-			return nil, prepareErr
-		}
-		plan.addWrite(targetPath, "codex", content)
-	}
-	if options.InstallCursor {
-		targetPath := filepath.Join(homeDir, ".cursor", "hooks.json")
-		content, prepareErr := prepareJSONHooks(options.TemplatesDir, "cursor", canonicalBinPath, targetPath, true)
-		if prepareErr != nil {
-			return nil, prepareErr
-		}
-		plan.addWrite(targetPath, "cursor", content)
-	}
-	if options.InstallGemini {
-		targetPath := filepath.Join(homeDir, ".gemini", "settings.json")
-		content, prepareErr := prepareJSONHooks(options.TemplatesDir, "gemini", canonicalBinPath, targetPath, false)
-		if prepareErr != nil {
-			return nil, prepareErr
-		}
-		plan.addWrite(targetPath, "gemini", content)
-	}
-	if options.InstallCopilot {
-		targetPath := filepath.Join(homeDir, ".copilot", "hooks", "agent-gate.json")
-		content, prepareErr := prepareReplacementJSONHooks(options.TemplatesDir, "copilot", canonicalBinPath, targetPath)
-		if prepareErr != nil {
-			return nil, prepareErr
-		}
-		plan.addWrite(targetPath, "copilot", content)
 	}
 	return plan, nil
+}
+
+func prepareProviderHooks(
+	plan *HookInstallationPlan,
+	options HooksOptions,
+	provider Provider,
+	homeDir string,
+	canonicalBinPath string,
+) error {
+	switch provider {
+	case ProviderClaude:
+		targetPath := filepath.Join(homeDir, ".claude", "settings.json")
+		content, err := prepareJSONHooks(options.TemplatesDir, string(provider), canonicalBinPath, targetPath, false)
+		if err != nil {
+			return err
+		}
+		plan.addWrite(targetPath, provider, content)
+	case ProviderCodex:
+		targetPath := filepath.Join(homeDir, ".codex", "config.toml")
+		content, err := prepareCodexHooks(options.TemplatesDir, canonicalBinPath, targetPath)
+		if err != nil {
+			return err
+		}
+		plan.addWrite(targetPath, provider, content)
+	case ProviderCursor:
+		targetPath := filepath.Join(homeDir, ".cursor", "hooks.json")
+		content, err := prepareJSONHooks(options.TemplatesDir, string(provider), canonicalBinPath, targetPath, true)
+		if err != nil {
+			return err
+		}
+		plan.addWrite(targetPath, provider, content)
+	case ProviderGemini:
+		targetPath := filepath.Join(homeDir, ".gemini", "settings.json")
+		content, err := prepareJSONHooks(options.TemplatesDir, string(provider), canonicalBinPath, targetPath, false)
+		if err != nil {
+			return err
+		}
+		plan.addWrite(targetPath, provider, content)
+	case ProviderCopilot:
+		targetPath := filepath.Join(homeDir, ".copilot", "hooks", "agent-gate.json")
+		content, err := prepareReplacementJSONHooks(options.TemplatesDir, string(provider), canonicalBinPath, targetPath)
+		if err != nil {
+			return err
+		}
+		plan.addWrite(targetPath, provider, content)
+	default:
+		return fmt.Errorf("unknown provider %q", provider)
+	}
+	return nil
 }
 
 // ApplyHookInstallation writes bytes retained by a prepared hook installation plan.
@@ -211,7 +221,7 @@ func ApplyHookInstallation(plan *HookInstallationPlan) error {
 	return nil
 }
 
-func (plan *HookInstallationPlan) addWrite(targetPath string, provider string, content []byte) {
+func (plan *HookInstallationPlan) addWrite(targetPath string, provider Provider, content []byte) {
 	plan.writes = append(plan.writes, hookInstallationWrite{
 		targetPath: targetPath,
 		provider:   provider,

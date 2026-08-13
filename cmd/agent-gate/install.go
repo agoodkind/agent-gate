@@ -26,12 +26,24 @@ const (
 	installReadinessInterval = 200 * time.Millisecond
 )
 
+type providerSelectionFlag string
+
+const (
+	providerSelectionFlagClaude  providerSelectionFlag = "no-claude"
+	providerSelectionFlagCodex   providerSelectionFlag = "no-codex"
+	providerSelectionFlagCursor  providerSelectionFlag = "no-cursor"
+	providerSelectionFlagGemini  providerSelectionFlag = "no-gemini"
+	providerSelectionFlagCopilot providerSelectionFlag = "no-copilot"
+)
+
 type installFlagValues struct {
 	binPath             string
 	templatesDir        string
 	serviceTemplatesDir string
 	autoUpdate          string
 	auditProfile        string
+	providerNames       string
+	providers           []agentinstall.Provider
 	noConfig            bool
 	noService           bool
 	noClaude            bool
@@ -93,6 +105,10 @@ func runInstallHooks(args []string, dependencies installDependencies) int {
 	}
 	if flags.NArg() != 0 {
 		fmt.Fprintf(os.Stderr, "agent-gate install hooks: unexpected argument %q\n", flags.Arg(0))
+		return 2
+	}
+	if err := resolveProviderSelection(&values, flags); err != nil {
+		fmt.Fprintf(os.Stderr, "agent-gate install hooks: preflight: %v\n", err)
 		return 2
 	}
 	if err := resolveAndValidateInstallValues(&values, dependencies); err != nil {
@@ -167,6 +183,10 @@ func runInstallAll(args []string, dependencies installDependencies) int {
 	}
 	if flags.NArg() != 0 {
 		fmt.Fprintf(os.Stderr, "agent-gate install all: unexpected argument %q\n", flags.Arg(0))
+		return 2
+	}
+	if err := resolveProviderSelection(&values, flags); err != nil {
+		fmt.Fprintf(os.Stderr, "agent-gate install all: preflight: %v\n", err)
 		return 2
 	}
 	if err := validateAutoUpdate(values.autoUpdate); err != nil {
@@ -349,6 +369,7 @@ func newInstallFlagSet(name string, values *installFlagValues) *flag.FlagSet {
 
 func registerHookInstallFlags(flags *flag.FlagSet, values *installFlagValues) {
 	flags.StringVar(&values.templatesDir, "templates", "", "local hook template directory")
+	flags.StringVar(&values.providerNames, "providers", "", "comma-separated hook providers")
 	flags.BoolVar(&values.noClaude, "no-claude", false, "skip Claude hook config update")
 	flags.BoolVar(&values.noCodex, "no-codex", false, "skip Codex hook config update")
 	flags.BoolVar(&values.noCursor, "no-cursor", false, "skip Cursor hook config update")
@@ -364,12 +385,51 @@ func hookOptions(values installFlagValues) agentinstall.HooksOptions {
 	options := agentinstall.DefaultHooksOptions(values.binPath)
 	options.TemplatesDir = values.templatesDir
 	options.Stdout = os.Stdout
-	options.InstallClaude = !values.noClaude
-	options.InstallCodex = !values.noCodex
-	options.InstallCursor = !values.noCursor
-	options.InstallGemini = !values.noGemini
-	options.InstallCopilot = !values.noCopilot
+	options.Providers = values.providers
 	return options
+}
+
+func resolveProviderSelection(values *installFlagValues, flags *flag.FlagSet) error {
+	providersSet := false
+	selectionFlag := ""
+	flags.Visit(func(visited *flag.Flag) {
+		if visited.Name == "providers" {
+			providersSet = true
+		}
+		switch providerSelectionFlag(visited.Name) {
+		case providerSelectionFlagClaude, providerSelectionFlagCodex,
+			providerSelectionFlagCursor, providerSelectionFlagGemini,
+			providerSelectionFlagCopilot:
+			if selectionFlag == "" {
+				selectionFlag = "--" + visited.Name
+			}
+		}
+	})
+	if providersSet {
+		if selectionFlag != "" {
+			return fmt.Errorf("--providers cannot be used with %s", selectionFlag)
+		}
+		providers, err := agentinstall.ParseProviders(values.providerNames)
+		if err != nil {
+			return err
+		}
+		values.providers = providers
+		return nil
+	}
+	values.providers = make([]agentinstall.Provider, 0, len(agentinstall.AllProviders()))
+	disabled := map[agentinstall.Provider]bool{
+		agentinstall.ProviderClaude:  values.noClaude,
+		agentinstall.ProviderCodex:   values.noCodex,
+		agentinstall.ProviderCursor:  values.noCursor,
+		agentinstall.ProviderGemini:  values.noGemini,
+		agentinstall.ProviderCopilot: values.noCopilot,
+	}
+	for _, provider := range agentinstall.AllProviders() {
+		if !disabled[provider] {
+			values.providers = append(values.providers, provider)
+		}
+	}
+	return nil
 }
 
 func serviceOptions(
