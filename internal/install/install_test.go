@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"regexp"
@@ -879,6 +880,84 @@ func TestInstallSystemdServiceUsesExactCommandSequence(t *testing.T) {
 	}
 	if !readinessCalled {
 		t.Fatal("readiness callback was not called")
+	}
+}
+
+func TestPrepareSystemdServiceSupportsHostileExecutablePath(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("systemd unit verification requires Linux")
+	}
+	if _, err := exec.LookPath("systemd-analyze"); err != nil {
+		t.Skip("systemd-analyze is unavailable")
+	}
+	binPath := writeExecutable(t, filepath.Join(t.TempDir(), "binary %h path", "agent-gate"))
+	homeDir := t.TempDir()
+	plan, err := prepareServiceInstallationForPlatform(ServiceOptions{
+		BinPath:    binPath,
+		HomeDir:    homeDir,
+		ConfigHome: filepath.Join(homeDir, ".config"),
+	}, homeDir, servicePlatformLinux)
+	if err != nil {
+		t.Fatalf("prepareServiceInstallationForPlatform: %v", err)
+	}
+	unitPath := filepath.Join(t.TempDir(), systemdServiceName)
+	if err := os.WriteFile(unitPath, plan.content, 0o600); err != nil {
+		t.Fatalf("WriteFile systemd unit: %v", err)
+	}
+	verify := exec.CommandContext(t.Context(), "systemd-analyze", "verify", unitPath)
+	if output, err := verify.CombinedOutput(); err != nil {
+		t.Fatalf("systemd-analyze verify: %v\n%s", err, output)
+	}
+}
+
+func TestInstallHooksIsIdempotentForExecutablePathWithSpaces(t *testing.T) {
+	binPath := writeExecutable(t, filepath.Join(t.TempDir(), "binary path's", "agent-gate"))
+	homeDir := t.TempDir()
+	options := DefaultHooksOptions(binPath)
+	options.HomeDir = homeDir
+	providers := AllProviders()
+	options.Providers = providers
+
+	for attempt := 0; attempt < 2; attempt++ {
+		plan, err := PrepareHookInstallation(options)
+		if err != nil {
+			t.Fatalf("PrepareHookInstallation attempt %d: %v", attempt+1, err)
+		}
+		if err := ApplyHookInstallation(plan); err != nil {
+			t.Fatalf("ApplyHookInstallation attempt %d: %v", attempt+1, err)
+		}
+	}
+
+	for _, provider := range providers {
+		eventName, _, _ := lifecycleRegistration(provider)
+		groups, err := readLifecycleGroups(t.Context(), homeDir, provider, eventName)
+		if err != nil {
+			t.Fatalf("readLifecycleGroups %s: %v", provider, err)
+		}
+		executedCommands := 0
+		managedMarker := " managed-hook " + string(provider)
+		for _, group := range groups {
+			for _, hook := range groupCommands(group) {
+				if !strings.Contains(hook.Command, managedMarker) {
+					continue
+				}
+				command := exec.CommandContext(t.Context(), "/bin/sh", "-c", hook.Command)
+				if output, err := command.CombinedOutput(); err != nil {
+					t.Fatalf("execute installed %s command: %v\n%s", provider, err, output)
+				}
+				executedCommands++
+			}
+		}
+		if executedCommands == 0 {
+			t.Fatalf("%s installed no managed command", provider)
+		}
+		command, err := ReadManagedLifecycleCommand(options, provider)
+		if err != nil {
+			t.Fatalf("ReadManagedLifecycleCommand %s: %v", provider, err)
+		}
+		if command.Executable != binPath {
+			t.Fatalf("%s executable = %q, want %q", provider, command.Executable, binPath)
+		}
 	}
 }
 

@@ -254,6 +254,17 @@ func TestDocumentedShellInstallerFlagsAreSupported(t *testing.T) {
 	}
 }
 
+func TestReleaseInstallerRoutesSetupAndCleansTemporaryFiles(t *testing.T) {
+	command := exec.Command("bash", "scripts/test-install-setup.sh")
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("release installer setup test: %v\n%s", err, output)
+	}
+	if !bytes.Contains(output, []byte("test-install-setup.sh: PASS")) {
+		t.Fatalf("release installer setup output = %q", output)
+	}
+}
+
 func TestFirstPartyDocumentationLocalLinksResolve(t *testing.T) {
 	for _, path := range []string{"README.md", "HOOKS.md", "docs/hook-schemas.md"} {
 		contents, err := os.ReadFile(path)

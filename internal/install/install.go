@@ -414,6 +414,12 @@ func isAgentGateCommandObject(commandObject map[string]json.RawMessage) bool {
 	if trimmedCommand == agentGateBinaryName {
 		return true
 	}
+	if markerIndex := strings.LastIndex(trimmedCommand, " managed-hook "); markerIndex > 0 {
+		executable, err := parseShellCommandArgument(
+			strings.TrimSpace(trimmedCommand[:markerIndex]),
+		)
+		return err == nil && filepath.Base(executable) == agentGateBinaryName
+	}
 	executable := firstCommandToken(trimmedCommand)
 	return filepath.Base(executable) == agentGateBinaryName
 }
@@ -514,7 +520,7 @@ func replaceJSONCommand(value json.RawMessage, binPath string) (json.RawMessage,
 	if err := json.Unmarshal(value, &command); err != nil {
 		return value, false
 	}
-	replacedCommand := strings.ReplaceAll(command, agentGatePlaceholder, binPath)
+	replacedCommand := strings.ReplaceAll(command, agentGatePlaceholder, shellCommandArgument(binPath))
 	output, err := json.Marshal(replacedCommand)
 	if err != nil {
 		return value, false
@@ -527,7 +533,10 @@ func prepareCodexHooks(templatesDir string, binPath string, targetPath string) (
 	if err != nil {
 		return nil, err
 	}
-	renderedTemplate := strings.ReplaceAll(string(templateContent), agentGatePlaceholder, binPath)
+	quotedBinPath := shellCommandArgument(binPath)
+	encodedBinPath := strconv.Quote(quotedBinPath)
+	escapedBinPath := encodedBinPath[1 : len(encodedBinPath)-1]
+	renderedTemplate := strings.ReplaceAll(string(templateContent), agentGatePlaceholder, escapedBinPath)
 	existingContent := ""
 	if content, readErr := os.ReadFile(targetPath); readErr == nil {
 		existingContent = string(content)

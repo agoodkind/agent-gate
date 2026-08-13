@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 )
 
 // ServiceOptions configures daemon service installation.
@@ -93,7 +94,7 @@ func prepareServiceInstallationForPlatform(
 			options.ServiceTemplatesDir,
 			"systemd",
 			systemdServiceTemplate,
-			map[string]string{"@@BIN_PATH@@": options.BinPath},
+			map[string]string{"@@BIN_PATH@@": systemdExecArgument(options.BinPath)},
 		)
 	default:
 		return nil, fmt.Errorf("unsupported OS for service install: %s", platform)
@@ -112,6 +113,11 @@ func prepareServiceInstallationForPlatform(
 		options:    options,
 		platform:   platform,
 	}, nil
+}
+
+func systemdExecArgument(value string) string {
+	escaped := strings.ReplaceAll(value, "%", "%%")
+	return strconv.Quote(escaped)
 }
 
 // InstallService writes and starts the per-user daemon service.

@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+printf '%s\n' "$$" >"$CAPTURE_DIR/wrapper-pid"
+exec /bin/bash "$INSTALL_TEST_REPO_ROOT/install.sh" \
+    --version v1.2.3 \
+    --bin-dir "$CAPTURE_DIR/path with spaces" \
+    --require-attestation
