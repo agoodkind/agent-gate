@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"goodkind.io/go-makefile/selfupdate"
 )
@@ -84,8 +85,8 @@ func TestStartAuthenticatedProxyUsesLocalhost(t *testing.T) {
 func TestSelectReleasesForBranchBuild(t *testing.T) {
 	t.Parallel()
 	releases := []githubRelease{
-		{TagName: "202608121600-13b-abcdef1"},
-		{TagName: "202608111500-13a-12345678"},
+		{TagName: "202608111500-13a-12345678", PublishedAt: time.Date(2026, time.August, 11, 15, 0, 0, 0, time.UTC)},
+		{TagName: "202608121600-13b-abcdef1", PublishedAt: time.Date(2026, time.August, 12, 16, 0, 0, 0, time.UTC)},
 	}
 	environment := environment{
 		commit:  "abcdef1234567890",
@@ -96,19 +97,19 @@ func TestSelectReleasesForBranchBuild(t *testing.T) {
 	if err != nil {
 		t.Fatalf("selectReleases() error = %v", err)
 	}
-	if selection.target.TagName != releases[0].TagName {
-		t.Fatalf("target = %q, want %q", selection.target.TagName, releases[0].TagName)
+	if selection.target.TagName != releases[1].TagName {
+		t.Fatalf("target = %q, want %q", selection.target.TagName, releases[1].TagName)
 	}
-	if selection.previous.TagName != releases[1].TagName {
-		t.Fatalf("previous = %q, want %q", selection.previous.TagName, releases[1].TagName)
+	if selection.previous.TagName != releases[0].TagName {
+		t.Fatalf("previous = %q, want %q", selection.previous.TagName, releases[0].TagName)
 	}
 }
 
 func TestSelectReleasesForManualRunUsesLatestRelease(t *testing.T) {
 	t.Parallel()
 	releases := []githubRelease{
-		{TagName: "202608121600-13b-abcdef1"},
-		{TagName: "202608111500-13a-12345678"},
+		{TagName: "202608111500-13a-12345678", PublishedAt: time.Date(2026, time.August, 11, 15, 0, 0, 0, time.UTC)},
+		{TagName: "202608121600-13b-abcdef1", PublishedAt: time.Date(2026, time.August, 12, 16, 0, 0, 0, time.UTC)},
 	}
 	environment := environment{
 		commit:  "unreleased123456",
@@ -120,11 +121,11 @@ func TestSelectReleasesForManualRunUsesLatestRelease(t *testing.T) {
 	if err != nil {
 		t.Fatalf("selectReleases() error = %v", err)
 	}
-	if selection.target.TagName != releases[0].TagName {
-		t.Fatalf("target = %q, want %q", selection.target.TagName, releases[0].TagName)
+	if selection.target.TagName != releases[1].TagName {
+		t.Fatalf("target = %q, want %q", selection.target.TagName, releases[1].TagName)
 	}
-	if selection.previous.TagName != releases[1].TagName {
-		t.Fatalf("previous = %q, want %q", selection.previous.TagName, releases[1].TagName)
+	if selection.previous.TagName != releases[0].TagName {
+		t.Fatalf("previous = %q, want %q", selection.previous.TagName, releases[0].TagName)
 	}
 }
 
