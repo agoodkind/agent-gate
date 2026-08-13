@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -44,15 +45,36 @@ type queryArg struct {
 // returned source name is always "sqlite"; it is retained for callers that
 // surface which backend served the query.
 func Query(cfg *config.Config, filter QueryFilter) ([]QueryRecord, string, error) {
-	events, err := querySQLite(cfg, filter)
+	events, err := querySQLite(cfg, filter, false)
 	if err != nil {
 		return nil, "sqlite", err
 	}
 	return events, "sqlite", nil
 }
 
-func querySQLite(cfg *config.Config, filter QueryFilter) ([]QueryRecord, error) {
-	ctx := context.Background()
+// QueryReadOnly returns audit events through a read-only SQLite connection.
+func QueryReadOnly(
+	ctx context.Context,
+	cfg *config.Config,
+	filter QueryFilter,
+) ([]QueryRecord, string, error) {
+	events, err := querySQLiteContext(ctx, cfg, filter, true)
+	if err != nil {
+		return nil, "sqlite", err
+	}
+	return events, "sqlite", nil
+}
+
+func querySQLite(cfg *config.Config, filter QueryFilter, readOnly bool) ([]QueryRecord, error) {
+	return querySQLiteContext(context.Background(), cfg, filter, readOnly)
+}
+
+func querySQLiteContext(
+	ctx context.Context,
+	cfg *config.Config,
+	filter QueryFilter,
+	readOnly bool,
+) ([]QueryRecord, error) {
 	log := slog.Default()
 	path := config.DefaultAuditSQLitePath()
 	if cfg != nil {
@@ -65,7 +87,11 @@ func querySQLite(cfg *config.Config, filter QueryFilter) ([]QueryRecord, error) 
 		log.WarnContext(ctx, "stat audit sqlite path failed", slog.String("path", path), slog.Any("err", err))
 		return nil, fmt.Errorf("stat audit sqlite path: %w", err)
 	}
-	db, err := sql.Open("sqlite3", path)
+	databasePath := path
+	if readOnly {
+		databasePath = auditReadOnlySQLiteDSN(path)
+	}
+	db, err := sql.Open("sqlite3", databasePath)
 	if err != nil {
 		log.WarnContext(ctx, "open audit sqlite db failed", slog.String("path", path), slog.Any("err", err))
 		return nil, fmt.Errorf("open audit sqlite db: %w", err)
@@ -136,6 +162,14 @@ func querySQLite(cfg *config.Config, filter QueryFilter) ([]QueryRecord, error) 
 		return nil, fmt.Errorf("iterate audit events: %w", err)
 	}
 	return out, nil
+}
+
+func auditReadOnlySQLiteDSN(path string) string {
+	location := url.URL{Scheme: "file", Path: path}
+	values := url.Values{}
+	values.Set("mode", "ro")
+	location.RawQuery = values.Encode()
+	return location.String()
 }
 
 func auditPayloadProjectionColumns(ctx context.Context, database *sql.DB) (string, error) {

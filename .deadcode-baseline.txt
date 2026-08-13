@@ -23,3 +23,24 @@ pipeline/sentinel.go:74:6: unreachable func: classifyError	# deadcode:first_adde
 internal/version/version.go:38:6: unreachable func: Attrs	# deadcode:first_added=2026-05-05T04:09:36Z last_seen=2026-05-08T20:52:00Z
 internal/telemetry/setup.go:13:2: could not import goodkind.io/gklog/trace (invalid package name: "")	# deadcode:first_added=2026-05-08T20:52:00Z last_seen=2026-05-08T20:52:00Z
 internal/telemetry/setup.go:13:2: no required module provides package goodkind.io/gklog/trace; to add it:	# deadcode:first_added=2026-05-08T20:52:00Z last_seen=2026-05-08T20:52:00Z
+internal/audit/query.go:56:6: unreachable func: QueryReadOnly	# deadcode:first_added=2026-08-13T12:13:36Z last_seen=2026-08-13T12:13:36Z
+internal/install/registration.go:113:6: unreachable func: readLifecycleGroups	# deadcode:first_added=2026-08-13T12:13:36Z last_seen=2026-08-13T12:13:36Z
+internal/install/registration.go:150:6: unreachable func: validateInstalledExecutable	# deadcode:first_added=2026-08-13T12:13:36Z last_seen=2026-08-13T12:13:36Z
+internal/install/registration.go:165:6: unreachable func: lifecycleConfigurationPath	# deadcode:first_added=2026-08-13T12:13:36Z last_seen=2026-08-13T12:13:36Z
+internal/install/registration.go:182:6: unreachable func: validateLifecycleGroups	# deadcode:first_added=2026-08-13T12:13:36Z last_seen=2026-08-13T12:13:36Z
+internal/install/registration.go:220:6: unreachable func: validateLifecycleGroup	# deadcode:first_added=2026-08-13T12:13:36Z last_seen=2026-08-13T12:13:36Z
+internal/install/registration.go:264:6: unreachable func: parseManagedLifecycleCommand	# deadcode:first_added=2026-08-13T12:13:36Z last_seen=2026-08-13T12:13:36Z
+internal/install/registration.go:280:6: unreachable func: groupCommands	# deadcode:first_added=2026-08-13T12:13:36Z last_seen=2026-08-13T12:13:36Z
+internal/install/registration.go:45:6: unreachable func: ReadManagedLifecycleCommand	# deadcode:first_added=2026-08-13T12:13:36Z last_seen=2026-08-13T12:13:36Z
+internal/install/registration.go:50:6: unreachable func: ReadManagedLifecycleCommandContext	# deadcode:first_added=2026-08-13T12:13:36Z last_seen=2026-08-13T12:13:36Z
+internal/install/registration.go:96:6: unreachable func: lifecycleRegistration	# deadcode:first_added=2026-08-13T12:13:36Z last_seen=2026-08-13T12:13:36Z
+internal/setup/probe.go:113:6: unreachable func: executeLifecycleProbe	# deadcode:first_added=2026-08-13T12:13:36Z last_seen=2026-08-13T12:13:36Z
+internal/setup/probe.go:137:6: unreachable func: marshalLifecycleProbePayload	# deadcode:first_added=2026-08-13T12:13:36Z last_seen=2026-08-13T12:13:36Z
+internal/setup/probe.go:159:6: unreachable func: waitForDurableProbe	# deadcode:first_added=2026-08-13T12:13:36Z last_seen=2026-08-13T12:13:36Z
+internal/setup/probe.go:181:6: unreachable func: readDurableProbe	# deadcode:first_added=2026-08-13T12:13:36Z last_seen=2026-08-13T12:13:36Z
+internal/setup/probe.go:199:6: unreachable func: readDurableIntake	# deadcode:first_added=2026-08-13T12:13:36Z last_seen=2026-08-13T12:13:36Z
+internal/setup/probe.go:226:6: unreachable func: readDurableEvaluation	# deadcode:first_added=2026-08-13T12:13:36Z last_seen=2026-08-13T12:13:36Z
+internal/setup/probe.go:263:6: unreachable func: readDurableAudit	# deadcode:first_added=2026-08-13T12:13:36Z last_seen=2026-08-13T12:13:36Z
+internal/setup/probe.go:293:6: unreachable func: probeTimeoutError	# deadcode:first_added=2026-08-13T12:13:36Z last_seen=2026-08-13T12:13:36Z
+internal/setup/probe.go:47:6: unreachable func: VerifyInstalledHooks	# deadcode:first_added=2026-08-13T12:13:36Z last_seen=2026-08-13T12:13:36Z
+internal/setup/probe.go:69:6: unreachable func: verifyInstalledHook	# deadcode:first_added=2026-08-13T12:13:36Z last_seen=2026-08-13T12:13:36Z
