@@ -48,6 +48,7 @@ const (
 	commandKV          commandName = "kv"
 	commandManagedHook commandName = "managed-hook"
 	commandQuery       commandName = "query"
+	commandSetup       commandName = "setup"
 	commandUpdate      commandName = "update"
 	commandVersion     commandName = "version"
 )
@@ -185,6 +186,8 @@ func runCLIWithHook(
 		return runConfig(args[1:])
 	case commandInstall:
 		return runInstall(args[1:])
+	case commandSetup:
+		return runSetup(args[1:], stdout, stderr)
 	case commandUpdate:
 		return runUpdate(args[1:])
 	case commandVersion, "--version", "-v":
@@ -212,6 +215,7 @@ Commands:
   kv             Access durable key-value data
   managed-hook   Handle an installed provider hook
   query          Query audit and intake data
+  setup          Install and verify managed integrations
   update         Manage updates
   version        Show build information
 

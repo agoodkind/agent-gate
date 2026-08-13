@@ -131,6 +131,32 @@ func TestRunCLIHelpDoesNotEnterHookMode(t *testing.T) {
 	}
 }
 
+func TestRunCLIHelpListsSetupAndSetupFlags(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if exitCode := runCLIWithHook([]string{"--help"}, &stdout, &stderr, func(hookRoute) int {
+		t.Fatal("hook called")
+		return 1
+	}); exitCode != 0 {
+		t.Fatalf("help exit code = %d", exitCode)
+	}
+	if !strings.Contains(stdout.String(), "setup") {
+		t.Fatalf("help = %q", stdout.String())
+	}
+	stdout.Reset()
+	if exitCode := runCLIWithHook([]string{"setup", "--help"}, &stdout, &stderr, func(hookRoute) int {
+		t.Fatal("hook called")
+		return 1
+	}); exitCode != 0 {
+		t.Fatalf("setup help exit code = %d, stderr = %q", exitCode, stderr.String())
+	}
+	for _, flagName := range []string{"--non-interactive", "--providers", "--audit-profile", "--auto-update", "--bin-path", "--json"} {
+		if !strings.Contains(stdout.String(), flagName) {
+			t.Fatalf("setup help = %q, want %s", stdout.String(), flagName)
+		}
+	}
+}
+
 func TestRunCLIHelpListsAuditCommands(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
