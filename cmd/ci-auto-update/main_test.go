@@ -104,6 +104,50 @@ func TestSelectReleasesForBranchBuild(t *testing.T) {
 	}
 }
 
+func TestSelectReleasesForManualRunUsesLatestRelease(t *testing.T) {
+	t.Parallel()
+	releases := []githubRelease{
+		{TagName: "202608121600-13b-abcdef1"},
+		{TagName: "202608111500-13a-12345678"},
+	}
+	environment := environment{
+		commit:  "unreleased123456",
+		refType: "branch",
+		manual:  true,
+	}
+
+	selection, err := selectReleases(releases, environment)
+	if err != nil {
+		t.Fatalf("selectReleases() error = %v", err)
+	}
+	if selection.target.TagName != releases[0].TagName {
+		t.Fatalf("target = %q, want %q", selection.target.TagName, releases[0].TagName)
+	}
+	if selection.previous.TagName != releases[1].TagName {
+		t.Fatalf("previous = %q, want %q", selection.previous.TagName, releases[1].TagName)
+	}
+}
+
+func TestLoadEnvironmentDetectsManualRun(t *testing.T) {
+	t.Parallel()
+	values := map[string]string{
+		"GITHUB_REPOSITORY": "agoodkind/agent-gate",
+		"GITHUB_SHA":        "abcdef1234567890",
+		"GITHUB_REF_TYPE":   "branch",
+		"GITHUB_REF_NAME":   "main",
+		"GITHUB_EVENT_NAME": "workflow_dispatch",
+		"GH_TOKEN":          "token",
+	}
+
+	environment, err := loadEnvironment(func(name string) string { return values[name] })
+	if err != nil {
+		t.Fatalf("loadEnvironment() error = %v", err)
+	}
+	if !environment.manual {
+		t.Fatal("manual = false, want true")
+	}
+}
+
 func TestSelectReleasesSkipsDrafts(t *testing.T) {
 	t.Parallel()
 	releases := []githubRelease{
