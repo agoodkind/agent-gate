@@ -58,6 +58,9 @@ func querySQLite(cfg *config.Config, filter QueryFilter) ([]QueryRecord, error) 
 	if cfg != nil {
 		path = cfg.AuditSQLitePath()
 	}
+	if err := auditstorage.GuardDatabasePath(path); err != nil {
+		return nil, fmt.Errorf("guard audit query cutover: %w", err)
+	}
 	if _, err := os.Stat(path); err != nil {
 		log.WarnContext(ctx, "stat audit sqlite path failed", slog.String("path", path), slog.Any("err", err))
 		return nil, fmt.Errorf("stat audit sqlite path: %w", err)

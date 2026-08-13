@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"goodkind.io/agent-gate/internal/auditstorage"
 	"goodkind.io/agent-gate/internal/config"
 	installer "goodkind.io/agent-gate/internal/install"
 	"goodkind.io/agent-gate/internal/intake"
@@ -218,23 +219,148 @@ func stubFullCompactServiceStatus(t *testing.T) {
 	})
 }
 
-func TestFullCompactApplyFailsWithoutIncrementalFallback(t *testing.T) {
-	setupAuditCommandEnvironment(t, "[audit.storage]\nmaintenance_batch_rows = 1000\n")
+func TestFullCompactApplyPublicCLICompactsAfterExactConfirmation(t *testing.T) {
+	stubStoppedFullCompactServiceStatus(t)
+	stubInteractiveFullCompactInput(t, "compact audit.db\n")
+	setupAuditCommandEnvironment(t, "[audit.storage]\n")
 	createAuditCommandDatabase(t)
 	createAuditCommandFreePages(t, 1<<20)
+	before, err := os.Stat(config.DefaultAuditSQLitePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := runAudit([]string{"compact", "--full", "--apply"}, &stdout, &stderr)
+
+	if exitCode != 0 {
+		t.Fatalf("exit/stderr = %d/%q", exitCode, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "hooks fail open") ||
+		!strings.Contains(stdout.String(), "reclaimed bytes:") {
+		t.Fatalf("stdout/stderr = %q/%q", stdout.String(), stderr.String())
+	}
+	after, err := os.Stat(config.DefaultAuditSQLitePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Size() >= before.Size() {
+		t.Fatalf("database size = %d, want less than %d", after.Size(), before.Size())
+	}
+}
+
+func TestFullCompactApplyPublicCLIRejectsConfirmationWithSurroundingSpaces(t *testing.T) {
+	stubStoppedFullCompactServiceStatus(t)
+	stubInteractiveFullCompactInput(t, " compact audit.db \n")
+	setupAuditCommandEnvironment(t, "[audit.storage]\n")
+	createAuditCommandDatabase(t)
 	before := snapshotAuditFiles(t, config.DefaultAuditSQLitePath())
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
 	exitCode := runAudit([]string{"compact", "--full", "--apply"}, &stdout, &stderr)
 
-	if exitCode != 1 || !strings.Contains(stderr.String(), "full compaction apply is not implemented") {
-		t.Fatalf("exit code/stderr = %d/%q, want visible unavailable error", exitCode, stderr.String())
+	if exitCode != 1 || !strings.Contains(stderr.String(), "confirmation did not match") {
+		t.Fatalf("exit/stderr = %d/%q, want exact confirmation rejection", exitCode, stderr.String())
 	}
 	after := snapshotAuditFiles(t, config.DefaultAuditSQLitePath())
 	if !reflect.DeepEqual(after, before) {
-		t.Fatalf("full apply fallback changed SQLite files: before %#v after %#v", before, after)
+		t.Fatalf("inexact confirmation changed files: before=%#v after=%#v", before, after)
 	}
+}
+
+func TestFullCompactApplyPublicCLIRejectsNonInteractiveInputWithoutMutation(t *testing.T) {
+	stubStoppedFullCompactServiceStatus(t)
+	setupAuditCommandEnvironment(t, "[audit.storage]\n")
+	createAuditCommandDatabase(t)
+	before := snapshotAuditFiles(t, config.DefaultAuditSQLitePath())
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := runAudit([]string{"compact", "--full", "--apply"}, &stdout, &stderr)
+
+	if exitCode != 1 || !strings.Contains(stderr.String(), "interactive terminal") {
+		t.Fatalf("exit/stderr = %d/%q, want terminal rejection", exitCode, stderr.String())
+	}
+	after := snapshotAuditFiles(t, config.DefaultAuditSQLitePath())
+	if !reflect.DeepEqual(after, before) {
+		t.Fatalf("noninteractive rejection changed files: before=%#v after=%#v", before, after)
+	}
+}
+
+func TestFullCompactApplyPublicCLIRejectsActiveDaemonBeforeMutation(t *testing.T) {
+	stubFullCompactServiceStatus(t)
+	stubInteractiveFullCompactInput(t, "compact audit.db\n")
+	setupAuditCommandEnvironment(t, "[audit.storage]\n")
+	createAuditCommandDatabase(t)
+	before := snapshotAuditFiles(t, config.DefaultAuditSQLitePath())
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := runAudit([]string{"compact", "--full", "--apply"}, &stdout, &stderr)
+
+	if exitCode != 1 || !strings.Contains(stderr.String(), "daemon is running") {
+		t.Fatalf("exit/stderr = %d/%q, want running daemon", exitCode, stderr.String())
+	}
+	after := snapshotAuditFiles(t, config.DefaultAuditSQLitePath())
+	if !reflect.DeepEqual(after, before) {
+		t.Fatalf("active daemon rejection changed files: before=%#v after=%#v", before, after)
+	}
+}
+
+func TestPublicWriterCommandsRejectUnresolvedCutover(t *testing.T) {
+	setupAuditCommandEnvironment(t, "[audit.storage]\n")
+	createAuditCommandDatabase(t)
+	path := config.DefaultAuditSQLitePath()
+	if err := auditstorage.WriteCutoverJournal(auditstorage.CutoverJournal{
+		DatabasePath: path, RunID: "interrupted",
+		Phase: auditstorage.CutoverOriginalRenamed,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	before := snapshotAuditFiles(t, path)
+	for _, args := range [][]string{
+		{"maintain", "--apply"},
+		{"compact", "--apply"},
+	} {
+		var stdout bytes.Buffer
+		var stderr bytes.Buffer
+		exitCode := runAudit(args, &stdout, &stderr)
+		if exitCode != 1 || !strings.Contains(stderr.String(), "recovery is required") {
+			t.Fatalf("runAudit(%v) exit/stderr = %d/%q", args, exitCode, stderr.String())
+		}
+	}
+	after := snapshotAuditFiles(t, path)
+	if !reflect.DeepEqual(after, before) {
+		t.Fatalf("guarded writer changed SQLite files: before=%#v after=%#v", before, after)
+	}
+}
+
+func stubStoppedFullCompactServiceStatus(t *testing.T) {
+	t.Helper()
+	originalInspect := auditInspectService
+	auditInspectService = func(
+		context.Context,
+		installer.ServiceStatusOptions,
+	) (installer.ServiceState, error) {
+		return installer.ServiceState{
+			Platform: "launchd", Managed: true, Running: false, BinaryPath: "/opt/agent-gate",
+		}, nil
+	}
+	t.Cleanup(func() { auditInspectService = originalInspect })
+}
+
+func stubInteractiveFullCompactInput(t *testing.T, input string) {
+	t.Helper()
+	originalInput := auditInput
+	originalInteractive := auditInputIsTerminal
+	auditInput = strings.NewReader(input)
+	auditInputIsTerminal = func() bool { return true }
+	t.Cleanup(func() {
+		auditInput = originalInput
+		auditInputIsTerminal = originalInteractive
+	})
 }
 
 func TestFullCompactPublicCLILeavesActiveWALByteIdentical(t *testing.T) {

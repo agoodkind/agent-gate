@@ -7,14 +7,13 @@ import (
 	"log/slog"
 	"net"
 	"os"
-	"path/filepath"
 	"sync"
-	"syscall"
 
 	"google.golang.org/grpc"
 
 	"goodkind.io/agent-gate/api/daemonpb"
 	"goodkind.io/agent-gate/internal/config"
+	"goodkind.io/agent-gate/internal/processlock"
 )
 
 // Run starts the daemon gRPC server on the XDG runtime Unix socket.
@@ -27,25 +26,16 @@ func Run(log *slog.Logger, cfg *config.Config) error {
 		return fmt.Errorf("ensure runtime dir: %w", err)
 	}
 
-	lockPath := filepath.Join(config.RuntimeDir(), "daemon.process.lock")
-	lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		log.ErrorContext(ctx, "open daemon process lock failed", "path", lockPath, "err", err)
-		return fmt.Errorf("open daemon process lock: %w", err)
-	}
-	defer func() { _ = lockFile.Close() }()
-
-	lockFD := lockFile.Fd()
-	if lockFD > uintptr(int(^uint32(0)>>1)) {
-		log.ErrorContext(ctx, "daemon process lock fd out of range", "fd", lockFD)
-		return fmt.Errorf("daemon process lock fd %d exceeds int range", lockFD)
-	}
-	lockFDInt := int(lockFD)
-	if err := syscall.Flock(lockFDInt, syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		log.InfoContext(ctx, "daemon already running", "lock_path", lockPath)
+	processLock, err := processlock.Acquire(config.RuntimeDir())
+	if errors.Is(err, processlock.ErrBusy) {
+		log.InfoContext(ctx, "daemon already running")
 		return nil
 	}
-	defer func() { _ = syscall.Flock(lockFDInt, syscall.LOCK_UN) }()
+	if err != nil {
+		log.ErrorContext(ctx, "open daemon process lock failed", "err", err)
+		return fmt.Errorf("open daemon process lock: %w", err)
+	}
+	defer func() { _ = processLock.Release() }()
 
 	socketPath := config.DaemonSocketPath()
 	listener, err := daemonListener(ctx, socketPath)

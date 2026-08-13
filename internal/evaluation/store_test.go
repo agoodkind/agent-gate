@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -22,7 +23,8 @@ import (
 )
 
 func TestNewStoreMigrationRecordsSharedSchemaVersion(t *testing.T) {
-	database, err := sql.Open("sqlite3", filepath.Join(t.TempDir(), "evaluation.db"))
+	path := filepath.Join(t.TempDir(), "evaluation.db")
+	database, err := sql.Open("sqlite3", path)
 	if err != nil {
 		t.Fatalf("open database: %v", err)
 	}
@@ -33,7 +35,7 @@ func TestNewStoreMigrationRecordsSharedSchemaVersion(t *testing.T) {
 		}
 	})
 
-	if _, err := evaluation.NewStore(t.Context(), database); err != nil {
+	if _, err := evaluation.NewStore(t.Context(), path, database); err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
 	version, err := auditstorage.SchemaVersion(t.Context(), database)
@@ -42,6 +44,31 @@ func TestNewStoreMigrationRecordsSharedSchemaVersion(t *testing.T) {
 	}
 	if version != 6 {
 		t.Fatalf("schema version = %d, want 6", version)
+	}
+}
+
+func TestNewSQLiteStoreRejectsUnresolvedCutoverBeforeDatabaseCreation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.db")
+	if err := auditstorage.WriteCutoverJournal(auditstorage.CutoverJournal{
+		DatabasePath: path,
+		RunID:        "run",
+		Phase:        auditstorage.CutoverPrepared,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	database, err := sql.Open("sqlite3", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+
+	_, err = evaluation.NewStore(t.Context(), path, database)
+
+	if err == nil || !strings.Contains(err.Error(), "recovery is required") {
+		t.Fatalf("NewSQLiteStore error = %v, want recovery required", err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("database stat error = %v, want missing", err)
 	}
 }
 
@@ -291,7 +318,8 @@ func TestStoreRejectsUnsafeV2Metadata(t *testing.T) {
 }
 
 func TestNewStoreEnablesForeignKeyEnforcement(t *testing.T) {
-	database, err := sql.Open("sqlite3", filepath.Join(t.TempDir(), "evaluation.db"))
+	path := filepath.Join(t.TempDir(), "evaluation.db")
+	database, err := sql.Open("sqlite3", path)
 	if err != nil {
 		t.Fatalf("open database: %v", err)
 	}
@@ -301,7 +329,7 @@ func TestNewStoreEnablesForeignKeyEnforcement(t *testing.T) {
 			t.Fatalf("close database: %v", err)
 		}
 	})
-	if _, err := evaluation.NewStore(context.Background(), database); err != nil {
+	if _, err := evaluation.NewStore(context.Background(), path, database); err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
 	var enabled int
@@ -447,7 +475,7 @@ func TestStoreMigratesMissingLayerVerdict(t *testing.T) {
 	}
 	resetAuditSchemaVersion(t, intakeStore.Handle())
 
-	migratedStore, err := evaluation.NewStore(ctx, intakeStore.Handle())
+	migratedStore, err := evaluation.NewStore(ctx, path, intakeStore.Handle())
 	if err != nil {
 		t.Fatalf("NewStore migration: %v", err)
 	}

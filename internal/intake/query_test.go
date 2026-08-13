@@ -44,6 +44,20 @@ func TestQueryHandlesMissingAndEmptyIntakeHistory(t *testing.T) {
 	}
 }
 
+func TestQueryRejectsUnresolvedCutoverWhenDatabaseIsMissing(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.db")
+	if err := auditstorage.WriteCutoverJournal(auditstorage.CutoverJournal{
+		DatabasePath: path, RunID: "run", Phase: auditstorage.CutoverOriginalRenamed,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := intake.Query(t.Context(), queryConfig(path), intake.QueryFilter{})
+	if err == nil || !strings.Contains(err.Error(), "recovery is required") {
+		t.Fatalf("Query error = %v, want recovery required", err)
+	}
+}
+
 func TestQueryHandlesMissingIntakeTablesAsEmptyHistory(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "audit.db")
 	db, err := sql.Open("sqlite3", path)

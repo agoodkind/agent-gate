@@ -20,6 +20,9 @@ func WriteNextAttempt(ctx context.Context, path string, nextAttempt time.Time) (
 	if nextAttempt.IsZero() {
 		return errors.New("audit maintenance next attempt is required")
 	}
+	if err := auditstorage.GuardDatabasePath(path); err != nil {
+		return wrapError("guard audit maintenance schedule cutover", err)
+	}
 	database, err := sql.Open("sqlite3", path)
 	if err != nil {
 		return wrapError("open audit maintenance schedule database", err)

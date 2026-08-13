@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"goodkind.io/agent-gate/internal/auditmaintenance"
+	"goodkind.io/agent-gate/internal/auditstorage"
 	installer "goodkind.io/agent-gate/internal/install"
 	"goodkind.io/agent-gate/internal/intake"
 )
@@ -41,6 +42,34 @@ func TestFullCompactDryRunDoesNotWriteDatabase(t *testing.T) {
 	after := snapshotFullCompactFiles(t, path)
 	if !reflect.DeepEqual(after, before) {
 		t.Fatalf("preflight changed database: before=%#v after=%#v", before, after)
+	}
+}
+
+func TestFullCompactPreflightRejectsUnresolvedCutoverBeforeReadingSource(t *testing.T) {
+	path := createFullCompactDatabase(t)
+	if err := auditstorage.WriteCutoverJournal(auditstorage.CutoverJournal{
+		DatabasePath: path,
+		RunID:        "interrupted",
+		Phase:        auditstorage.CutoverPrepared,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	before := snapshotFullCompactFiles(t, path)
+
+	_, err := auditmaintenance.PreviewFullCompact(t.Context(), auditmaintenance.FullCompactOptions{
+		Path: path,
+		Service: installer.ServiceState{
+			Platform: "launchd", Managed: true, Running: false,
+		},
+		FreeBytes: func(string) (uint64, error) { return 1 << 40, nil },
+	})
+
+	if err == nil || !strings.Contains(err.Error(), "recovery is required") {
+		t.Fatalf("PreviewFullCompact error = %v, want recovery required", err)
+	}
+	after := snapshotFullCompactFiles(t, path)
+	if !reflect.DeepEqual(after, before) {
+		t.Fatalf("guarded preflight changed database: before=%#v after=%#v", before, after)
 	}
 }
 

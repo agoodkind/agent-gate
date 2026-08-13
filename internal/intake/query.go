@@ -86,6 +86,9 @@ func Query(ctx context.Context, cfg *config.Config, filter QueryFilter) (QueryRe
 		Source:  "sqlite",
 		Note:    "",
 	}
+	if err := auditstorage.GuardDatabasePath(path); err != nil {
+		return QueryResult{}, wrapLoggedError(ctx, slog.Default(), "guard intake query cutover", err)
+	}
 	if _, err := os.Stat(path); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			result.Note = "no durable seen-event history exists yet"

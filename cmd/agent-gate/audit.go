@@ -1,15 +1,21 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
+
+	"golang.org/x/term"
 
 	"goodkind.io/agent-gate/internal/auditmaintenance"
 	"goodkind.io/agent-gate/internal/config"
@@ -18,6 +24,8 @@ import (
 
 var auditExecutablePath = os.Executable
 var auditInspectService = installer.InspectService
+var auditInput io.Reader = os.Stdin
+var auditInputIsTerminal = func() bool { return term.IsTerminal(int(os.Stdin.Fd())) }
 var auditCommandContext = func() (context.Context, context.CancelFunc) {
 	return signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 }
@@ -77,8 +85,7 @@ func runAuditCompact(
 		return 2
 	}
 	if full && apply {
-		fmt.Fprintln(stderr, "agent-gate audit compact: full compaction apply is not implemented")
-		return 1
+		return runAuditFullCompactApply(stdout, stderr, cfg)
 	}
 	policy := cfg.AuditStoragePolicy()
 	if dryRun {
@@ -108,6 +115,70 @@ func runAuditCompact(
 		return 1
 	}
 	writeAuditCompactResult(stdout, result)
+	return 0
+}
+
+func runAuditFullCompactApply(stdout io.Writer, stderr io.Writer, cfg *config.Config) int {
+	ctx, stop := auditCommandContext()
+	defer stop()
+	executablePath, err := auditExecutablePath()
+	if err != nil {
+		fmt.Fprintf(stderr, "agent-gate audit compact: locate executable: %v\n", err)
+		return 1
+	}
+	canonicalExecutable, err := installer.CanonicalExecutablePath(executablePath)
+	if err != nil {
+		fmt.Fprintf(stderr, "agent-gate audit compact: resolve executable: %v\n", err)
+		return 1
+	}
+	inspect := func(inspectCtx context.Context) (installer.ServiceState, error) {
+		serviceCtx, cancelService := context.WithTimeout(inspectCtx, auditServiceStatusTimeout)
+		defer cancelService()
+		return auditInspectService(serviceCtx, installer.ServiceStatusOptions{
+			BinaryPath: canonicalExecutable,
+		})
+	}
+	service, err := inspect(ctx)
+	if err != nil {
+		fmt.Fprintf(stderr, "agent-gate audit compact: service status: %v\n", err)
+		return 1
+	}
+	if service.Running {
+		fmt.Fprintln(stderr, "agent-gate audit compact: managed daemon is running; stop it before full compaction")
+		return 1
+	}
+	if !auditInputIsTerminal() {
+		fmt.Fprintln(stderr, "agent-gate audit compact: full apply requires an interactive terminal")
+		return 1
+	}
+	confirmation := "compact " + filepath.Base(cfg.AuditSQLitePath())
+	fmt.Fprintln(stderr, "The operator-controlled offline interval makes hooks fail open.")
+	fmt.Fprintf(stderr, "Type %s to continue: ", confirmation)
+	line, err := bufio.NewReader(auditInput).ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		fmt.Fprintf(stderr, "agent-gate audit compact: read confirmation: %v\n", err)
+		return 1
+	}
+	line = strings.TrimSuffix(line, "\n")
+	line = strings.TrimSuffix(line, "\r")
+	if line != confirmation {
+		fmt.Fprintln(stderr, "agent-gate audit compact: confirmation did not match")
+		return 1
+	}
+	result, err := auditmaintenance.ApplyFullCompact(ctx, auditmaintenance.FullCompactApplyOptions{
+		Path: cfg.AuditSQLitePath(), RuntimeDirectory: config.RuntimeDir(),
+		Owner: "agent-gate-cli", LeaseTTL: 5 * time.Minute,
+		InspectService: inspect,
+		FreeBytes:      nil, FailStep: nil, Now: time.Now,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "agent-gate audit compact: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "run id: %s\n", result.RunID)
+	fmt.Fprintf(stdout, "before bytes: %d\n", result.BeforeBytes)
+	fmt.Fprintf(stdout, "after bytes: %d\n", result.AfterBytes)
+	fmt.Fprintf(stdout, "reclaimed bytes: %d\n", result.ReclaimedBytes)
 	return 0
 }
 
