@@ -11,8 +11,8 @@ require (
 	github.com/pelletier/go-toml/v2 v2.4.3
 	go.opentelemetry.io/otel v1.45.0
 	go.opentelemetry.io/otel/metric v1.45.0
-	go.opentelemetry.io/otel/sdk v1.44.0
-	go.opentelemetry.io/otel/sdk/metric v1.44.0
+	go.opentelemetry.io/otel/sdk v1.45.0
+	go.opentelemetry.io/otel/sdk/metric v1.45.0
 	golang.org/x/sys v0.47.0
 	golang.org/x/term v0.45.0
 	goodkind.io/clyde v0.0.0-20260715020851-23020238ae53
