@@ -33,8 +33,8 @@ type readinessDaemonFake struct {
 	// received and recorded the mismatched identity from the first. A test can
 	// then expire the wait at exactly that point rather than hoping a fixed
 	// wall-clock budget covered the round trip.
-	served     chan struct{}
-	serveOnce  sync.Once
+	served    chan struct{}
+	serveOnce sync.Once
 }
 
 func (server *readinessDaemonFake) Status(
@@ -146,12 +146,13 @@ func TestRunInstallPrevalidatesBeforeMutations(t *testing.T) {
 	binPath := writeCommandExecutable(t)
 	for _, args := range [][]string{
 		{"all", "--auto-update", "sometimes"},
+		{"all", "--audit-profile", "sometimes"},
 		{"all", "unexpected"},
 		{"all", "--bin-path", filepath.Join(t.TempDir(), "missing")},
 	} {
 		dependencies := successfulInstallDependencies(binPath)
 		mutationCount := 0
-		dependencies.ensureConfig = func(string) error {
+		dependencies.ensureConfig = func(config.EnsureDefaultsOptions) error {
 			mutationCount++
 			return nil
 		}
@@ -181,7 +182,7 @@ func TestRunInstallRejectsBrokenExecutableSymlinkBeforeMutations(t *testing.T) {
 	}
 	dependencies := successfulInstallDependencies(binPath)
 	mutationCount := 0
-	dependencies.ensureConfig = func(string) error {
+	dependencies.ensureConfig = func(config.EnsureDefaultsOptions) error {
 		mutationCount++
 		return nil
 	}
@@ -218,7 +219,7 @@ func TestRunInstallAllPrevalidatesInstallerOptionsBeforeMutations(t *testing.T) 
 		t.Run(failingStage, func(t *testing.T) {
 			dependencies := successfulInstallDependencies(binPath)
 			mutationCount := 0
-			dependencies.ensureConfig = func(string) error {
+			dependencies.ensureConfig = func(config.EnsureDefaultsOptions) error {
 				mutationCount++
 				return nil
 			}
@@ -275,7 +276,7 @@ func TestRunInstallAllMalformedLaterHookLeavesConfigServiceAndHooksUntouched(t *
 		options.HomeDir = homeDir
 		return agentinstall.PrepareHookInstallation(options)
 	}
-	dependencies.ensureConfig = func(string) error {
+	dependencies.ensureConfig = func(config.EnsureDefaultsOptions) error {
 		return os.WriteFile(filepath.Join(homeDir, "config-state"), []byte("config-mutated"), 0o600)
 	}
 	dependencies.installService = func(agentinstall.ServiceOptions) error {
@@ -302,8 +303,8 @@ func TestRunInstallAllOrdersConfigServiceReadinessAndHooks(t *testing.T) {
 	binPath := writeCommandExecutable(t)
 	dependencies := successfulInstallDependencies(binPath)
 	var calls []string
-	dependencies.ensureConfig = func(mode string) error {
-		calls = append(calls, "config:"+mode)
+	dependencies.ensureConfig = func(options config.EnsureDefaultsOptions) error {
+		calls = append(calls, "config:"+options.AutoUpdateMode)
 		return nil
 	}
 	dependencies.validateConfig = func() error {
@@ -333,6 +334,113 @@ func TestRunInstallAllOrdersConfigServiceReadinessAndHooks(t *testing.T) {
 	want := []string{"config:check", "validate", "service", "ready", "hooks"}
 	if !reflect.DeepEqual(calls, want) {
 		t.Fatalf("calls = %v, want %v", calls, want)
+	}
+}
+
+func TestInstallAllUsesSharedInstallationPlan(t *testing.T) {
+	binPath := writeCommandExecutable(t)
+	dependencies := successfulInstallDependencies(binPath)
+	preparedPlan := &agentinstall.InstallationPlan{}
+	prepareCalled := false
+	applyCalled := false
+	dependencies.prepareInstallation = func(
+		options agentinstall.InstallationOptions,
+	) (*agentinstall.InstallationPlan, error) {
+		prepareCalled = true
+		if options.Config == nil || options.Config.AutoUpdateMode != config.UpdateModeCheck {
+			t.Fatalf("config options = %+v, want check mode", options.Config)
+		}
+		if options.Config.AuditProfile != config.AuditStorageProfileMinimal {
+			t.Fatalf("audit profile = %q, want minimal", options.Config.AuditProfile)
+		}
+		if options.Service == nil {
+			t.Fatal("service options are nil")
+		}
+		if options.Hooks == nil {
+			t.Fatal("hook options are nil")
+		}
+		return preparedPlan, nil
+	}
+	dependencies.applyInstallation = func(
+		plan *agentinstall.InstallationPlan,
+	) (agentinstall.ApplyResult, error) {
+		applyCalled = true
+		if plan != preparedPlan {
+			t.Fatalf("applied plan = %p, want %p", plan, preparedPlan)
+		}
+		return agentinstall.ApplyResult{}, nil
+	}
+	dependencies.ensureConfig = func(config.EnsureDefaultsOptions) error {
+		t.Fatal("legacy config apply was called")
+		return nil
+	}
+	dependencies.installService = func(agentinstall.ServiceOptions) error {
+		t.Fatal("legacy service apply was called")
+		return nil
+	}
+	dependencies.applyHooks = func(*agentinstall.HookInstallationPlan) error {
+		t.Fatal("legacy hook apply was called")
+		return nil
+	}
+
+	exitCode := runInstallWithDependencies(
+		[]string{
+			"all",
+			"--auto-update", config.UpdateModeCheck,
+			"--audit-profile", string(config.AuditStorageProfileMinimal),
+		},
+		dependencies,
+	)
+	if exitCode != 0 {
+		t.Fatalf("exitCode = %d, want 0", exitCode)
+	}
+	if !prepareCalled || !applyCalled {
+		t.Fatalf("shared plan calls: prepare=%t apply=%t", prepareCalled, applyCalled)
+	}
+}
+
+func TestInstallConfigRepairCommandAppliesPreparedChoices(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", configHome)
+	configDir := filepath.Join(configHome, "agent-gate")
+	if err := os.MkdirAll(configDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll config directory: %v", err)
+	}
+	configPath := filepath.Join(configDir, "config.toml")
+	initial := `[audit.storage]
+profile = "full"
+
+[update]
+enabled = true
+mode = "apply"
+`
+	if err := os.WriteFile(configPath, []byte(initial), 0o600); err != nil {
+		t.Fatalf("WriteFile initial config: %v", err)
+	}
+
+	exitCode := runInstallWithDependencies([]string{
+		"all",
+		"--no-service",
+		"--no-claude",
+		"--no-codex",
+		"--no-cursor",
+		"--no-gemini",
+		"--no-copilot",
+		"--auto-update", config.UpdateModeCheck,
+		"--audit-profile", string(config.AuditStorageProfileMinimal),
+	}, defaultInstallDependencies())
+	if exitCode != 0 {
+		t.Fatalf("exitCode = %d, want 0", exitCode)
+	}
+	loaded, err := config.LoadExisting(configPath)
+	if err != nil {
+		t.Fatalf("LoadExisting repaired config: %v", err)
+	}
+	if loaded.UpdateMode() != config.UpdateModeCheck {
+		t.Fatalf("update mode = %q, want check", loaded.UpdateMode())
+	}
+	if loaded.AuditStoragePolicy().Profile != config.AuditStorageProfileMinimal {
+		t.Fatalf("audit profile = %q, want minimal", loaded.AuditStoragePolicy().Profile)
 	}
 }
 
@@ -384,7 +492,7 @@ func TestRunInstallAllHonorsOptOutFlags(t *testing.T) {
 	serviceCalled := false
 	readinessCalled := false
 	var hooks agentinstall.HooksOptions
-	dependencies.ensureConfig = func(string) error {
+	dependencies.ensureConfig = func(config.EnsureDefaultsOptions) error {
 		configCalled = true
 		return nil
 	}
@@ -606,7 +714,7 @@ func successfulInstallDependencies(binPath string) installDependencies {
 		},
 		applyHooks:      func(*agentinstall.HookInstallationPlan) error { return nil },
 		validateService: func(agentinstall.ServiceOptions) error { return nil },
-		ensureConfig:    func(string) error { return nil },
+		ensureConfig:    func(config.EnsureDefaultsOptions) error { return nil },
 		validateConfig:  func() error { return nil },
 		installService: func(options agentinstall.ServiceOptions) error {
 			if options.Ready != nil {

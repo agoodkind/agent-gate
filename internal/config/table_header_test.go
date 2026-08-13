@@ -50,7 +50,7 @@ func TestMergeDoesNotDuplicateADecoratedTable(t *testing.T) {
 	for _, header := range []string{"[update] # managed", "[ update ]", `["update"]`} {
 		t.Run(header, func(t *testing.T) {
 			contents := header + "\nmode = \"check\"\n"
-			merged, _, err := mergeUpdateDefaults(contents, "")
+			merged, err := mergeUpdateDefaults(contents, "")
 			if err != nil {
 				t.Fatalf("mergeUpdateDefaults: %v", err)
 			}
