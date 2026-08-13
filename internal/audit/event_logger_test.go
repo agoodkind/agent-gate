@@ -251,3 +251,35 @@ func TestQuery_SQLite(t *testing.T) {
 		t.Fatalf("detail state = %q, want available", events[0].Detail.State)
 	}
 }
+
+func TestQueryReadOnlyReturnsExistingAuditEvents(t *testing.T) {
+	cfg := testConfig(t)
+	logger, err := audit.NewEventLoggerWithOptions(
+		context.Background(),
+		cfg,
+		nil,
+		audit.LoggerOptions{QueueLimit: 0},
+	)
+	if err != nil {
+		t.Fatalf("NewEventLogger: %v", err)
+	}
+	logger.Log("codex", "setup-read-only", "SessionStart", "info", "hook.allowed", audit.Attrs{
+		"system":     audit.NewStringValue("codex"),
+		"session_id": audit.NewStringValue("setup-read-only"),
+		"event":      audit.NewStringValue("SessionStart"),
+		"decision":   audit.NewStringValue("allow"),
+	})
+	if err := logger.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	events, source, err := audit.QueryReadOnly(context.Background(), cfg, audit.QueryFilter{
+		System: "codex", SessionID: "setup-read-only", Decision: "allow",
+	})
+	if err != nil {
+		t.Fatalf("QueryReadOnly: %v", err)
+	}
+	if source != "sqlite" || len(events) != 1 {
+		t.Fatalf("source/events = %q/%d, want sqlite/1", source, len(events))
+	}
+}
