@@ -750,8 +750,12 @@ func TestInstallLaunchdServiceUsesExactCommandSequence(t *testing.T) {
 			return nil
 		},
 	}
-	if err := installLaunchdService(options, homeDir, io.Discard, runner); err != nil {
-		t.Fatalf("installLaunchdService: %v", err)
+	plan, err := prepareServiceInstallationForPlatform(options, homeDir, servicePlatformDarwin)
+	if err != nil {
+		t.Fatalf("prepareServiceInstallationForPlatform: %v", err)
+	}
+	if err := applyLaunchdService(plan, io.Discard, runner); err != nil {
+		t.Fatalf("applyLaunchdService: %v", err)
 	}
 
 	domain := "gui/" + strconv.Itoa(os.Getuid())
@@ -786,8 +790,12 @@ func TestInstallSystemdServiceUsesExactCommandSequence(t *testing.T) {
 			return nil
 		},
 	}
-	if err := installSystemdService(options, homeDir, io.Discard, runner); err != nil {
-		t.Fatalf("installSystemdService: %v", err)
+	plan, err := prepareServiceInstallationForPlatform(options, homeDir, servicePlatformLinux)
+	if err != nil {
+		t.Fatalf("prepareServiceInstallationForPlatform: %v", err)
+	}
+	if err := applySystemdService(plan, io.Discard, runner); err != nil {
+		t.Fatalf("applySystemdService: %v", err)
 	}
 
 	want := []string{

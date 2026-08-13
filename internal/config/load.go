@@ -20,7 +20,11 @@ func Load() (*Config, error) {
 
 // LoadExisting reads an existing config file and compiles all rule patterns.
 func LoadExisting(path string) (*Config, error) {
-	return loadPath(path, true, true)
+	if _, err := os.Stat(path); err != nil {
+		slog.Error("stat config failed", "path", path, "err", err)
+		return nil, fmt.Errorf("stat config %s: %w", path, err)
+	}
+	return loadExisting(path, true)
 }
 
 // loadPath reads and compiles a config. When strict is true any bad rule or
@@ -28,6 +32,38 @@ func LoadExisting(path string) (*Config, error) {
 // wants. When strict is false the bad part is dropped or defaulted and recorded
 // in Failures, so a running daemon keeps enforcing everything still valid.
 func loadPath(path string, requireExisting bool, strict bool) (*Config, error) {
+	log := slog.Default()
+
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) && !requireExisting {
+			var cfg Config
+			policy, resolveErr := resolveAuditStorage(cfg.Audit.Storage)
+			if resolveErr != nil {
+				return nil, resolveErr
+			}
+			cfg.auditStoragePolicy = policy
+			return &cfg, nil
+		}
+		log.Error("stat config failed", "path", path, "err", err)
+		return nil, fmt.Errorf("stat config %s: %w", path, err)
+	}
+	if strict {
+		return LoadExisting(path)
+	}
+	return loadExisting(path, false)
+}
+
+func loadExisting(path string, strict bool) (*Config, error) {
+	log := slog.Default()
+	sourceBytes, err := os.ReadFile(path)
+	if err != nil {
+		log.Error("read config failed", "path", path, "err", err)
+		return nil, fmt.Errorf("read config %s: %w", path, err)
+	}
+	return loadSource(path, sourceBytes, strict)
+}
+
+func loadSource(path string, sourceBytes []byte, strict bool) (*Config, error) {
 	log := slog.Default()
 	var cfg Config
 
@@ -52,24 +88,6 @@ func loadPath(path string, requireExisting bool, strict bool) (*Config, error) {
 		return nil
 	}
 
-	if _, err := os.Stat(path); err != nil {
-		if os.IsNotExist(err) && !requireExisting {
-			policy, resolveErr := resolveAuditStorage(cfg.Audit.Storage)
-			if resolveErr != nil {
-				return nil, resolveErr
-			}
-			cfg.auditStoragePolicy = policy
-			return &cfg, nil
-		}
-		log.Error("stat config failed", "path", path, "err", err)
-		return nil, fmt.Errorf("stat config %s: %w", path, err)
-	}
-
-	sourceBytes, err := os.ReadFile(path)
-	if err != nil {
-		log.Error("read config failed", "path", path, "err", err)
-		return nil, fmt.Errorf("read config %s: %w", path, err)
-	}
 	cfg.sourceIdentity = hashIdentity(sourceBytes)
 	if err := decodeOrDegrade(log, path, sourceBytes, &cfg, strict); err != nil {
 		return nil, err

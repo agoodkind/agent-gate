@@ -4,8 +4,8 @@ import (
 	_ "embed"
 	"fmt"
 	"log/slog"
-	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -36,6 +36,7 @@ type Update struct {
 // EnsureDefaultsOptions controls install-time config creation and merging.
 type EnsureDefaultsOptions struct {
 	AutoUpdateMode string
+	AuditProfile   AuditStorageProfile
 }
 
 // UpdateEnabled reports whether the daemon-owned updater should run.
@@ -108,76 +109,20 @@ func normalizeUpdate(update *Update) error {
 
 // EnsureDefaults creates or merges the canonical default config.
 func EnsureDefaults(options EnsureDefaultsOptions) (string, error) {
-	log := slog.Default()
-	configPath := filepath.Clean(Path())
-	log.Info("config ensure defaults", "path", configPath, "auto_update", options.AutoUpdateMode)
-	if options.AutoUpdateMode != "" && options.AutoUpdateMode != UpdateModeApply && options.AutoUpdateMode != UpdateModeCheck && options.AutoUpdateMode != "off" {
-		err := fmt.Errorf("auto-update mode must be %q, %q, or %q", UpdateModeCheck, UpdateModeApply, "off")
-		log.Warn("config ensure defaults rejected mode", "path", configPath, "err", err)
-		return configPath, err
-	}
-
-	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
-		log.Warn("config ensure defaults create dir failed", "path", configPath, "err", err)
-		return configPath, fmt.Errorf("create config dir: %w", err)
-	}
-	current, err := os.ReadFile(configPath)
+	plan, err := PrepareDefaults(options)
 	if err != nil {
-		if !os.IsNotExist(err) {
-			log.Warn("config ensure defaults read failed", "path", configPath, "err", err)
-			return configPath, fmt.Errorf("read config: %w", err)
-		}
-		content := canonicalConfigWithUpdateOverride(options.AutoUpdateMode)
-		// #nosec G703 -- installer writes the canonical agent-gate config to the resolved XDG path.
-		if writeErr := os.WriteFile(configPath, []byte(content), 0o600); writeErr != nil {
-			log.Warn("config ensure defaults write failed", "path", configPath, "err", writeErr)
-			return configPath, fmt.Errorf("write default config: %w", writeErr)
-		}
-		_, loadErr := LoadExisting(configPath)
-		if loadErr != nil {
-			log.Warn("config ensure defaults validation failed", "path", configPath, "err", loadErr)
-		}
-		return configPath, loadErr
+		return filepath.Clean(Path()), err
 	}
-
-	next, changed, mergeErr := mergeUpdateDefaults(string(current), options.AutoUpdateMode)
-	if mergeErr != nil {
-		log.Warn("config ensure defaults merge failed", "path", configPath, "err", mergeErr)
-		return configPath, mergeErr
-	}
-	if !changed {
-		_, loadErr := LoadExisting(configPath)
-		if loadErr != nil {
-			log.Warn("config ensure defaults validation failed", "path", configPath, "err", loadErr)
-		}
-		return configPath, loadErr
-	}
-	// #nosec G703 -- installer writes the merged agent-gate config to the resolved XDG path.
-	if err := os.WriteFile(configPath, []byte(next), 0o600); err != nil {
-		log.Warn("config ensure defaults write merged failed", "path", configPath, "err", err)
-		return configPath, fmt.Errorf("write merged config: %w", err)
-	}
-	_, loadErr := LoadExisting(configPath)
-	if loadErr != nil {
-		log.Warn("config ensure defaults validation failed", "path", configPath, "err", loadErr)
-	}
-	return configPath, loadErr
+	return ApplyDefaults(plan)
 }
 
-func canonicalConfigWithUpdateOverride(mode string) string {
-	if mode == "" || mode == UpdateModeApply {
-		return defaultConfigTOML
-	}
-	return strings.Replace(defaultConfigTOML, defaultUpdateBlock(), updateBlockForMode(mode), 1)
-}
-
-func mergeUpdateDefaults(contents string, mode string) (string, bool, error) {
+func mergeUpdateDefaults(contents string, mode string) (string, error) {
 	log := slog.Default()
 	var decoded Config
 	err := toml.Unmarshal([]byte(contents), &decoded)
 	if err != nil {
 		log.Warn("config update merge decode failed", "err", err)
-		return "", false, fmt.Errorf("decode config before merge: %w", err)
+		return "", fmt.Errorf("decode config before merge: %w", err)
 	}
 	// Whether the file already declares an [update] table decides between
 	// merging into it and appending a fresh one, so an absent table and a table
@@ -187,7 +132,7 @@ func mergeUpdateDefaults(contents string, mode string) (string, bool, error) {
 	// matcher the rewrite below uses to find it.
 	hasUpdate := topLevelTableDeclared(contents, "update")
 	if hasUpdate && mode == "" {
-		return contents, false, nil
+		return contents, nil
 	}
 	if !hasUpdate {
 		block := updateBlockForMode(mode)
@@ -195,16 +140,16 @@ func mergeUpdateDefaults(contents string, mode string) (string, bool, error) {
 		if strings.HasSuffix(contents, "\n") {
 			separator = ""
 		}
-		return contents + separator + "\n" + block, true, nil
+		return contents + separator + "\n" + block, nil
 	}
 	block := mergedUpdateBlock(decoded.Update, mode)
 	next, replaced := replaceTopLevelTable(contents, "update", block)
 	if !replaced {
 		err := fmt.Errorf("update table was detected but could not be replaced")
 		log.Warn("config update merge replace failed", "err", err)
-		return "", false, err
+		return "", err
 	}
-	return next, next != contents, nil
+	return next, nil
 }
 
 func updateBlockForMode(mode string) string {
@@ -224,10 +169,6 @@ interval = "24h"
 repo = "agoodkind/agent-gate"
 allow_prerelease = true
 `, enabled, resolvedMode)
-}
-
-func defaultUpdateBlock() string {
-	return updateBlockForMode(UpdateModeApply)
 }
 
 func mergedUpdateBlock(existing Update, mode string) string {
@@ -266,9 +207,13 @@ allow_prerelease = %t
 
 func replaceTopLevelTable(contents string, tableName string, replacement string) (string, bool) {
 	lines := strings.SplitAfter(contents, "\n")
+	structuralLines := tomlStructuralLines(lines)
 	start := -1
 	end := len(lines)
 	for i := range lines {
+		if !structuralLines[i] {
+			continue
+		}
 		if isTopLevelTableHeader(lines[i], tableName) {
 			start = i
 			continue
@@ -300,8 +245,10 @@ func replaceTopLevelTable(contents string, tableName string, replacement string)
 // hold non-zero values: a decode into a typed struct cannot tell an absent
 // table from a table of zero values.
 func topLevelTableDeclared(contents string, tableName string) bool {
-	for line := range strings.SplitSeq(contents, "\n") {
-		if isTopLevelTableHeader(line, tableName) {
+	lines := strings.SplitAfter(contents, "\n")
+	structuralLines := tomlStructuralLines(lines)
+	for i := range lines {
+		if structuralLines[i] && isTopLevelTableHeader(lines[i], tableName) {
 			return true
 		}
 	}
@@ -318,25 +265,6 @@ func topLevelTableDeclared(contents string, tableName string) bool {
 // that no longer parses. Both the presence check and the rewrite use this, so
 // they cannot disagree about which line is the header.
 func isTopLevelTableHeader(line string, tableName string) bool {
-	trimmed := strings.TrimSpace(line)
-	if !strings.HasPrefix(trimmed, "[") {
-		return false
-	}
-	// An array-of-tables header opens with [[ and is a different construct.
-	if strings.HasPrefix(trimmed, "[[") {
-		return false
-	}
-	closing := strings.Index(trimmed, "]")
-	if closing < 0 {
-		return false
-	}
-	// Only a comment may follow the closing bracket; anything else is not a
-	// bare table header.
-	rest := strings.TrimSpace(trimmed[closing+1:])
-	if rest != "" && !strings.HasPrefix(rest, "#") {
-		return false
-	}
-	key := strings.TrimSpace(trimmed[1:closing])
-	key = strings.Trim(key, `"'`)
-	return key == tableName
+	path, ok := tomlTableHeaderPath(line)
+	return ok && slices.Equal(path, strings.Split(tableName, "."))
 }

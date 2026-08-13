@@ -31,6 +31,7 @@ type installFlagValues struct {
 	templatesDir        string
 	serviceTemplatesDir string
 	autoUpdate          string
+	auditProfile        string
 	noConfig            bool
 	noService           bool
 	noClaude            bool
@@ -48,15 +49,17 @@ type daemonIdentity struct {
 type daemonStatusLookup func(context.Context) (daemonIdentity, error)
 
 type installDependencies struct {
-	resolveExecutable  func() (string, error)
-	validateExecutable func(string) error
-	prepareHooks       func(agentinstall.HooksOptions) (*agentinstall.HookInstallationPlan, error)
-	applyHooks         func(*agentinstall.HookInstallationPlan) error
-	validateService    func(agentinstall.ServiceOptions) error
-	ensureConfig       func(string) error
-	validateConfig     func() error
-	installService     func(agentinstall.ServiceOptions) error
-	waitForReady       func(string) error
+	resolveExecutable   func() (string, error)
+	validateExecutable  func(string) error
+	prepareInstallation func(agentinstall.InstallationOptions) (*agentinstall.InstallationPlan, error)
+	applyInstallation   func(*agentinstall.InstallationPlan) (agentinstall.ApplyResult, error)
+	prepareHooks        func(agentinstall.HooksOptions) (*agentinstall.HookInstallationPlan, error)
+	applyHooks          func(*agentinstall.HookInstallationPlan) error
+	validateService     func(agentinstall.ServiceOptions) error
+	ensureConfig        func(config.EnsureDefaultsOptions) error
+	validateConfig      func() error
+	installService      func(agentinstall.ServiceOptions) error
+	waitForReady        func(string) error
 }
 
 func runInstall(args []string) int {
@@ -96,6 +99,14 @@ func runInstallHooks(args []string, dependencies installDependencies) int {
 		fmt.Fprintf(os.Stderr, "agent-gate install hooks: preflight: %v\n", err)
 		return 2
 	}
+	if dependencies.prepareInstallation != nil && dependencies.applyInstallation != nil {
+		hooks := hookOptions(values)
+		return runPreparedInstallation(
+			"agent-gate install hooks",
+			agentinstall.InstallationOptions{Hooks: &hooks},
+			dependencies,
+		)
+	}
 	plan, err := dependencies.prepareHooks(hookOptions(values))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent-gate install hooks: preflight: hooks: %v\n", err)
@@ -123,6 +134,14 @@ func runInstallService(args []string, dependencies installDependencies) int {
 		fmt.Fprintf(os.Stderr, "agent-gate install service: preflight: %v\n", err)
 		return 2
 	}
+	if dependencies.prepareInstallation != nil && dependencies.applyInstallation != nil {
+		service := serviceOptions(values, dependencies)
+		return runPreparedInstallation(
+			"agent-gate install service",
+			agentinstall.InstallationOptions{Service: &service},
+			dependencies,
+		)
+	}
 	if err := dependencies.validateService(serviceOptions(values, dependencies)); err != nil {
 		fmt.Fprintf(os.Stderr, "agent-gate install service: preflight: service: %v\n", err)
 		return 2
@@ -142,6 +161,7 @@ func runInstallAll(args []string, dependencies installDependencies) int {
 	flags.BoolVar(&values.noConfig, "no-config", false, "skip default config creation and merge")
 	flags.BoolVar(&values.noService, "no-service", false, "skip service installation and readiness")
 	flags.StringVar(&values.autoUpdate, "auto-update", "", "set update mode: check, apply, or off")
+	flags.StringVar(&values.auditProfile, "audit-profile", "", "set audit storage profile: balanced, full, or minimal")
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
@@ -153,9 +173,37 @@ func runInstallAll(args []string, dependencies installDependencies) int {
 		fmt.Fprintf(os.Stderr, "agent-gate install all: preflight: %v\n", err)
 		return 2
 	}
+	if err := validateAuditProfile(values.auditProfile); err != nil {
+		fmt.Fprintf(os.Stderr, "agent-gate install all: preflight: %v\n", err)
+		return 2
+	}
 	if err := resolveAndValidateInstallValues(&values, dependencies); err != nil {
 		fmt.Fprintf(os.Stderr, "agent-gate install all: preflight: %v\n", err)
 		return 2
+	}
+	if dependencies.prepareInstallation != nil && dependencies.applyInstallation != nil {
+		installationOptions := agentinstall.InstallationOptions{}
+		if !values.noConfig {
+			options := configOptions(values)
+			installationOptions.Config = &options
+		}
+		if !values.noService {
+			service := serviceOptions(values, dependencies)
+			installationOptions.Service = &service
+		}
+		hooks := hookOptions(values)
+		installationOptions.Hooks = &hooks
+		if values.noConfig {
+			if err := dependencies.validateConfig(); err != nil {
+				fmt.Fprintf(os.Stderr, "agent-gate install all: preflight: config: %v\n", err)
+				return 2
+			}
+		}
+		return runPreparedInstallation(
+			"agent-gate install all",
+			installationOptions,
+			dependencies,
+		)
 	}
 	hookPlan, err := dependencies.prepareHooks(hookOptions(values))
 	if err != nil {
@@ -169,7 +217,7 @@ func runInstallAll(args []string, dependencies installDependencies) int {
 		}
 	}
 	if !values.noConfig {
-		if err := dependencies.ensureConfig(values.autoUpdate); err != nil {
+		if err := dependencies.ensureConfig(configOptions(values)); err != nil {
 			fmt.Fprintf(os.Stderr, "agent-gate install all: config: %v\n", err)
 			return 1
 		}
@@ -193,13 +241,15 @@ func runInstallAll(args []string, dependencies installDependencies) int {
 
 func defaultInstallDependencies() installDependencies {
 	return installDependencies{
-		resolveExecutable:  os.Executable,
-		validateExecutable: agentinstall.ValidateExecutable,
-		prepareHooks:       agentinstall.PrepareHookInstallation,
-		applyHooks:         agentinstall.ApplyHookInstallation,
-		validateService:    agentinstall.ValidateServiceOptions,
-		ensureConfig: func(autoUpdate string) error {
-			_, err := config.EnsureDefaults(config.EnsureDefaultsOptions{AutoUpdateMode: autoUpdate})
+		resolveExecutable:   os.Executable,
+		validateExecutable:  agentinstall.ValidateExecutable,
+		prepareInstallation: agentinstall.PrepareInstallation,
+		applyInstallation:   agentinstall.ApplyInstallation,
+		prepareHooks:        agentinstall.PrepareHookInstallation,
+		applyHooks:          agentinstall.ApplyHookInstallation,
+		validateService:     agentinstall.ValidateServiceOptions,
+		ensureConfig: func(options config.EnsureDefaultsOptions) error {
+			_, err := config.EnsureDefaults(options)
 			return err
 		},
 		validateConfig: func() error {
@@ -215,6 +265,24 @@ func defaultInstallDependencies() installDependencies {
 		installService: agentinstall.InstallService,
 		waitForReady:   waitForInstalledDaemon,
 	}
+}
+
+func runPreparedInstallation(
+	commandName string,
+	options agentinstall.InstallationOptions,
+	dependencies installDependencies,
+) int {
+	plan, err := dependencies.prepareInstallation(options)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%s: preflight: %v\n", commandName, err)
+		return 2
+	}
+	defer func() { _ = plan.Close() }()
+	if _, err := dependencies.applyInstallation(plan); err != nil {
+		fmt.Fprintf(os.Stderr, "%s: %v\n", commandName, err)
+		return 1
+	}
+	return 0
 }
 
 func resolveAndValidateInstallValues(
@@ -247,6 +315,28 @@ func validateAutoUpdate(value string) error {
 		return nil
 	default:
 		return fmt.Errorf("auto-update mode must be %q, %q, or %q", config.UpdateModeCheck, config.UpdateModeApply, "off")
+	}
+}
+
+func validateAuditProfile(value string) error {
+	switch config.AuditStorageProfile(value) {
+	case "", config.AuditStorageProfileBalanced, config.AuditStorageProfileFull,
+		config.AuditStorageProfileMinimal:
+		return nil
+	default:
+		return fmt.Errorf(
+			"audit profile must be %q, %q, or %q",
+			config.AuditStorageProfileBalanced,
+			config.AuditStorageProfileFull,
+			config.AuditStorageProfileMinimal,
+		)
+	}
+}
+
+func configOptions(values installFlagValues) config.EnsureDefaultsOptions {
+	return config.EnsureDefaultsOptions{
+		AutoUpdateMode: values.autoUpdate,
+		AuditProfile:   config.AuditStorageProfile(values.auditProfile),
 	}
 }
 
