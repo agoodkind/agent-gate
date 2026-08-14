@@ -3,91 +3,14 @@ package evaluation_test
 import (
 	"database/sql"
 	"encoding/json"
-	"os"
 	"path/filepath"
 	"reflect"
 	"strconv"
 	"testing"
 
-	"goodkind.io/agent-gate/internal/auditstorage"
 	"goodkind.io/agent-gate/internal/evaluation"
 	"goodkind.io/agent-gate/internal/intake"
 )
-
-func TestOpenSQLiteMigratesLegacyEvaluationDetail(t *testing.T) {
-	path := installLegacyEvaluationFixture(t)
-
-	store, err := intake.OpenSQLite(t.Context(), path, nil)
-	if err != nil {
-		t.Fatalf("OpenSQLite: %v", err)
-	}
-	closed := false
-	t.Cleanup(func() {
-		if !closed {
-			if err := store.Close(); err != nil {
-				t.Errorf("Close: %v", err)
-			}
-		}
-	})
-
-	appliedAt, err := auditstorage.MigrationAppliedAt(t.Context(), store.Handle(), 3)
-	if err != nil {
-		t.Fatalf("MigrationAppliedAt: %v", err)
-	}
-
-	version, err := auditstorage.SchemaVersion(t.Context(), store.Handle())
-	if err != nil {
-		t.Fatalf("SchemaVersion: %v", err)
-	}
-	if version != 6 {
-		t.Fatalf("schema version = %d, want 6", version)
-	}
-	assertLegacyEvaluationDetail(t, store.Handle())
-	assertLegacyEvaluationRecord(t, store)
-	if err := store.Close(); err != nil {
-		t.Fatalf("Close before reopen: %v", err)
-	}
-	closed = true
-
-	reopened, err := intake.OpenSQLite(t.Context(), path, nil)
-	if err != nil {
-		t.Fatalf("OpenSQLite reopen: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := reopened.Close(); err != nil {
-			t.Errorf("Close: %v", err)
-		}
-	})
-	reopenedAppliedAt, err := auditstorage.MigrationAppliedAt(t.Context(), reopened.Handle(), 3)
-	if err != nil {
-		t.Fatalf("MigrationAppliedAt reopen: %v", err)
-	}
-	if !reopenedAppliedAt.Equal(appliedAt) {
-		t.Fatalf("migration reapplied at %s, first applied at %s", reopenedAppliedAt, appliedAt)
-	}
-	assertLegacyEvaluationDetail(t, reopened.Handle())
-	assertLegacyEvaluationRecord(t, reopened)
-}
-
-func assertLegacyEvaluationRecord(t *testing.T, store *intake.Store) {
-	t.Helper()
-	record, err := store.Evaluations().Get(t.Context(), "eval-legacy")
-	if err != nil {
-		t.Fatalf("Get: %v", err)
-	}
-	if string(record.Evaluation.ErrorJSON) != `{"evaluation_error":"legacy"}` {
-		t.Fatalf("evaluation error = %s", record.Evaluation.ErrorJSON)
-	}
-	if len(record.Layers) != 1 ||
-		string(record.Layers[0].InputJSON) != `{"input":"legacy"}` ||
-		string(record.Layers[0].OutputJSON) != `{"output":"legacy"}` ||
-		record.Layers[0].ErrorMessage != "legacy layer error" {
-		t.Fatalf("migrated layers = %#v", record.Layers)
-	}
-	if len(record.Labels) != 1 || record.Labels[0].Rationale != "legacy label rationale" {
-		t.Fatalf("migrated labels = %#v", record.Labels)
-	}
-}
 
 func TestRecordCompletedCommitsEvaluationSummaryAndDetail(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "audit.db")
@@ -181,85 +104,6 @@ func TestCostReportSurvivesEvaluationDetailRemoval(t *testing.T) {
 	if cost.Calls != 1 || cost.PromptTokens != 1000 || cost.CachedTokens != 200 ||
 		cost.CompletionTokens != 100 || cost.EstimatedCostMicros != 183 {
 		t.Fatalf("cost after detail removal = %+v", cost)
-	}
-}
-
-func assertLegacyEvaluationDetail(t *testing.T, database *sql.DB) {
-	t.Helper()
-	var detailState string
-	if err := database.QueryRowContext(t.Context(), `
-		select detail_state from gate_evaluations where evaluation_id = 'eval-legacy'
-	`).Scan(&detailState); err != nil {
-		t.Fatalf("read evaluation summary: %v", err)
-	}
-	if detailState != "available" {
-		t.Fatalf("detail state = %q, want available", detailState)
-	}
-	var errorJSON []byte
-	if err := database.QueryRowContext(t.Context(), `
-		select error_json from gate_evaluation_details where evaluation_id = 'eval-legacy'
-	`).Scan(&errorJSON); err != nil {
-		t.Fatalf("read evaluation detail: %v", err)
-	}
-	if string(errorJSON) != `{"evaluation_error":"legacy"}` {
-		t.Fatalf("evaluation detail = %s", errorJSON)
-	}
-	var inputJSON []byte
-	var outputJSON []byte
-	var metadataJSON []byte
-	var errorMessage string
-	if err := database.QueryRowContext(t.Context(), `
-		select input_json, output_json, metadata_json, error_message
-		from gate_evaluation_layer_details
-		where evaluation_id = 'eval-legacy' and layer_index = 0
-	`).Scan(&inputJSON, &outputJSON, &metadataJSON, &errorMessage); err != nil {
-		t.Fatalf("read evaluation layer detail: %v", err)
-	}
-	if string(inputJSON) != `{"input":"legacy"}` ||
-		string(outputJSON) != `{"output":"legacy"}` ||
-		errorMessage != "legacy layer error" ||
-		!json.Valid(metadataJSON) {
-		t.Fatalf(
-			"layer detail = input %s output %s metadata %s error %q",
-			inputJSON, outputJSON, metadataJSON, errorMessage,
-		)
-	}
-	var rationale string
-	if err := database.QueryRowContext(t.Context(), `
-		select rationale from gate_evaluation_label_details
-		where evaluation_id = 'eval-legacy' and namespace = 'operator' and label_version = 1
-	`).Scan(&rationale); err != nil {
-		t.Fatalf("read evaluation label detail: %v", err)
-	}
-	if rationale != "legacy label rationale" {
-		t.Fatalf("label rationale = %q", rationale)
-	}
-	var upstreamStatus string
-	var requestID string
-	var requestedModel string
-	var promptTokens int64
-	var cachedTokens int64
-	var completionTokens int64
-	var ruleName string
-	if err := database.QueryRowContext(t.Context(), `
-		select upstream_metadata_status, request_id, requested_model,
-			prompt_tokens, cached_tokens, completion_tokens, rule_name
-		from gate_evaluation_layers
-		where evaluation_id = 'eval-legacy' and layer_index = 0
-	`).Scan(
-		&upstreamStatus, &requestID, &requestedModel,
-		&promptTokens, &cachedTokens, &completionTokens, &ruleName,
-	); err != nil {
-		t.Fatalf("read migrated evaluation summary projection: %v", err)
-	}
-	if upstreamStatus != "present" || requestID != "request-legacy" ||
-		requestedModel != "model-legacy" || promptTokens != 101 ||
-		cachedTokens != 17 || completionTokens != 19 || ruleName != "legacy-rule-filter" {
-		t.Fatalf(
-			"summary projection = status %q request %q model %q tokens %d/%d/%d rule %q",
-			upstreamStatus, requestID, requestedModel, promptTokens, cachedTokens,
-			completionTokens, ruleName,
-		)
 	}
 }
 
@@ -365,25 +209,4 @@ func costLayerMetadata(
 
 func jsonInt(value int64) string {
 	return strconv.FormatInt(value, 10)
-}
-
-func installLegacyEvaluationFixture(t *testing.T) string {
-	t.Helper()
-	fixture, err := os.ReadFile(filepath.Join("..", "auditstorage", "testdata", "legacy_v1.sql"))
-	if err != nil {
-		t.Fatalf("read legacy fixture: %v", err)
-	}
-	path := filepath.Join(t.TempDir(), "audit.db")
-	database, err := sql.Open("sqlite3", path)
-	if err != nil {
-		t.Fatalf("open fixture: %v", err)
-	}
-	if _, err := database.ExecContext(t.Context(), string(fixture)); err != nil {
-		_ = database.Close()
-		t.Fatalf("install legacy fixture: %v", err)
-	}
-	if err := database.Close(); err != nil {
-		t.Fatalf("close fixture: %v", err)
-	}
-	return path
 }

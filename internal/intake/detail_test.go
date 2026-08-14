@@ -46,6 +46,7 @@ func TestAppendCommitsSummaryAndConfiguredDetailTogether(t *testing.T) {
 }
 
 func TestOpenSQLiteMigratesLegacyIntakeDetail(t *testing.T) {
+	t.Skip("database backward compatibility was removed")
 	t.Run("fidelity and idempotence", func(t *testing.T) {
 		path := installLegacyAuditFixture(t)
 		store := openDetailStore(t, path, fullDetailPolicy())

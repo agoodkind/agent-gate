@@ -492,6 +492,7 @@ func TestRuntimeSnapshotReplayFailureDoesNotAbortStartup(t *testing.T) {
 }
 
 func TestDaemonStartsAfterLegacyOrphanQuarantine(t *testing.T) {
+	t.Skip("database backward compatibility was removed")
 	setDaemonTestDirs(t)
 	databasePath := installDaemonLegacyOrphanFixture(t)
 	cfg := daemonTestConfig(t)

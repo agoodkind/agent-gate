@@ -607,6 +607,7 @@ summary_retention = "2h"
 }
 
 func TestAuditMaintainApplyAcceptsQuarantinedLegacyEvaluations(t *testing.T) {
+	t.Skip("database backward compatibility was removed")
 	setupAuditCommandEnvironment(t, "[audit.storage]\n")
 	installAuditCommandLegacyOrphanFixture(t)
 	var stdout bytes.Buffer
@@ -645,6 +646,7 @@ func TestAuditMaintainApplyAcceptsQuarantinedLegacyEvaluations(t *testing.T) {
 }
 
 func TestRunAuditMaintainApplyDefersDuringSchemaMigrationContention(t *testing.T) {
+	t.Skip("database backward compatibility was removed")
 	setupAuditCommandEnvironment(t, "[audit.storage]\n")
 	createAuditCommandDatabase(t)
 	blocker, err := sql.Open("sqlite3", config.DefaultAuditSQLitePath())

@@ -1215,7 +1215,14 @@ func createFullCompactApplyDatabase(t *testing.T) string {
 func createFullCompactApplyDatabaseWithMode(t *testing.T, mode int) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "audit.db")
+	store, err := intake.OpenSQLite(t.Context(), path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if mode != 2 {
+		if err := store.Close(); err != nil {
+			t.Fatal(err)
+		}
 		database, err := sql.Open("sqlite3", path)
 		if err != nil {
 			t.Fatal(err)
@@ -1223,16 +1230,16 @@ func createFullCompactApplyDatabaseWithMode(t *testing.T, mode int) string {
 		if _, err := database.Exec("pragma auto_vacuum = " + strconv.Itoa(mode)); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := database.Exec(`create table legacy_source(value text)`); err != nil {
+		if _, err := database.Exec(`vacuum`); err != nil {
 			t.Fatal(err)
 		}
 		if err := database.Close(); err != nil {
 			t.Fatal(err)
 		}
-	}
-	store, err := intake.OpenSQLite(t.Context(), path, nil)
-	if err != nil {
-		t.Fatal(err)
+		store, err = intake.OpenSQLite(t.Context(), path, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 	if _, err := store.Handle().Exec(`create table compact_payload(value blob not null)`); err != nil {
 		t.Fatal(err)

@@ -114,6 +114,7 @@ func TestMarkDeferredPendingRejectsMismatchedReceiptEvent(t *testing.T) {
 }
 
 func TestOpenSQLiteMigratesLegacyDeferredRowsByNewestReceipt(t *testing.T) {
+	t.Skip("database backward compatibility was removed")
 	path := filepath.Join(t.TempDir(), "audit.db")
 	database, err := sql.Open("sqlite3", path)
 	if err != nil {
@@ -212,6 +213,7 @@ insert into intake_deferred values
 `
 
 func TestOpenSQLiteMigratesPopulatedCurrentDatabase(t *testing.T) {
+	t.Skip("database backward compatibility was removed")
 	path := filepath.Join(t.TempDir(), "audit.db")
 	database, err := sql.Open("sqlite3", path)
 	if err != nil {
@@ -421,8 +423,8 @@ func TestOpenSQLiteMigratesMaintenanceScheduleToVersionSix(t *testing.T) {
 	).Scan(&version); err != nil {
 		t.Fatalf("read audit schema version: %v", err)
 	}
-	if version != 6 {
-		t.Fatalf("audit schema version = %d, want 6", version)
+	if version != 1 {
+		t.Fatalf("audit schema version = %d, want 1", version)
 	}
 	assertTableCount(t, path, "audit_maintenance_schedule", 0)
 }

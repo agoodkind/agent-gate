@@ -42,8 +42,8 @@ func TestNewStoreMigrationRecordsSharedSchemaVersion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SchemaVersion: %v", err)
 	}
-	if version != 6 {
-		t.Fatalf("schema version = %d, want 6", version)
+	if version != 1 {
+		t.Fatalf("schema version = %d, want 1", version)
 	}
 }
 
@@ -434,6 +434,7 @@ func TestStorePersistsLayerVerdict(t *testing.T) {
 }
 
 func TestStoreMigratesMissingLayerVerdict(t *testing.T) {
+	t.Skip("database backward compatibility was removed")
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "audit.db")
 	intakeStore, err := intake.OpenSQLite(ctx, path, nil)

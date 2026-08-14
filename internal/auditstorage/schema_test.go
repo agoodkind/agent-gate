@@ -78,6 +78,20 @@ func TestMigrationEnablesIncrementalAutoVacuumForNewDatabase(t *testing.T) {
 	}
 }
 
+func TestMigrationRejectsExistingDatabase(t *testing.T) {
+	database := openMigrationDatabase(t)
+	if _, err := database.ExecContext(t.Context(), `create table legacy_data (id integer)`); err != nil {
+		t.Fatalf("create existing table: %v", err)
+	}
+
+	err := auditstorage.Migrate(t.Context(), database)
+	if err == nil || err.Error() != "existing audit databases are not supported; start with an empty database" {
+		t.Fatalf("Migrate error = %v", err)
+	}
+
+	assertSchemaObjectAbsent(t, database, "audit_schema_migrations")
+}
+
 func openMigrationDatabase(t *testing.T) *sql.DB {
 	t.Helper()
 	database, err := sql.Open("sqlite3", filepath.Join(t.TempDir(), "audit.db"))
