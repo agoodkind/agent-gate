@@ -238,7 +238,7 @@ func TestDocumentedShellInstallerFlagsAreSupported(t *testing.T) {
 		"--require-attestation": true,
 		"--version":             true,
 	}
-	for _, path := range []string{"README.md", "HOOKS.md", "docs/hook-schemas.md"} {
+	for _, path := range firstPartyDocumentationPaths(t) {
 		contents, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatalf("read %s: %v", path, err)
@@ -264,6 +264,17 @@ func TestReleaseInstallerRoutesSetupAndCleansTemporaryFiles(t *testing.T) {
 	}
 	if !bytes.Contains(output, []byte("test-install-setup.sh: PASS")) {
 		t.Fatalf("release installer setup output = %q", output)
+	}
+}
+
+func TestDocumentedCommandsExecute(t *testing.T) {
+	command := exec.Command("bash", "scripts/check-doc-commands.sh")
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("documented commands: %v\n%s", err, output)
+	}
+	if !bytes.Contains(output, []byte("check-doc-commands.sh: PASS")) {
+		t.Fatalf("documented command output = %q", output)
 	}
 }
 
@@ -318,7 +329,7 @@ func firstPartyDocumentationPaths(t *testing.T) []string {
 }
 
 func TestDocumentedMakeTargetsExist(t *testing.T) {
-	documentation := readFiles(t, "README.md", "HOOKS.md")
+	documentation := readFiles(t, firstPartyDocumentationPaths(t)...)
 	makeSources := readGlobbedFiles(t, "Makefile", ".make/*.mk")
 	knownTargets := make(map[string]bool)
 	for _, match := range makeTargetPattern.FindAllStringSubmatch(makeSources, -1) {
@@ -332,16 +343,12 @@ func TestDocumentedMakeTargetsExist(t *testing.T) {
 }
 
 func TestDocumentedCLICommandNamesExist(t *testing.T) {
-	documentation := readFiles(t, "README.md", "HOOKS.md")
+	documentation := readFiles(t, firstPartyDocumentationPaths(t)...)
 	commandSource := readFiles(t, "cmd/agent-gate/main.go", "cmd/agent-gate/install.go")
 	for _, match := range agentGateCommandPattern.FindAllStringSubmatch(documentation, -1) {
-		for _, command := range match[1:] {
-			if command == "" {
-				continue
-			}
-			if !strings.Contains(commandSource, `"`+command+`"`) {
-				t.Errorf("documentation names unknown agent-gate command %q", command)
-			}
+		command := match[1]
+		if !strings.Contains(commandSource, `"`+command+`"`) {
+			t.Errorf("documentation names unknown agent-gate command %q", command)
 		}
 	}
 }

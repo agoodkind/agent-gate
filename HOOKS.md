@@ -86,12 +86,14 @@ placeholder `__AGENT_GATE_BIN__` becomes the absolute installed binary path.
 
 Reinstall every hook template around the current binary:
 
+<!-- doc-test: skip reason=changes-installed-hooks -->
 ```sh
 agent-gate install hooks --bin-path "$(command -v agent-gate)"
 ```
 
 Reinstall one provider by opting out of the other four:
 
+<!-- doc-test: skip reason=changes-installed-hooks -->
 ```sh
 agent-gate install hooks --bin-path "$(command -v agent-gate)" --no-codex --no-cursor --no-gemini --no-copilot
 agent-gate install hooks --bin-path "$(command -v agent-gate)" --no-claude --no-cursor --no-gemini --no-copilot
