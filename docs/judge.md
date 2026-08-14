@@ -79,8 +79,6 @@ The design keeps the judge under $10 per month on top of the free tier through a
 
 Cost and cache metrics are queryable per model per day with `agent-gate query cost`. It reads the recorded inference-layer token metadata, deduplicates the batch call's tokens by request id so a shared call counts once, applies the per-model price table, and projects a monthly figure. The price table has priced defaults and accepts `[judge.pricing]` overrides in config.
 
-Over a recorded window of about 3.77 days, billed cloud spend for the enforcing model projects to about $0.17 per month, far under the budget, and the local recorded-only model bills nothing. This figure is a lower bound, because token usage is surfaced for only some calls.
-
 Two measurement gaps are open today:
 
 - The OpenAI prompt-cache hit count is not surfaced in-band. The provider's `cached_tokens` field does not reach agent-gate, so prompt-cache engagement cannot be shown from recorded metadata yet. The cost model already reads the cached path and picks the value up once it is surfaced.
