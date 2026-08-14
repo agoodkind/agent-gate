@@ -14,15 +14,7 @@ const migrationTimeFormat = time.RFC3339Nano
 const migrationCleanupTimeout = 5 * time.Second
 
 var migrations = []Migration{
-	{
-		Version: 1, ForeignKeysDisabled: false, Apply: migrateV1,
-		AfterCommit: reportLegacyQuarantine,
-	},
-	{Version: 2, ForeignKeysDisabled: true, Apply: migrateIntakeV2, AfterCommit: nil},
-	{Version: 3, ForeignKeysDisabled: true, Apply: migrateEvaluationV3, AfterCommit: nil},
-	{Version: 4, ForeignKeysDisabled: true, Apply: migrateOutboxV4, AfterCommit: nil},
-	{Version: 5, ForeignKeysDisabled: false, Apply: migrateMaintenanceV5, AfterCommit: nil},
-	{Version: 6, ForeignKeysDisabled: false, Apply: migrateScheduleV6, AfterCommit: nil},
+	{Version: 1, ForeignKeysDisabled: true, Apply: createCurrentSchema, AfterCommit: nil},
 }
 
 var migrationNow = time.Now
@@ -44,11 +36,21 @@ func migrate(ctx context.Context, database *sql.DB, busyTimeoutMilliseconds int)
 	if err := GuardDatabase(ctx, database); err != nil {
 		return err
 	}
-	if err := configureDatabase(ctx, database, busyTimeoutMilliseconds); err != nil {
-		return err
-	}
 	version, err := SchemaVersion(ctx, database)
 	if err != nil {
+		return err
+	}
+	empty, err := hasNoApplicationTables(ctx, database)
+	if err != nil {
+		return err
+	}
+	if version == 0 && !empty {
+		return errors.New("existing audit databases are not supported; start with an empty database")
+	}
+	if version > len(migrations) {
+		return fmt.Errorf("audit schema version %d is not supported; start with an empty database", version)
+	}
+	if err := configureDatabase(ctx, database, busyTimeoutMilliseconds); err != nil {
 		return err
 	}
 	if version > 0 {
@@ -64,6 +66,23 @@ func migrate(ctx context.Context, database *sql.DB, busyTimeoutMilliseconds int)
 			return err
 		}
 		version = migration.Version
+	}
+	return nil
+}
+
+func createCurrentSchema(ctx context.Context, transaction *sql.Tx) error {
+	builders := []func(context.Context, *sql.Tx) error{
+		migrateV1,
+		migrateIntakeV2,
+		migrateEvaluationV3,
+		migrateOutboxV4,
+		migrateMaintenanceV5,
+		migrateScheduleV6,
+	}
+	for _, build := range builders {
+		if err := build(ctx, transaction); err != nil {
+			return err
+		}
 	}
 	return nil
 }

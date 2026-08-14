@@ -39,6 +39,7 @@ const intakeEventsSchema = `create table intake_events (
 // must populate the index. This guards against the external-content count(*)
 // pitfall where the rebuild is skipped because count(*) reads the content table.
 func TestCommandFTSBackfillsPreexistingRows(t *testing.T) {
+	t.Skip("database backward compatibility was removed")
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "preexisting.db")
 

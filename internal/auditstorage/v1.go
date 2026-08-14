@@ -38,9 +38,6 @@ func migrateV1(ctx context.Context, transaction *sql.Tx) error {
 	if err := executeStatements(ctx, transaction, outboxSchema); err != nil {
 		return err
 	}
-	if _, err := LegacyQuarantine(ctx, transaction); err != nil {
-		return err
-	}
 	if err := executeStatements(ctx, transaction, auditSchema); err != nil {
 		return err
 	}

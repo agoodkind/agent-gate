@@ -52,8 +52,8 @@ func TestEventLoggerMigrationRecordsSharedSchemaVersion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SchemaVersion: %v", err)
 	}
-	if version != 6 {
-		t.Fatalf("schema version = %d, want 6", version)
+	if version != 1 {
+		t.Fatalf("schema version = %d, want 1", version)
 	}
 }
 

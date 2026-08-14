@@ -504,6 +504,7 @@ func TestStoreListRejectsUnknownV2MetadataAfterRead(t *testing.T) {
 }
 
 func TestStoreMigratesEvaluationQueryColumns(t *testing.T) {
+	t.Skip("database backward compatibility was removed")
 	_, database, path, first, _ := newEvaluationQueryFixture(t)
 	dropEvaluationQueryColumns(t, database)
 
@@ -535,6 +536,7 @@ func TestStoreMigratesEvaluationQueryColumns(t *testing.T) {
 }
 
 func TestQueryReadsPopulatedLegacyEvaluationsBeforeAndAfterMigration(t *testing.T) {
+	t.Skip("database backward compatibility was removed")
 	_, database, path, first, _ := newEvaluationQueryFixture(t)
 	dropEvaluationQueryColumns(t, database)
 	ctx := context.Background()

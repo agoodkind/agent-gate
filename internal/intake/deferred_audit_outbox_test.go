@@ -235,6 +235,7 @@ func TestDeferredAuditClaimAllowsOneConcurrentOwner(t *testing.T) {
 }
 
 func TestDeferredAuditOutboxMigrationDoesNotInventHistoricalRows(t *testing.T) {
+	t.Skip("database backward compatibility was removed")
 	path := filepath.Join(t.TempDir(), "audit.db")
 	store := openAtomicStore(t, path)
 	receipt := appendAtomicRecord(t, store, "event-historical-complete")

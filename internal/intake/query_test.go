@@ -85,6 +85,7 @@ func TestQueryHandlesMissingIntakeTablesAsEmptyHistory(t *testing.T) {
 }
 
 func TestQueryRequiresMigrationForLegacyMixedDetail(t *testing.T) {
+	t.Skip("database backward compatibility was removed")
 	path := installLegacyAuditFixture(t)
 	result, err := intake.Query(context.Background(), queryConfig(path), intake.QueryFilter{
 		EventID:           "event-legacy",
