@@ -56,7 +56,7 @@ agent-gate query decisions --since 24h --decision block
 
 ## Upgrade or recover
 
-Audit database upgrades are not supported. Export any required history, stop the daemon, remove the audit database and its SQLite sidecars, then install the new release. The daemon creates the current schema when it starts with no database.
+Audit database upgrades are not supported. Follow the [Audit Storage](audit-storage.md) upgrade and retention warning before installing a new release.
 
 <!-- doc-test: skip reason=changes-installed-release -->
 ```sh
