@@ -43,7 +43,7 @@ agent-gate audit compact --apply
 
 Full compaction is explicit and offline. Stop the daemon first. Preflight rejects an active daemon before mutation. The command uses a process lock, database lease, verified replacement, and durable recovery journal. It never stops, starts, or restarts the service.
 
-<!-- doc-test: run fixture=query -->
+<!-- doc-test: skip reason=requires-stopped-managed-service -->
 ```sh
 agent-gate audit compact --full --dry-run
 ```
