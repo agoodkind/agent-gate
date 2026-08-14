@@ -2,6 +2,8 @@ package agentgate_test
 
 import (
 	"bytes"
+	"errors"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -266,7 +268,7 @@ func TestReleaseInstallerRoutesSetupAndCleansTemporaryFiles(t *testing.T) {
 }
 
 func TestFirstPartyDocumentationLocalLinksResolve(t *testing.T) {
-	for _, path := range []string{"README.md", "HOOKS.md", "docs/hook-schemas.md"} {
+	for _, path := range firstPartyDocumentationPaths(t) {
 		contents, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatalf("read %s: %v", path, err)
@@ -283,6 +285,36 @@ func TestFirstPartyDocumentationLocalLinksResolve(t *testing.T) {
 			}
 		}
 	}
+}
+
+func firstPartyDocumentationPaths(t *testing.T) []string {
+	t.Helper()
+	paths := []string{"README.md", "HOOKS.md"}
+	if _, err := os.Stat("CONTRIBUTING.md"); err == nil {
+		paths = append(paths, "CONTRIBUTING.md")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("inspect CONTRIBUTING.md: %v", err)
+	}
+	err := filepath.WalkDir("docs", func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			if path == filepath.Join("docs", "superpowers") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if filepath.Ext(path) == ".md" {
+			paths = append(paths, path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("discover first-party documentation: %v", err)
+	}
+	sort.Strings(paths)
+	return paths
 }
 
 func TestDocumentedMakeTargetsExist(t *testing.T) {
