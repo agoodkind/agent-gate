@@ -102,7 +102,7 @@ func ruleSubscriptions(rule *config.Rule) []ruleSubscription {
 			if rule.ProviderDisabled(key.system.String()) {
 				continue
 			}
-			out = append(out, ruleSubscription{key.system, key.event})
+			out = append(out, ruleSubscription(key))
 		}
 		return out
 	}
