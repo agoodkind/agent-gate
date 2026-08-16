@@ -340,6 +340,9 @@ violation_message = "blocked"
 	if err == nil {
 		t.Fatal("Load() returned nil error for unknown disable_providers entry")
 	}
+	if !strings.Contains(err.Error(), `rule "bad-disable"`) {
+		t.Fatalf("Load() error = %v, want rule name in error", err)
+	}
 	if !strings.Contains(err.Error(), `unknown disable_providers entry "not-a-provider"`) {
 		t.Fatalf("Load() error = %v", err)
 	}

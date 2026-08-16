@@ -679,7 +679,8 @@ func validateDisableProviders(ruleName string, providers []string) error {
 	for _, provider := range providers {
 		if !slices.Contains(validDisableProviders, provider) {
 			return fmt.Errorf(
-				"unknown disable_providers entry %q (expected one of %q, %q, %q, %q, or %q)",
+				"rule %q: unknown disable_providers entry %q (expected one of %q, %q, %q, %q, or %q)",
+				ruleName,
 				provider,
 				validDisableProviders[0],
 				validDisableProviders[1],
