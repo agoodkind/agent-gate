@@ -348,15 +348,17 @@ func validateDiagnosticGroup(context string, group int, re *regex.Regexp) error 
 //     a) Conditions is non-empty and ALL conditions match, OR
 //     b) Conditions is empty and the single FieldPaths/Pattern matches.
 type Rule struct {
-	Name          string      `toml:"name"`
-	Description   string      `toml:"description"`
-	Events        []string    `toml:"events"`
-	ClaudeEvents  []string    `toml:"claude_events"`
-	CursorEvents  []string    `toml:"cursor_events"`
-	CodexEvents   []string    `toml:"codex_events"`
-	CopilotEvents []string    `toml:"copilot_events"`
-	GeminiEvents  []string    `toml:"gemini_events"`
-	Conditions    []Condition `toml:"conditions"`
+	Name             string      `toml:"name"`
+	Description      string      `toml:"description"`
+	Events           []string    `toml:"events"`
+	ClaudeEvents     []string    `toml:"claude_events"`
+	CursorEvents     []string    `toml:"cursor_events"`
+	CodexEvents      []string    `toml:"codex_events"`
+	CopilotEvents    []string    `toml:"copilot_events"`
+	GeminiEvents     []string    `toml:"gemini_events"`
+	DisableProviders []string    `toml:"disable_providers"`
+	AllEvents        bool        `toml:"all_events"`
+	Conditions       []Condition `toml:"conditions"`
 	// Eval declares an ordered list of evaluators (deterministic and infer) and
 	// their roles. A rule with no Eval entries behaves as it does today.
 	Eval []RuleEval `toml:"eval,omitempty"`
@@ -615,6 +617,9 @@ func compileRule(
 	if err := validateRuleJudgeContext(r.Name, r.JudgeContext); err != nil {
 		return err
 	}
+	if err := validateDisableProviders(r.Name, r.DisableProviders); err != nil {
+		return err
+	}
 	if len(r.Conditions) > 0 {
 		for j := range r.Conditions {
 			if r.IsResponseAction() && ConditionKind(r.Conditions[j].Kind) == ConditionKindExec && r.Conditions[j].BlockOn == "" {
@@ -666,6 +671,30 @@ func normalizeRuleDiagnosticFormat(r *Rule) error {
 			DiagnosticFormatMessageOnly,
 		)
 	}
+}
+
+var validDisableProviders = []string{"claude", "cursor", "codex", "copilot", "gemini"}
+
+func validateDisableProviders(ruleName string, providers []string) error {
+	for _, provider := range providers {
+		if !slices.Contains(validDisableProviders, provider) {
+			return fmt.Errorf(
+				"unknown disable_providers entry %q (expected one of %q, %q, %q, %q, or %q)",
+				provider,
+				validDisableProviders[0],
+				validDisableProviders[1],
+				validDisableProviders[2],
+				validDisableProviders[3],
+				validDisableProviders[4],
+			)
+		}
+	}
+	return nil
+}
+
+// ProviderDisabled reports whether system is listed in disable_providers.
+func (r *Rule) ProviderDisabled(system string) bool {
+	return slices.Contains(r.DisableProviders, system)
 }
 
 // compileCondition fills in compiled regex and selector state for one

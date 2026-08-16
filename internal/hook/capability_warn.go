@@ -96,27 +96,51 @@ type ruleSubscription struct {
 // system prefix apply to every supported system that recognises the event
 // name in its canonical form.
 func ruleSubscriptions(rule *config.Rule) []ruleSubscription {
+	if rule.AllEvents {
+		var out []ruleSubscription
+		for key := range capabilityTable {
+			if rule.ProviderDisabled(key.system.String()) {
+				continue
+			}
+			out = append(out, ruleSubscription{key.system, key.event})
+		}
+		return out
+	}
+
 	var out []ruleSubscription
-	for _, e := range rule.ClaudeEvents {
-		out = append(out, ruleSubscription{SystemClaude, e})
+	if !rule.ProviderDisabled("claude") {
+		for _, e := range rule.ClaudeEvents {
+			out = append(out, ruleSubscription{SystemClaude, e})
+		}
 	}
-	for _, e := range rule.CodexEvents {
-		out = append(out, ruleSubscription{SystemCodex, e})
+	if !rule.ProviderDisabled("codex") {
+		for _, e := range rule.CodexEvents {
+			out = append(out, ruleSubscription{SystemCodex, e})
+		}
 	}
-	for _, e := range rule.CopilotEvents {
-		out = append(out, ruleSubscription{SystemCopilot, e})
+	if !rule.ProviderDisabled("copilot") {
+		for _, e := range rule.CopilotEvents {
+			out = append(out, ruleSubscription{SystemCopilot, e})
+		}
 	}
-	for _, e := range rule.CursorEvents {
-		out = append(out, ruleSubscription{SystemCursor, e})
+	if !rule.ProviderDisabled("cursor") {
+		for _, e := range rule.CursorEvents {
+			out = append(out, ruleSubscription{SystemCursor, e})
+		}
 	}
-	for _, e := range rule.GeminiEvents {
-		out = append(out, ruleSubscription{SystemGemini, e})
+	if !rule.ProviderDisabled("gemini") {
+		for _, e := range rule.GeminiEvents {
+			out = append(out, ruleSubscription{SystemGemini, e})
+		}
 	}
 	for _, e := range rule.Events {
 		// Events without a provider prefix: the daemon routes the same event
 		// name to whichever provider sent the hook payload. To warn
 		// accurately, look the event up under every system that has it.
 		for _, sys := range []System{SystemClaude, SystemCodex, SystemCopilot, SystemCursor, SystemGemini} {
+			if rule.ProviderDisabled(sys.String()) {
+				continue
+			}
 			if _, ok := capabilityTable[capabilityKey{sys, e}]; ok {
 				out = append(out, ruleSubscription{sys, e})
 			}
