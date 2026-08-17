@@ -325,6 +325,29 @@ output_file = "context/session.txt"
 	}
 }
 
+func TestLoadRejectsUnknownDisableProvider(t *testing.T) {
+	setConfigHome(t, `[[rules]]
+name = "bad-disable"
+all_events = true
+disable_providers = ["not-a-provider"]
+field_paths = ["command"]
+pattern = "blocked"
+action = "block"
+violation_message = "blocked"
+`)
+
+	_, err := config.Load()
+	if err == nil {
+		t.Fatal("Load() returned nil error for unknown disable_providers entry")
+	}
+	if !strings.Contains(err.Error(), `rule "bad-disable"`) {
+		t.Fatalf("Load() error = %v, want rule name in error", err)
+	}
+	if !strings.Contains(err.Error(), `unknown disable_providers entry "not-a-provider"`) {
+		t.Fatalf("Load() error = %v", err)
+	}
+}
+
 func TestLoadRejectsUnknownAction(t *testing.T) {
 	setConfigHome(t, `[[rules]]
 name = "unknown-action-rule"

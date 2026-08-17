@@ -348,15 +348,17 @@ func validateDiagnosticGroup(context string, group int, re *regex.Regexp) error 
 //     a) Conditions is non-empty and ALL conditions match, OR
 //     b) Conditions is empty and the single FieldPaths/Pattern matches.
 type Rule struct {
-	Name          string      `toml:"name"`
-	Description   string      `toml:"description"`
-	Events        []string    `toml:"events"`
-	ClaudeEvents  []string    `toml:"claude_events"`
-	CursorEvents  []string    `toml:"cursor_events"`
-	CodexEvents   []string    `toml:"codex_events"`
-	CopilotEvents []string    `toml:"copilot_events"`
-	GeminiEvents  []string    `toml:"gemini_events"`
-	Conditions    []Condition `toml:"conditions"`
+	Name             string      `toml:"name"`
+	Description      string      `toml:"description"`
+	Events           []string    `toml:"events"`
+	ClaudeEvents     []string    `toml:"claude_events"`
+	CursorEvents     []string    `toml:"cursor_events"`
+	CodexEvents      []string    `toml:"codex_events"`
+	CopilotEvents    []string    `toml:"copilot_events"`
+	GeminiEvents     []string    `toml:"gemini_events"`
+	DisableProviders []string    `toml:"disable_providers"`
+	AllEvents        bool        `toml:"all_events"`
+	Conditions       []Condition `toml:"conditions"`
 	// Eval declares an ordered list of evaluators (deterministic and infer) and
 	// their roles. A rule with no Eval entries behaves as it does today.
 	Eval []RuleEval `toml:"eval,omitempty"`
@@ -475,6 +477,8 @@ func NewSimpleRule(name, pattern string, compiled *regex.Regexp, events, fieldPa
 		CodexEvents:       nil,
 		CopilotEvents:     nil,
 		GeminiEvents:      nil,
+		DisableProviders:  nil,
+		AllEvents:         false,
 		Conditions:        nil,
 		Eval:              nil,
 		Intent:            "",
@@ -613,6 +617,9 @@ func compileRule(
 		return err
 	}
 	if err := validateRuleJudgeContext(r.Name, r.JudgeContext); err != nil {
+		return err
+	}
+	if err := validateDisableProviders(r.Name, r.DisableProviders); err != nil {
 		return err
 	}
 	if len(r.Conditions) > 0 {

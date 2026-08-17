@@ -48,19 +48,19 @@ func daemonTestConfig(t testing.TB) *config.Config {
 	if err != nil {
 		t.Fatalf("compile regex: %v", err)
 	}
+	rule := config.NewSimpleRule(
+		"no-broad-go-test",
+		`go test \./\.\.\.`,
+		re,
+		nil,
+		[]string{"tool_input.command"},
+		"block",
+		"Use make test for full project runs.",
+	)
+	rule.AllEvents = true
 	return &config.Config{
 		Audit: config.Audit{Enabled: boolPtr(false)},
-		Rules: []config.Rule{
-			config.NewSimpleRule(
-				"no-broad-go-test",
-				`go test \./\.\.\.`,
-				re,
-				nil,
-				[]string{"tool_input.command"},
-				"block",
-				"Use make test for full project runs.",
-			),
-		},
+		Rules: []config.Rule{rule},
 	}
 }
 
@@ -547,19 +547,19 @@ func emdashDaemonTestConfig(t testing.TB) *config.Config {
 	if err != nil {
 		t.Fatalf("compile emdash regex: %v", err)
 	}
+	rule := config.NewSimpleRule(
+		"no-emdashes",
+		pattern,
+		re,
+		nil,
+		[]string{"tool_input.new_string", "edits[*].new_string", "last_assistant_message"},
+		"block",
+		"No typographic dashes.",
+	)
+	rule.AllEvents = true
 	return &config.Config{
 		Audit: config.Audit{Enabled: boolPtr(false)},
-		Rules: []config.Rule{
-			config.NewSimpleRule(
-				"no-emdashes",
-				pattern,
-				re,
-				nil,
-				[]string{"tool_input.new_string", "edits[*].new_string", "last_assistant_message"},
-				"block",
-				"No typographic dashes.",
-			),
-		},
+		Rules: []config.Rule{rule},
 	}
 }
 

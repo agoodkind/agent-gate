@@ -293,8 +293,9 @@ func TestEvaluateBatchGroupInvalidReplyErrorsAll(t *testing.T) {
 
 func batchRule(name, use string, point config.InferencePoint) config.Rule {
 	return config.Rule{
-		Name:   name,
-		Intent: "block " + name,
+		Name:      name,
+		Intent:    "block " + name,
+		AllEvents: true,
 		Eval: []config.RuleEval{
 			{Kind: config.EvalKindInfer, Role: config.RoleEnforce, Use: use, Fanout: config.FanoutBatch},
 		},

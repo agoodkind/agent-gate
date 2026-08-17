@@ -801,6 +801,8 @@ func diffConditionGateMatch(fields FieldSet, c *config.Condition) bool {
 		CodexEvents:       nil,
 		CopilotEvents:     nil,
 		GeminiEvents:      nil,
+		DisableProviders:  nil,
+		AllEvents:         false,
 		Conditions:        nil,
 		Eval:              nil,
 		Intent:            "",
@@ -859,6 +861,8 @@ func shellReadConditionGateMatch(fields FieldSet, c *config.Condition) bool {
 		CodexEvents:       nil,
 		CopilotEvents:     nil,
 		GeminiEvents:      nil,
+		DisableProviders:  nil,
+		AllEvents:         false,
 		Conditions:        nil,
 		Eval:              nil,
 		Intent:            "",
@@ -903,17 +907,17 @@ func CheckedRuleNames(system, eventName string, rules []config.Rule) []string {
 }
 
 // appliesToEvent returns true when the rule's event filter includes eventName
-// for the given system. Only checks the system-specific events array (claude_events
-// or cursor_events) plus the shared events array. If all are empty, the rule
-// applies to all events.
+// for the given system. disable_providers wins over all_events and listed events.
 func appliesToEvent(rule *config.Rule, system, eventName string) bool {
-	shared := rule.Events
-	specific := systemSpecificEvents(rule, system)
-
-	noFilters := len(shared) == 0 && len(specific) == 0
-	if noFilters {
+	if rule.ProviderDisabled(system) {
+		return false
+	}
+	if rule.AllEvents {
 		return true
 	}
+
+	shared := rule.Events
+	specific := systemSpecificEvents(rule, system)
 
 	return slices.Contains(shared, eventName) ||
 		slices.Contains(specific, eventName)

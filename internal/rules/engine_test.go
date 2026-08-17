@@ -1174,15 +1174,90 @@ func TestEvaluate_EventFilter(t *testing.T) {
 	}
 }
 
-// TestEvaluate_EmptyEventList verifies that an empty events list matches all events.
+// TestEvaluate_EmptyEventList verifies that empty event lists without all_events match nothing.
 func TestEvaluate_EmptyEventList(t *testing.T) {
+	rule := loadRule(t, "no-events", `forbidden`, nil,
+		[]string{"command"}, "forbidden keyword")
+
+	v := rules.Evaluate(context.Background(), "claude", "PreToolUse", rules.FieldSet{Command: "do something forbidden here"}, []config.Rule{rule})
+
+	if v != nil {
+		t.Errorf("expected no violation for rule with empty event lists, got %q", v.RuleName)
+	}
+}
+
+func TestEvaluate_AllEventsMatchesAnyEvent(t *testing.T) {
 	rule := loadRule(t, "catch-all", `forbidden`, nil,
 		[]string{"command"}, "forbidden keyword")
+	rule.AllEvents = true
 
 	v := rules.Evaluate(context.Background(), "unknown", "AnyEvent", rules.FieldSet{Command: "do something forbidden here"}, []config.Rule{rule})
 
 	if v == nil {
-		t.Error("expected violation for catch-all rule, got nil")
+		t.Fatal("expected violation for all_events rule, got nil")
+	}
+}
+
+func TestEvaluate_DisableProvidersSkipsHarness(t *testing.T) {
+	t.Run("all_events", func(t *testing.T) {
+		rule := loadRule(t, "no-cursor", `forbidden`, nil,
+			[]string{"command"}, "forbidden keyword")
+		rule.AllEvents = true
+		rule.DisableProviders = []string{"cursor"}
+
+		v := rules.Evaluate(context.Background(), "cursor", "preToolUse", rules.FieldSet{Command: "do something forbidden here"}, []config.Rule{rule})
+		if v != nil {
+			t.Fatalf("expected cursor to be skipped, got violation %q", v.RuleName)
+		}
+
+		v = rules.Evaluate(context.Background(), "claude", "PreToolUse", rules.FieldSet{Command: "do something forbidden here"}, []config.Rule{rule})
+		if v == nil {
+			t.Fatal("expected claude to match all_events rule, got nil")
+		}
+	})
+
+	t.Run("listed events", func(t *testing.T) {
+		rule := loadRule(t, "no-cursor-listed", `forbidden`,
+			[]string{"PreToolUse", "preToolUse"},
+			[]string{"command"}, "forbidden keyword")
+		rule.DisableProviders = []string{"cursor"}
+
+		v := rules.Evaluate(context.Background(), "cursor", "preToolUse", rules.FieldSet{Command: "do something forbidden here"}, []config.Rule{rule})
+		if v != nil {
+			t.Fatalf("expected cursor to be skipped, got violation %q", v.RuleName)
+		}
+
+		v = rules.Evaluate(context.Background(), "claude", "PreToolUse", rules.FieldSet{Command: "do something forbidden here"}, []config.Rule{rule})
+		if v == nil {
+			t.Fatal("expected claude to match listed event, got nil")
+		}
+	})
+}
+
+func TestEvaluate_ClaudeEventsOnlyDoesNotMatchCursor(t *testing.T) {
+	rule := config.Rule{
+		Name:             "claude-only",
+		ClaudeEvents:     []string{"PreToolUse"},
+		FieldPaths:       []string{"command"},
+		Pattern:          `forbidden`,
+		Action:           "block",
+		ViolationMessage: "forbidden keyword",
+	}
+	re, err := regex.Compile(rule.Pattern)
+	if err != nil {
+		t.Fatalf("compile pattern: %v", err)
+	}
+	rule = config.NewSimpleRule(rule.Name, rule.Pattern, re, nil, rule.FieldPaths, rule.Action, rule.ViolationMessage)
+	rule.ClaudeEvents = []string{"PreToolUse"}
+
+	v := rules.Evaluate(context.Background(), "cursor", "preToolUse", rules.FieldSet{Command: "do something forbidden here"}, []config.Rule{rule})
+	if v != nil {
+		t.Fatalf("expected cursor to be skipped for claude_events-only rule, got %q", v.RuleName)
+	}
+
+	v = rules.Evaluate(context.Background(), "claude", "PreToolUse", rules.FieldSet{Command: "do something forbidden here"}, []config.Rule{rule})
+	if v == nil {
+		t.Fatal("expected claude PreToolUse to match, got nil")
 	}
 }
 
@@ -1204,6 +1279,7 @@ func TestEvaluate_UnknownFieldSelector(t *testing.T) {
 func TestCheckedRuleNames(t *testing.T) {
 	rules1 := redirectionRule(t)
 	allEvents := loadRule(t, "global", `x`, nil, []string{"command"}, "msg")
+	allEvents.AllEvents = true
 
 	rulesSlice := []config.Rule{rules1, allEvents}
 

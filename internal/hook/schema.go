@@ -621,36 +621,49 @@ type schemaEventPair struct {
 
 func applicableEventPairs(r *config.Rule) []schemaEventPair {
 	if ruleHasNoEventFilters(r) {
-		return allEventPairs()
+		return filterDisabledProviders(allEventPairs(), r)
 	}
 
 	applicable := make([]schemaEventPair, 0, len(r.Events)*5+
 		len(r.ClaudeEvents)+len(r.CursorEvents)+len(r.CodexEvents)+len(r.CopilotEvents)+len(r.GeminiEvents))
 	for _, ev := range r.Events {
-		applicable = append(
-			applicable,
-			schemaEventPair{"cursor", ev},
-			schemaEventPair{"claude", ev},
-			schemaEventPair{"codex", ev},
-			schemaEventPair{"copilot", ev},
-			schemaEventPair{"gemini", ev},
-		)
+		for _, system := range []string{"claude", "cursor", "codex", "copilot", "gemini"} {
+			if r.ProviderDisabled(system) {
+				continue
+			}
+			applicable = append(applicable, schemaEventPair{system, ev})
+		}
 	}
-	applicable = appendEventPairs(applicable, "claude", r.ClaudeEvents)
-	applicable = appendEventPairs(applicable, "cursor", r.CursorEvents)
-	applicable = appendEventPairs(applicable, "codex", r.CodexEvents)
-	applicable = appendEventPairs(applicable, "copilot", r.CopilotEvents)
-	applicable = appendEventPairs(applicable, "gemini", r.GeminiEvents)
+	applicable = appendProviderEventPairs(applicable, r, "claude", r.ClaudeEvents)
+	applicable = appendProviderEventPairs(applicable, r, "cursor", r.CursorEvents)
+	applicable = appendProviderEventPairs(applicable, r, "codex", r.CodexEvents)
+	applicable = appendProviderEventPairs(applicable, r, "copilot", r.CopilotEvents)
+	applicable = appendProviderEventPairs(applicable, r, "gemini", r.GeminiEvents)
 	return applicable
 }
 
 func ruleHasNoEventFilters(r *config.Rule) bool {
-	return len(r.Events) == 0 &&
-		len(r.ClaudeEvents) == 0 &&
-		len(r.CursorEvents) == 0 &&
-		len(r.CodexEvents) == 0 &&
-		len(r.CopilotEvents) == 0 &&
-		len(r.GeminiEvents) == 0
+	return r.AllEvents
+}
+
+func appendProviderEventPairs(applicable []schemaEventPair, r *config.Rule, system string, events []string) []schemaEventPair {
+	if r.ProviderDisabled(system) {
+		return applicable
+	}
+	return appendEventPairs(applicable, system, events)
+}
+
+func filterDisabledProviders(pairs []schemaEventPair, r *config.Rule) []schemaEventPair {
+	if len(r.DisableProviders) == 0 {
+		return pairs
+	}
+	filtered := pairs[:0]
+	for _, pair := range pairs {
+		if !r.ProviderDisabled(pair.system) {
+			filtered = append(filtered, pair)
+		}
+	}
+	return filtered
 }
 
 func allEventPairs() []schemaEventPair {
