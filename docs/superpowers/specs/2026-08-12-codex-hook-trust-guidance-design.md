@@ -33,7 +33,5 @@ excluded from the selected providers or when the Codex write fails.
 
 ## Verify the behavior
 
-A behavior test captures installer output after a real Codex hook installation.
-It asserts the Desktop steps, command line steps, and official documentation
-link. Existing Codex installation tests continue to verify the managed
+Existing Codex installation tests continue to verify the managed
 `config.toml` block.
