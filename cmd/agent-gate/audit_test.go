@@ -7,7 +7,9 @@ import (
 	"path/filepath"
 	"testing"
 
+	"goodkind.io/agent-gate/internal/auditstorage"
 	"goodkind.io/agent-gate/internal/config"
+	"time"
 )
 
 func TestRunAuditStatusReportsFileSizes(t *testing.T) {
@@ -20,7 +22,19 @@ func TestRunAuditStatusReportsFileSizes(t *testing.T) {
 	if err := store.Handle().Close(); err != nil {
 		t.Fatal(err)
 	}
-	info, err := os.Stat(config.DefaultAuditSQLitePath())
+	catalog, err := auditstorage.NewCatalog((&config.Config{}).AuditCatalogOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{}
+	if err := cfg.PrepareAuditStorage(); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := catalog.Status(cfg.AuditStoragePolicy().Rotation(), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(snapshot.CurrentBucketPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -28,11 +42,11 @@ func TestRunAuditStatusReportsFileSizes(t *testing.T) {
 	if code := runAudit([]string{"status", "--json"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("code=%d error=%s", code, stderr.String())
 	}
-	var status auditFileStatus
+	var status auditstorage.AuditStatus
 	if err := json.Unmarshal(stdout.Bytes(), &status); err != nil {
 		t.Fatal(err)
 	}
-	if status.DatabaseBytes != info.Size() || status.WALBytes != 0 {
+	if len(status.RetainedFiles) != 1 || status.RetainedFiles[0].DatabaseBytes != info.Size() || status.RetainedFiles[0].WALBytes != 0 {
 		t.Fatalf("status=%+v file=%d", status, info.Size())
 	}
 }

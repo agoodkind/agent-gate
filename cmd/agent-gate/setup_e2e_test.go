@@ -143,7 +143,7 @@ func assertSetupDurableStateAfterClose(t *testing.T, cfg *config.Config, setupID
 		}
 		evaluationResult, err := evaluation.Query(
 			context.Background(),
-			cfg.AuditSQLitePath(),
+			cfg,
 			evaluation.QueryFilter{
 				Mode: "hot", System: system, SessionID: setupID,
 				DetailMode: evaluation.QueryDetailSummary, Limit: 2,

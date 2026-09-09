@@ -487,7 +487,7 @@ func (realAuditClock) Now() time.Time {
 }
 
 func normalizeEvent(system, sessionID, eventName, level, msg string, attrs Attrs) Event {
-	now := auditNow().UTC().Format(time.RFC3339Nano)
+	now := auditstorage.FormatTime(auditNow())
 	event := Event{
 		EventID:       "",
 		SchemaVersion: schemaVersion,

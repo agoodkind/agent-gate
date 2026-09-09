@@ -104,7 +104,7 @@ func (policy RotationPolicy) Validate() error {
 }
 
 func (catalog *Catalog) desiredState(policy RotationPolicy) CatalogState {
-	return CatalogState{BasePath: catalog.options.BasePath, IntervalSeconds: int64(policy.Interval / time.Second), Retained: policy.Retained, ResetPending: false, PendingBasePaths: nil}
+	return CatalogState{BasePath: catalog.options.BasePath, IntervalSeconds: int64(policy.Interval / time.Second), Retained: policy.Retained, ResetPending: false, PendingBasePaths: nil, CleanupError: ""}
 }
 
 func (catalog *Catalog) checkState(policy RotationPolicy) (CatalogState, error) {
@@ -381,8 +381,7 @@ func retained(bucket Bucket, policy RotationPolicy, now time.Time) bool {
 }
 
 // Prune deletes expired windows, deferring any that still have a reader or writer.
-func (catalog *Catalog) Prune(ctx context.Context, policy RotationPolicy, now time.Time) (PruneResult, error) {
-	var result PruneResult
+func (catalog *Catalog) Prune(ctx context.Context, policy RotationPolicy, now time.Time) (result PruneResult, resultErr error) {
 	lock, err := catalog.coordinate(ctx)
 	if err != nil {
 		return result, err
@@ -391,6 +390,21 @@ func (catalog *Catalog) Prune(ctx context.Context, policy RotationPolicy, now ti
 	if _, err := catalog.checkState(policy); err != nil {
 		return result, err
 	}
+	defer func() {
+		state, err := catalog.loadState()
+		if err != nil {
+			resultErr = errors.Join(resultErr, err)
+			return
+		}
+		message := ""
+		if resultErr != nil {
+			message = resultErr.Error()
+		}
+		if state.CleanupError != message {
+			state.CleanupError = message
+			resultErr = errors.Join(resultErr, catalog.saveState(state))
+		}
+	}()
 	if err := catalog.cleanStaging(ctx); err != nil {
 		return result, err
 	}

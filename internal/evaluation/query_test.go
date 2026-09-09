@@ -55,7 +55,7 @@ func TestStoreListFiltersJoinedEvaluations(t *testing.T) {
 		})
 	}
 
-	result, err := evaluation.Query(ctx, path, evaluation.QueryFilter{Limit: 1, Offset: 1})
+	result, err := evaluation.Query(ctx, fixtureConfig(t, path), evaluation.QueryFilter{Limit: 1, Offset: 1})
 	if err != nil {
 		t.Fatalf("Query pagination: %v", err)
 	}
@@ -142,7 +142,7 @@ func TestExportEvaluationsFiltersBeforeCheckingDetail(t *testing.T) {
 		t.Fatalf("mark evaluation detail expired: %v", err)
 	}
 
-	filtered, err := evaluation.Query(t.Context(), path, evaluation.QueryFilter{
+	filtered, err := evaluation.Query(t.Context(), fixtureConfig(t, path), evaluation.QueryFilter{
 		System: "claude",
 		Limit:  1,
 	})
@@ -164,7 +164,7 @@ func TestExportEvaluationsFiltersBeforeCheckingDetail(t *testing.T) {
 		)
 	}
 
-	paginated, err := evaluation.Query(t.Context(), path, evaluation.QueryFilter{Limit: 1})
+	paginated, err := evaluation.Query(t.Context(), fixtureConfig(t, path), evaluation.QueryFilter{Limit: 1})
 	if err != nil {
 		t.Fatalf("Query paginated export: %v", err)
 	}

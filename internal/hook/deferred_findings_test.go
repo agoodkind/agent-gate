@@ -5,8 +5,10 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"goodkind.io/agent-gate/internal/audit"
+	"goodkind.io/agent-gate/internal/auditstorage"
 	"goodkind.io/agent-gate/internal/config"
 	"goodkind.io/agent-gate/internal/hook"
 )
@@ -20,10 +22,25 @@ func TestWriteDeferredFindingsPersistsOnlyPhaseViolations(t *testing.T) {
 				cfg := &config.Config{Rules: []config.Rule{rule}}
 				cfg.Audit.Storage.Profile = profile
 				cfg.Audit.Outputs.SQLite.Path = filepath.Join(t.TempDir(), "audit.db")
+				t.Setenv("XDG_STATE_HOME", t.TempDir())
+				t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
 				if err := cfg.PrepareAuditStorage(); err != nil {
 					t.Fatal(err)
 				}
-				logger, err := audit.NewEventLoggerWithOptions(t.Context(), cfg, nil, audit.LoggerOptions{})
+				catalog, err := auditstorage.NewCatalog(cfg.AuditCatalogOptions())
+				if err != nil {
+					t.Fatal(err)
+				}
+				bucket, err := catalog.EnsureCurrent(t.Context(), cfg.AuditStoragePolicy().Rotation(), time.Now())
+				if err != nil {
+					t.Fatal(err)
+				}
+				handle, err := catalog.OpenWriter(t.Context(), bucket)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = handle.Close() })
+				logger, err := audit.NewEventLoggerWithOptions(t.Context(), cfg, nil, audit.LoggerOptions{SharedDB: handle.Database})
 				if err != nil {
 					t.Fatal(err)
 				}

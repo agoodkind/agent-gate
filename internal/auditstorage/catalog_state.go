@@ -11,6 +11,7 @@ import (
 
 // CatalogState records the active policy or the families awaiting destruction.
 type CatalogState struct {
+	CleanupError     string   `json:"cleanup_error,omitempty"`
 	BasePath         string   `json:"base_path"`
 	IntervalSeconds  int64    `json:"interval_seconds"`
 	Retained         int      `json:"retention_buckets"`

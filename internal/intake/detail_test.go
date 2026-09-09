@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"goodkind.io/agent-gate/internal/auditstorage"
 	"goodkind.io/agent-gate/internal/config"
 	"goodkind.io/agent-gate/internal/intake"
 )
@@ -55,7 +54,7 @@ func TestCanonicalInputRetainedUntilEveryReceiptCompletes(t *testing.T) {
 			}
 			if policy.Detail.WireInput {
 				assertRecordDetailEqual(t, got, input)
-			} else if len(got.RawPayload) != 0 || got.NormalizedJSON != nil || got.ClassificationJSON != nil || len(got.EnvFingerprint) != 0 {
+			} else if got.RawPayload != nil || got.NormalizedJSON != nil || got.ClassificationJSON != nil || len(got.EnvFingerprint) != 0 {
 				t.Fatalf("terminal input retained: %+v", got)
 			}
 			third, err := store.Append(t.Context(), input)
@@ -96,17 +95,7 @@ func openDetailStore(
 	policy config.AuditStoragePolicy,
 ) *intake.Store {
 	t.Helper()
-	database, err := auditstorage.OpenWriter(t.Context(), path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = database.Close() })
-	store, err := intake.NewStore(t.Context(), database, policy, nil)
-	if err != nil {
-		t.Fatalf("OpenSQLiteWithOptions: %v", err)
-	}
-	t.Cleanup(func() { _ = store.Handle().Close() })
-	return store
+	return openQueryBucket(t, path, &policy)
 }
 
 func populatedDetailRecord(eventID string) intake.Record {

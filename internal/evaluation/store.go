@@ -11,6 +11,7 @@ import (
 	"math"
 	"time"
 
+	"goodkind.io/agent-gate/internal/auditstorage"
 	"goodkind.io/agent-gate/internal/config"
 )
 
@@ -349,6 +350,7 @@ func (s *Store) getEvaluation(ctx context.Context, evaluationID string) (Evaluat
 	var value Evaluation
 	var startedAt string
 	var completedAt string
+	var errorJSON []byte
 	err := s.database.QueryRowContext(ctx, storeSQL4, evaluationID).Scan(
 		&value.EvaluationID,
 		&value.ReceiptID,
@@ -367,7 +369,7 @@ func (s *Store) getEvaluation(ctx context.Context, evaluationID string) (Evaluat
 		&value.EnforcementAction,
 		&value.Enforced,
 		&value.TotalLatencyUS,
-		&value.ErrorJSON,
+		&errorJSON,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Evaluation{}, ErrNotFound
@@ -375,6 +377,7 @@ func (s *Store) getEvaluation(ctx context.Context, evaluationID string) (Evaluat
 	if err != nil {
 		return Evaluation{}, wrapError("read evaluation", err)
 	}
+	value.ErrorJSON = json.RawMessage(errorJSON)
 	value.StartedAt, err = parseTime(startedAt)
 	if err != nil {
 		return Evaluation{}, err
@@ -414,6 +417,8 @@ func scanLayer(rows *sql.Rows) (Layer, error) {
 	var cacheVersion sql.NullInt64
 	var cacheExpiry sql.NullString
 	var metadataJSON []byte
+	var inputJSON, outputJSON []byte
+	var errorMessage sql.NullString
 	var startedAt string
 	var completedAt string
 	err := rows.Scan(
@@ -425,10 +430,10 @@ func scanLayer(rows *sql.Rows) (Layer, error) {
 		&value.Outcome,
 		&value.Verdict,
 		&value.InputReference,
-		&value.InputJSON,
+		&inputJSON,
 		&value.InputHash,
 		&value.OutputHash,
-		&value.OutputJSON,
+		&outputJSON,
 		&metadataJSON,
 		&startedAt,
 		&completedAt,
@@ -444,7 +449,7 @@ func scanLayer(rows *sql.Rows) (Layer, error) {
 		&cacheVersion,
 		&cacheExpiry,
 		&value.ErrorCode,
-		&value.ErrorMessage,
+		&errorMessage,
 		&value.RetryCount,
 	)
 	if err != nil {
@@ -454,6 +459,9 @@ func scanLayer(rows *sql.Rows) (Layer, error) {
 		converted := int(parentIndex.Int64)
 		value.ParentLayerIndex = &converted
 	}
+	value.InputJSON = json.RawMessage(inputJSON)
+	value.OutputJSON = json.RawMessage(outputJSON)
+	value.ErrorMessage = errorMessage.String
 	value.MetadataJSON = json.RawMessage(metadataJSON)
 	if cacheVersion.Valid {
 		value.CacheEntryVersion = &cacheVersion.Int64
@@ -489,13 +497,14 @@ func (s *Store) getLabels(ctx context.Context, evaluationID string) ([]Label, er
 		var label Label
 		var confidence sql.NullFloat64
 		var createdAt string
+		var rationale sql.NullString
 		if err := rows.Scan(
 			&label.Namespace,
 			&label.LabelVersion,
 			&label.Verdict,
 			&label.Source,
 			&confidence,
-			&label.Rationale,
+			&rationale,
 			&createdAt,
 		); err != nil {
 			return nil, wrapError("scan evaluation label", err)
@@ -503,6 +512,7 @@ func (s *Store) getLabels(ctx context.Context, evaluationID string) ([]Label, er
 		if confidence.Valid {
 			label.Confidence = &confidence.Float64
 		}
+		label.Rationale = rationale.String
 		label.CreatedAt, err = parseTime(createdAt)
 		if err != nil {
 			return nil, err
@@ -516,7 +526,7 @@ func (s *Store) getLabels(ctx context.Context, evaluationID string) ([]Label, er
 }
 
 func formatTime(value time.Time) string {
-	return value.UTC().Format(time.RFC3339Nano)
+	return auditstorage.FormatTime(value)
 }
 
 func formatOptionalTime(value *time.Time) sql.NullString {

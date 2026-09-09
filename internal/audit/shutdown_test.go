@@ -49,7 +49,7 @@ func TestLoggerShutdownBoundsBlockedBorrowedWriter(t *testing.T) {
 func TestLoggerShutdownDrainsAfterOwnerCancellation(t *testing.T) {
 	cfg := testConfig(t)
 	owner, cancelOwner := context.WithCancel(t.Context())
-	logger, err := audit.NewEventLoggerWithOptions(owner, cfg, nil, audit.LoggerOptions{})
+	logger, err := audit.NewEventLoggerWithOptions(owner, cfg, nil, audit.LoggerOptions{SharedDB: retainedQueryDatabase(t, cfg)})
 	if err != nil {
 		t.Fatal(err)
 	}

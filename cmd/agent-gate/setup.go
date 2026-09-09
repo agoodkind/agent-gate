@@ -318,8 +318,9 @@ func writeSetupComplete(writer io.Writer, jsonOutput bool, result setup.Result) 
 	for _, probe := range result.Probes {
 		fmt.Fprintf(
 			writer,
-			"verified %s: receipt %d, evaluation %s, decision %s\n",
+			"verified %s: bucket %s, receipt %d, evaluation %s, decision %s\n",
 			probe.Provider,
+			probe.BucketID,
 			probe.ReceiptID,
 			probe.EvaluationID,
 			probe.Decision,

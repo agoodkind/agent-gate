@@ -205,7 +205,6 @@ func readHotAuditEvents(t *testing.T, server *Server) []audit.QueryRecord {
 	t.Helper()
 	snapshot := server.runtime.Load()
 	queryConfig := *snapshot.cfg
-	queryConfig.Audit.Outputs.SQLite.Path = snapshot.bucket.Path
 	events, _, err := audit.QueryReadOnly(t.Context(), &queryConfig, audit.QueryFilter{})
 	if err != nil {
 		t.Fatal(err)

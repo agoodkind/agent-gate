@@ -174,7 +174,7 @@ func (s *Store) Append(ctx context.Context, record Record) (AppendResult, error)
 	result, err := tx.ExecContext(ctx, storeSQL1,
 		record.EventID,
 		record.SchemaVersion,
-		record.RecordedAt.UTC().Format(time.RFC3339Nano),
+		auditstorage.FormatTime(record.RecordedAt),
 		record.System,
 		record.SessionID,
 		record.TurnID,
@@ -205,7 +205,7 @@ func (s *Store) Append(ctx context.Context, record Record) (AppendResult, error)
 			return AppendResult{}, err
 		}
 	}
-	receiptResult, err := tx.ExecContext(ctx, storeSQL2, record.EventID, receivedAt.Format(time.RFC3339Nano))
+	receiptResult, err := tx.ExecContext(ctx, storeSQL2, record.EventID, auditstorage.FormatTime(receivedAt))
 	if err != nil {
 		return AppendResult{}, wrapLoggedError(ctx, s.log, "insert intake receipt", err)
 	}
@@ -268,7 +268,7 @@ func (s *Store) MarkDeferredPending(ctx context.Context, eventID string, receipt
 
 // MarkDeferredComplete marks an intake record as fully replayed.
 func (s *Store) MarkDeferredComplete(ctx context.Context, receiptID int64) error {
-	now := intakeNow().UTC().Format(time.RFC3339Nano)
+	now := auditstorage.FormatTime(intakeNow())
 	return s.withExistingReceipt(ctx, "", receiptID, func(tx *sql.Tx, eventID string) error {
 		_, err := tx.ExecContext(ctx, storeSQL3, receiptID, eventID, DeferredStateComplete, now)
 		if err != nil {
@@ -372,7 +372,7 @@ func (s *Store) withExistingReceipt(
 }
 
 func (s *Store) noteReplay(ctx context.Context, receiptID int64) error {
-	now := intakeNow().UTC().Format(time.RFC3339Nano)
+	now := auditstorage.FormatTime(intakeNow())
 	return s.withExistingReceipt(ctx, "", receiptID, func(tx *sql.Tx, _ string) error {
 		result, err := tx.ExecContext(ctx, storeSQL7, now, receiptID, DeferredStatePending)
 		if err != nil {
@@ -478,8 +478,7 @@ func scanRecord(rows *sql.Rows) (Record, error) {
 	}
 	record.NormalizedJSON = json.RawMessage(normalized)
 	record.ClassificationJSON = json.RawMessage(classification)
-	record.RawPayload = make([]byte, len(rawPayload))
-	copy(record.RawPayload, rawPayload)
+	record.RawPayload = bytes.Clone(rawPayload)
 	record.RawPayloadHash = rawPayloadHash
 	record.EnvFingerprint, err = unmarshalEnvFingerprint(string(envFingerprint))
 	if err != nil {

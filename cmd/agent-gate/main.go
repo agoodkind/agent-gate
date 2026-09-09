@@ -17,6 +17,7 @@ import (
 
 	"goodkind.io/agent-gate/api/daemonpb"
 	"goodkind.io/agent-gate/internal/audit"
+	"goodkind.io/agent-gate/internal/auditstorage"
 	"goodkind.io/agent-gate/internal/config"
 	"goodkind.io/agent-gate/internal/daemon"
 	"goodkind.io/agent-gate/internal/evaluation"
@@ -388,7 +389,7 @@ func runConfig(args []string) int {
 }
 
 func writeAuditStoragePolicy(out io.Writer, policy config.AuditStoragePolicy) {
- _, _ = fmt.Fprintf(out, "audit storage: %s\n", policy.Profile)
+	_, _ = fmt.Fprintf(out, "audit storage: %s\n", policy.Profile)
 }
 
 func runConfigEnsureDefaults(args []string) int {
@@ -1025,7 +1026,7 @@ func runCostQuery(args []string) int {
 	pricing := costPricingFromConfig(cfg)
 	result, err := evaluation.CostReport(
 		context.Background(),
-		cfg.AuditSQLitePath(),
+		cfg,
 		pricing,
 		evaluation.CostFilter{Since: since, Until: until},
 	)
@@ -1144,7 +1145,7 @@ func registerSharedQueryFlags(fs *flag.FlagSet, shared *sharedQueryFlags, system
 	fs.StringVar(session, "session", "", "filter by session id")
 	fs.StringVar(event, "event", "", "filter by event name")
 	fs.StringVar(tool, "tool", "", "filter by tool name")
-	fs.IntVar(limit, "limit", 50, "maximum rows")
+	fs.IntVar(limit, "limit", 0, "maximum rows (zero uses the query default)")
 	fs.BoolVar(&shared.jsonOut, "json", false, "print JSONL")
 }
 
@@ -1214,6 +1215,8 @@ func runDecisionQuery(args []string) int {
 	var filter audit.QueryFilter
 	var shared sharedQueryFlags
 	registerSharedQueryFlags(fs, &shared, &filter.System, &filter.SessionID, &filter.EventName, &filter.ToolName, &filter.Limit)
+	fs.StringVar(&filter.BucketID, "bucket", "", "filter by retained UTC bucket id")
+	fs.IntVar(&filter.Offset, "offset", 0, "rows to skip")
 	fs.StringVar(&filter.Decision, "decision", "", "filter by decision")
 	fs.StringVar(&filter.Rule, "rule", "", "filter by rule")
 	if err := fs.Parse(args); err != nil {
@@ -1228,7 +1231,7 @@ func runDecisionQuery(args []string) int {
 		fmt.Fprintf(os.Stderr, "agent-gate query decisions: config load failed: %v\n", err)
 		return 2
 	}
-	events, source, err := audit.Query(cfg, filter)
+	events, source, err := audit.QueryReadOnly(context.Background(), cfg, filter)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent-gate query decisions: no audit output available: %v\n", err)
 		return 1
@@ -1253,6 +1256,8 @@ func runSeenQuery(args []string) int {
 	var filter intake.QueryFilter
 	var shared sharedQueryFlags
 	registerSharedQueryFlags(fs, &shared, &filter.System, &filter.SessionID, &filter.EventName, &filter.ToolName, &filter.Limit)
+	fs.StringVar(&filter.BucketID, "bucket", "", "filter by retained UTC bucket id")
+	fs.IntVar(&filter.Offset, "offset", 0, "rows to skip")
 	fs.StringVar(&filter.DeferredState, "state", "", "filter by deferred replay state")
 	fs.StringVar(&filter.EventID, "event-id", "", "filter by durable event id")
 	fs.BoolVar(&filter.IncludeNormalized, "include-normalized", false, "include normalized payload JSON")
@@ -1315,6 +1320,7 @@ func parseEvaluationQueryFilterWithFlags(
 	)
 	fs.StringVar(&filter.EvaluationID, "evaluation-id", "", "filter by evaluation id")
 	fs.StringVar(&filter.EventID, "event-id", "", "filter by durable event id")
+	fs.StringVar(&filter.BucketID, "bucket", "", "filter by retained UTC bucket id")
 	fs.Int64Var(&filter.ReceiptID, "receipt-id", 0, "filter by receipt id")
 	fs.StringVar(&filter.Mode, "mode", "", "filter by evaluation mode")
 	fs.StringVar(&filter.RuleName, "rule", "", "filter by rule name")
@@ -1333,6 +1339,11 @@ func parseEvaluationQueryFilterWithFlags(
 	if !applySharedEvaluationQueryFlags(shared, &filter, command) {
 		return filter, false, 2
 	}
+	if filter.ReceiptID > 0 && filter.BucketID == "" {
+		fmt.Fprintln(os.Stderr, "receipt id requires --bucket")
+		return filter, false, 2
+	}
+
 	return filter, shared.jsonOut, 0
 }
 
@@ -1342,7 +1353,7 @@ func loadEvaluationQueryResult(command string, filter evaluation.QueryFilter) (e
 		fmt.Fprintf(os.Stderr, "agent-gate %s: config load failed: %v\n", command, err)
 		return evaluation.QueryResult{}, 2
 	}
-	result, err := evaluation.Query(context.Background(), cfg.AuditSQLitePath(), filter)
+	result, err := evaluation.Query(context.Background(), cfg, filter)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent-gate %s: %v\n", command, err)
 		return evaluation.QueryResult{}, 1
@@ -1410,7 +1421,9 @@ func runExport(args []string) int {
 	}
 	filter.DetailMode = evaluation.QueryDetailFull
 	filter.CompleteDetailOnly = skipExpiredDetail
-	result, code := loadEvaluationQueryResult("export evaluations", filter)
+	preflight := filter
+	preflight.Limit, preflight.Offset, preflight.DetailMode = 1, 0, evaluation.QueryDetailSummary
+	result, code := loadEvaluationQueryResult("export evaluations", preflight)
 	if code != 0 {
 		return code
 	}
@@ -1434,7 +1447,22 @@ func runExport(args []string) int {
 			result.Completeness.IncompleteCount,
 		)
 	}
-	return encodeEvaluationJSONL("export evaluations", result)
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 2
+	}
+	encoder := json.NewEncoder(os.Stdout)
+	if err := evaluation.Walk(context.Background(), cfg, filter, func(record evaluation.QueryRecord) error {
+		if record.Detail.State != auditstorage.DetailStateAvailable {
+			return fmt.Errorf("evaluation %s/%s lacks complete detail", record.BucketID, record.EvaluationID)
+		}
+		return encoder.Encode(record)
+	}); err != nil {
+		fmt.Fprintf(os.Stderr, "agent-gate export evaluations: %v\n", err)
+		return 1
+	}
+	return 0
 }
 
 func parseQueryTime(s string) (time.Time, error) {
@@ -1446,8 +1474,9 @@ func parseQueryTime(s string) (time.Time, error) {
 
 func printEventTable(source string, events []audit.QueryRecord) {
 	_, _ = fmt.Fprintf(os.Stdout, "source=%s rows=%d\n", source, len(events))
-	_, _ = fmt.Fprintf(os.Stdout, "%-25s  %-8s  %-12s  %-12s  %-9s  %-24s  %-12s  %s\n", "time", "system", "decision", "event", "tool", "rules", "detail", "command")
+	_, _ = fmt.Fprintf(os.Stdout, "%-16s  %-25s  %-8s  %-12s  %-12s  %-9s  %-24s  %-12s  %s\n", "bucket", "time", "system", "decision", "event", "tool", "rules", "detail", "command")
 	for _, event := range events {
+
 		rules := "-"
 		if len(event.Decision.RulesMatched) > 0 {
 			rules = strings.Join(event.Decision.RulesMatched, ",")
@@ -1457,7 +1486,8 @@ func printEventTable(source string, events []audit.QueryRecord) {
 			cmd = cmd[:77] + "..."
 		}
 		_, _ = fmt.Fprintf(
-			os.Stdout, "%-25s  %-8s  %-12s  %-12s  %-9s  %-24s  %-12s  %s\n",
+			os.Stdout, "%-16s  %-25s  %-8s  %-12s  %-12s  %-9s  %-24s  %-12s  %s\n",
+			event.BucketID,
 			event.Time,
 			event.System,
 			event.Decision.Kind,
@@ -1475,14 +1505,16 @@ func printSeenTable(result intake.QueryResult) {
 	if result.Note != "" {
 		_, _ = fmt.Fprintf(os.Stdout, "note=%s\n", result.Note)
 	}
-	_, _ = fmt.Fprintf(os.Stdout, "%-25s  %-8s  %-12s  %-12s  %-9s  %-10s  %-12s  %s\n", "recorded_at", "system", "state", "event", "tool", "session", "detail", "command")
+	_, _ = fmt.Fprintf(os.Stdout, "%-16s  %-25s  %-8s  %-12s  %-12s  %-9s  %-10s  %-12s  %s\n", "bucket", "recorded_at", "system", "state", "event", "tool", "session", "detail", "command")
 	for _, record := range result.Records {
+
 		cmd := record.Operation.Command
 		if len(cmd) > 80 {
 			cmd = cmd[:77] + "..."
 		}
 		_, _ = fmt.Fprintf(
-			os.Stdout, "%-25s  %-8s  %-12s  %-12s  %-9s  %-10s  %-12s  %s\n",
+			os.Stdout, "%-16s  %-25s  %-8s  %-12s  %-12s  %-9s  %-10s  %-12s  %s\n",
+			record.BucketID,
 			record.RecordedAt,
 			record.System,
 			record.Deferred.State,
@@ -1502,7 +1534,8 @@ func printEvaluationTable(result evaluation.QueryResult) {
 	}
 	_, _ = fmt.Fprintf(
 		os.Stdout,
-		"%-25s  %-8s  %-9s  %-12s  %-12s  %-12s  %-8s  %-7s  %-12s  %s\n",
+		"%-16s  %-25s  %-8s  %-9s  %-12s  %-12s  %-12s  %-8s  %-7s  %-12s  %s\n",
+		"bucket",
 		"completed_at",
 		"system",
 		"mode",
@@ -1515,9 +1548,11 @@ func printEvaluationTable(result evaluation.QueryResult) {
 		"evaluation_id",
 	)
 	for _, record := range result.Records {
+
 		_, _ = fmt.Fprintf(
 			os.Stdout,
-			"%-25s  %-8s  %-9s  %-12s  %-12s  %-12s  %-8d  %-7d  %-12s  %s\n",
+			"%-16s  %-25s  %-8s  %-9s  %-12s  %-12s  %-12s  %-8d  %-7d  %-12s  %s\n",
+			record.BucketID,
 			record.CompletedAt.Format(time.RFC3339Nano),
 			record.System,
 			record.Mode,

@@ -35,6 +35,7 @@ type ProbeRequest struct {
 
 // ProbeResult identifies every durable stage produced by one installed command.
 type ProbeResult struct {
+	BucketID      string
 	Provider      installer.Provider
 	IntakeEventID string
 	ReceiptID     int64
@@ -76,6 +77,13 @@ func verifyInstalledHook(
 	provider installer.Provider,
 	timeout time.Duration,
 ) (ProbeResult, error) {
+	return verifyInstalledHookWithExecutor(ctx, request, provider, timeout, executeLifecycleProbe)
+}
+
+func verifyInstalledHookWithExecutor(
+	ctx context.Context, request ProbeRequest, provider installer.Provider, timeout time.Duration,
+	execute func(context.Context, installer.ManagedHookCommand, []byte) (int, []byte, error),
+) (ProbeResult, error) {
 	command, err := installer.ReadManagedLifecycleCommandContext(
 		ctx,
 		installer.HooksOptions{
@@ -94,7 +102,7 @@ func verifyInstalledHook(
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	exitCode, output, err := executeLifecycleProbe(probeCtx, command, payload)
+	exitCode, output, err := execute(probeCtx, command, payload)
 	if err != nil {
 		return ProbeResult{}, fmt.Errorf(
 			"%s: installed lifecycle command exited %d: %w: %s",
@@ -105,7 +113,7 @@ func verifyInstalledHook(
 		)
 	}
 	result := ProbeResult{
-		Provider: provider, IntakeEventID: "", ReceiptID: 0, EvaluationID: "",
+		Provider: provider, BucketID: "", IntakeEventID: "", ReceiptID: 0, EvaluationID: "",
 		AuditEventID: "", Decision: "", ExitCode: exitCode,
 	}
 	if err := waitForDurableProbe(probeCtx, request, command, &result); err != nil {
@@ -208,6 +216,7 @@ func readDurableIntake(
 ) (bool, error) {
 	provider := string(command.Provider)
 	query, err := intake.Query(ctx, request.Config, intake.QueryFilter{
+		BucketID: "", Offset: 0,
 		Since: time.Time{}, Until: time.Time{}, System: provider,
 		SessionID: request.SetupID, EventName: command.EventName, ToolName: "",
 		DeferredState: "", EventID: "", Limit: 2,
@@ -224,6 +233,7 @@ func readDurableIntake(
 		return false, fmt.Errorf("%s: durable intake returned %d records", provider, len(query.Records))
 	}
 	result.IntakeEventID = query.Records[0].EventID
+	result.BucketID = query.Records[0].BucketID
 	return false, nil
 }
 
@@ -235,7 +245,8 @@ func readDurableEvaluation(
 ) (bool, error) {
 	provider := string(command.Provider)
 	for _, mode := range []string{"hot", "deferred", "deferred_replay"} {
-		query, err := evaluation.Query(ctx, request.Config.AuditSQLitePath(), evaluation.QueryFilter{
+		query, err := evaluation.Query(ctx, request.Config, evaluation.QueryFilter{
+			BucketID:     result.BucketID,
 			EvaluationID: "", EventID: result.IntakeEventID, ReceiptID: 0, Mode: mode,
 			Since: time.Time{}, Until: time.Time{}, System: provider,
 			SessionID: request.SetupID, EventName: command.EventName, ToolName: "",
@@ -275,6 +286,7 @@ func readDurableAudit(
 ) (bool, error) {
 	provider := string(command.Provider)
 	records, _, err := audit.QueryReadOnly(ctx, request.Config, audit.QueryFilter{
+		BucketID: result.BucketID, EventID: "", Offset: 0,
 		Since: time.Time{}, Until: time.Time{}, System: provider,
 		SessionID: request.SetupID, EventName: command.EventName, ToolName: "",
 		Decision: "", Rule: "", Limit: 2,

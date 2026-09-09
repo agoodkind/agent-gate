@@ -1700,7 +1700,7 @@ func TestEvaluateHook_CodexStopBlockingRuleDowngradesToAudit(t *testing.T) {
 	}
 	waitForNoPendingIntake(t, srv)
 	waitForAuditMessages(t, srv, "hook.audit_violation", "hook.allowed")
-	events, _, err := audit.Query(currentAuditConfig(srv), audit.QueryFilter{Limit: 20})
+	events, _, err := audit.QueryReadOnly(t.Context(), currentAuditConfig(srv), audit.QueryFilter{Limit: 20})
 	if err != nil {
 		t.Fatalf("audit.Query: %v", err)
 	}
@@ -2181,7 +2181,7 @@ func waitForAuditMessages(t testing.TB, server *Server, messages ...string) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		events, _, err := audit.Query(currentAuditConfig(server), audit.QueryFilter{Limit: 50})
+		events, _, err := audit.QueryReadOnly(t.Context(), currentAuditConfig(server), audit.QueryFilter{Limit: 50})
 		if err == nil {
 			found := make(map[string]bool, len(messages))
 			for _, event := range events {
@@ -2226,7 +2226,6 @@ func waitForNoPendingIntake(t testing.TB, srv *Server) {
 func currentAuditConfig(server *Server) *config.Config {
 	snapshot := server.runtime.Load()
 	cfg := *snapshot.cfg
-	cfg.Audit.Outputs.SQLite.Path = snapshot.bucket.Path
 	return &cfg
 }
 

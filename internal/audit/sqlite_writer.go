@@ -7,6 +7,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"time"
+
+	"goodkind.io/agent-gate/internal/auditstorage"
 )
 
 //go:embed insert_event.sql
@@ -54,6 +57,13 @@ func WriteEvents(ctx context.Context, database *sql.DB, events []Event) error {
 // WriteEventsInTx inserts events and children without committing the caller's transaction.
 func WriteEventsInTx(ctx context.Context, transaction *sql.Tx, events []Event) error {
 	for _, event := range events {
+		if event.Time != "" {
+			instant, err := time.Parse(time.RFC3339Nano, event.Time)
+			if err != nil {
+				return storageError("parse audit event time", err)
+			}
+			event.Time = auditstorage.FormatTime(instant)
+		}
 		result, err := transaction.ExecContext(ctx, insertEventSQL,
 			event.EventID, event.SchemaVersion, event.Time, event.Level, event.Message,
 			event.System, event.SessionID, event.TurnID, event.EventName, event.ToolUseID,

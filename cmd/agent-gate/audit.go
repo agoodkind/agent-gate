@@ -2,19 +2,14 @@ package main
 
 import (
 	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
+	"goodkind.io/agent-gate/internal/auditstorage"
 	"io"
-	"os"
+	"time"
 
 	"goodkind.io/agent-gate/internal/config"
 )
-
-type auditFileStatus struct {
-	DatabaseBytes int64 `json:"database_bytes"`
-	WALBytes      int64 `json:"wal_bytes"`
-}
 
 func runAudit(args []string, stdout io.Writer, stderr io.Writer) int {
 	if len(args) == 0 {
@@ -45,23 +40,19 @@ func runAuditStatus(args []string, stdout io.Writer, stderr io.Writer, cfg *conf
 		fmt.Fprintf(stderr, "agent-gate audit status: unexpected argument %q\n", flags.Arg(0))
 		return 2
 	}
-	var status auditFileStatus
-	for _, file := range []struct {
-		path  string
-		bytes *int64
-	}{
-		{cfg.AuditSQLitePath(), &status.DatabaseBytes},
-		{cfg.AuditSQLitePath() + "-wal", &status.WALBytes},
-	} {
-		info, err := os.Stat(file.path)
-		if errors.Is(err, os.ErrNotExist) {
-			continue
-		}
-		if err != nil {
-			fmt.Fprintf(stderr, "agent-gate audit status: %v\n", err)
-			return 1
-		}
-		*file.bytes = info.Size()
+	if err := cfg.PrepareAuditStorage(); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	catalog, err := auditstorage.NewCatalog(cfg.AuditCatalogOptions())
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	status, err := catalog.Status(cfg.AuditStoragePolicy().Rotation(), time.Now())
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
 	}
 	if jsonOutput {
 		if err := json.NewEncoder(stdout).Encode(status); err != nil {
@@ -69,7 +60,14 @@ func runAuditStatus(args []string, stdout io.Writer, stderr io.Writer, cfg *conf
 			return 1
 		}
 	} else {
-		fmt.Fprintf(stdout, "database bytes: %d\nwrite-ahead log bytes: %d\n", status.DatabaseBytes, status.WALBytes)
+		fmt.Fprintf(stdout, "bucket interval: %s\nretention buckets: %d\ncurrent bucket: %s\ncurrent path: %s\ntotal bytes: %d\nnext boundary: %s\nreset pending: %t\n",
+			status.BucketInterval, status.RetentionBuckets, status.CurrentBucketID, status.CurrentBucketPath, status.TotalBytes, status.NextBoundary.Format(time.RFC3339), status.ResetPending)
+		for _, file := range status.RetainedFiles {
+			fmt.Fprintf(stdout, "%s database=%d wal=%d shm=%d\n", file.ID, file.DatabaseBytes, file.WALBytes, file.SHMBytes)
+		}
+		if status.CleanupError != "" {
+			fmt.Fprintf(stdout, "cleanup error: %s\n", status.CleanupError)
+		}
 	}
 	return 0
 }

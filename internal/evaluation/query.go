@@ -7,12 +7,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"strconv"
 	"strings"
 	"time"
 
 	"goodkind.io/agent-gate/internal/auditstorage"
+	"goodkind.io/agent-gate/internal/config"
 )
 
 const (
@@ -28,6 +28,7 @@ const (
 
 // QueryFilter narrows evaluation records and their joined intake metadata.
 type QueryFilter struct {
+	BucketID           string
 	EvaluationID       string
 	EventID            string
 	ReceiptID          int64
@@ -66,6 +67,7 @@ type QueryResult struct {
 
 // QueryRecord contains safe evaluation and intake metadata plus ordered children.
 type QueryRecord struct {
+	BucketID           string                        `json:"bucket_id"`
 	EvaluationID       string                        `json:"evaluation_id"`
 	ReceiptID          int64                         `json:"receipt_id"`
 	EventID            string                        `json:"event_id"`
@@ -147,53 +149,119 @@ func (s *Store) List(ctx context.Context, filter QueryFilter) ([]QueryRecord, er
 	return listQueryRecords(ctx, s.database, filter)
 }
 
-// Query reads evaluations from an existing SQLite path without creating or migrating it.
-func Query(ctx context.Context, path string, filter QueryFilter) (QueryResult, error) {
-	result := QueryResult{
-		Records: make([]QueryRecord, 0),
-		Source:  "sqlite",
-		Note:    "",
-		Completeness: DetailCompleteness{
-			IncompleteCount: 0, EarliestCompleteDetailAt: nil,
-		},
+// Query returns one globally ordered retained-history page.
+func Query(ctx context.Context, cfg *config.Config, filter QueryFilter) (QueryResult, error) {
+	normalized, err := normalizeQueryFilter(filter)
+	if err != nil {
+		return QueryResult{}, wrapError("query retained evaluations", err)
 	}
-	if _, err := os.Stat(path); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			result.Note = "no evaluation history exists yet"
-			return result, nil
+	if filter.ReceiptID > 0 && filter.BucketID == "" {
+		return QueryResult{}, errors.New("receipt id requires bucket id")
+	}
+	set, err := cfg.ReadAuditHistory(ctx, filter.BucketID)
+	if err != nil {
+		return QueryResult{}, wrapError("query retained evaluations", err)
+	}
+	defer func() { _ = set.Close() }()
+	result := QueryResult{Source: "sqlite", Records: make([]QueryRecord, 0), Note: "", Completeness: DetailCompleteness{IncompleteCount: 0, EarliestCompleteDetailAt: nil}}
+	for _, handle := range set.Handles {
+		completeness, err := queryDetailCompleteness(ctx, handle.Database, normalized)
+		if err != nil {
+			return QueryResult{}, wrapError("query retained evaluations", err)
 		}
-		return QueryResult{}, wrapError("stat evaluation sqlite path", err)
+		result.Completeness.IncompleteCount += completeness.IncompleteCount
+		candidate := completeness.EarliestCompleteDetailAt
+		current := result.Completeness.EarliestCompleteDetailAt
+		if candidate != nil && (current == nil || candidate.Before(*current)) {
+			result.Completeness.EarliestCompleteDetailAt = candidate
+		}
 	}
-	database, err := sql.Open("sqlite3", queryReadOnlySQLiteDSN(path))
-	if err != nil {
-		return QueryResult{}, wrapError("open evaluation sqlite db read-only", err)
+	err = walkReadSet(ctx, set, normalized, func(record QueryRecord) error {
+		result.Records = append(result.Records, record)
+		return nil
+	})
+	if len(set.Handles) == 0 {
+		result.Note = "no evaluation history exists yet"
 	}
-	defer func() {
-		_ = database.Close()
-	}()
-	if err := database.PingContext(ctx); err != nil {
-		return QueryResult{}, wrapError("ping evaluation sqlite db read-only", err)
-	}
-	var count int
-	if err := database.QueryRowContext(ctx, querySQL1).Scan(&count); err != nil {
-		return QueryResult{}, wrapError("count evaluation rows", err)
-	}
-	if count == 0 {
-		result.Note = "no evaluations have been recorded yet"
-		return result, nil
-	}
-	records, err := listQueryRecords(ctx, database, filter)
-	if err != nil {
-		return QueryResult{}, err
-	}
-	completeness, err := queryDetailCompleteness(ctx, database, filter)
-	if err != nil {
-		return QueryResult{}, err
-	}
-	result.Records = records
-	result.Completeness = completeness
-	return result, nil
+	return result, err
 }
+
+// Walk streams retained evaluations; a zero limit visits all matching records.
+func Walk(ctx context.Context, cfg *config.Config, filter QueryFilter, yield func(QueryRecord) error) error {
+	normalized, err := normalizeQueryFilter(filter)
+	if err != nil {
+		return err
+	}
+	normalized.Limit = filter.Limit
+	if filter.ReceiptID > 0 && filter.BucketID == "" {
+		return errors.New("receipt id requires bucket id")
+	}
+	set, err := cfg.ReadAuditHistory(ctx, filter.BucketID)
+	if err != nil {
+		return wrapError("open retained evaluations", err)
+	}
+	defer func() { _ = set.Close() }()
+	return walkReadSet(ctx, set, normalized, yield)
+}
+
+func walkReadSet(ctx context.Context, set *auditstorage.ReadSet, filter QueryFilter, yield func(QueryRecord) error) error {
+	err := auditstorage.Merge(ctx, set, filter.Limit, filter.Offset,
+		func(handle *auditstorage.BucketHandle, cursor *auditstorage.QuerySummary) ([]auditstorage.QuerySummary, error) {
+			where, arguments := evaluationRecordWhere(filter)
+			if cursor != nil {
+				if where == "" {
+					where = " where "
+				} else {
+					where += " and "
+				}
+				where += evaluationKeysetSQL
+				arguments = append(arguments, queryArgument{Value: cursor.Time}, queryArgument{Value: cursor.ID})
+			}
+			rows, err := queryEvaluationRows(ctx, handle.Database, evaluationSummarySQL+where+evaluationPageSQL, arguments)
+			if err != nil {
+				return nil, err
+			}
+			defer func() { _ = rows.Close() }()
+			var records []auditstorage.QuerySummary
+			for rows.Next() {
+				var record auditstorage.QuerySummary
+				if err := rows.Scan(&record.ID, &record.Time); err != nil {
+					return nil, wrapError("scan evaluation summary", err)
+				}
+				records = append(records, record)
+			}
+			if err := rows.Err(); err != nil {
+				return nil, wrapError("read evaluation summaries", err)
+			}
+			return records, nil
+		},
+		func(handle *auditstorage.BucketHandle, row auditstorage.QuerySummary) error {
+			selected := filter
+			selected.EvaluationID, selected.Limit, selected.Offset = row.ID, 1, 0
+			records, err := listQueryRecords(ctx, handle.Database, selected)
+			if err != nil {
+				return err
+			}
+			if len(records) != 1 {
+				return fmt.Errorf("evaluation %q disappeared during read", row.ID)
+			}
+			records[0].BucketID = handle.Bucket.ID
+			return yield(records[0])
+		})
+	if err != nil {
+		return wrapError("walk retained evaluations", err)
+	}
+	return nil
+}
+
+//go:embed query_summary.sql
+var evaluationSummarySQL string
+
+//go:embed query_page.sql
+var evaluationPageSQL string
+
+//go:embed query_keyset.sql
+var evaluationKeysetSQL string
 
 func listQueryRecords(
 	ctx context.Context,
@@ -236,6 +304,10 @@ func listQueryRecords(
 	if err := rows.Close(); err != nil {
 		return nil, wrapError("close evaluation rows", err)
 	}
+	return loadQueryDetails(ctx, database, records, normalized)
+}
+
+func loadQueryDetails(ctx context.Context, database *sql.DB, records []QueryRecord, normalized QueryFilter) ([]QueryRecord, error) {
 	for i := range records {
 		outcomeKnown := records[i].expectedLayerCount >= 0
 		detailAvailable := normalized.DetailMode == QueryDetailFull &&
@@ -720,9 +792,6 @@ func querySafeLabels(
 	}
 	return labels, nil
 }
-
-//go:embed query_1.sql
-var querySQL1 string
 
 //go:embed query_2.sql
 var querySQL2 string

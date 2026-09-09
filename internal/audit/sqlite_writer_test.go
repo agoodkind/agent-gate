@@ -293,11 +293,26 @@ func TestReviewConstructorCancellationStillDrains(t *testing.T) {
 
 func TestAuditQueryReturnsEventOwnedChildrenInOrder(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "audit.db")
-	database, err := auditstorage.OpenWriter(t.Context(), path)
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	cfg := &config.Config{Audit: config.Audit{Outputs: config.AuditOutput{SQLite: config.AuditSQLiteOutput{Path: path}}}}
+	if err := cfg.PrepareAuditStorage(); err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := auditstorage.NewCatalog(cfg.AuditCatalogOptions())
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = database.Close() })
+	bucket, err := catalog.EnsureCurrent(t.Context(), cfg.AuditStoragePolicy().Rotation(), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	handle, err := catalog.OpenWriter(t.Context(), bucket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = handle.Close() })
+	database := handle.Database
 	target := testAuditEvent("target")
 	target.SessionID = "children"
 	target.Operation = Operation{CWD: "/repo", EffectiveCWD: "/repo/sub", Command: "run target", FilePath: "/repo/file"}
@@ -310,7 +325,7 @@ func TestAuditQueryReturnsEventOwnedChildrenInOrder(t *testing.T) {
 	if err := WriteEvents(t.Context(), database, []Event{unrelated, target, empty}); err != nil {
 		t.Fatal(err)
 	}
-	cfg := &config.Config{Audit: config.Audit{Outputs: config.AuditOutput{SQLite: config.AuditSQLiteOutput{Path: path}}}}
+
 	records, _, err := QueryReadOnly(t.Context(), cfg, QueryFilter{SessionID: "children"})
 	if err != nil {
 		t.Fatal(err)

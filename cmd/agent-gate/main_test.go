@@ -581,7 +581,11 @@ func TestRunQuerySeenAcceptsSharedAndIntakeFilters(t *testing.T) {
 
 func TestRunQueryDecisionsPreservesAuditQueryBehavior(t *testing.T) {
 	setupQueryEnvironment(t)
-	logger, err := audit.NewEventLoggerWithOptions(context.Background(), &config.Config{}, nil, audit.LoggerOptions{QueueLimit: 0})
+	store, err := openFixtureIntake(t, t.Context(), config.DefaultAuditSQLitePath(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logger, err := audit.NewEventLoggerWithOptions(context.Background(), &config.Config{}, nil, audit.LoggerOptions{QueueLimit: 0, SharedDB: store.Handle()})
 	if err != nil {
 		t.Fatalf("NewEventLoggerContext: %v", err)
 	}
@@ -627,6 +631,7 @@ func TestRunQueryEvaluationsEmitsSafeNestedJSONLWithFilters(t *testing.T) {
 		"--evaluation-id", record.Evaluation.EvaluationID,
 		"--event-id", record.Evaluation.EventID,
 		"--receipt-id", strconv.FormatInt(record.Evaluation.ReceiptID, 10),
+		"--bucket", currentCLIBucket(t),
 		"--mode", record.Evaluation.Mode,
 		"--since", "2026-07-11T00:00:00Z",
 		"--until", "2026-07-12T00:00:00Z",
@@ -933,12 +938,12 @@ func TestRunQueryEvaluationsHandlesEmptyHistory(t *testing.T) {
 	}
 }
 
-func TestQueryTableRenderersPreserveColumnsAndAddDetail(t *testing.T) {
+func TestQueryTableRenderersIncludeBucketAndDetail(t *testing.T) {
 	seen := intake.QueryResult{
 		Source: "sqlite",
 		Records: []intake.QueryRecord{
 			{
-				RecordedAt: "2026-07-11T01:02:03Z", System: "codex",
+				BucketID: "20260711T000000Z", RecordedAt: "2026-07-11T01:02:03Z", System: "codex",
 				SessionID: "session-1", EventName: "PreToolUse", ToolName: "Shell",
 				Operation: intake.Operation{Command: "make test"},
 				Deferred:  intake.QueryDeferred{State: intake.DeferredStatePending},
@@ -950,15 +955,15 @@ func TestQueryTableRenderersPreserveColumnsAndAddDetail(t *testing.T) {
 	}
 	seenOutput := captureStdoutCall(t, func() { printSeenTable(seen) })
 	wantSeen := "source=sqlite rows=1\n" +
-		fmt.Sprintf("%-25s  %-8s  %-12s  %-12s  %-9s  %-10s  %-12s  %s\n", "recorded_at", "system", "state", "event", "tool", "session", "detail", "command") +
-		fmt.Sprintf("%-25s  %-8s  %-12s  %-12s  %-9s  %-10s  %-12s  %s\n", "2026-07-11T01:02:03Z", "codex", "pending", "PreToolUse", "Shell", "session-1", "not_recorded", "make test")
+		fmt.Sprintf("%-16s  %-25s  %-8s  %-12s  %-12s  %-9s  %-10s  %-12s  %s\n", "bucket", "recorded_at", "system", "state", "event", "tool", "session", "detail", "command") +
+		fmt.Sprintf("%-16s  %-25s  %-8s  %-12s  %-12s  %-9s  %-10s  %-12s  %s\n", "20260711T000000Z", "2026-07-11T01:02:03Z", "codex", "pending", "PreToolUse", "Shell", "session-1", "not_recorded", "make test")
 	if seenOutput != wantSeen {
 		t.Fatalf("seen table changed\ngot:  %q\nwant: %q", seenOutput, wantSeen)
 	}
 
 	events := []audit.QueryRecord{
 		{
-			Event: audit.Event{
+			BucketID: "20260711T000000Z", Event: audit.Event{
 				Time: "2026-07-11T01:02:03Z", System: "codex", EventName: "PreToolUse",
 				ToolName: "Shell", Operation: audit.Operation{Command: "make test"},
 				Decision: audit.Decision{Kind: "block", RulesMatched: []string{"rule-1"}},
@@ -968,8 +973,8 @@ func TestQueryTableRenderersPreserveColumnsAndAddDetail(t *testing.T) {
 	}
 	eventOutput := captureStdoutCall(t, func() { printEventTable("sqlite", events) })
 	wantEvent := "source=sqlite rows=1\n" +
-		fmt.Sprintf("%-25s  %-8s  %-12s  %-12s  %-9s  %-24s  %-12s  %s\n", "time", "system", "decision", "event", "tool", "rules", "detail", "command") +
-		fmt.Sprintf("%-25s  %-8s  %-12s  %-12s  %-9s  %-24s  %-12s  %s\n", "2026-07-11T01:02:03Z", "codex", "block", "PreToolUse", "Shell", "rule-1", "available", "make test")
+		fmt.Sprintf("%-16s  %-25s  %-8s  %-12s  %-12s  %-9s  %-24s  %-12s  %s\n", "bucket", "time", "system", "decision", "event", "tool", "rules", "detail", "command") +
+		fmt.Sprintf("%-16s  %-25s  %-8s  %-12s  %-12s  %-9s  %-24s  %-12s  %s\n", "20260711T000000Z", "2026-07-11T01:02:03Z", "codex", "block", "PreToolUse", "Shell", "rule-1", "available", "make test")
 	if eventOutput != wantEvent {
 		t.Fatalf("decision table changed\ngot:  %q\nwant: %q", eventOutput, wantEvent)
 	}
@@ -1071,7 +1076,8 @@ func setCLIExportStoredDetailState(
 	state auditstorage.DetailState,
 ) {
 	t.Helper()
-	database, err := sql.Open("sqlite3", config.DefaultAuditSQLitePath())
+	store, err := openFixtureIntake(t, t.Context(), config.DefaultAuditSQLitePath(), nil)
+	database := store.Handle()
 	if err != nil {
 		t.Fatalf("open audit database: %v", err)
 	}
@@ -1358,4 +1364,18 @@ func readCapturedFile(t *testing.T, file *os.File) string {
 		t.Fatalf("Close captured file: %v", err)
 	}
 	return string(data)
+}
+
+func currentCLIBucket(t *testing.T) string {
+	t.Helper()
+	cfg := &config.Config{}
+	set, err := cfg.ReadAuditHistory(t.Context(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = set.Close() }()
+	if len(set.Handles) != 1 {
+		t.Fatalf("buckets = %d", len(set.Handles))
+	}
+	return set.Handles[0].Bucket.ID
 }

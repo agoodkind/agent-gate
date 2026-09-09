@@ -18,6 +18,8 @@ import (
 
 func TestQueryHandlesMissingAndEmptyIntakeHistory(t *testing.T) {
 	missingPath := filepath.Join(t.TempDir(), "missing.db")
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
 	missingResult, err := intake.Query(context.Background(), queryConfig(missingPath), intake.QueryFilter{})
 	if err != nil {
 		t.Fatalf("Query missing sqlite: %v", err)
@@ -37,12 +39,12 @@ func TestQueryHandlesMissingAndEmptyIntakeHistory(t *testing.T) {
 	if len(emptyResult.Records) != 0 {
 		t.Fatalf("empty sqlite records = %d, want 0", len(emptyResult.Records))
 	}
-	if !strings.Contains(emptyResult.Note, "no seen events") {
+	if !strings.Contains(emptyResult.Note, "no durable seen-event history") {
 		t.Fatalf("empty sqlite note = %q, want friendly empty note", emptyResult.Note)
 	}
 }
 
-func TestQueryClampsRangesToFirstIntakeRecord(t *testing.T) {
+func TestQueryFiltersRangesAcrossRetainedHistory(t *testing.T) {
 	store, path := newQueryTestStore(t)
 	firstRecordedAt := time.Date(2026, 5, 9, 19, 30, 0, 0, time.UTC)
 	appendQueryRecord(t, store, "evt_first", firstRecordedAt, "claude", "session-1", "PreToolUse", "Bash")
@@ -58,9 +60,6 @@ func TestQueryClampsRangesToFirstIntakeRecord(t *testing.T) {
 	if len(preRange.Records) != 0 {
 		t.Fatalf("pre-range records = %d, want 0", len(preRange.Records))
 	}
-	if !strings.Contains(preRange.Note, firstRecordedAt.Format(time.RFC3339Nano)) {
-		t.Fatalf("pre-range note = %q, want dynamic first-record timestamp", preRange.Note)
-	}
 
 	spanningRange, err := intake.Query(context.Background(), queryConfig(path), intake.QueryFilter{
 		Since: firstRecordedAt.Add(-2 * time.Hour),
@@ -71,12 +70,6 @@ func TestQueryClampsRangesToFirstIntakeRecord(t *testing.T) {
 	}
 	if len(spanningRange.Records) != 2 {
 		t.Fatalf("spanning range records = %d, want 2", len(spanningRange.Records))
-	}
-	if !strings.Contains(spanningRange.Note, firstRecordedAt.Format(time.RFC3339Nano)) {
-		t.Fatalf("spanning range note = %q, want dynamic first-record timestamp", spanningRange.Note)
-	}
-	if !strings.Contains(spanningRange.Note, "clamped") {
-		t.Fatalf("spanning range note = %q, want clamp note", spanningRange.Note)
 	}
 }
 
@@ -285,10 +278,7 @@ func queryConfig(path string) *config.Config {
 func newQueryTestStore(t *testing.T) (*intake.Store, string) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "sqlite", "audit.db")
-	store, err := openFixtureIntake(t, context.Background(), path, nil)
-	if err != nil {
-		t.Fatalf("OpenSQLite: %v", err)
-	}
+	store := openQueryBucket(t, path, nil)
 	t.Cleanup(func() {
 		if err := store.Handle().Close(); err != nil {
 			t.Fatalf("Close: %v", err)

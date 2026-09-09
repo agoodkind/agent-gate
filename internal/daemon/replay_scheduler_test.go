@@ -224,7 +224,7 @@ func TestReplaySchedulerRunsOnlyItsPhaseAndPreservesCost(t *testing.T) {
 					t.Fatalf("phase calls = %d, want %d", fake.calls.Load(), wantCalls)
 				}
 				assertHotAuditMessages(t, readHotAuditEvents(t, server), wantMessages)
-				report, err := evaluation.CostReport(t.Context(), server.runtime.Load().bucket.Path, map[string]evaluation.ModelPricing{"measured-model": {InputPerMillion: 1, OutputPerMillion: 2}}, evaluation.CostFilter{})
+				report, err := evaluation.CostReport(t.Context(), server.runtime.Load().cfg, map[string]evaluation.ModelPricing{"measured-model": {InputPerMillion: 1, OutputPerMillion: 2}}, evaluation.CostFilter{})
 				if err != nil || len(report.Models) != 1 || report.Models[0].Calls != wantCalls || report.Models[0].PromptTokens != 10*wantCalls || report.TotalBilledCostMicros != 14*wantCalls {
 					t.Fatalf("cost report = %+v, %v", report, err)
 				}

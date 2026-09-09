@@ -84,7 +84,7 @@ func TestCostReportSurvivesEvaluationDetailRemoval(t *testing.T) {
 
 	result, err := evaluation.CostReport(
 		t.Context(),
-		path,
+		fixtureConfig(t, path),
 		map[string]evaluation.ModelPricing{
 			"gpt-5.4-mini": {
 				InputPerMillion: 0.15, CachedInputPerMillion: 0.015,

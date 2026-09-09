@@ -316,10 +316,7 @@ func TestStoreSchemaHasForeignKeysAndIndices(t *testing.T) {
 		}
 	})
 
-	database, err := sql.Open("sqlite3", path)
-	if err != nil {
-		t.Fatalf("open schema database: %v", err)
-	}
+	database := intakeStore.Handle()
 	t.Cleanup(func() {
 		if err := database.Close(); err != nil {
 			t.Fatalf("close schema database: %v", err)

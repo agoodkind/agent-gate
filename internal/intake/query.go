@@ -5,10 +5,8 @@ import (
 	"database/sql"
 	_ "embed"
 	"encoding/json"
-	"errors"
+	"fmt"
 	"log/slog"
-	"net/url"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -21,6 +19,8 @@ import (
 
 // QueryFilter narrows durable intake records returned by [Query].
 type QueryFilter struct {
+	BucketID          string
+	Offset            int
 	Since             time.Time
 	Until             time.Time
 	System            string
@@ -44,6 +44,7 @@ type QueryResult struct {
 // QueryRecord is the public query projection for a durable intake record.
 // It intentionally omits raw payload bytes.
 type QueryRecord struct {
+	BucketID       string                        `json:"bucket_id"`
 	EventID        string                        `json:"event_id"`
 	RecordedAt     string                        `json:"recorded_at"`
 	System         string                        `json:"system"`
@@ -74,88 +75,73 @@ type queryArgument struct {
 	Value string
 }
 
-// Query reads durable intake history through a read-only connection.
+// Query returns a globally ordered page from retained intake buckets.
 func Query(ctx context.Context, cfg *config.Config, filter QueryFilter) (QueryResult, error) {
-	path := config.DefaultAuditSQLitePath()
-	if cfg != nil {
-		path = cfg.AuditSQLitePath()
+	if filter.Limit == 0 {
+		filter.Limit = 100
 	}
-	result := QueryResult{
-		Records: nil,
-		Source:  "sqlite",
-		Note:    "",
+	result := QueryResult{Source: "sqlite", Records: make([]QueryRecord, 0), Note: ""}
+	err := Walk(ctx, cfg, filter, func(record QueryRecord) error { result.Records = append(result.Records, record); return nil })
+	if len(result.Records) == 0 {
+		result.Note = "no durable seen-event history in range"
 	}
-	if _, err := os.Stat(path); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			result.Note = "no durable seen-event history exists yet"
-			return result, nil
-		}
-		return QueryResult{}, wrapLoggedError(ctx, slog.Default(), "stat intake sqlite path", err)
-	}
-	db, err := sql.Open("sqlite3", readOnlySQLiteDSN(path))
-	if err != nil {
-		return QueryResult{}, wrapLoggedError(ctx, slog.Default(), "open intake sqlite db read-only", err)
-	}
-	defer func() {
-		_ = db.Close()
-	}()
-	if err := db.PingContext(ctx); err != nil {
-		return QueryResult{}, wrapLoggedError(ctx, slog.Default(), "ping intake sqlite db read-only", err)
-	}
-
-	start, hasRows, err := intakeStart(ctx, db)
-	if err != nil {
-		return QueryResult{}, err
-	}
-	if !hasRows {
-		result.Note = "no seen events have been recorded yet"
-		return result, nil
-	}
-	if !filter.Until.IsZero() && filter.Until.Before(start) {
-		result.Note = "seen-event history starts at " + formatTime(start) + "; use query decisions for earlier audit history"
-		return result, nil
-	}
-	if !filter.Since.IsZero() && filter.Since.Before(start) {
-		filter.Since = start
-		result.Note = "clamped lower bound to seen-event history start " + formatTime(start)
-	}
-
-	records, err := queryRecords(ctx, db, filter)
-	if err != nil {
-		return QueryResult{}, err
-	}
-	result.Records = records
-	return result, nil
+	return result, err
 }
 
-func readOnlySQLiteDSN(path string) string {
-	u := url.URL{
-		Scheme: "file",
-		Path:   path,
+// Walk streams retained intake events; zero limit visits every matching event.
+func Walk(ctx context.Context, cfg *config.Config, filter QueryFilter, yield func(QueryRecord) error) error {
+	if err := auditstorage.ValidatePage(filter.Limit, filter.Offset); err != nil {
+		return wrapLoggedError(ctx, slog.Default(), "read retained history", err)
 	}
-	values := url.Values{}
-	values.Set("mode", "ro")
-	values.Set("_foreign_keys", "on")
-	values.Set("_journal_mode", "WAL")
-	values.Set("_synchronous", "NORMAL")
-	values.Set("_busy_timeout", "5000")
-	u.RawQuery = values.Encode()
-	return u.String()
-}
-
-func intakeStart(ctx context.Context, db *sql.DB) (time.Time, bool, error) {
-	var raw sql.NullString
-	if err := db.QueryRowContext(ctx, querySQL1).Scan(&raw); err != nil {
-		return time.Time{}, false, wrapLoggedError(ctx, slog.Default(), "query intake history start", err)
-	}
-	if !raw.Valid || raw.String == "" {
-		return time.Time{}, false, nil
-	}
-	parsed, err := time.Parse(time.RFC3339Nano, raw.String)
+	set, err := cfg.ReadAuditHistory(ctx, filter.BucketID)
 	if err != nil {
-		return time.Time{}, false, wrapLoggedError(ctx, slog.Default(), "parse intake history start", err)
+		return wrapLoggedError(ctx, slog.Default(), "read retained history", err)
 	}
-	return parsed, true, nil
+	defer func() { _ = set.Close() }()
+	err = auditstorage.Merge(ctx, set, filter.Limit, filter.Offset,
+		func(handle *auditstorage.BucketHandle, cursor *auditstorage.QuerySummary) ([]auditstorage.QuerySummary, error) {
+			where, args := intakeQueryWhere(filter)
+			if cursor != nil {
+				if where == "" {
+					where = " where "
+				} else {
+					where += " and "
+				}
+				where += intakeKeysetSQL
+				args = append(args, queryArgument{Value: cursor.Time}, queryArgument{Value: strconv.FormatInt(cursor.Sequence, 10)})
+			}
+			rows, err := queryIntakeRows(ctx, handle.Database, intakeSummarySQL+where+intakePageSQL, args)
+			if err != nil {
+				return nil, wrapLoggedError(ctx, slog.Default(), "read query rows", err)
+			}
+			defer func() { _ = rows.Close() }()
+			var result []auditstorage.QuerySummary
+			for rows.Next() {
+				var row auditstorage.QuerySummary
+				if err := rows.Scan(&row.ID, &row.Time, &row.Sequence); err != nil {
+					return nil, wrapLoggedError(ctx, slog.Default(), "read query rows", err)
+				}
+				result = append(result, row)
+			}
+			return result, rows.Err()
+		},
+		func(handle *auditstorage.BucketHandle, row auditstorage.QuerySummary) error {
+			selected := filter
+			selected.EventID, selected.Limit = row.ID, 1
+			records, err := queryRecords(ctx, handle.Database, selected)
+			if err != nil {
+				return wrapLoggedError(ctx, slog.Default(), "read retained history", err)
+			}
+			if len(records) != 1 {
+				return fmt.Errorf("intake event %q disappeared during read", row.ID)
+			}
+			records[0].BucketID = handle.Bucket.ID
+			return yield(records[0])
+		})
+	if err != nil {
+		return wrapLoggedError(ctx, slog.Default(), "walk retained history", err)
+	}
+	return nil
 }
 
 func queryRecords(
@@ -174,7 +160,7 @@ func queryRecords(
 	allArgs = append(allArgs, args...)
 	rows, err := queryIntakeRows(ctx, db, query+where+" order by e.recorded_at desc, e.seq desc"+limit, allArgs)
 	if err != nil {
-		return nil, err
+		return nil, wrapLoggedError(ctx, slog.Default(), "read query rows", err)
 	}
 	defer func() {
 		_ = rows.Close()
@@ -184,7 +170,7 @@ func queryRecords(
 	for rows.Next() {
 		record, err := scanQueryRecord(ctx, rows, filter)
 		if err != nil {
-			return nil, err
+			return nil, wrapLoggedError(ctx, slog.Default(), "read query rows", err)
 		}
 		records = append(records, record)
 	}
@@ -207,10 +193,10 @@ func intakeQueryWhere(filter QueryFilter) (string, []queryArgument) {
 		args = append(args, queryArgument{Value: value})
 	}
 	if !filter.Since.IsZero() {
-		add("e.recorded_at >= ?", filter.Since.UTC().Format(time.RFC3339Nano))
+		add("e.recorded_at >= ?", auditstorage.FormatTime(filter.Since))
 	}
 	if !filter.Until.IsZero() {
-		add("e.recorded_at <= ?", filter.Until.UTC().Format(time.RFC3339Nano))
+		add("e.recorded_at <= ?", auditstorage.FormatTime(filter.Until))
 	}
 	if filter.System != "" {
 		add("e.system = ?", filter.System)
@@ -329,12 +315,14 @@ func nullStringValue(value sql.NullString) string {
 	return value.String
 }
 
-func formatTime(value time.Time) string {
-	return value.UTC().Format(time.RFC3339Nano)
-}
-
-//go:embed query_1.sql
-var querySQL1 string
-
 //go:embed query_2.sql
 var querySQL2 string
+
+//go:embed query_summary.sql
+var intakeSummarySQL string
+
+//go:embed query_page.sql
+var intakePageSQL string
+
+//go:embed query_keyset.sql
+var intakeKeysetSQL string
