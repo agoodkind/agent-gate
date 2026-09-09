@@ -89,6 +89,7 @@ func Query(ctx context.Context, cfg *config.Config, filter QueryFilter) (QueryRe
 }
 
 // Walk streams retained intake events; zero limit visits every matching event.
+// Summary pages fix selection and order; detail reflects state at fetch time.
 func Walk(ctx context.Context, cfg *config.Config, filter QueryFilter, yield func(QueryRecord) error) error {
 	if err := auditstorage.ValidatePage(filter.Limit, filter.Offset); err != nil {
 		return wrapLoggedError(ctx, slog.Default(), "read retained history", err)
@@ -126,8 +127,10 @@ func Walk(ctx context.Context, cfg *config.Config, filter QueryFilter, yield fun
 			return result, rows.Err()
 		},
 		func(handle *auditstorage.BucketHandle, row auditstorage.QuerySummary) error {
-			selected := filter
+			var selected QueryFilter
 			selected.EventID, selected.Limit = row.ID, 1
+			selected.IncludeNormalized = filter.IncludeNormalized
+			selected.IncludeEnv = filter.IncludeEnv
 			records, err := queryRecords(ctx, handle.Database, selected)
 			if err != nil {
 				return wrapLoggedError(ctx, slog.Default(), "read retained history", err)
