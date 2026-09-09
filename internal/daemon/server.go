@@ -169,6 +169,7 @@ func New(log *slog.Logger, cfg *config.Config) (*Server, error) {
 		log.Error("invalid hook config", slog.Any("err", errs[0]))
 		return nil, fmt.Errorf("invalid hook config: %w", errs[0])
 	}
+	initializeBuildIdentity(log)
 
 	hook.WarnCapabilityDowngrades(context.Background(), log, cfg)
 
