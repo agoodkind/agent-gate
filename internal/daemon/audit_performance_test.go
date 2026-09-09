@@ -14,7 +14,8 @@ const (
 	auditTraceAllowRequests    = 1000
 	auditTraceBlockRequests    = 100
 	auditTraceDeferredRequests = 100
-	auditTraceDigest           = "af3feeef13dcf62464aa3a24dfb09e09e29c5b49ebfd805bd5a451861341aa08"
+	auditTraceFixtureVersion   = "complete-trace-v2-startup-replay-finished"
+	auditTraceDigest           = "90d8212fbde8ac38fea628f34bb7851daed7039e709d08991df6f48aa3e5ee91"
 )
 
 var auditTraceInputSizes = [...]int{1024, 16384, 262144}
@@ -69,6 +70,8 @@ func auditTraceRequest(sequence uint64, marker string, targetSize int) *daemonpb
 
 func auditPerformanceTraceDigest(requests []*daemonpb.EvaluateHookRequest) string {
 	digest := sha256.New()
+	_, _ = digest.Write([]byte(auditTraceFixtureVersion))
+	_, _ = digest.Write([]byte{10})
 	for _, request := range requests {
 		_, _ = digest.Write(request.RawJson)
 		_, _ = digest.Write([]byte{'\n'})

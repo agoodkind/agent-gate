@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
 	"net"
 	"os"
@@ -21,27 +22,71 @@ func BenchmarkAuditTrace(b *testing.B) {
 		endpoint := startAuditTraceInferenceServer(b, fake)
 		cfg := auditTraceConfig(b, endpoint)
 		databasePath := cfg.AuditSQLitePath()
-		srv := newBenchmarkServer(b, cfg)
+		srv := newAuditTraceServer(b, cfg)
 		requests := auditPerformanceTrace()
 
 		b.ResetTimer()
-		for _, request := range requests {
+		for index, request := range requests {
 			response, err := srv.EvaluateHook(context.Background(), request)
 			if err != nil {
 				b.Fatalf("EvaluateHook: %v", err)
 			}
-			if response.GetExitCode() != 0 {
-				b.Fatalf("exit_code = %d, want 0", response.GetExitCode())
-			}
+			assertAuditTraceResponse(b, index, response)
 		}
-		b.StopTimer()
 		flushAuditTrace(b, srv)
 		srv.Close()
+		b.StopTimer()
 		if got := fake.callCount(); got != auditTraceDeferredRequests {
 			b.Fatalf("inference calls = %d, want %d", got, auditTraceDeferredRequests)
 		}
 		b.ReportMetric(float64(auditTraceStoredBytes(b, databasePath)), "stored-bytes")
 	}
+}
+
+func assertAuditTraceResponse(
+	b *testing.B,
+	index int,
+	response *daemonpb.EvaluateHookResponse,
+) {
+	b.Helper()
+	if response.GetExitCode() != 0 {
+		b.Fatalf("request %d exit_code = %d, want 0", index, response.GetExitCode())
+	}
+	denied := bytes.Contains(
+		response.GetStdoutData(),
+		[]byte(`"permissionDecision":"deny"`),
+	)
+	wantDenied := index >= auditTraceAllowRequests &&
+		index < auditTraceAllowRequests+auditTraceBlockRequests
+	if denied != wantDenied {
+		b.Fatalf(
+			"request %d denied = %t, want %t; stdout=%q",
+			index,
+			denied,
+			wantDenied,
+			response.GetStdoutData(),
+		)
+	}
+}
+
+func newAuditTraceServer(b *testing.B, cfg *config.Config) *Server {
+	b.Helper()
+	originalReplay := replayRuntimeSnapshotPending
+	replayFinished := make(chan struct{})
+	replayRuntimeSnapshotPending = func(
+		processor *deferredProcessor,
+		ctx context.Context,
+	) error {
+		defer close(replayFinished)
+		return originalReplay(processor, ctx)
+	}
+	b.Cleanup(func() {
+		replayRuntimeSnapshotPending = originalReplay
+	})
+	srv := newBenchmarkServer(b, cfg)
+	<-replayFinished
+	replayRuntimeSnapshotPending = originalReplay
+	return srv
 }
 
 func flushAuditTrace(b *testing.B, srv *Server) {
