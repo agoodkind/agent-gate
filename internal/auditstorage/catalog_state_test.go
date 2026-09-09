@@ -276,7 +276,7 @@ func TestPurgePreservesUnrelatedFilesSymlinksAndCoordination(t *testing.T) {
 	if err := os.Symlink(unrelated, symlink); err != nil {
 		t.Fatal(err)
 	}
-	if err := catalog.Purge(t.Context()); err != nil {
+	if err := catalog.Purge(t.Context(), func([]string) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(bucket.Path); !errors.Is(err, os.ErrNotExist) {
@@ -294,8 +294,8 @@ func TestPurgePreservesUnrelatedFilesSymlinksAndCoordination(t *testing.T) {
 	if !os.SameFile(coordination, after) {
 		t.Fatal("coordination inode changed")
 	}
-	if _, err := catalog.EnsureCurrent(t.Context(), policy, now); !errors.Is(err, ErrResetPending) {
-		t.Fatalf("purge created ready state: %v", err)
+	if _, err := os.Stat(catalog.options.StatePath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("purge left policy metadata: %v", err)
 	}
 }
 
@@ -451,7 +451,7 @@ func TestPurgeDeletesStagingArtifacts(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := catalog.Purge(t.Context()); err != nil {
+	if err := catalog.Purge(t.Context(), func([]string) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 	for _, suffix := range []string{".creating", ".creating-shm", ".creating-wal"} {
@@ -494,7 +494,7 @@ func TestCatalogCanonicalPathAndLiteralStem(t *testing.T) {
 	if err := os.WriteFile(unrelated, []byte("keep"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := equivalent.Purge(t.Context()); err != nil {
+	if err := equivalent.Purge(t.Context(), func([]string) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(bucket.Path); !errors.Is(err, os.ErrNotExist) {
@@ -610,7 +610,7 @@ func TestCatalogSupportsExtensionsThatResembleSidecars(t *testing.T) {
 			if _, err := os.Stat(bucket.Path); err != nil {
 				t.Fatalf("creation cleanup removed current database: %v", err)
 			}
-			if err := catalog.Purge(t.Context()); err != nil {
+			if err := catalog.Purge(t.Context(), func([]string) error { return nil }); err != nil {
 				t.Fatal(err)
 			}
 			if _, err := os.Stat(bucket.Path); !errors.Is(err, os.ErrNotExist) {

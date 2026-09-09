@@ -262,26 +262,36 @@ func (catalog *Catalog) Reset(ctx context.Context, policy RotationPolicy, now ti
 	return bucket, nil
 }
 
-// Purge records invalidation and deletes the family without creating a replacement.
-func (catalog *Catalog) Purge(ctx context.Context) error {
+// Purge removes configured history without reading old databases or policy metadata.
+func (catalog *Catalog) Purge(ctx context.Context, validate func([]string) error) error {
+	slog.DebugContext(ctx, "purge audit family")
+	if validate == nil {
+		return errors.New("purge validation is required")
+	}
 	lock, err := catalog.coordinate(ctx)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = lock.Close() }()
-	state, err := catalog.loadState()
+	paths, err := catalog.purgePaths()
 	if err != nil {
 		return err
 	}
-	state.PendingBasePaths = pendingFamilies(state, catalog.options.BasePath)
-	if state.BasePath == "" {
-		state.BasePath = catalog.options.BasePath
-	}
-	state.ResetPending = true
-	if err := catalog.saveState(state); err != nil {
+	if err := validate(paths); err != nil {
 		return err
 	}
-	return catalog.deleteFamilies(ctx, state.PendingBasePaths)
+	if err := catalog.deleteFamilies(ctx, []string{catalog.options.BasePath}); err != nil {
+		return err
+	}
+	if err := os.Remove(catalog.options.StatePath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return storageError("remove purged catalog state", err)
+	}
+	if _, err := os.Stat(filepath.Dir(catalog.options.StatePath)); errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return storageError("stat purge metadata directory", err)
+	}
+	return syncDirectory(filepath.Dir(catalog.options.StatePath))
 }
 
 // OpenWriter pins an existing bucket and refuses handles after invalidation.

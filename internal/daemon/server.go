@@ -99,7 +99,6 @@ func zeroConfig() *config.Config {
 			Outputs: config.AuditOutput{SQLite: config.AuditSQLiteOutput{Path: ""}},
 			Storage: emptyAuditStorage,
 		},
-		Paths: config.Paths{ConversationsDir: ""},
 		Performance: config.Performance{
 			Hook: config.HookPerformance{
 				HotConcurrency:          0,

@@ -1,9 +1,6 @@
 [log]
 level = "info"
 
-[paths]
-conversations_dir = ""
-
 [audit]
 enabled = true
 level = "info"

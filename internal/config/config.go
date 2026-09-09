@@ -70,15 +70,6 @@ type HookCachePerformance struct {
 	PruneIntervalMS int `toml:"prune_interval_ms"`
 }
 
-// Paths holds optional explicit path overrides from the [paths] TOML table.
-// An empty string for any field means "use the XDG env var (or its default)".
-// Non-empty values take highest priority in the resolution chain.
-type Paths struct {
-	// ConversationsDir overrides the base directory for per-conversation logs.
-	// Empty: use $XDG_STATE_HOME/agent-gate/conversations.
-	ConversationsDir string `toml:"conversations_dir"`
-}
-
 // Condition is one clause in a multi-condition rule.
 // All conditions in a rule must match for the rule to fire (AND semantics).
 type Condition struct {
@@ -512,7 +503,6 @@ type TelemetryConfig struct {
 type Config struct {
 	Log         Log             `toml:"log"`
 	Audit       Audit           `toml:"audit"`
-	Paths       Paths           `toml:"paths"`
 	Performance Performance     `toml:"performance"`
 	Telemetry   TelemetryConfig `toml:"telemetry"`
 	Update      Update          `toml:"update"`
@@ -550,15 +540,6 @@ func (c *Config) BlockFooter() string {
 		return ""
 	}
 	return strings.TrimSpace(c.Messages.BlockFooter)
-}
-
-// ConversationsDir returns the resolved base directory for per-conversation
-// audit logs. Each conversation gets its own subfolder.
-func (c *Config) ConversationsDir() string {
-	if c.Paths.ConversationsDir != "" {
-		return c.Paths.ConversationsDir
-	}
-	return DefaultConversationsDir()
 }
 
 // AuditEnabled reports whether audit logging is enabled. Default is true.
