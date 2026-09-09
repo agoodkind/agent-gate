@@ -34,6 +34,11 @@ func (s *Server) StartAuditScheduler(ctx context.Context) {
 		return
 	default:
 	}
+	s.auditRequested = true
+	snapshot := s.runtime.Load()
+	if snapshot == nil || snapshot.cfg.Unusable() {
+		return
+	}
 	s.auditOnce.Do(func() {
 		workerContext, cancel := context.WithCancel(ctx)
 		s.auditCancel = cancel

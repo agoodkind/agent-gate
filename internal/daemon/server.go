@@ -57,30 +57,31 @@ type runtimeSnapshot struct {
 type Server struct {
 	daemonpb.UnimplementedAgentGateDServer
 
-	log           *slog.Logger
-	cfgMu         sync.RWMutex
-	runtimeMu     sync.RWMutex
-	runtime       atomic.Pointer[runtimeSnapshot]
-	configWatcher *fsnotify.Watcher
-	configPath    string
-	hotKV         *hotkv.Store
-	inferRuntime  *rules.InferRuntime
-	lifecycleMu   sync.Mutex
-	closing       bool
-	updateCancel  context.CancelFunc
-	stopDaemon    func()
-	catalog       *auditstorage.Catalog
-	shutdown      <-chan struct{}
-	auditCancel   context.CancelFunc
-	cancel        context.CancelFunc
-	now           func() time.Time
-	auditTicks    <-chan time.Time
-	auditWake     chan struct{}
-	auditOnce     sync.Once
-	auditWG       sync.WaitGroup
-	auditStarted  chan struct{}
-	closeOnce     sync.Once
-	retryWait     func(context.Context, time.Duration) error
+	log            *slog.Logger
+	cfgMu          sync.RWMutex
+	runtimeMu      sync.RWMutex
+	runtime        atomic.Pointer[runtimeSnapshot]
+	configWatcher  *fsnotify.Watcher
+	configPath     string
+	hotKV          *hotkv.Store
+	inferRuntime   *rules.InferRuntime
+	lifecycleMu    sync.Mutex
+	closing        bool
+	updateCancel   context.CancelFunc
+	stopDaemon     func()
+	catalog        *auditstorage.Catalog
+	shutdown       <-chan struct{}
+	auditCancel    context.CancelFunc
+	cancel         context.CancelFunc
+	now            func() time.Time
+	auditTicks     <-chan time.Time
+	auditWake      chan struct{}
+	auditRequested bool
+	auditOnce      sync.Once
+	auditWG        sync.WaitGroup
+	auditStarted   chan struct{}
+	closeOnce      sync.Once
+	retryWait      func(context.Context, time.Duration) error
 
 	overloadLogMu       sync.Mutex
 	lastOverloadLogTime time.Time
@@ -200,9 +201,10 @@ func newServerWithStorageWait(ctx context.Context, log *slog.Logger, cfg *config
 		lastOverloadLogTime:           time.Time{},
 		catalog:                       nil, shutdown: lifetime.Done(), auditCancel: nil, cancel: cancel, now: now,
 		auditTicks: nil, auditWake: make(chan struct{}, 1), auditOnce: sync.Once{}, auditWG: sync.WaitGroup{},
-		closeOnce:    sync.Once{},
-		retryWait:    wait,
-		auditStarted: make(chan struct{}),
+		closeOnce:      sync.Once{},
+		retryWait:      wait,
+		auditStarted:   make(chan struct{}),
+		auditRequested: false,
 	}
 	snapshot, err := s.initializeAuditStorage(lifetime, cfg)
 	if err != nil {
@@ -489,15 +491,19 @@ func (s *Server) reloadConfig(ctx context.Context) error {
 	s.runtimeMu.Unlock()
 	updateCancel := s.updateCancel
 	stopDaemon := s.stopDaemon
+	auditRequested := s.auditRequested
 	s.cfgMu.Unlock()
 
 	if updateCancel != nil {
 		updateCancel()
 	}
 	if stopDaemon != nil {
-		s.StartUpdateScheduler(ctx, stopDaemon)
+		s.StartUpdateScheduler(context.WithoutCancel(ctx), stopDaemon)
 	}
 	oldSnapshot.close(ctx, s.log)
+	if auditRequested {
+		s.StartAuditScheduler(context.WithoutCancel(ctx))
+	}
 	s.log.InfoContext(ctx, "config reloaded", "path", s.configPath, "rules", len(candidate.Rules), "audit_enabled", candidate.AuditEnabled())
 	return nil
 }
