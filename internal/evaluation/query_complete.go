@@ -2,14 +2,12 @@ package evaluation
 
 func evaluationRecordWhere(
 	filter QueryFilter,
-	hasOutcome bool,
-	hasSplitDetail bool,
 ) (string, []queryArgument) {
-	where, arguments := evaluationQueryWhere(filter, hasOutcome, hasSplitDetail)
+	where, arguments := evaluationQueryWhere(filter)
 	if !filter.CompleteDetailOnly {
 		return where, arguments
 	}
-	predicate := evaluationCompleteDetailPredicate(hasSplitDetail)
+	predicate := evaluationCompleteDetailPredicate()
 	if where == "" {
 		return " where " + predicate, arguments
 	}

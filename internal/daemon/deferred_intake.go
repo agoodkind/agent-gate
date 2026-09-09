@@ -111,29 +111,7 @@ func (p *deferredProcessor) ReplayPending(ctx context.Context) error {
 			})
 		}
 	}
-	auditErr := p.ReplayPendingAudit(ctx)
-	if err != nil || auditErr != nil {
-		return errors.Join(err, auditErr)
-	}
-	return nil
-}
-
-// ReplayPendingAudit delivers committed outbox entries without re-evaluating.
-func (p *deferredProcessor) ReplayPendingAudit(ctx context.Context) error {
-	if p == nil || p.store == nil || p.sink == nil {
-		return nil
-	}
-	receiptIDs, err := p.store.ListPendingDeferredAudit(ctx, 0)
-	if err != nil {
-		if p.log != nil {
-			p.log.WarnContext(ctx, "list pending deferred audit failed", "err", err)
-		}
-		return fmt.Errorf("list pending deferred audit: %w", err)
-	}
-	for _, receiptID := range receiptIDs {
-		p.processDeferredAudit(ctx, receiptID)
-	}
-	return nil
+	return err
 }
 
 func (p *deferredProcessor) Enqueue(receiptID int64, eventID string, hotEvent hook.DeferredAuditEvent) bool {
@@ -223,7 +201,7 @@ func (p *deferredProcessor) processEvent(ctx context.Context, work deferredWork)
 	}()
 	defer stopRenewalAndWait()
 	defer cancel()
-	p.processRecord(processingCtx, ctx, record, claim, hotEvent, stopRenewalAndWait)
+	p.processRecord(processingCtx, record, claim, hotEvent, stopRenewalAndWait)
 }
 
 func (p *deferredProcessor) renewClaim(
@@ -259,7 +237,6 @@ func (p *deferredProcessor) renewClaim(
 
 func (p *deferredProcessor) processRecord(
 	ctx context.Context,
-	auditCtx context.Context,
 	record intake.Record,
 	claim intake.DeferredClaim,
 	hotEvent *hook.DeferredAuditEvent,
@@ -313,96 +290,6 @@ func (p *deferredProcessor) processRecord(
 	}
 	if afterCommit != nil {
 		afterCommit()
-	}
-	p.processDeferredAudit(auditCtx, record.ReceiptID)
-}
-
-func (p *deferredProcessor) processDeferredAudit(ctx context.Context, receiptID int64) {
-	if p.sink == nil {
-		return
-	}
-	sink, ok := p.sink.(audit.ReplayableDurableSink)
-	if !ok {
-		p.log.WarnContext(ctx, "deferred audit sink is not replayable", "receipt_id", receiptID)
-		return
-	}
-	entries, claim, err := p.store.ClaimDeferredAudit(
-		ctx, receiptID, p.claimOwner, p.claimLease,
-	)
-	if err != nil {
-		if !errors.Is(err, intake.ErrDeferredAuditClaimUnavailable) && p.log != nil {
-			p.log.WarnContext(ctx, "claim deferred audit failed", "receipt_id", receiptID, "err", err)
-		}
-		return
-	}
-	processingCtx, cancel := context.WithCancel(ctx)
-	stopRenewal := make(chan struct{})
-	renewalDone := make(chan struct{})
-	go func() {
-		defer func() {
-			if recovered := recover(); recovered != nil && p.log != nil {
-				p.log.ErrorContext(
-					processingCtx, "deferred audit claim renewal panic recovered", "err", recovered,
-				)
-			}
-		}()
-		p.renewAuditClaim(processingCtx, cancel, claim, stopRenewal, renewalDone)
-	}()
-	stopRenewalAndWait := func() {
-		close(stopRenewal)
-		<-renewalDone
-	}
-	defer cancel()
-	defer stopRenewalAndWait()
-	for _, entry := range entries {
-		if err := sink.LogNormalizedDurable(ctx, entry.Entry); err != nil {
-			p.releaseAuditClaim(context.WithoutCancel(ctx), claim)
-			return
-		}
-		if err := p.store.MarkDeferredAuditEntryDelivered(
-			processingCtx, claim, entry.Index,
-		); err != nil {
-			p.releaseAuditClaim(context.WithoutCancel(ctx), claim)
-			return
-		}
-	}
-	if err := p.store.CompleteDeferredAudit(processingCtx, claim); err != nil {
-		p.releaseAuditClaim(context.WithoutCancel(ctx), claim)
-	}
-}
-
-func (p *deferredProcessor) renewAuditClaim(
-	ctx context.Context,
-	cancel context.CancelFunc,
-	claim intake.DeferredAuditClaim,
-	stop <-chan struct{},
-	done chan<- struct{},
-) {
-	defer close(done)
-	ticker := time.NewTicker(p.claimRenewInterval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ticker.C:
-			if err := p.store.RenewDeferredAuditClaim(ctx, claim, p.claimLease); err != nil {
-				cancel()
-				return
-			}
-		case <-stop:
-			return
-		case <-ctx.Done():
-			return
-		}
-	}
-}
-
-func (p *deferredProcessor) releaseAuditClaim(
-	ctx context.Context,
-	claim intake.DeferredAuditClaim,
-) {
-	if err := p.store.ReleaseDeferredAuditClaim(ctx, claim); err != nil &&
-		!errors.Is(err, intake.ErrDeferredAuditClaimLost) && p.log != nil {
-		p.log.WarnContext(ctx, "release deferred audit claim failed", "receipt_id", claim.ReceiptID, "err", err)
 	}
 }
 

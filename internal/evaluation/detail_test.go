@@ -76,9 +76,9 @@ func TestCostReportSurvivesEvaluationDetailRemoval(t *testing.T) {
 		t.Fatalf("RecordCompleted: %v", err)
 	}
 	if _, err := store.Handle().ExecContext(t.Context(), `
-		delete from gate_evaluation_label_details;
-		delete from gate_evaluation_layer_details;
-		delete from gate_evaluation_details;
+		update gate_evaluation_labels set rationale = null;
+ update gate_evaluation_layers set input_json = null, output_json = null, metadata_json = null, error_message = null;
+ update gate_evaluations set content_recorded = 0, error_json = null;
 	`); err != nil {
 		t.Fatalf("delete evaluation detail: %v", err)
 	}
@@ -109,14 +109,14 @@ func TestCostReportSurvivesEvaluationDetailRemoval(t *testing.T) {
 
 func assertEvaluationSummary(t *testing.T, database *sql.DB, evaluationID string) {
 	t.Helper()
-	var detailState string
+	var contentRecorded bool
 	if err := database.QueryRowContext(t.Context(), `
-		select detail_state from gate_evaluations where evaluation_id = ?
-	`, evaluationID).Scan(&detailState); err != nil {
+		select content_recorded from gate_evaluations where evaluation_id = ?
+	`, evaluationID).Scan(&contentRecorded); err != nil {
 		t.Fatalf("read detail state: %v", err)
 	}
-	if detailState != "available" {
-		t.Fatalf("detail state = %q, want available", detailState)
+	if !contentRecorded {
+		t.Fatal("content was not recorded")
 	}
 	var status string
 	var requestID string
@@ -150,7 +150,7 @@ func assertEvaluationDetail(t *testing.T, database *sql.DB, record evaluation.Re
 	t.Helper()
 	var evaluationError []byte
 	if err := database.QueryRowContext(t.Context(), `
-		select error_json from gate_evaluation_details where evaluation_id = ?
+		select error_json from gate_evaluations where evaluation_id = ?
 	`, record.Evaluation.EvaluationID).Scan(&evaluationError); err != nil {
 		t.Fatalf("read evaluation detail: %v", err)
 	}
@@ -163,7 +163,7 @@ func assertEvaluationDetail(t *testing.T, database *sql.DB, record evaluation.Re
 	var errorMessage string
 	if err := database.QueryRowContext(t.Context(), `
 		select input_json, output_json, metadata_json, error_message
-		from gate_evaluation_layer_details
+		from gate_evaluation_layers
 		where evaluation_id = ? and layer_index = 1
 	`, record.Evaluation.EvaluationID).Scan(
 		&inputJSON, &outputJSON, &metadataJSON, &errorMessage,
@@ -178,7 +178,7 @@ func assertEvaluationDetail(t *testing.T, database *sql.DB, record evaluation.Re
 	}
 	var rationale string
 	if err := database.QueryRowContext(t.Context(), `
-		select rationale from gate_evaluation_label_details
+		select rationale from gate_evaluation_labels
 		where evaluation_id = ? and namespace = ? and label_version = ?
 	`, record.Evaluation.EvaluationID, record.Labels[0].Namespace,
 		record.Labels[0].LabelVersion).Scan(&rationale); err != nil {

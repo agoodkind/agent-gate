@@ -388,20 +388,7 @@ func runConfig(args []string) int {
 }
 
 func writeAuditStoragePolicy(out io.Writer, policy config.AuditStoragePolicy) {
-	_, _ = fmt.Fprintf(out, "audit storage: %s\n", policy.Profile)
-	_, _ = fmt.Fprintf(out, "full detail: %s\n", policy.FullDetailRetention)
-	_, _ = fmt.Fprintf(out, "summary: %s\n", policy.SummaryRetention)
-	if policy.MaxSizeBytes == 0 {
-		_, _ = fmt.Fprintln(out, "size target: disabled")
-	} else {
-		_, _ = fmt.Fprintf(out, "size target: %d bytes\n", policy.MaxSizeBytes)
-	}
-	_, _ = fmt.Fprintf(
-		out,
-		"maintenance: every %s, %d rows per batch\n",
-		policy.MaintenanceInterval,
-		policy.MaintenanceBatchRows,
-	)
+ _, _ = fmt.Fprintf(out, "audit storage: %s\n", policy.Profile)
 }
 
 func runConfigEnsureDefaults(args []string) int {

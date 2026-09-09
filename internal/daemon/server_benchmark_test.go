@@ -101,14 +101,7 @@ func flushAuditTrace(b *testing.B, srv *Server) {
 		if err != nil {
 			b.Fatalf("ListPending: %v", err)
 		}
-		pendingAudit, err := snapshot.intakeStore.ListPendingDeferredAudit(
-			context.Background(),
-			0,
-		)
-		if err != nil {
-			b.Fatalf("ListPendingDeferredAudit: %v", err)
-		}
-		if len(pending) == 0 && len(pendingAudit) == 0 {
+		if len(pending) == 0 {
 			return
 		}
 		time.Sleep(10 * time.Millisecond)

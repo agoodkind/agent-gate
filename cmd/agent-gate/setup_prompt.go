@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"strings"
 
-	"goodkind.io/agent-gate/internal/auditmaintenance"
 	"goodkind.io/agent-gate/internal/config"
 	installer "goodkind.io/agent-gate/internal/install"
 	"goodkind.io/agent-gate/internal/setup"
@@ -17,7 +16,6 @@ import (
 type PlanSummary struct {
 	Providers       []installer.Provider
 	EffectivePolicy config.AuditStoragePolicy
-	Maintenance     *auditmaintenance.Plan
 }
 
 // Prompter selects interactive setup choices and confirms the prepared plan.

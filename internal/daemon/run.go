@@ -59,7 +59,6 @@ func Run(log *slog.Logger, cfg *config.Config) error {
 
 	if err := serveAfterReadiness(grpcServer, listener, func() {
 		log.InfoContext(ctx, "daemon listening", "socket", socketPath)
-		srv.StartMaintenanceScheduler(ctx)
 	}); err != nil {
 		log.ErrorContext(ctx, "grpc serve failed", "err", err)
 		return fmt.Errorf("grpc serve: %w", err)

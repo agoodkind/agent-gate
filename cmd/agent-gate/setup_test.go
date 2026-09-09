@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"goodkind.io/agent-gate/internal/auditmaintenance"
 	"goodkind.io/agent-gate/internal/config"
 	installer "goodkind.io/agent-gate/internal/install"
 	"goodkind.io/agent-gate/internal/setup"
@@ -28,12 +27,11 @@ func TestSetupNonInteractivePreviewsBeforeWrites(t *testing.T) {
 				return &setup.Plan{
 					Providers:       []installer.Provider{installer.ProviderCodex},
 					EffectivePolicy: config.AuditStoragePolicy{Profile: config.AuditStorageProfileMinimal},
-					Maintenance:     &auditmaintenance.Plan{EstimatedDeleteBytes: 37},
 				}, nil
 			},
 			Apply: func(context.Context, *setup.Plan, setup.Dependencies) (setup.Result, error) {
 				applyCalls++
-				if !strings.Contains(stdout.String(), "estimated delete bytes: 37") {
+				if !strings.Contains(stdout.String(), "audit storage: minimal") {
 					t.Fatalf("stdout before apply = %q", stdout.String())
 				}
 				return setup.Result{SetupID: "setup-48"}, nil
@@ -136,7 +134,7 @@ func TestSetupNonInteractiveJSONOutputIsMachineReadable(t *testing.T) {
 	if exitCode != 0 || stderr.Len() != 0 {
 		t.Fatalf("exit code = %d, stderr = %q", exitCode, stderr.String())
 	}
-	for _, want := range []string{`"phase":"preview"`, `"existing_records":0`, `"phase":"complete"`, `"setup_id":"setup-json"`} {
+	for _, want := range []string{`"phase":"preview"`, `"phase":"complete"`, `"setup_id":"setup-json"`} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Fatalf("stdout = %q, want %q", stdout.String(), want)
 		}
@@ -150,7 +148,7 @@ func TestSetupInteractivePreviewsConfirmsAppliesAndPrintsEveryProvider(t *testin
 		providers: []installer.Provider{installer.ProviderClaude, installer.ProviderCursor},
 		profile:   config.AuditStorageProfileMinimal,
 		confirm: func(summary PlanSummary) (bool, error) {
-			if !strings.Contains(stdout.String(), "estimated delete bytes: 41") {
+			if !strings.Contains(stdout.String(), "audit storage: minimal") {
 				t.Fatalf("stdout before confirmation = %q", stdout.String())
 			}
 			return true, nil
@@ -173,7 +171,6 @@ func TestSetupInteractivePreviewsConfirmsAppliesAndPrintsEveryProvider(t *testin
 			return &setup.Plan{
 				Providers:       append([]installer.Provider(nil), options.Providers...),
 				EffectivePolicy: config.AuditStoragePolicy{Profile: options.AuditProfile},
-				Maintenance:     &auditmaintenance.Plan{EstimatedDeleteBytes: 41},
 			}, nil
 		},
 		Apply: func(context.Context, *setup.Plan, setup.Dependencies) (setup.Result, error) {

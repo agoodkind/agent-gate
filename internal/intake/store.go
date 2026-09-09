@@ -7,26 +7,27 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	_ "embed"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"hash"
 	"log/slog"
 	"maps"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 
-	"goodkind.io/agent-gate/internal/audit"
 	"goodkind.io/agent-gate/internal/auditstorage"
 	"goodkind.io/agent-gate/internal/config"
 	"goodkind.io/agent-gate/internal/evaluation"
 )
 
 const schemaVersion = 1
+
+//go:embed restore_input.sql
+var restoreInputSQL string
 
 // DeferredState tracks whether an intake event is still waiting for deferred
 // replay or has already been processed.
@@ -94,21 +95,6 @@ type DeferredClaim struct {
 	ExpiresAt time.Time
 }
 
-// DeferredAuditClaim fences one outbox delivery attempt to one processor.
-type DeferredAuditClaim struct {
-	ReceiptID int64
-	EventID   string
-	Owner     string
-	Attempt   int
-	ExpiresAt time.Time
-}
-
-// DeferredAuditEntry is one ordered, immutable outbox entry.
-type DeferredAuditEntry struct {
-	Index int
-	Entry audit.NormalizedEntry
-}
-
 // AppendResult reports the durable event id and whether a new row was
 // inserted.
 type AppendResult struct {
@@ -139,7 +125,7 @@ type SQLiteOptions struct {
 	Log    *slog.Logger
 }
 
-// OpenSQLite opens the durable intake store with the balanced compatibility policy.
+// OpenSQLite opens the durable intake store with the balanced content policy.
 func OpenSQLite(ctx context.Context, path string, log *slog.Logger) (*Store, error) {
 	return openSQLite(ctx, SQLiteOptions{
 		Path: path, Policy: balancedAuditStoragePolicy(), Log: log,
@@ -161,26 +147,15 @@ func openSQLite(ctx context.Context, options SQLiteOptions) (*Store, error) {
 	if options.Log == nil {
 		options.Log = slog.Default()
 	}
-	if err := auditstorage.GuardDatabasePath(options.Path); err != nil {
-		return nil, wrapLoggedError(ctx, options.Log, "guard intake sqlite cutover", err)
-	}
-	if err := os.MkdirAll(filepath.Dir(options.Path), 0o755); err != nil {
-		return nil, wrapLoggedError(ctx, options.Log, "create intake sqlite dir", err)
-	}
-	db, err := sql.Open("sqlite3", options.Path)
+	db, err := auditstorage.OpenWriter(ctx, options.Path)
 	if err != nil {
 		return nil, wrapLoggedError(ctx, options.Log, "open intake sqlite db", err)
 	}
-	configureSQLite(db)
 	store := &Store{
 		db:          db,
 		log:         options.Log,
 		policy:      options.Policy,
 		evaluations: nil,
-	}
-	if err := store.init(ctx); err != nil {
-		_ = db.Close()
-		return nil, err
 	}
 	store.evaluations, err = evaluation.NewStoreWithPolicy(ctx, options.Path, db, options.Policy)
 	if err != nil {
@@ -204,11 +179,6 @@ func balancedAuditStoragePolicy() config.AuditStoragePolicy {
 			EnvironmentEvidence: true, EvaluationContent: true,
 		},
 	}
-}
-
-func configureSQLite(db *sql.DB) {
-	db.SetMaxOpenConns(1)
-	db.SetMaxIdleConns(1)
 }
 
 // Handle returns the underlying SQLite handle so a co-located writer, namely the
@@ -265,25 +235,7 @@ func (s *Store) Append(ctx context.Context, record Record) (AppendResult, error)
 		_ = tx.Rollback()
 	}()
 
-	result, err := tx.ExecContext(ctx, `
-			insert into intake_events (
-			event_id,
-			schema_version,
-			recorded_at,
-			system,
-			session_id,
-			turn_id,
-			event_name,
-			tool_name,
-			tool_use_id,
-			cwd,
-			effective_cwd,
-			command,
-				file_path,
-				raw_payload_hash
-			) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-			on conflict(event_id) do nothing
-		`,
+	result, err := tx.ExecContext(ctx, storeSQL1,
 		record.EventID,
 		record.SchemaVersion,
 		record.RecordedAt.UTC().Format(time.RFC3339Nano),
@@ -298,6 +250,11 @@ func (s *Store) Append(ctx context.Context, record Record) (AppendResult, error)
 		record.Operation.Command,
 		record.Operation.FilePath,
 		record.RawPayloadHash,
+		record.RawPayload,
+		[]byte(record.NormalizedJSON),
+		[]byte(record.ClassificationJSON),
+		[]byte(mustMarshalEnvFingerprint(record.EnvFingerprint)),
+		s.recordedInputMask(),
 	)
 	if err != nil {
 		return AppendResult{}, wrapLoggedError(ctx, s.log, "insert intake event", err)
@@ -307,13 +264,12 @@ func (s *Store) Append(ctx context.Context, record Record) (AppendResult, error)
 		return AppendResult{}, wrapLoggedError(ctx, s.log, "read intake append rows", err)
 	}
 	receivedAt := intakeNow().UTC()
-	if err := s.insertDetail(ctx, tx, record, receivedAt); err != nil {
-		return AppendResult{}, err
+	if rowsAffected == 0 {
+		if err := s.restoreInput(ctx, tx, record); err != nil {
+			return AppendResult{}, err
+		}
 	}
-	receiptResult, err := tx.ExecContext(ctx, `
-			insert into intake_receipts (event_id, received_at)
-			values (?, ?)
-		`, record.EventID, receivedAt.Format(time.RFC3339Nano))
+	receiptResult, err := tx.ExecContext(ctx, storeSQL2, record.EventID, receivedAt.Format(time.RFC3339Nano))
 	if err != nil {
 		return AppendResult{}, wrapLoggedError(ctx, s.log, "insert intake receipt", err)
 	}
@@ -331,55 +287,39 @@ func (s *Store) Append(ctx context.Context, record Record) (AppendResult, error)
 	}, nil
 }
 
-func (s *Store) insertDetail(
-	ctx context.Context,
-	transaction *sql.Tx,
-	record Record,
-	changedAt time.Time,
-) error {
-	details := []struct {
-		class   auditstorage.DetailClass
-		content []byte
-	}{
-		{class: auditstorage.DetailClassWireInput, content: record.RawPayload},
-		{class: auditstorage.DetailClassNormalizedInput, content: record.NormalizedJSON},
-		{class: auditstorage.DetailClassProviderEvidence, content: record.ClassificationJSON},
-		{
-			class:   auditstorage.DetailClassEnvironmentEvidence,
-			content: []byte(mustMarshalEnvFingerprint(record.EnvFingerprint)),
-		},
+func (s *Store) recordedInputMask() auditstorage.DetailMask {
+	var mask auditstorage.DetailMask
+	if s.policy.Detail.WireInput {
+		mask |= auditstorage.DetailWireInput
 	}
-	for _, detail := range details {
-		if _, err := transaction.ExecContext(ctx, `
-			insert into intake_event_details (event_id, detail_class, content)
-			values (?, ?, ?)
-			on conflict(event_id, detail_class) do nothing
-		`, record.EventID, detail.class, detail.content); err != nil {
-			return wrapLoggedError(ctx, s.log, "insert intake event detail", err)
-		}
+	if s.policy.Detail.NormalizedInput {
+		mask |= auditstorage.DetailNormalizedInput
 	}
-	state := auditstorage.DetailStateAvailable
-	if !s.policy.Detail.WireInput || !s.policy.Detail.NormalizedInput ||
-		!s.policy.Detail.ProviderEvidence || !s.policy.Detail.EnvironmentEvidence {
-		state = auditstorage.DetailStateProtected
+	if s.policy.Detail.ProviderEvidence {
+		mask |= auditstorage.DetailProviderEvidence
 	}
-	if _, err := transaction.ExecContext(ctx, `
-		insert into intake_event_detail_manifest (
-			event_id, recorded_classes_json, available_classes_json, state, state_changed_at
-		) values (?, ?, ?, ?, ?)
-		on conflict(event_id) do update set
-			recorded_classes_json = excluded.recorded_classes_json,
-			available_classes_json = excluded.available_classes_json,
-			state = excluded.state,
-			state_changed_at = excluded.state_changed_at
-	`, record.EventID, intakeDetailClassesJSON, intakeDetailClassesJSON, state,
-		changedAt.Format(time.RFC3339Nano)); err != nil {
-		return wrapLoggedError(ctx, s.log, "insert intake event detail manifest", err)
+	if s.policy.Detail.EnvironmentEvidence {
+		mask |= auditstorage.DetailEnvironmentEvidence
+	}
+	return mask
+}
+
+func (s *Store) restoreInput(ctx context.Context, transaction *sql.Tx, record Record) error {
+	result, err := transaction.ExecContext(ctx, restoreInputSQL,
+		record.RawPayload, []byte(record.NormalizedJSON), []byte(record.ClassificationJSON),
+		[]byte(mustMarshalEnvFingerprint(record.EnvFingerprint)), s.recordedInputMask(), record.EventID, record.RawPayloadHash)
+	if err != nil {
+		return wrapLoggedError(ctx, s.log, "store canonical intake input", err)
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return wrapLoggedError(ctx, s.log, "read restored input result", err)
+	}
+	if count != 1 {
+		return errors.New("intake event identity does not match canonical input")
 	}
 	return nil
 }
-
-const intakeDetailClassesJSON = `["wire_input","normalized_input","provider_evidence","environment_evidence"]`
 
 // MarkDeferredPending marks an intake record ready for deferred replay.
 func (s *Store) MarkDeferredPending(ctx context.Context, eventID string, receiptID int64) error {
@@ -394,71 +334,17 @@ func (s *Store) MarkDeferredPending(ctx context.Context, eventID string, receipt
 func (s *Store) MarkDeferredComplete(ctx context.Context, receiptID int64) error {
 	now := intakeNow().UTC().Format(time.RFC3339Nano)
 	return s.withExistingReceipt(ctx, "", receiptID, func(tx *sql.Tx, eventID string) error {
-		_, err := tx.ExecContext(ctx, `
-			insert into intake_deferred (
-				receipt_id,
-				event_id,
-				state,
-				pending_at,
-				completed_at,
-				last_replay_at,
-				replay_count
-			) values (?, ?, ?,
-				null,
-				?,
-				null,
-				0)
-			on conflict(receipt_id) do update set
-				state = excluded.state,
-				completed_at = excluded.completed_at
-		`, receiptID, eventID, DeferredStateComplete, now)
+		_, err := tx.ExecContext(ctx, storeSQL3, receiptID, eventID, DeferredStateComplete, now)
 		if err != nil {
 			return wrapLoggedError(ctx, s.log, "mark intake deferred complete", err)
 		}
-		return nil
+		return s.clearTerminalInput(ctx, tx, eventID)
 	})
 }
 
 // ListDeferredPending returns pending intake records in append order.
 func (s *Store) ListDeferredPending(ctx context.Context, limit int) ([]Record, error) {
-	query := `
-		select
-			e.seq,
-			e.event_id,
-			e.schema_version,
-			e.recorded_at,
-			e.system,
-			e.session_id,
-			e.turn_id,
-			e.event_name,
-			e.tool_name,
-			e.tool_use_id,
-			e.cwd,
-			e.effective_cwd,
-			e.command,
-			e.file_path,
-				(select content from intake_event_details
-					where event_id = e.event_id and detail_class = 'wire_input'),
-				e.raw_payload_hash,
-				(select content from intake_event_details
-					where event_id = e.event_id and detail_class = 'normalized_input'),
-				(select content from intake_event_details
-					where event_id = e.event_id and detail_class = 'provider_evidence'),
-				(select content from intake_event_details
-					where event_id = e.event_id and detail_class = 'environment_evidence'),
-			r.receipt_id,
-			r.received_at,
-			d.state,
-			d.pending_at,
-			d.completed_at,
-			d.last_replay_at,
-			coalesce(d.replay_count, 0)
-		from intake_events e
-		join intake_deferred d on d.event_id = e.event_id
-		join intake_receipts r on r.receipt_id = d.receipt_id
-		where d.state = ?
-		order by r.receipt_id asc
-	`
+	query := storeSQL4
 	var rows *sql.Rows
 	var err error
 	if limit > 0 {
@@ -490,45 +376,7 @@ func (s *Store) ListDeferredPending(ctx context.Context, limit int) ([]Record, e
 
 // Get loads one durable intake record by event id.
 func (s *Store) Get(ctx context.Context, eventID string) (Record, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		select
-			e.seq,
-			e.event_id,
-			e.schema_version,
-			e.recorded_at,
-			e.system,
-			e.session_id,
-			e.turn_id,
-			e.event_name,
-			e.tool_name,
-			e.tool_use_id,
-			e.cwd,
-			e.effective_cwd,
-			e.command,
-			e.file_path,
-				(select content from intake_event_details
-					where event_id = e.event_id and detail_class = 'wire_input'),
-				e.raw_payload_hash,
-				(select content from intake_event_details
-					where event_id = e.event_id and detail_class = 'normalized_input'),
-				(select content from intake_event_details
-					where event_id = e.event_id and detail_class = 'provider_evidence'),
-				(select content from intake_event_details
-					where event_id = e.event_id and detail_class = 'environment_evidence'),
-			coalesce(r.receipt_id, 0),
-			coalesce(r.received_at, e.recorded_at),
-			coalesce(d.state, ?),
-			d.pending_at,
-			d.completed_at,
-			d.last_replay_at,
-			coalesce(d.replay_count, 0)
-		from intake_events e
-		left join intake_receipts r on r.receipt_id = (
-			select max(receipt_id) from intake_receipts where event_id = e.event_id
-		)
-		left join intake_deferred d on d.receipt_id = r.receipt_id
-		where e.event_id = ?
-	`, DeferredStateNone, eventID)
+	rows, err := s.db.QueryContext(ctx, storeSQL5, DeferredStateNone, eventID)
 	if err != nil {
 		return Record{}, wrapLoggedError(ctx, s.log, "query intake record", err)
 	}
@@ -553,14 +401,6 @@ func (s *Store) GetReceipt(ctx context.Context, receiptID int64) (Record, error)
 	return s.receiptRecord(ctx, receiptID, "")
 }
 
-func (s *Store) init(ctx context.Context) error {
-	if err := auditstorage.Migrate(ctx, s.db); err != nil {
-		return wrapLoggedError(ctx, s.log, "migrate intake sqlite schema", err)
-	}
-	logDeferredReceiptRepairs(ctx, s.db, s.log)
-	return nil
-}
-
 func (s *Store) withExistingReceipt(
 	ctx context.Context,
 	expectedEventID string,
@@ -576,9 +416,7 @@ func (s *Store) withExistingReceipt(
 	}()
 
 	var eventID string
-	err = tx.QueryRowContext(ctx, `
-		select event_id from intake_receipts where receipt_id = ?
-	`, receiptID).Scan(&eventID)
+	err = tx.QueryRowContext(ctx, storeSQL6, receiptID).Scan(&eventID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrEventNotFound
 	}
@@ -600,11 +438,7 @@ func (s *Store) withExistingReceipt(
 func (s *Store) noteReplay(ctx context.Context, receiptID int64) error {
 	now := intakeNow().UTC().Format(time.RFC3339Nano)
 	return s.withExistingReceipt(ctx, "", receiptID, func(tx *sql.Tx, _ string) error {
-		result, err := tx.ExecContext(ctx, `
-			update intake_deferred
-			set last_replay_at = ?, replay_count = replay_count + 1
-			where receipt_id = ? and state = ?
-		`, now, receiptID, DeferredStatePending)
+		result, err := tx.ExecContext(ctx, storeSQL7, now, receiptID, DeferredStatePending)
 		if err != nil {
 			return wrapLoggedError(ctx, s.log, "update intake replay metadata", err)
 		}
@@ -624,42 +458,7 @@ func (s *Store) pendingRecord(ctx context.Context, receiptID int64) (Record, err
 }
 
 func (s *Store) receiptRecord(ctx context.Context, receiptID int64, requiredState string) (Record, error) {
-	query := `
-		select
-			e.seq,
-			e.event_id,
-			e.schema_version,
-			e.recorded_at,
-			e.system,
-			e.session_id,
-			e.turn_id,
-			e.event_name,
-			e.tool_name,
-			e.tool_use_id,
-			e.cwd,
-			e.effective_cwd,
-			e.command,
-			e.file_path,
-				(select content from intake_event_details
-					where event_id = e.event_id and detail_class = 'wire_input'),
-				e.raw_payload_hash,
-				(select content from intake_event_details
-					where event_id = e.event_id and detail_class = 'normalized_input'),
-				(select content from intake_event_details
-					where event_id = e.event_id and detail_class = 'provider_evidence'),
-				(select content from intake_event_details
-					where event_id = e.event_id and detail_class = 'environment_evidence'),
-			r.receipt_id,
-			r.received_at,
-			coalesce(d.state, 'none'),
-			d.pending_at,
-			d.completed_at,
-			d.last_replay_at,
-			coalesce(d.replay_count, 0)
-		from intake_events e
-		join intake_receipts r on r.event_id = e.event_id
-		left join intake_deferred d on d.receipt_id = r.receipt_id
-		where r.receipt_id = ?`
+	query := storeSQL8
 	var rows *sql.Rows
 	var err error
 	if requiredState != "" {
@@ -691,9 +490,9 @@ func scanRecord(rows *sql.Rows) (Record, error) {
 	var (
 		recordedAt     string
 		receivedAt     string
-		normalized     string
-		classification string
-		envFingerprint string
+		normalized     []byte
+		classification []byte
+		envFingerprint []byte
 		state          string
 		pendingAt      sql.NullString
 		completedAt    sql.NullString
@@ -746,7 +545,7 @@ func scanRecord(rows *sql.Rows) (Record, error) {
 	record.RawPayload = make([]byte, len(rawPayload))
 	copy(record.RawPayload, rawPayload)
 	record.RawPayloadHash = rawPayloadHash
-	record.EnvFingerprint, err = unmarshalEnvFingerprint(envFingerprint)
+	record.EnvFingerprint, err = unmarshalEnvFingerprint(string(envFingerprint))
 	if err != nil {
 		return Record{}, err
 	}
@@ -874,15 +673,41 @@ func unmarshalEnvFingerprint(raw string) (map[string]string, error) {
 }
 
 // UpdateHotEvalLatency records the synchronous hot-path evaluation latency for a
-// durable event. It targets only hot_eval_latency_us, so the FTS update trigger
-// (scoped to the command column) does not fire.
+// durable event.
 func (s *Store) UpdateHotEvalLatency(ctx context.Context, eventID string, latencyMicros int64) error {
 	if strings.TrimSpace(eventID) == "" {
 		return ErrEventNotFound
 	}
-	_, err := s.db.ExecContext(ctx, `update intake_events set hot_eval_latency_us = ? where event_id = ?`, latencyMicros, eventID)
+	_, err := s.db.ExecContext(ctx, storeSQL9, latencyMicros, eventID)
 	if err != nil {
 		return wrapLoggedError(ctx, s.log, "update intake hot_eval_latency_us", err)
 	}
 	return nil
 }
+
+//go:embed store_1.sql
+var storeSQL1 string
+
+//go:embed store_2.sql
+var storeSQL2 string
+
+//go:embed store_3.sql
+var storeSQL3 string
+
+//go:embed store_4.sql
+var storeSQL4 string
+
+//go:embed store_5.sql
+var storeSQL5 string
+
+//go:embed store_6.sql
+var storeSQL6 string
+
+//go:embed store_7.sql
+var storeSQL7 string
+
+//go:embed store_8.sql
+var storeSQL8 string
+
+//go:embed store_9.sql
+var storeSQL9 string

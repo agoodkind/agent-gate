@@ -7,90 +7,16 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
-	"goodkind.io/agent-gate/internal/auditmaintenance"
 	"goodkind.io/agent-gate/internal/config"
 	installer "goodkind.io/agent-gate/internal/install"
 )
-
-func TestSetupNonInteractivePreviewsBeforeWrites(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(t.TempDir(), "config"))
-	t.Setenv("XDG_STATE_HOME", filepath.Join(t.TempDir(), "state"))
-	binPath := writeSetupExecutable(t)
-	databasePath := config.DefaultAuditSQLitePath()
-	if err := os.MkdirAll(filepath.Dir(databasePath), 0o700); err != nil {
-		t.Fatalf("MkdirAll database directory: %v", err)
-	}
-	if err := os.WriteFile(databasePath, []byte("existing"), 0o600); err != nil {
-		t.Fatalf("WriteFile database: %v", err)
-	}
-
-	mutated := false
-	previewed := false
-	dependencies := Dependencies{
-		PrepareInstallation: func(options installer.InstallationOptions) (*installer.InstallationPlan, error) {
-			if options.Config == nil || options.Hooks == nil || options.Service == nil {
-				t.Fatal("installation options are incomplete")
-			}
-			configPlan, err := config.PrepareDefaults(*options.Config)
-			if err != nil {
-				return nil, err
-			}
-			return &installer.InstallationPlan{Config: configPlan}, nil
-		},
-		Preview: func(
-			_ context.Context,
-			path string,
-			policy config.AuditStoragePolicy,
-			_ time.Time,
-		) (auditmaintenance.Plan, error) {
-			if mutated {
-				t.Fatal("preview ran after a mutation")
-			}
-			if _, err := os.Stat(config.Path()); !errors.Is(err, os.ErrNotExist) {
-				t.Fatalf("config exists before apply: %v", err)
-			}
-			if path != databasePath {
-				t.Fatalf("database path = %q, want %q", path, databasePath)
-			}
-			if policy.Profile != config.AuditStorageProfileMinimal {
-				t.Fatalf("profile = %q, want minimal", policy.Profile)
-			}
-			previewed = true
-			return auditmaintenance.Plan{EstimatedDeleteBytes: 41}, nil
-		},
-		ApplyInstallation: func(*installer.InstallationPlan) (installer.ApplyResult, error) {
-			mutated = true
-			return installer.ApplyResult{}, nil
-		},
-	}
-	plan, err := Prepare(t.Context(), Options{
-		BinPath: binPath, Providers: []installer.Provider{installer.ProviderCodex},
-		AuditProfile: config.AuditStorageProfileMinimal, AutoUpdate: config.UpdateModeCheck,
-	}, dependencies)
-	if err != nil {
-		t.Fatalf("Prepare: %v", err)
-	}
-	t.Cleanup(func() { _ = plan.Close() })
-	if !previewed {
-		t.Fatal("maintenance preview did not run")
-	}
-	if mutated {
-		t.Fatal("prepare mutated installation state")
-	}
-	if plan.Maintenance == nil || plan.Maintenance.EstimatedDeleteBytes != 41 {
-		t.Fatalf("maintenance = %#v", plan.Maintenance)
-	}
-}
 
 func TestSetupNonInteractiveFreshInstallDoesNotCreateAuditDatabase(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(t.TempDir(), "config"))
 	t.Setenv("XDG_STATE_HOME", filepath.Join(t.TempDir(), "state"))
 	binPath := writeSetupExecutable(t)
-	previewCalls := 0
 	dependencies := Dependencies{
 		PrepareInstallation: func(options installer.InstallationOptions) (*installer.InstallationPlan, error) {
 			configPlan, err := config.PrepareDefaults(*options.Config)
@@ -98,10 +24,6 @@ func TestSetupNonInteractiveFreshInstallDoesNotCreateAuditDatabase(t *testing.T)
 				return nil, err
 			}
 			return &installer.InstallationPlan{Config: configPlan}, nil
-		},
-		Preview: func(context.Context, string, config.AuditStoragePolicy, time.Time) (auditmaintenance.Plan, error) {
-			previewCalls++
-			return auditmaintenance.Plan{}, nil
 		},
 	}
 	plan, err := Prepare(t.Context(), Options{
@@ -112,55 +34,8 @@ func TestSetupNonInteractiveFreshInstallDoesNotCreateAuditDatabase(t *testing.T)
 		t.Fatalf("Prepare: %v", err)
 	}
 	t.Cleanup(func() { _ = plan.Close() })
-	if previewCalls != 0 {
-		t.Fatalf("preview calls = %d, want 0", previewCalls)
-	}
-	if plan.Maintenance != nil {
-		t.Fatalf("maintenance = %#v, want nil", plan.Maintenance)
-	}
 	if _, err := os.Stat(config.DefaultAuditSQLitePath()); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("audit database exists after prepare: %v", err)
-	}
-}
-
-func TestSetupNonInteractiveRejectsBrokenAuditDatabaseSymlink(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(t.TempDir(), "config"))
-	t.Setenv("XDG_STATE_HOME", filepath.Join(t.TempDir(), "state"))
-	binPath := writeSetupExecutable(t)
-	databasePath := config.DefaultAuditSQLitePath()
-	if err := os.MkdirAll(filepath.Dir(databasePath), 0o700); err != nil {
-		t.Fatalf("MkdirAll database directory: %v", err)
-	}
-	if err := os.Symlink(filepath.Join(t.TempDir(), "missing.db"), databasePath); err != nil {
-		t.Fatalf("Symlink database: %v", err)
-	}
-	previewCalls := 0
-	_, err := Prepare(t.Context(), Options{
-		BinPath: binPath, Providers: []installer.Provider{installer.ProviderClaude},
-		AuditProfile: config.AuditStorageProfileBalanced, AutoUpdate: config.UpdateModeApply,
-	}, Dependencies{
-		PrepareInstallation: func(options installer.InstallationOptions) (*installer.InstallationPlan, error) {
-			configPlan, prepareErr := config.PrepareDefaults(*options.Config)
-			if prepareErr != nil {
-				return nil, prepareErr
-			}
-			return &installer.InstallationPlan{Config: configPlan}, nil
-		},
-		Preview: func(context.Context, string, config.AuditStoragePolicy, time.Time) (auditmaintenance.Plan, error) {
-			previewCalls++
-			return auditmaintenance.Plan{}, nil
-		},
-	})
-	if err == nil || !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("Prepare error = %v, want broken database path error", err)
-	}
-	if previewCalls != 0 {
-		t.Fatalf("preview calls = %d, want 0", previewCalls)
-	}
-	info, lstatErr := os.Lstat(databasePath)
-	if lstatErr != nil || info.Mode()&os.ModeSymlink == 0 {
-		t.Fatalf("broken database symlink was not preserved: %#v, %v", info, lstatErr)
 	}
 }
 

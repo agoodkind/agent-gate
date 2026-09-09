@@ -9,8 +9,6 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -51,22 +49,28 @@ const (
 
 // EventLogger is the audit event sink shared by the daemon and the CLI.
 // It owns a dedup cache, a worker goroutine that flushes batched writes,
-// and zero or more configured outputs (JSONL, SQLite).
+// and a concrete SQLite writer.
 type EventLogger struct {
 	minLevel slog.Level
 	dedup    *expirable.LRU[string, struct{}]
-	outputs  []eventSink
+	writer   *sqliteWriter
 	rawHash  bool
 	enabled  bool
 
 	mu              sync.Mutex
 	cond            *sync.Cond
 	queue           []eventWrite
+	queuedBytes     int
+	batchMaxItems   int
+	batchMaxBytes   int
+	queueMaxBytes   int
 	limit           int
 	dropped         uint64
 	dropLogInterval time.Duration
 	lastDrop        time.Time
 	stopping        bool
+	closeDone       chan struct{}
+	closeErr        error
 
 	wg       sync.WaitGroup
 	log      *slog.Logger
@@ -74,8 +78,8 @@ type EventLogger struct {
 }
 
 type eventWrite struct {
-	event      Event
-	rawPayload string
+	event Event
+	bytes int
 }
 
 // LoggerOptions tunes queue behavior for tests and high-throughput daemon use.
@@ -83,12 +87,15 @@ type eventWrite struct {
 // (the intake store's) instead of opening its own, so audit and intake writes
 // share one serialized connection pool.
 type LoggerOptions struct {
-	QueueLimit int
-	SharedDB   *sql.DB
+	QueueLimit    int
+	BatchMaxItems int
+	BatchMaxBytes int
+	QueueMaxBytes int
+	SharedDB      *sql.DB
 }
 
 // Event is one normalized audit record. It is the canonical schema written
-// to all configured outputs.
+// to SQLite.
 type Event struct {
 	EventID        string      `json:"event_id"`
 	SchemaVersion  int         `json:"schema_version"`
@@ -111,7 +118,6 @@ type Event struct {
 // changing its timestamp, event identity, or normalized fields.
 type NormalizedEntry struct {
 	Event       Event  `json:"event"`
-	RawPayload  string `json:"raw_payload,omitempty"`
 	Fingerprint string `json:"fingerprint"`
 }
 
@@ -128,7 +134,7 @@ func emptyNormalizedEntry() NormalizedEntry {
 			},
 			Violations: nil, RawPayloadHash: "",
 		},
-		RawPayload: "", Fingerprint: "",
+		Fingerprint: "",
 	}
 }
 
@@ -159,11 +165,6 @@ type Violation struct {
 	Message   string `json:"message,omitempty"`
 }
 
-type eventSink interface {
-	Write(Event, string) error
-	Close() error
-}
-
 // NewEventLoggerWithOptions constructs an [EventLogger] with explicit queue
 // tuning. Zero-valued options select production defaults.
 func NewEventLoggerWithOptions(ctx context.Context, cfg *config.Config, log *slog.Logger, options LoggerOptions) (*EventLogger, error) {
@@ -179,9 +180,22 @@ func NewEventLoggerWithOptions(ctx context.Context, cfg *config.Config, log *slo
 		queueLimit = cfg.AuditQueueLimit()
 	}
 	el := new(EventLogger)
+	el.closeDone = make(chan struct{})
 	el.minLevel = parseLevel(level)
 	el.enabled = true
 	el.limit = queueLimit
+	el.batchMaxItems = options.BatchMaxItems
+	if el.batchMaxItems <= 0 {
+		el.batchMaxItems = 64
+	}
+	el.batchMaxBytes = options.BatchMaxBytes
+	if el.batchMaxBytes <= 0 {
+		el.batchMaxBytes = 1024 * 1024
+	}
+	el.queueMaxBytes = options.QueueMaxBytes
+	if el.queueMaxBytes <= 0 {
+		el.queueMaxBytes = 16 * 1024 * 1024
+	}
 	el.log = log
 	el.sharedDB = options.SharedDB
 	el.cond = sync.NewCond(&el.mu)
@@ -192,11 +206,11 @@ func NewEventLoggerWithOptions(ctx context.Context, cfg *config.Config, log *slo
 		el.enabled = false
 	}
 	if el.enabled {
-		if err := el.configureOutputs(ctx, cfg, log); err != nil {
+		if err := el.configureOutputs(ctx, cfg); err != nil {
 			return nil, err
 		}
 	}
-	if len(el.outputs) == 0 {
+	if el.writer == nil {
 		el.enabled = false
 	}
 
@@ -209,7 +223,7 @@ func NewEventLoggerWithOptions(ctx context.Context, cfg *config.Config, log *slo
 				}
 				el.wg.Done()
 			}()
-			el.worker()
+			el.worker(ctx)
 		}()
 	}
 	return el, nil
@@ -220,30 +234,23 @@ func (el *EventLogger) Enabled() bool {
 	return el != nil && el.enabled
 }
 
-func (el *EventLogger) configureOutputs(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
-	// SQLite is the sole audit sink. Decisions and violations are persisted to
-	// the same audit.db that backs intake; the operational agent-gate.jsonl log
-	// is for debugging agent-gate itself, not audit output. When a shared handle
-	// is supplied the sink writes through the intake store's connection pool so
-	// the two writers serialize instead of contending.
+func (el *EventLogger) configureOutputs(ctx context.Context, cfg *config.Config) error {
 	el.rawHash = true
-	sqlitePath := config.DefaultAuditSQLitePath()
+	path := config.DefaultAuditSQLitePath()
 	if cfg != nil {
-		sqlitePath = cfg.AuditSQLitePath()
+		path = cfg.AuditSQLitePath()
 	}
-	if el.sharedDB != nil {
-		s, err := newSQLiteEventSinkFromDB(ctx, sqlitePath, el.sharedDB, log)
+	database := el.sharedDB
+	ownsDB := false
+	if database == nil {
+		var err error
+		database, err = auditstorage.OpenWriter(ctx, path)
 		if err != nil {
-			return err
+			return storageError("open audit writer", err)
 		}
-		el.outputs = append(el.outputs, s)
-		return nil
+		ownsDB = true
 	}
-	s, err := newSQLiteEventSink(ctx, sqlitePath, log)
-	if err != nil {
-		return err
-	}
-	el.outputs = append(el.outputs, s)
+	el.writer = &sqliteWriter{db: database, ownsDB: ownsDB}
 	return nil
 }
 
@@ -254,39 +261,29 @@ func (el *EventLogger) Log(system, sessionID, eventName, level, msg string, attr
 	if el == nil || !el.enabled || !el.shouldLog(level) {
 		return
 	}
-	if !el.hasQueueCapacity() {
+	entry := el.Normalize(system, sessionID, eventName, level, msg, attrs)
+	encoded, err := json.Marshal(entry.Event)
+	if err != nil || len(encoded) > el.batchMaxBytes {
 		el.recordDrop(system, sessionID, eventName, msg)
 		return
 	}
-
-	event := normalizeEvent(system, sessionID, eventName, level, msg, attrs)
-	fingerprint := dedupFingerprint(event, attrs)
 	el.mu.Lock()
 	if el.stopping {
 		el.mu.Unlock()
 		return
 	}
-	if len(el.queue) >= el.limit {
+	if len(el.queue) >= el.limit || len(encoded) > el.queueMaxBytes-el.queuedBytes {
 		el.mu.Unlock()
 		el.recordDrop(system, sessionID, eventName, msg)
 		return
 	}
-	if _, seen := el.dedup.Get(fingerprint); seen {
+	if _, seen := el.dedup.Get(entry.Fingerprint); seen {
 		el.mu.Unlock()
 		return
 	}
-	el.dedup.Add(fingerprint, struct{}{})
-	event.EventID = "evt_" + fingerprint[:32]
-
-	rawPayload := ""
-	if value, ok := attrs["raw_payload"]; ok {
-		rawPayload = value.String()
-	}
-	if rawPayload != "" && el.rawHash {
-		event.RawPayloadHash = payloadHash(rawPayload)
-	}
-
-	el.queue = append(el.queue, eventWrite{event: event, rawPayload: rawPayload})
+	el.dedup.Add(entry.Fingerprint, struct{}{})
+	el.queue = append(el.queue, eventWrite{event: entry.Event, bytes: len(encoded)})
+	el.queuedBytes += len(encoded)
 	el.cond.Signal()
 	el.mu.Unlock()
 }
@@ -332,7 +329,7 @@ func (el *EventLogger) Normalize(
 	}
 	event.EventID = "evt_" + fingerprint[:32]
 	return NormalizedEntry{
-		Event: event, RawPayload: rawPayload, Fingerprint: fingerprint,
+		Event: event, Fingerprint: fingerprint,
 	}
 }
 
@@ -345,24 +342,31 @@ func (el *EventLogger) LogNormalizedDurable(
 	if el == nil || !el.enabled {
 		return nil
 	}
+	encoded, err := json.Marshal(entry.Event)
+	if err != nil {
+		return storageError("encode audit event", err)
+	}
+	if len(encoded) > el.batchMaxBytes {
+		return fmt.Errorf("audit event exceeds batch byte limit %d", el.batchMaxBytes)
+	}
 	el.mu.Lock()
-	defer el.mu.Unlock()
 	if el.stopping {
+		el.mu.Unlock()
 		return fmt.Errorf("audit logger is stopping")
 	}
 	if _, seen := el.dedup.Get(entry.Fingerprint); seen {
+		el.mu.Unlock()
 		return nil
 	}
-	for _, output := range el.outputs {
-		if err := output.Write(entry.Event, entry.RawPayload); err != nil {
-			el.log.WarnContext(
-				ctx, "durable audit output write failed",
-				slog.String("event_id", entry.Event.EventID), slog.Any("err", err),
-			)
-			return fmt.Errorf("write durable audit event: %w", err)
-		}
+	el.wg.Add(1)
+	el.mu.Unlock()
+	defer el.wg.Done()
+	if err := WriteEvents(ctx, el.writer.db, []Event{entry.Event}); err != nil {
+		return err
 	}
+	el.mu.Lock()
 	el.dedup.Add(entry.Fingerprint, struct{}{})
+	el.mu.Unlock()
 	return nil
 }
 
@@ -370,12 +374,6 @@ var (
 	_ DurableSink           = (*LocalSink)(nil)
 	_ ReplayableDurableSink = (*LocalSink)(nil)
 )
-
-func (el *EventLogger) hasQueueCapacity() bool {
-	el.mu.Lock()
-	defer el.mu.Unlock()
-	return !el.stopping && len(el.queue) < el.limit
-}
 
 func (el *EventLogger) recordDrop(system, sessionID, eventName, msg string) {
 	now := auditNow()
@@ -411,51 +409,49 @@ func (el *EventLogger) Close() error {
 	el.mu.Lock()
 	if el.stopping {
 		el.mu.Unlock()
-		return nil
+		<-el.closeDone
+		return el.closeErr
 	}
 	el.stopping = true
 	el.cond.Broadcast()
 	el.mu.Unlock()
 
 	el.wg.Wait()
-	for _, output := range el.outputs {
-		_ = output.Close()
+	if el.writer != nil {
+		el.closeErr = el.writer.Close()
 	}
-	return nil
+	close(el.closeDone)
+	return el.closeErr
 }
 
-func (el *EventLogger) worker() {
+func (el *EventLogger) worker(ctx context.Context) {
 	for {
 		el.mu.Lock()
 		for len(el.queue) == 0 && !el.stopping {
 			el.cond.Wait()
 		}
-		batch := el.queue
-		el.queue = nil
-		stopping := el.stopping
-		el.mu.Unlock()
-
-		for _, w := range batch {
-			for _, output := range el.outputs {
-				if err := output.Write(w.event, w.rawPayload); err != nil {
-					el.log.Warn("audit output write failed", "event_id", w.event.EventID, "err", err)
-				}
-			}
-		}
-
-		if stopping {
-			el.mu.Lock()
-			remaining := el.queue
-			el.queue = nil
+		if len(el.queue) == 0 && el.stopping {
 			el.mu.Unlock()
-			for _, w := range remaining {
-				for _, output := range el.outputs {
-					if err := output.Write(w.event, w.rawPayload); err != nil {
-						el.log.Warn("audit output write failed", "event_id", w.event.EventID, "err", err)
-					}
-				}
-			}
 			return
+		}
+		count := 0
+		size := 0
+		events := make([]Event, 0, el.batchMaxItems)
+		for count < len(el.queue) && count < el.batchMaxItems {
+			next := el.queue[count]
+			if size+next.bytes > el.batchMaxBytes {
+				break
+			}
+			events = append(events, next.event)
+			size += next.bytes
+			count++
+		}
+		clear(el.queue[:count])
+		el.queue = el.queue[count:]
+		el.queuedBytes -= size
+		el.mu.Unlock()
+		if err := WriteEvents(ctx, el.writer.db, events); err != nil {
+			el.log.Warn("audit batch write failed", "events", len(events), "err", err)
 		}
 	}
 }
@@ -633,160 +629,6 @@ func stringSliceAttr(attrs Attrs, key string) []string {
 func payloadHash(rawPayload string) string {
 	sum := sha256.Sum256([]byte(rawPayload))
 	return "sha256:" + hex.EncodeToString(sum[:])
-}
-
-type sqliteEventSink struct {
-	db     *sql.DB
-	log    *slog.Logger
-	ownsDB bool
-}
-
-func newSQLiteEventSink(ctx context.Context, path string, log *slog.Logger) (*sqliteEventSink, error) {
-	if log == nil {
-		log = slog.Default()
-	}
-	if err := auditstorage.GuardDatabasePath(path); err != nil {
-		return nil, fmt.Errorf("guard audit sqlite cutover: %w", err)
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		log.WarnContext(ctx, "create audit sqlite dir failed", slog.String("path", path), slog.Any("err", err))
-		return nil, fmt.Errorf("create audit sqlite dir: %w", err)
-	}
-	db, err := sql.Open("sqlite3", path)
-	if err != nil {
-		log.WarnContext(ctx, "open audit sqlite db failed", slog.String("path", path), slog.Any("err", err))
-		return nil, fmt.Errorf("open audit sqlite db: %w", err)
-	}
-	// The audit sink shares audit.db with the durable intake store (two separate
-	// connection pools to one WAL file). Match the intake store's single
-	// serialized connection so the two writers wait on busy_timeout instead of
-	// failing with SQLITE_BUSY when they contend, for example during the startup
-	// intake replay that drives audit writes.
-	db.SetMaxOpenConns(1)
-	db.SetMaxIdleConns(1)
-	s := &sqliteEventSink{db: db, log: log, ownsDB: true}
-	if err := s.init(ctx); err != nil {
-		_ = db.Close()
-		return nil, err
-	}
-	return s, nil
-}
-
-// newSQLiteEventSinkFromDB builds a sink that writes through an already-open
-// shared handle (the intake store's). It does not own the handle, so Close
-// leaves it open for the owner to close. Sharing one pool serializes audit and
-// intake writes and removes their cross-pool lock contention.
-func newSQLiteEventSinkFromDB(
-	ctx context.Context,
-	path string,
-	db *sql.DB,
-	log *slog.Logger,
-) (*sqliteEventSink, error) {
-	if log == nil {
-		log = slog.Default()
-	}
-	if err := auditstorage.GuardDatabasePath(path); err != nil {
-		result := fmt.Errorf("guard shared audit sqlite cutover: %w", err)
-		log.WarnContext(ctx, "guard shared audit sqlite cutover failed", slog.Any("err", result))
-		return nil, result
-	}
-	s := &sqliteEventSink{db: db, log: log, ownsDB: false}
-	if err := s.init(ctx); err != nil {
-		return nil, err
-	}
-	return s, nil
-}
-
-func (s *sqliteEventSink) init(ctx context.Context) error {
-	if err := auditstorage.Migrate(ctx, s.db); err != nil {
-		s.log.WarnContext(ctx, "migrate audit sqlite schema failed", slog.Any("err", err))
-		return fmt.Errorf("migrate audit sqlite schema: %w", err)
-	}
-	return nil
-}
-
-func (s *sqliteEventSink) Write(event Event, _ string) error {
-	ctx := context.Background()
-	checked, err := json.Marshal(event.Decision.RulesChecked)
-	if err != nil {
-		s.log.Warn("marshal audit rules_checked failed", slog.String("event_id", event.EventID), slog.Any("err", err))
-		return fmt.Errorf("marshal rules_checked: %w", err)
-	}
-	matched, err := json.Marshal(event.Decision.RulesMatched)
-	if err != nil {
-		s.log.Warn("marshal audit rules_matched failed", slog.String("event_id", event.EventID), slog.Any("err", err))
-		return fmt.Errorf("marshal rules_matched: %w", err)
-	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		s.log.Warn("begin audit tx failed", slog.String("event_id", event.EventID), slog.Any("err", err))
-		return fmt.Errorf("begin audit tx: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	eventResult, err := tx.ExecContext(ctx, `insert or ignore into events values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		event.EventID, event.SchemaVersion, event.Time, event.Level, event.Message, event.System,
-		event.SessionID, event.TurnID, event.EventName, event.ToolUseID, event.ToolName, event.RawPayloadHash,
-	)
-	if err != nil {
-		s.log.Warn("insert audit event failed", slog.String("event_id", event.EventID), slog.Any("err", err))
-		return fmt.Errorf("insert audit event: %w", err)
-	}
-	insertedCount, err := eventResult.RowsAffected()
-	if err != nil {
-		s.log.Warn("read inserted audit event count failed", slog.String("event_id", event.EventID), slog.Any("err", err))
-		return fmt.Errorf("read inserted audit event count: %w", err)
-	}
-	if insertedCount == 0 {
-		if err := tx.Commit(); err != nil {
-			s.log.Warn("commit replayed audit tx failed", slog.String("event_id", event.EventID), slog.Any("err", err))
-			return fmt.Errorf("commit replayed audit tx: %w", err)
-		}
-		return nil
-	}
-	if _, err := tx.ExecContext(ctx, `insert or ignore into operations values (?, ?, ?, ?, ?)`,
-		event.EventID, event.Operation.CWD, event.Operation.EffectiveCWD, event.Operation.Command, event.Operation.FilePath,
-	); err != nil {
-		s.log.Warn("insert audit operation failed", slog.String("event_id", event.EventID), slog.Any("err", err))
-		return fmt.Errorf("insert audit operation: %w", err)
-	}
-	if _, err := tx.ExecContext(ctx, `insert or ignore into decisions values (?, ?, ?, ?, ?)`,
-		event.EventID, event.Decision.Kind, boolInt(event.Decision.CanBlock), string(checked), string(matched),
-	); err != nil {
-		s.log.Warn("insert audit decision failed", slog.String("event_id", event.EventID), slog.Any("err", err))
-		return fmt.Errorf("insert audit decision: %w", err)
-	}
-	for _, v := range event.Violations {
-		if _, err := tx.ExecContext(ctx, `insert into violations (event_id, rule, mode, field_path, file_path, start, end, message) values (?, ?, ?, ?, ?, ?, ?, ?)`,
-			event.EventID, v.Rule, v.Mode, v.FieldPath, v.FilePath, v.Start, v.End, v.Message,
-		); err != nil {
-			s.log.Warn("insert audit violation failed", slog.String("event_id", event.EventID), slog.String("rule", v.Rule), slog.Any("err", err))
-			return fmt.Errorf("insert audit violation: %w", err)
-		}
-	}
-	if err := tx.Commit(); err != nil {
-		s.log.Warn("commit audit tx failed", slog.String("event_id", event.EventID), slog.Any("err", err))
-		return fmt.Errorf("commit audit tx: %w", err)
-	}
-	return nil
-}
-
-func boolInt(v bool) int {
-	if v {
-		return 1
-	}
-	return 0
-}
-
-func (s *sqliteEventSink) Close() error {
-	if s == nil || s.db == nil || !s.ownsDB {
-		return nil
-	}
-	if err := s.db.Close(); err != nil {
-		s.log.Warn("close audit sqlite db failed", slog.Any("err", err))
-		return fmt.Errorf("close audit sqlite db: %w", err)
-	}
-	return nil
 }
 
 // AttrsFromSlog flattens a slice of [slog.Attr] into the audit attribute

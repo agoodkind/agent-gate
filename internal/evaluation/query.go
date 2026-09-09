@@ -3,6 +3,7 @@ package evaluation
 import (
 	"context"
 	"database/sql"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -143,7 +144,7 @@ func (s *Store) List(ctx context.Context, filter QueryFilter) ([]QueryRecord, er
 	if s == nil || s.database == nil {
 		return nil, errors.New("evaluation store is unavailable")
 	}
-	return listQueryRecords(ctx, s.database, filter, true, true, true, true)
+	return listQueryRecords(ctx, s.database, filter)
 }
 
 // Query reads evaluations from an existing SQLite path without creating or migrating it.
@@ -155,9 +156,6 @@ func Query(ctx context.Context, path string, filter QueryFilter) (QueryResult, e
 		Completeness: DetailCompleteness{
 			IncompleteCount: 0, EarliestCompleteDetailAt: nil,
 		},
-	}
-	if err := guardEvaluationDatabasePath(path); err != nil {
-		return QueryResult{}, err
 	}
 	if _, err := os.Stat(path); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -176,45 +174,19 @@ func Query(ctx context.Context, path string, filter QueryFilter) (QueryResult, e
 	if err := database.PingContext(ctx); err != nil {
 		return QueryResult{}, wrapError("ping evaluation sqlite db read-only", err)
 	}
-	exists, err := queryTableExists(ctx, database, "gate_evaluations")
-	if err != nil {
-		return QueryResult{}, err
-	}
-	if !exists {
-		result.Note = "no evaluation history exists yet"
-		return result, nil
-	}
 	var count int
-	if err := database.QueryRowContext(ctx, `select count(*) from gate_evaluations`).Scan(&count); err != nil {
+	if err := database.QueryRowContext(ctx, querySQL1).Scan(&count); err != nil {
 		return QueryResult{}, wrapError("count evaluation rows", err)
 	}
 	if count == 0 {
 		result.Note = "no evaluations have been recorded yet"
 		return result, nil
 	}
-	hasOutcome, err := queryLayerOutcomeColumnExists(ctx, database)
+	records, err := listQueryRecords(ctx, database, filter)
 	if err != nil {
 		return QueryResult{}, err
 	}
-	hasChildCounts, err := queryChildCountColumnsExist(ctx, database)
-	if err != nil {
-		return QueryResult{}, err
-	}
-	hasVerdict, err := queryLayerVerdictColumnExists(ctx, database)
-	if err != nil {
-		return QueryResult{}, err
-	}
-	hasSplitDetail, err := queryTableExists(ctx, database, "gate_evaluation_layer_details")
-	if err != nil {
-		return QueryResult{}, err
-	}
-	records, err := listQueryRecords(
-		ctx, database, filter, hasOutcome, hasChildCounts, hasVerdict, hasSplitDetail,
-	)
-	if err != nil {
-		return QueryResult{}, err
-	}
-	completeness, err := queryDetailCompleteness(ctx, database, filter, hasOutcome, hasSplitDetail)
+	completeness, err := queryDetailCompleteness(ctx, database, filter)
 	if err != nil {
 		return QueryResult{}, err
 	}
@@ -227,22 +199,18 @@ func listQueryRecords(
 	ctx context.Context,
 	database *sql.DB,
 	filter QueryFilter,
-	hasOutcome bool,
-	hasChildCounts bool,
-	hasVerdict bool,
-	hasSplitDetail bool,
 ) ([]QueryRecord, error) {
 	normalized, err := normalizeQueryFilter(filter)
 	if err != nil {
 		return nil, err
 	}
-	where, arguments := evaluationRecordWhere(normalized, hasOutcome, hasSplitDetail)
+	where, arguments := evaluationRecordWhere(normalized)
 	arguments = append(
 		arguments,
 		queryArgument{Value: strconv.Itoa(normalized.Limit)},
 		queryArgument{Value: strconv.Itoa(normalized.Offset)},
 	)
-	rows, err := queryEvaluationRows(ctx, database, evaluationQuerySelect(hasChildCounts, hasSplitDetail)+where+`
+	rows, err := queryEvaluationRows(ctx, database, evaluationQuerySelect()+where+`
 		order by g.completed_at desc, g.evaluation_id desc
 		limit ? offset ?
 	`, arguments)
@@ -269,18 +237,14 @@ func listQueryRecords(
 		return nil, wrapError("close evaluation rows", err)
 	}
 	for i := range records {
-		outcomeKnown := hasOutcome && records[i].expectedLayerCount >= 0
+		outcomeKnown := records[i].expectedLayerCount >= 0
 		detailAvailable := normalized.DetailMode == QueryDetailFull &&
-			(records[i].Detail.State == auditstorage.DetailStateAvailable ||
-				records[i].Detail.State == auditstorage.DetailStateProtected)
+			records[i].Detail.State == auditstorage.DetailStateAvailable
 		layers, err := querySafeLayers(
 			ctx,
 			database,
 			records[i].EvaluationID,
-			hasOutcome,
 			outcomeKnown,
-			hasVerdict,
-			hasSplitDetail,
 			detailAvailable,
 		)
 		if err != nil {
@@ -319,69 +283,29 @@ func listQueryRecords(
 	return records, nil
 }
 
-func evaluationQuerySelect(hasChildCounts bool, hasSplitDetail bool) string {
-	childCounts := "-1, -1"
-	if hasChildCounts {
-		childCounts = "g.layer_count, g.label_count"
-	}
-	detailColumns := `'available', 1, 1, 0`
-	if hasSplitDetail {
-		detailColumns = `g.detail_state,
-			case when g.detail_state != 'not_recorded' then 1 else 0 end,
-			case when ` + evaluationCompleteDetailPredicate(true) + ` then 1 else 0 end,
-			case when g.detail_state = 'protected' and (
-				exists (select 1 from intake_deferred pending
-					where pending.receipt_id = g.receipt_id and pending.state = 'pending')
-				or exists (select 1 from deferred_audit_outbox pending_outbox
-					where pending_outbox.receipt_id = g.receipt_id
-						and pending_outbox.state = 'pending')
-				or exists (select 1 from deferred_audit_outbox_entries undelivered
-					where undelivered.receipt_id = g.receipt_id
-						and undelivered.delivered_at is null)
-			) then 1 else 0 end`
-	}
-	return `select g.evaluation_id, g.receipt_id, g.event_id, g.attempt, g.mode,
-		e.system, e.session_id, e.event_name, e.tool_name,
-		g.config_hash, g.engine_version, g.engine_commit, g.engine_build_hash,
-		g.input_hash, g.started_at, g.completed_at, g.final_verdict,
-		g.final_source, g.enforcement_action, g.enforced, g.total_latency_us, ` + childCounts + `,
-		` + detailColumns + `
-	from gate_evaluations g
-	join intake_events e on e.event_id = g.event_id
-`
+func evaluationQuerySelect() string {
+	return strings.ReplaceAll(querySQL2, "{{complete}}", evaluationCompleteDetailPredicate())
 }
 
-func evaluationCompleteDetailPredicate(hasSplitDetail bool) string {
-	if !hasSplitDetail {
-		return "1 = 1"
-	}
-	return `g.detail_state in ('available', 'protected')
-		and exists (
-			select 1 from gate_evaluation_details evaluation_detail
-			where evaluation_detail.evaluation_id = g.evaluation_id
-		)
-		and (select count(*) from gate_evaluation_layer_details layer_detail
-			where layer_detail.evaluation_id = g.evaluation_id) =
-			(select count(*) from gate_evaluation_layers layer_summary
-				where layer_summary.evaluation_id = g.evaluation_id)
-		and (select count(*) from gate_evaluation_label_details label_detail
-			where label_detail.evaluation_id = g.evaluation_id) =
-			(select count(*) from gate_evaluation_labels label_summary
-				where label_summary.evaluation_id = g.evaluation_id)`
+func evaluationCompleteDetailPredicate() string {
+	return `g.content_recorded = 1
+  and g.error_json is not null
+  and not exists (select 1 from gate_evaluation_layers layer
+   where layer.evaluation_id = g.evaluation_id and (
+    layer.input_json is null or layer.output_json is null or
+    layer.metadata_json is null or layer.error_message is null))
+  and not exists (select 1 from gate_evaluation_labels label
+   where label.evaluation_id = g.evaluation_id and label.rationale is null)`
 }
 
-func queryDetailCompleteness(ctx context.Context, database *sql.DB, filter QueryFilter, hasOutcome bool, hasSplitDetail bool) (DetailCompleteness, error) {
+func queryDetailCompleteness(ctx context.Context, database *sql.DB, filter QueryFilter) (DetailCompleteness, error) {
 	normalized, err := normalizeQueryFilter(filter)
 	if err != nil {
 		return DetailCompleteness{}, err
 	}
-	where, arguments := evaluationQueryWhere(normalized, hasOutcome, hasSplitDetail)
-	predicate := evaluationCompleteDetailPredicate(hasSplitDetail)
-	query := `select
-		count(*) - coalesce(sum(case when ` + predicate + ` then 1 else 0 end), 0),
-		min(case when ` + predicate + ` then g.completed_at end)
-	from gate_evaluations g
-	join intake_events e on e.event_id = g.event_id` + where
+	where, arguments := evaluationQueryWhere(normalized)
+	predicate := evaluationCompleteDetailPredicate()
+	query := strings.ReplaceAll(querySQL3, "{{complete}}", predicate) + where
 	values := make([]any, 0, len(arguments))
 	for _, argument := range arguments {
 		values = append(values, argument.Value)
@@ -422,8 +346,6 @@ func normalizeQueryFilter(filter QueryFilter) (QueryFilter, error) {
 
 func evaluationQueryWhere(
 	filter QueryFilter,
-	hasOutcome bool,
-	hasSplitDetail bool,
 ) (string, []queryArgument) {
 	clauses := make([]string, 0)
 	arguments := make([]queryArgument, 0)
@@ -461,7 +383,7 @@ func evaluationQueryWhere(
 	if filter.ToolName != "" {
 		add("e.tool_name = ?", filter.ToolName)
 	}
-	addLayerQueryFilters(filter, hasOutcome, hasSplitDetail, &clauses, &arguments)
+	addLayerQueryFilters(filter, &clauses, &arguments)
 	if filter.FinalVerdict != "" {
 		add("g.final_verdict = ?", filter.FinalVerdict)
 	}
@@ -473,15 +395,9 @@ func evaluationQueryWhere(
 
 func addLayerQueryFilters(
 	filter QueryFilter,
-	hasOutcome bool,
-	hasSplitDetail bool,
 	clauses *[]string,
 	arguments *[]queryArgument,
 ) {
-	if filter.LayerOutcome != "" && !hasOutcome {
-		*clauses = append(*clauses, "1 = 0")
-		return
-	}
 	layerClauses := make([]string, 0)
 	layerArguments := make([]queryArgument, 0)
 	add := func(clause string, value string) {
@@ -490,23 +406,10 @@ func addLayerQueryFilters(
 	}
 	if filter.RuleName != "" {
 		ruleFilter := `(
-			json_extract(filtered_layer.metadata_json, '$.rule_name') = ?
-			or exists (
-				select 1
-				from json_each(filtered_layer.metadata_json, '$.checked_rules') checked_rule
-				where json_extract(checked_rule.value, '$.rule_name') = ?
-			)
-		)`
-		if hasSplitDetail {
-			ruleFilter = `(
-				filtered_layer.rule_name = ?
-				or exists (
-					select 1
-					from json_each(filtered_layer.checked_rules_json) checked_rule
-					where json_extract(checked_rule.value, '$.rule_name') = ?
-				)
-			)`
-		}
+ filtered_layer.rule_name = ?
+ or exists (select 1 from json_each(filtered_layer.checked_rules_json) checked_rule
+  where json_extract(checked_rule.value, '$.rule_name') = ?)
+ )`
 		layerClauses = append(layerClauses, ruleFilter)
 		layerArguments = append(
 			layerArguments,
@@ -559,10 +462,8 @@ func scanQueryEvaluation(rows *sql.Rows) (QueryRecord, error) {
 	var record QueryRecord
 	var startedAt string
 	var completedAt string
-	var detailState auditstorage.DetailState
 	var detailRecorded int
 	var detailAvailable int
-	var detailProtected int
 	if err := rows.Scan(
 		&record.EvaluationID,
 		&record.ReceiptID,
@@ -587,10 +488,8 @@ func scanQueryEvaluation(rows *sql.Rows) (QueryRecord, error) {
 		&record.TotalLatencyUS,
 		&record.expectedLayerCount,
 		&record.expectedLabelCount,
-		&detailState,
 		&detailRecorded,
 		&detailAvailable,
-		&detailProtected,
 	); err != nil {
 		return QueryRecord{}, wrapError("scan evaluation row", err)
 	}
@@ -603,26 +502,14 @@ func scanQueryEvaluation(rows *sql.Rows) (QueryRecord, error) {
 	if err != nil {
 		return QueryRecord{}, err
 	}
-	recordedClasses := make([]auditstorage.DetailClass, 0, 1)
+	var recorded, available auditstorage.DetailMask
 	if detailRecorded != 0 {
-		recordedClasses = append(recordedClasses, auditstorage.DetailClassEvaluationContent)
+		recorded = auditstorage.DetailEvaluationContent
 	}
-	availableClasses := make([]auditstorage.DetailClass, 0, 1)
 	if detailAvailable != 0 {
-		availableClasses = append(availableClasses, auditstorage.DetailClassEvaluationContent)
+		available = auditstorage.DetailEvaluationContent
 	}
-	protectedClasses := make([]auditstorage.DetailClass, 0, 1)
-	if detailProtected != 0 {
-		protectedClasses = append(protectedClasses, auditstorage.DetailClassEvaluationContent)
-	}
-	record.Detail = auditstorage.ProjectDetail(
-		recordedClasses,
-		availableClasses,
-		[]auditstorage.DetailClass{auditstorage.DetailClassEvaluationContent},
-		detailState,
-		"",
-		protectedClasses,
-	)
+	record.Detail = auditstorage.ProjectDetail(recorded, available, auditstorage.DetailEvaluationContent)
 	return record, nil
 }
 
@@ -630,40 +517,10 @@ func querySafeLayers(
 	ctx context.Context,
 	database *sql.DB,
 	evaluationID string,
-	hasOutcome bool,
 	outcomeKnown bool,
-	hasVerdict bool,
-	hasSplitDetail bool,
 	detailAvailable bool,
 ) ([]QueryLayer, error) {
-	outcomeColumn := "''"
-	if hasOutcome {
-		outcomeColumn = "outcome"
-	}
-	verdictColumn := "''"
-	if hasVerdict {
-		verdictColumn = "verdict"
-	}
-	detailColumns := "output_json, metadata_json"
-	detailJoin := ""
-	if hasSplitDetail {
-		detailColumns = "null, null"
-		if detailAvailable {
-			detailColumns = "detail.output_json, detail.metadata_json"
-			detailJoin = ` join gate_evaluation_layer_details detail
-				on detail.evaluation_id = layer.evaluation_id
-				and detail.layer_index = layer.layer_index`
-		}
-	}
-	query := `select layer.layer_index, layer.parent_layer_index, layer.kind, layer.name, layer.status, ` + outcomeColumn + `, ` + verdictColumn + `,
-		input_reference, input_hash, output_hash, output_json, metadata_json,
-		started_at, completed_at, latency_us, service_name, service_version,
-		model_name, model_version, prompt_hash, schema_hash, cache_status,
-		cache_key_hash, cache_entry_version, cache_expires_at, error_code, retry_count
-		from gate_evaluation_layers layer` + detailJoin + `
-		where layer.evaluation_id = ? order by layer.layer_index`
-	query = strings.Replace(query, "output_json, metadata_json", detailColumns, 1)
-	rows, err := database.QueryContext(ctx, query, evaluationID)
+	rows, err := database.QueryContext(ctx, querySQL4, detailAvailable, detailAvailable, evaluationID)
 	if err != nil {
 		return nil, wrapError("query safe evaluation layers", err)
 	}
@@ -826,12 +683,7 @@ func querySafeLabels(
 	database *sql.DB,
 	evaluationID string,
 ) ([]QueryLabel, error) {
-	rows, err := database.QueryContext(ctx, `
-		select namespace, label_version, verdict, source, confidence, created_at
-		from gate_evaluation_labels
-		where evaluation_id = ?
-		order by namespace, label_version
-	`, evaluationID)
+	rows, err := database.QueryContext(ctx, querySQL5, evaluationID)
 	if err != nil {
 		return nil, wrapError("query safe evaluation labels", err)
 	}
@@ -869,126 +721,17 @@ func querySafeLabels(
 	return labels, nil
 }
 
-func queryTableExists(ctx context.Context, database *sql.DB, tableName string) (bool, error) {
-	var exists int
-	err := database.QueryRowContext(ctx, `
-		select 1 from sqlite_master where type = 'table' and name = ?
-	`, tableName).Scan(&exists)
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
-	}
-	if err != nil {
-		return false, wrapError("query evaluation table metadata", err)
-	}
-	return exists == 1, nil
-}
+//go:embed query_1.sql
+var querySQL1 string
 
-func queryLayerOutcomeColumnExists(ctx context.Context, database *sql.DB) (bool, error) {
-	rows, err := database.QueryContext(ctx, `pragma table_info(gate_evaluation_layers)`)
-	if err != nil {
-		return false, wrapError("query evaluation column metadata", err)
-	}
-	defer func() {
-		_ = rows.Close()
-	}()
-	for rows.Next() {
-		var columnID int
-		var name string
-		var columnType string
-		var notNull int
-		var defaultValue sql.NullString
-		var primaryKey int
-		if err := rows.Scan(
-			&columnID,
-			&name,
-			&columnType,
-			&notNull,
-			&defaultValue,
-			&primaryKey,
-		); err != nil {
-			return false, wrapError("scan evaluation column metadata", err)
-		}
-		if name == "outcome" {
-			return true, nil
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return false, wrapError("iterate evaluation column metadata", err)
-	}
-	return false, nil
-}
+//go:embed query_2.sql
+var querySQL2 string
 
-func queryLayerVerdictColumnExists(ctx context.Context, database *sql.DB) (bool, error) {
-	rows, err := database.QueryContext(ctx, `pragma table_info(gate_evaluation_layers)`)
-	if err != nil {
-		return false, wrapError("query evaluation verdict column metadata", err)
-	}
-	defer func() {
-		_ = rows.Close()
-	}()
-	for rows.Next() {
-		var columnID int
-		var name string
-		var columnType string
-		var notNull int
-		var defaultValue sql.NullString
-		var primaryKey int
-		if err := rows.Scan(
-			&columnID,
-			&name,
-			&columnType,
-			&notNull,
-			&defaultValue,
-			&primaryKey,
-		); err != nil {
-			return false, wrapError("scan evaluation verdict column metadata", err)
-		}
-		if name == "verdict" {
-			return true, nil
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return false, wrapError("iterate evaluation verdict column metadata", err)
-	}
-	return false, nil
-}
+//go:embed query_3.sql
+var querySQL3 string
 
-func queryChildCountColumnsExist(ctx context.Context, database *sql.DB) (bool, error) {
-	rows, err := database.QueryContext(ctx, `pragma table_info(gate_evaluations)`)
-	if err != nil {
-		return false, wrapError("query evaluation child count metadata", err)
-	}
-	defer func() {
-		_ = rows.Close()
-	}()
-	foundLayerCount := false
-	foundLabelCount := false
-	for rows.Next() {
-		var columnID int
-		var name string
-		var columnType string
-		var notNull int
-		var defaultValue sql.NullString
-		var primaryKey int
-		if err := rows.Scan(
-			&columnID,
-			&name,
-			&columnType,
-			&notNull,
-			&defaultValue,
-			&primaryKey,
-		); err != nil {
-			return false, wrapError("scan evaluation child count metadata", err)
-		}
-		if name == "layer_count" {
-			foundLayerCount = true
-		}
-		if name == "label_count" {
-			foundLabelCount = true
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return false, wrapError("iterate evaluation child count metadata", err)
-	}
-	return foundLayerCount && foundLabelCount, nil
-}
+//go:embed query_4.sql
+var querySQL4 string
+
+//go:embed query_5.sql
+var querySQL5 string

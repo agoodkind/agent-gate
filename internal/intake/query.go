@@ -3,6 +3,7 @@ package intake
 import (
 	"context"
 	"database/sql"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -73,9 +74,7 @@ type queryArgument struct {
 	Value string
 }
 
-// Query reads durable intake history without creating schema or running
-// migrations. It opens SQLite in read-only mode and treats missing intake
-// tables as an empty v1 seen-event history.
+// Query reads durable intake history through a read-only connection.
 func Query(ctx context.Context, cfg *config.Config, filter QueryFilter) (QueryResult, error) {
 	path := config.DefaultAuditSQLitePath()
 	if cfg != nil {
@@ -85,9 +84,6 @@ func Query(ctx context.Context, cfg *config.Config, filter QueryFilter) (QueryRe
 		Records: nil,
 		Source:  "sqlite",
 		Note:    "",
-	}
-	if err := auditstorage.GuardDatabasePath(path); err != nil {
-		return QueryResult{}, wrapLoggedError(ctx, slog.Default(), "guard intake query cutover", err)
 	}
 	if _, err := os.Stat(path); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -107,25 +103,6 @@ func Query(ctx context.Context, cfg *config.Config, filter QueryFilter) (QueryRe
 		return QueryResult{}, wrapLoggedError(ctx, slog.Default(), "ping intake sqlite db read-only", err)
 	}
 
-	exists, err := tableExists(ctx, db, "intake_events")
-	if err != nil {
-		return QueryResult{}, err
-	}
-	if !exists {
-		result.Note = "no durable seen-event history exists yet"
-		return result, nil
-	}
-	hasDeferredTable, err := tableExists(ctx, db, "intake_deferred")
-	if err != nil {
-		return QueryResult{}, err
-	}
-	hasDetailTable, err := tableExists(ctx, db, "intake_event_details")
-	if err != nil {
-		return QueryResult{}, err
-	}
-	if !hasDetailTable {
-		return QueryResult{}, errors.New("intake query requires migration before reading legacy detail")
-	}
 	start, hasRows, err := intakeStart(ctx, db)
 	if err != nil {
 		return QueryResult{}, err
@@ -143,11 +120,7 @@ func Query(ctx context.Context, cfg *config.Config, filter QueryFilter) (QueryRe
 		result.Note = "clamped lower bound to seen-event history start " + formatTime(start)
 	}
 
-	var policy config.AuditStoragePolicy
-	if cfg != nil {
-		policy = cfg.AuditStoragePolicy()
-	}
-	records, err := queryRecords(ctx, db, filter, hasDeferredTable, policy)
+	records, err := queryRecords(ctx, db, filter)
 	if err != nil {
 		return QueryResult{}, err
 	}
@@ -162,29 +135,17 @@ func readOnlySQLiteDSN(path string) string {
 	}
 	values := url.Values{}
 	values.Set("mode", "ro")
+	values.Set("_foreign_keys", "on")
+	values.Set("_journal_mode", "WAL")
+	values.Set("_synchronous", "NORMAL")
+	values.Set("_busy_timeout", "5000")
 	u.RawQuery = values.Encode()
 	return u.String()
 }
 
-func tableExists(ctx context.Context, db *sql.DB, tableName string) (bool, error) {
-	var exists int
-	err := db.QueryRowContext(ctx, `
-		select 1
-		from sqlite_master
-		where type = 'table' and name = ?
-	`, tableName).Scan(&exists)
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
-	}
-	if err != nil {
-		return false, wrapLoggedError(ctx, slog.Default(), "query intake table metadata", err)
-	}
-	return exists == 1, nil
-}
-
 func intakeStart(ctx context.Context, db *sql.DB) (time.Time, bool, error) {
 	var raw sql.NullString
-	if err := db.QueryRowContext(ctx, `select min(recorded_at) from intake_events`).Scan(&raw); err != nil {
+	if err := db.QueryRowContext(ctx, querySQL1).Scan(&raw); err != nil {
 		return time.Time{}, false, wrapLoggedError(ctx, slog.Default(), "query intake history start", err)
 	}
 	if !raw.Valid || raw.String == "" {
@@ -201,19 +162,15 @@ func queryRecords(
 	ctx context.Context,
 	db *sql.DB,
 	filter QueryFilter,
-	hasDeferredTable bool,
-	policy config.AuditStoragePolicy,
 ) ([]QueryRecord, error) {
-	where, args := intakeQueryWhere(filter, hasDeferredTable)
+	where, args := intakeQueryWhere(filter)
 	limit := ""
 	if filter.Limit > 0 {
 		limit = " limit " + strconv.Itoa(filter.Limit)
 	}
-	query := intakeQuerySelect(hasDeferredTable, filter)
+	query := intakeQuerySelect(filter)
 	allArgs := make([]queryArgument, 0, len(args)+1)
-	if hasDeferredTable {
-		allArgs = append(allArgs, queryArgument{Value: string(DeferredStateNone)})
-	}
+	allArgs = append(allArgs, queryArgument{Value: string(DeferredStateNone)})
 	allArgs = append(allArgs, args...)
 	rows, err := queryIntakeRows(ctx, db, query+where+" order by e.recorded_at desc, e.seq desc"+limit, allArgs)
 	if err != nil {
@@ -225,7 +182,7 @@ func queryRecords(
 
 	records := make([]QueryRecord, 0)
 	for rows.Next() {
-		record, err := scanQueryRecord(ctx, rows, filter, policy)
+		record, err := scanQueryRecord(ctx, rows, filter)
 		if err != nil {
 			return nil, err
 		}
@@ -237,106 +194,12 @@ func queryRecords(
 	return records, nil
 }
 
-func intakeQuerySelect(hasDeferredTable bool, filter QueryFilter) string {
-	normalizedColumn := "null"
-	if filter.IncludeNormalized {
-		normalizedColumn = `(select content from intake_event_details
-			where event_id = e.event_id and detail_class = 'normalized_input')`
-	}
-	environmentColumn := "null"
-	if filter.IncludeEnv {
-		environmentColumn = `(select content from intake_event_details
-			where event_id = e.event_id and detail_class = 'environment_evidence')`
-	}
-	detailColumns := `
-		` + normalizedColumn + `,
-		(select content from intake_event_details
-			where event_id = e.event_id and detail_class = 'provider_evidence'),
-		` + environmentColumn + `,
-		manifest.recorded_classes_json,
-		manifest.available_classes_json,
-		manifest.state,
-		manifest.state_changed_at,
-		case when exists (
-			select 1 from intake_receipts protected_receipt
-			where protected_receipt.event_id = e.event_id and (
-				not exists (
-					select 1 from gate_evaluations hot
-					where hot.receipt_id = protected_receipt.receipt_id
-						and hot.mode = 'hot'
-				)
-				or exists (
-					select 1 from intake_deferred pending
-					where pending.receipt_id = protected_receipt.receipt_id
-						and pending.state = 'pending'
-				)
-				or exists (
-					select 1 from deferred_audit_outbox pending_outbox
-					where pending_outbox.receipt_id = protected_receipt.receipt_id
-						and pending_outbox.state = 'pending'
-				)
-				or exists (
-					select 1 from deferred_audit_outbox_entries undelivered
-					where undelivered.receipt_id = protected_receipt.receipt_id
-						and undelivered.delivered_at is null
-				)
-			)
-		) then 1 else 0 end,`
-	if !hasDeferredTable {
-		return `
-			select
-			e.event_id,
-			e.recorded_at,
-			e.system,
-			e.session_id,
-			e.turn_id,
-			e.event_name,
-			e.tool_name,
-			e.tool_use_id,
-			e.cwd,
-			e.effective_cwd,
-			e.command,
-			e.file_path,
-				e.raw_payload_hash,` + detailColumns + `
-			'none',
-			null as pending_at,
-			null as completed_at,
-			null as last_replay_at,
-			0
-		from intake_events e
-		join intake_event_detail_manifest manifest on manifest.event_id = e.event_id
-	`
-	}
-	return `
-		select
-			e.event_id,
-			e.recorded_at,
-			e.system,
-			e.session_id,
-			e.turn_id,
-			e.event_name,
-			e.tool_name,
-			e.tool_use_id,
-			e.cwd,
-			e.effective_cwd,
-			e.command,
-			e.file_path,
-				e.raw_payload_hash,` + detailColumns + `
-			coalesce(d.state, ?),
-			d.pending_at,
-			d.completed_at,
-			d.last_replay_at,
-			coalesce(d.replay_count, 0)
-		from intake_events e
-		join intake_event_detail_manifest manifest on manifest.event_id = e.event_id
-		left join intake_receipts r on r.receipt_id = (
-			select max(receipt_id) from intake_receipts where event_id = e.event_id
-		)
-		left join intake_deferred d on d.receipt_id = r.receipt_id
-	`
+func intakeQuerySelect(filter QueryFilter) string {
+	query := strings.ReplaceAll(querySQL2, "{{normalized}}", strconv.FormatBool(filter.IncludeNormalized))
+	return strings.ReplaceAll(query, "{{environment}}", strconv.FormatBool(filter.IncludeEnv))
 }
 
-func intakeQueryWhere(filter QueryFilter, hasDeferredTable bool) (string, []queryArgument) {
+func intakeQueryWhere(filter QueryFilter) (string, []queryArgument) {
 	var clauses []string
 	var args []queryArgument
 	add := func(clause string, value string) {
@@ -365,12 +228,8 @@ func intakeQueryWhere(filter QueryFilter, hasDeferredTable bool) (string, []quer
 		add("e.event_id = ?", filter.EventID)
 	}
 	if filter.DeferredState != "" {
-		if hasDeferredTable {
-			add("coalesce(d.state, ?) = ?", string(DeferredStateNone))
-			args = append(args, queryArgument{Value: filter.DeferredState})
-		} else if filter.DeferredState != string(DeferredStateNone) {
-			clauses = append(clauses, "1 = 0")
-		}
+		add("coalesce(d.state, ?) = ?", string(DeferredStateNone))
+		args = append(args, queryArgument{Value: filter.DeferredState})
 	}
 	if len(clauses) == 0 {
 		return "", args
@@ -394,18 +253,14 @@ func scanQueryRecord(
 	ctx context.Context,
 	rows *sql.Rows,
 	filter QueryFilter,
-	policy config.AuditStoragePolicy,
 ) (QueryRecord, error) {
 	var (
 		record           QueryRecord
 		normalized       sql.NullString
 		classification   sql.NullString
 		envFingerprint   sql.NullString
-		recordedClasses  string
-		availableClasses string
-		detailState      auditstorage.DetailState
-		stateChangedAt   string
-		protected        int
+		recordedClasses  auditstorage.DetailMask
+		availableClasses auditstorage.DetailMask
 		state            string
 		pendingAt        sql.NullString
 		completedAt      sql.NullString
@@ -430,9 +285,6 @@ func scanQueryRecord(
 		&envFingerprint,
 		&recordedClasses,
 		&availableClasses,
-		&detailState,
-		&stateChangedAt,
-		&protected,
 		&state,
 		&pendingAt,
 		&completedAt,
@@ -446,36 +298,21 @@ func scanQueryRecord(
 	record.Deferred.PendingAt = nullStringValue(pendingAt)
 	record.Deferred.CompletedAt = nullStringValue(completedAt)
 	record.Deferred.LastReplayAt = nullStringValue(lastReplayAt)
-	recorded, err := decodeDetailClasses(ctx, recordedClasses)
-	if err != nil {
-		return QueryRecord{}, err
-	}
-	available, err := decodeDetailClasses(ctx, availableClasses)
-	if err != nil {
-		return QueryRecord{}, err
-	}
-	requested := []auditstorage.DetailClass{auditstorage.DetailClassProviderEvidence}
+	requested := auditstorage.DetailProviderEvidence
 	if filter.IncludeNormalized {
-		requested = append(requested, auditstorage.DetailClassNormalizedInput)
+		requested |= auditstorage.DetailNormalizedInput
 	}
 	if filter.IncludeEnv {
-		requested = append(requested, auditstorage.DetailClassEnvironmentEvidence)
+		requested |= auditstorage.DetailEnvironmentEvidence
 	}
-	protectedClasses := protectedIntakeClasses(
-		policy, requested, detailState, protected != 0,
-	)
-	record.Detail = auditstorage.ProjectDetail(
-		recorded, available, requested, detailState, stateChangedAt, protectedClasses,
-	)
-	detailReadable := record.Detail.State == auditstorage.DetailStateAvailable ||
-		record.Detail.State == auditstorage.DetailStateProtected
-	if detailReadable && classification.Valid && classification.String != "" {
+	record.Detail = auditstorage.ProjectDetail(recordedClasses, availableClasses, requested)
+	if classification.Valid && classification.String != "" {
 		record.Classification = json.RawMessage(classification.String)
 	}
-	if detailReadable && filter.IncludeNormalized && normalized.Valid && normalized.String != "" {
+	if filter.IncludeNormalized && normalized.Valid && normalized.String != "" {
 		record.NormalizedJSON = json.RawMessage(normalized.String)
 	}
-	if detailReadable && filter.IncludeEnv && envFingerprint.Valid && envFingerprint.String != "" {
+	if filter.IncludeEnv && envFingerprint.Valid && envFingerprint.String != "" {
 		env, err := unmarshalEnvFingerprint(envFingerprint.String)
 		if err != nil {
 			return QueryRecord{}, err
@@ -483,60 +320,6 @@ func scanQueryRecord(
 		record.EnvFingerprint = env
 	}
 	return record, nil
-}
-
-func protectedIntakeClasses(
-	policy config.AuditStoragePolicy,
-	requested []auditstorage.DetailClass,
-	storedState auditstorage.DetailState,
-	liveProtected bool,
-) []auditstorage.DetailClass {
-	protectedClasses := make([]auditstorage.DetailClass, 0, len(requested))
-	if !liveProtected {
-		return protectedClasses
-	}
-	if policy.Profile == "" {
-		if storedState == auditstorage.DetailStateProtected {
-			return append(protectedClasses, requested...)
-		}
-		return protectedClasses
-	}
-	for _, requestedClass := range requested {
-		if !intakeDetailClassEnabled(policy.Detail, requestedClass) {
-			protectedClasses = append(protectedClasses, requestedClass)
-		}
-	}
-	return protectedClasses
-}
-
-func intakeDetailClassEnabled(
-	policy config.AuditStorageDetailPolicy,
-	detailClass auditstorage.DetailClass,
-) bool {
-	switch detailClass {
-	case auditstorage.DetailClassWireInput:
-		return policy.WireInput
-	case auditstorage.DetailClassNormalizedInput:
-		return policy.NormalizedInput
-	case auditstorage.DetailClassProviderEvidence:
-		return policy.ProviderEvidence
-	case auditstorage.DetailClassEnvironmentEvidence:
-		return policy.EnvironmentEvidence
-	case auditstorage.DetailClassEvaluationContent,
-		auditstorage.DetailClassDeferredAuditPayload:
-		return true
-	}
-	return true
-}
-
-func decodeDetailClasses(ctx context.Context, encoded string) ([]auditstorage.DetailClass, error) {
-	classes := make([]auditstorage.DetailClass, 0)
-	if err := json.Unmarshal([]byte(encoded), &classes); err != nil {
-		return nil, wrapLoggedError(
-			ctx, slog.Default(), "decode intake detail classes", err,
-		)
-	}
-	return classes, nil
 }
 
 func nullStringValue(value sql.NullString) string {
@@ -549,3 +332,9 @@ func nullStringValue(value sql.NullString) string {
 func formatTime(value time.Time) string {
 	return value.UTC().Format(time.RFC3339Nano)
 }
+
+//go:embed query_1.sql
+var querySQL1 string
+
+//go:embed query_2.sql
+var querySQL2 string

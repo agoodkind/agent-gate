@@ -12,7 +12,6 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 
-	"goodkind.io/agent-gate/internal/auditstorage"
 	"goodkind.io/agent-gate/internal/evaluation"
 	"goodkind.io/agent-gate/internal/intake"
 )
@@ -140,7 +139,7 @@ func TestExportEvaluationsFiltersBeforeCheckingDetail(t *testing.T) {
 	_, database, path, first, second := newEvaluationQueryFixture(t)
 	deleteEvaluationDetail(t, database, first.Evaluation.EvaluationID)
 	if _, err := database.Exec(`
-		update gate_evaluations set detail_state = 'expired' where evaluation_id = ?
+		update gate_evaluations set content_recorded = 0 where evaluation_id = ?
 	`, first.Evaluation.EvaluationID); err != nil {
 		t.Fatalf("mark evaluation detail expired: %v", err)
 	}
@@ -191,162 +190,10 @@ func TestExportEvaluationsFiltersBeforeCheckingDetail(t *testing.T) {
 	}
 }
 
-func TestQueryPreservesExpiredStateWhenDetailRowsRemain(t *testing.T) {
-	_, database, path, first, _ := newEvaluationQueryFixture(t)
-	if _, err := database.Exec(`
-		update gate_evaluations set detail_state = 'expired' where evaluation_id = ?
-	`, first.Evaluation.EvaluationID); err != nil {
-		t.Fatalf("mark evaluation detail expired: %v", err)
-	}
-
-	result, err := evaluation.Query(t.Context(), path, evaluation.QueryFilter{
-		EvaluationID: first.Evaluation.EvaluationID,
-	})
-	if err != nil {
-		t.Fatalf("Query: %v", err)
-	}
-	if result.Completeness.IncompleteCount != 1 ||
-		result.Completeness.EarliestCompleteDetailAt != nil {
-		t.Fatalf("completeness = %+v, want one incomplete record", result.Completeness)
-	}
-	if len(result.Records) != 1 ||
-		result.Records[0].Detail.State != auditstorage.DetailStateExpired {
-		t.Fatalf("records = %+v, want one expired record", result.Records)
-	}
-	if len(result.Records[0].Layers[0].Output) != 0 ||
-		len(result.Records[0].Layers[0].Metadata) != 0 {
-		t.Fatalf("expired evaluation content present: %+v", result.Records[0].Layers[0])
-	}
-}
-
 func deleteEvaluationDetail(t *testing.T, database *sql.DB, evaluationID string) {
 	t.Helper()
-	for _, table := range []string{
-		"gate_evaluation_label_details",
-		"gate_evaluation_layer_details",
-		"gate_evaluation_details",
-	} {
-		if _, err := database.Exec(
-			"delete from "+table+" where evaluation_id = ?",
-			evaluationID,
-		); err != nil {
-			t.Fatalf("delete %s: %v", table, err)
-		}
-	}
-}
-
-func TestQueryReportsExpiredEvaluationDetailAndOmitsContent(t *testing.T) {
-	_, database, path, first, _ := newEvaluationQueryFixture(t)
-	if _, err := database.Exec(
-		`delete from gate_evaluation_details where evaluation_id = ?`,
-		first.Evaluation.EvaluationID,
-	); err != nil {
-		t.Fatalf("delete evaluation detail: %v", err)
-	}
-	if _, err := database.Exec(
-		`delete from gate_evaluation_layer_details where evaluation_id = ?`,
-		first.Evaluation.EvaluationID,
-	); err != nil {
-		t.Fatalf("delete layer detail: %v", err)
-	}
-	if _, err := database.Exec(
-		`delete from gate_evaluation_label_details where evaluation_id = ?`,
-		first.Evaluation.EvaluationID,
-	); err != nil {
-		t.Fatalf("delete label detail: %v", err)
-	}
-	if _, err := database.Exec(
-		`update gate_evaluations set detail_state = 'expired' where evaluation_id = ?`,
-		first.Evaluation.EvaluationID,
-	); err != nil {
-		t.Fatalf("mark evaluation detail expired: %v", err)
-	}
-
-	result, err := evaluation.Query(t.Context(), path, evaluation.QueryFilter{
-		EvaluationID: first.Evaluation.EvaluationID,
-	})
-	if err != nil {
-		t.Fatalf("Query: %v", err)
-	}
-	record := result.Records[0]
-	if record.Detail.State != auditstorage.DetailStateExpired {
-		t.Fatalf("detail state = %q, want expired", record.Detail.State)
-	}
-	if len(record.Layers) == 0 || len(record.Labels) == 0 {
-		t.Fatalf("summary children missing: layers=%d labels=%d", len(record.Layers), len(record.Labels))
-	}
-	encoded, err := json.Marshal(record)
-	if err != nil {
-		t.Fatalf("Marshal: %v", err)
-	}
-	if strings.Contains(string(encoded), `"output"`) ||
-		strings.Contains(string(encoded), `"metadata"`) {
-		t.Fatalf("expired evaluation content present: %s", encoded)
-	}
-}
-
-func TestQueryReportsProtectedEvaluationDetail(t *testing.T) {
-	_, database, path, first, _ := newEvaluationQueryFixture(t)
-	if _, err := database.Exec(`
-		update gate_evaluations set detail_state = 'protected' where evaluation_id = ?
-	`, first.Evaluation.EvaluationID); err != nil {
-		t.Fatalf("mark evaluation detail protected: %v", err)
-	}
-	if _, err := database.Exec(`
-		insert into intake_deferred (
-			receipt_id, event_id, state, pending_at, completed_at,
-			last_replay_at, replay_count, claim_owner, claim_expires_at, claim_attempt
-		) values (?, ?, 'pending', '2026-07-11T01:00:00Z', null, null, 0, null, null, 0)
-	`, first.Evaluation.ReceiptID, first.Evaluation.EventID); err != nil {
-		t.Fatalf("insert pending evaluation relationship: %v", err)
-	}
-
-	result, err := evaluation.Query(t.Context(), path, evaluation.QueryFilter{
-		EvaluationID: first.Evaluation.EvaluationID,
-	})
-	if err != nil {
-		t.Fatalf("Query: %v", err)
-	}
-	if result.Records[0].Detail.State != auditstorage.DetailStateProtected {
-		t.Fatalf("detail state = %q, want protected", result.Records[0].Detail.State)
-	}
-	if len(result.Records[0].Layers[0].Output) == 0 {
-		t.Fatal("protected evaluation output is absent")
-	}
-}
-
-func TestQueryReportsNotRecordedEvaluationDetail(t *testing.T) {
-	_, database, path, first, _ := newEvaluationQueryFixture(t)
-	for _, table := range []string{
-		"gate_evaluation_label_details",
-		"gate_evaluation_layer_details",
-		"gate_evaluation_details",
-	} {
-		if _, err := database.Exec(
-			"delete from "+table+" where evaluation_id = ?",
-			first.Evaluation.EvaluationID,
-		); err != nil {
-			t.Fatalf("delete %s: %v", table, err)
-		}
-	}
-	if _, err := database.Exec(`
-		update gate_evaluations set detail_state = 'not_recorded' where evaluation_id = ?
-	`, first.Evaluation.EvaluationID); err != nil {
-		t.Fatalf("mark evaluation detail not recorded: %v", err)
-	}
-
-	result, err := evaluation.Query(t.Context(), path, evaluation.QueryFilter{
-		EvaluationID: first.Evaluation.EvaluationID,
-	})
-	if err != nil {
-		t.Fatalf("Query: %v", err)
-	}
-	record := result.Records[0]
-	if record.Detail.State != auditstorage.DetailStateNotRecorded {
-		t.Fatalf("detail state = %q, want not_recorded", record.Detail.State)
-	}
-	if len(record.Layers[0].Output) != 0 || len(record.Layers[0].Metadata) != 0 {
-		t.Fatalf("not-recorded evaluation content present: %+v", record.Layers[0])
+	if _, err := database.Exec("update gate_evaluations set content_recorded = 0, error_json = null where evaluation_id = ?", evaluationID); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -373,50 +220,6 @@ func TestStoreListCorrelatesLayerScopedFilters(t *testing.T) {
 	}
 	if len(correlated) != 1 || correlated[0].EvaluationID != first.Evaluation.EvaluationID {
 		t.Fatalf("correlated records = %+v, want %q", correlated, first.Evaluation.EvaluationID)
-	}
-}
-
-func TestQueryHandlesMissingAndLegacyEvaluationHistory(t *testing.T) {
-	missingPath := filepath.Join(t.TempDir(), "missing.db")
-	missing, err := evaluation.Query(context.Background(), missingPath, evaluation.QueryFilter{})
-	if err != nil {
-		t.Fatalf("Query missing database: %v", err)
-	}
-	if len(missing.Records) != 0 || !strings.Contains(missing.Note, "no evaluation history") {
-		t.Fatalf("missing result = %+v", missing)
-	}
-
-	legacyPath := filepath.Join(t.TempDir(), "legacy.db")
-	database, err := sql.Open("sqlite3", legacyPath)
-	if err != nil {
-		t.Fatalf("open legacy database: %v", err)
-	}
-	if _, err := database.Exec(`create table intake_events (event_id text primary key)`); err != nil {
-		t.Fatalf("create legacy schema: %v", err)
-	}
-	if err := database.Close(); err != nil {
-		t.Fatalf("close legacy database: %v", err)
-	}
-	legacy, err := evaluation.Query(context.Background(), legacyPath, evaluation.QueryFilter{})
-	if err != nil {
-		t.Fatalf("Query legacy database: %v", err)
-	}
-	if len(legacy.Records) != 0 || !strings.Contains(legacy.Note, "no evaluation history") {
-		t.Fatalf("legacy result = %+v", legacy)
-	}
-}
-
-func TestQueryRejectsUnresolvedCutoverWhenDatabaseIsMissing(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "audit.db")
-	if err := auditstorage.WriteCutoverJournal(auditstorage.CutoverJournal{
-		DatabasePath: path, RunID: "run", Phase: auditstorage.CutoverOriginalRenamed,
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	_, err := evaluation.Query(t.Context(), path, evaluation.QueryFilter{})
-	if err == nil || !strings.Contains(err.Error(), "recovery is required") {
-		t.Fatalf("Query error = %v, want recovery required", err)
 	}
 }
 
@@ -447,7 +250,7 @@ func TestStoreListRejectsMissingAndCorruptChildRows(t *testing.T) {
 			name: "corrupt metadata",
 			mutate: func(t *testing.T, database *sql.DB, evaluationID string) {
 				t.Helper()
-				if _, err := database.Exec(`update gate_evaluation_layer_details set metadata_json = '{' where evaluation_id = ? and layer_index = 1`, evaluationID); err != nil {
+				if _, err := database.Exec(`update gate_evaluation_layers set metadata_json = '{' where evaluation_id = ? and layer_index = 1`, evaluationID); err != nil {
 					t.Fatalf("corrupt metadata: %v", err)
 				}
 			},
@@ -465,7 +268,7 @@ func TestStoreListRejectsMissingAndCorruptChildRows(t *testing.T) {
 			name: "mismatched output hash",
 			mutate: func(t *testing.T, database *sql.DB, evaluationID string) {
 				t.Helper()
-				if _, err := database.Exec(`update gate_evaluation_layer_details set output_json = '{"decision":"allow"}' where evaluation_id = ? and layer_index = 1`, evaluationID); err != nil {
+				if _, err := database.Exec(`update gate_evaluation_layers set output_json = '{"decision":"allow"}' where evaluation_id = ? and layer_index = 1`, evaluationID); err != nil {
 					t.Fatalf("corrupt output JSON: %v", err)
 				}
 			},
@@ -488,7 +291,7 @@ func TestStoreListRejectsMissingAndCorruptChildRows(t *testing.T) {
 func TestStoreListRejectsUnknownV2MetadataAfterRead(t *testing.T) {
 	store, database, _, first, _ := newEvaluationQueryFixture(t)
 	if _, err := database.Exec(`
-		update gate_evaluation_layer_details
+		update gate_evaluation_layers
 		set metadata_json = json_set(metadata_json, '$.prompt', 'prohibited')
 		where evaluation_id = ? and layer_index = 1
 	`, first.Evaluation.EvaluationID); err != nil {
@@ -500,105 +303,6 @@ func TestStoreListRejectsUnknownV2MetadataAfterRead(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("List accepted unknown v2 metadata field")
-	}
-}
-
-func TestStoreMigratesEvaluationQueryColumns(t *testing.T) {
-	t.Skip("database backward compatibility was removed")
-	_, database, path, first, _ := newEvaluationQueryFixture(t)
-	dropEvaluationQueryColumns(t, database)
-
-	migrated, err := evaluation.NewStore(context.Background(), path, database)
-	if err != nil {
-		t.Fatalf("NewStore migration: %v", err)
-	}
-	got, err := migrated.Get(context.Background(), first.Evaluation.EvaluationID)
-	if err != nil {
-		t.Fatalf("Get migrated evaluation: %v", err)
-	}
-	for _, layer := range got.Layers {
-		if layer.Outcome != "" {
-			t.Fatalf("legacy layer outcome = %q, want empty", layer.Outcome)
-		}
-	}
-	var layerCount int
-	var labelCount int
-	if err := database.QueryRow(`
-		select layer_count, label_count
-		from gate_evaluations
-		where evaluation_id = ?
-	`, first.Evaluation.EvaluationID).Scan(&layerCount, &labelCount); err != nil {
-		t.Fatalf("read migrated child counts: %v", err)
-	}
-	if layerCount != -1 || labelCount != -1 {
-		t.Fatalf("migrated child counts = %d, %d; want -1, -1", layerCount, labelCount)
-	}
-}
-
-func TestQueryReadsPopulatedLegacyEvaluationsBeforeAndAfterMigration(t *testing.T) {
-	t.Skip("database backward compatibility was removed")
-	_, database, path, first, _ := newEvaluationQueryFixture(t)
-	dropEvaluationQueryColumns(t, database)
-	ctx := context.Background()
-
-	before, err := evaluation.Query(ctx, path, evaluation.QueryFilter{
-		EvaluationID: first.Evaluation.EvaluationID,
-	})
-	if err != nil {
-		t.Fatalf("Query before migration: %v", err)
-	}
-	assertLegacyQueryRecord(t, before.Records, first.Evaluation.EvaluationID)
-
-	combined, err := evaluation.Query(ctx, path, evaluation.QueryFilter{
-		RuleName: "review-rule", LayerName: "review-layer", LayerKind: "inference",
-		LayerOutcome: "match", ModelName: "gpt-test",
-	})
-	if err != nil {
-		t.Fatalf("Query combined legacy filter: %v", err)
-	}
-	if len(combined.Records) != 0 {
-		t.Fatalf("combined legacy filter records = %+v, want empty", combined.Records)
-	}
-
-	migrated, err := evaluation.NewStore(ctx, path, database)
-	if err != nil {
-		t.Fatalf("NewStore migration: %v", err)
-	}
-	after, err := migrated.List(ctx, evaluation.QueryFilter{
-		EvaluationID: first.Evaluation.EvaluationID,
-	})
-	if err != nil {
-		t.Fatalf("List after migration: %v", err)
-	}
-	assertLegacyQueryRecord(t, after, first.Evaluation.EvaluationID)
-}
-
-func dropEvaluationQueryColumns(t *testing.T, database *sql.DB) {
-	t.Helper()
-	if _, err := database.Exec(`drop index gate_evaluation_layers_outcome_idx`); err != nil {
-		t.Fatalf("drop outcome index: %v", err)
-	}
-	if _, err := database.Exec(`alter table gate_evaluation_layers drop column outcome`); err != nil {
-		t.Fatalf("drop outcome column: %v", err)
-	}
-	if _, err := database.Exec(`alter table gate_evaluations drop column layer_count`); err != nil {
-		t.Fatalf("drop layer count column: %v", err)
-	}
-	if _, err := database.Exec(`alter table gate_evaluations drop column label_count`); err != nil {
-		t.Fatalf("drop label count column: %v", err)
-	}
-	resetAuditSchemaVersion(t, database)
-}
-
-func assertLegacyQueryRecord(t *testing.T, records []evaluation.QueryRecord, evaluationID string) {
-	t.Helper()
-	if len(records) != 1 || records[0].EvaluationID != evaluationID {
-		t.Fatalf("legacy records = %+v, want only %q", records, evaluationID)
-	}
-	for _, layer := range records[0].Layers {
-		if layer.Outcome != "" {
-			t.Fatalf("legacy layer outcome = %q, want empty", layer.Outcome)
-		}
 	}
 }
 

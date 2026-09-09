@@ -2,131 +2,95 @@ package auditstorage_test
 
 import (
 	"database/sql"
-	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 
-	_ "github.com/mattn/go-sqlite3"
-
+	"goodkind.io/agent-gate/internal/audit"
 	"goodkind.io/agent-gate/internal/auditstorage"
 )
 
-func TestMigrationRecordsVersionAndAppliedTimeOnce(t *testing.T) {
-	database := openMigrationDatabase(t)
-
-	if err := auditstorage.Migrate(t.Context(), database); err != nil {
-		t.Fatalf("Migrate first: %v", err)
-	}
-	firstAppliedAt, err := auditstorage.MigrationAppliedAt(t.Context(), database, 1)
-	if err != nil {
-		t.Fatalf("MigrationAppliedAt first: %v", err)
-	}
-	if firstAppliedAt.IsZero() {
-		t.Fatal("MigrationAppliedAt first = zero")
-	}
-
-	if err := auditstorage.Migrate(t.Context(), database); err != nil {
-		t.Fatalf("Migrate second: %v", err)
-	}
-	secondAppliedAt, err := auditstorage.MigrationAppliedAt(t.Context(), database, 1)
-	if err != nil {
-		t.Fatalf("MigrationAppliedAt second: %v", err)
-	}
-	if !secondAppliedAt.Equal(firstAppliedAt) {
-		t.Fatalf("applied at changed from %s to %s", firstAppliedAt, secondAppliedAt)
-	}
-}
-
-func TestMigrationFailureRollsBackVersionAndApplicationSchema(t *testing.T) {
-	database := openMigrationDatabase(t)
-	if _, err := database.ExecContext(
-		t.Context(),
-		`create table violations_mode_idx (id integer primary key)`,
-	); err != nil {
-		t.Fatalf("install late migration failure: %v", err)
-	}
-
-	if err := auditstorage.Migrate(t.Context(), database); err == nil {
-		t.Fatal("Migrate error = nil, want late schema failure")
-	}
-	version, err := auditstorage.SchemaVersion(t.Context(), database)
-	if err != nil {
-		t.Fatalf("SchemaVersion after failure: %v", err)
-	}
-	if version != 0 {
-		t.Fatalf("schema version after failure = %d, want 0", version)
-	}
-	assertUserVersion(t, database, 0)
-	assertSchemaObjectAbsent(t, database, "audit_schema_migrations")
-	assertSchemaObjectAbsent(t, database, "intake_events")
-	assertSchemaObjectAbsent(t, database, "events")
-}
-
-func TestMigrationEnablesIncrementalAutoVacuumForNewDatabase(t *testing.T) {
-	database := openMigrationDatabase(t)
-
-	if err := auditstorage.Migrate(t.Context(), database); err != nil {
-		t.Fatalf("Migrate: %v", err)
-	}
-
-	var mode int
-	if err := database.QueryRowContext(t.Context(), `pragma auto_vacuum`).Scan(&mode); err != nil {
-		t.Fatalf("query auto_vacuum: %v", err)
-	}
-	if mode != 2 {
-		t.Fatalf("auto_vacuum = %d, want incremental mode 2", mode)
-	}
-}
-
-func TestMigrationRejectsExistingDatabase(t *testing.T) {
-	database := openMigrationDatabase(t)
-	if _, err := database.ExecContext(t.Context(), `create table legacy_data (id integer)`); err != nil {
-		t.Fatalf("create existing table: %v", err)
-	}
-
-	err := auditstorage.Migrate(t.Context(), database)
-	if err == nil || err.Error() != "existing audit databases are not supported; start with an empty database" {
-		t.Fatalf("Migrate error = %v", err)
-	}
-
-	assertSchemaObjectAbsent(t, database, "audit_schema_migrations")
-}
-
-func openMigrationDatabase(t *testing.T) *sql.DB {
+func readFixture(t *testing.T, name string) string {
 	t.Helper()
+	content, err := os.ReadFile(filepath.Join("testdata", name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(content)
+}
+
+func TestOpenWriterReopensWithConnectionSettings(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.db")
+	for range 2 {
+		database, err := auditstorage.OpenWriter(t.Context(), path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if database.Stats().MaxOpenConnections != 1 {
+			t.Fatal("writer pool is not serialized")
+		}
+		database.SetMaxIdleConns(0)
+		for range 2 {
+			var foreignKeys, synchronous, timeout int
+			var journal string
+			if err := database.QueryRowContext(t.Context(), readFixture(t, "connection_settings.sql")).Scan(&foreignKeys, &journal, &synchronous, &timeout); err != nil {
+				t.Fatal(err)
+			}
+			if foreignKeys != 1 || journal != "wal" || synchronous != 1 || timeout != 5000 {
+				t.Fatalf("connection settings=%d/%s/%d/%d", foreignKeys, journal, synchronous, timeout)
+			}
+		}
+		if err := audit.WriteEvents(t.Context(), database, []audit.Event{{EventID: "reopen", SchemaVersion: 1}}); err != nil {
+			t.Fatal(err)
+		}
+		if err := database.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestInitializeRollsBackPartialSchema(t *testing.T) {
 	database, err := sql.Open("sqlite3", filepath.Join(t.TempDir(), "audit.db"))
 	if err != nil {
-		t.Fatalf("open database: %v", err)
+		t.Fatal(err)
 	}
-	database.SetMaxOpenConns(1)
-	t.Cleanup(func() {
-		if err := database.Close(); err != nil {
-			t.Fatalf("close database: %v", err)
-		}
-	})
-	return database
-}
-
-func assertUserVersion(t *testing.T, database *sql.DB, want int) {
-	t.Helper()
-	var got int
-	if err := database.QueryRowContext(t.Context(), `pragma user_version`).Scan(&got); err != nil {
-		t.Fatalf("query user_version: %v", err)
+	t.Cleanup(func() { _ = database.Close() })
+	if _, err := database.ExecContext(t.Context(), readFixture(t, "conflicting_schema.sql")); err != nil {
+		t.Fatal(err)
 	}
-	if got != want {
-		t.Fatalf("user_version = %d, want %d", got, want)
+	if err := auditstorage.Initialize(t.Context(), database); err == nil {
+		t.Fatal("accepted conflicting schema")
+	}
+	var tables int
+	if err := database.QueryRowContext(t.Context(), readFixture(t, "application_table_count.sql")).Scan(&tables); err != nil {
+		t.Fatal(err)
+	}
+	if tables != 1 {
+		t.Fatalf("partial schema survived rollback: %d tables", tables)
 	}
 }
 
-func assertSchemaObjectAbsent(t *testing.T, database *sql.DB, name string) {
-	t.Helper()
-	var objectName string
-	err := database.QueryRowContext(
-		t.Context(),
-		`select name from sqlite_schema where name = ?`,
-		name,
-	).Scan(&objectName)
-	if !errors.Is(err, sql.ErrNoRows) {
-		t.Fatalf("schema object %q lookup error = %v, want sql.ErrNoRows", name, err)
+func TestAuditChildOwnershipCascadesAndRejectsOrphans(t *testing.T) {
+	database, err := auditstorage.OpenWriter(t.Context(), filepath.Join(t.TempDir(), "audit.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	event := audit.Event{EventID: "parent", SchemaVersion: 1, Violations: []audit.Violation{{Rule: "rule"}}}
+	if err := audit.WriteEvents(t.Context(), database, []audit.Event{event}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ExecContext(t.Context(), readFixture(t, "delete_audit_parent.sql")); err != nil {
+		t.Fatal(err)
+	}
+	var children int
+	if err := database.QueryRowContext(t.Context(), readFixture(t, "audit_child_count.sql")).Scan(&children); err != nil {
+		t.Fatal(err)
+	}
+	if children != 0 {
+		t.Fatalf("orphan children=%d", children)
+	}
+	if _, err := database.ExecContext(t.Context(), readFixture(t, "insert_orphan.sql")); err == nil {
+		t.Fatal("accepted orphan decision")
 	}
 }
