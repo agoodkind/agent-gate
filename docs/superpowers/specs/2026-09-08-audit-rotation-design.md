@@ -1,8 +1,54 @@
-# Disposable audit storage and manual reset
+# Audit CPU load, disk usage, rotation, and reset
 
-Agent-gate stores audit history in daily SQLite files and retains the current day plus the previous six days by default. Changing rotation or retention settings discards the existing history and starts fresh.
+Agent-gate removes repeated executable hashing, redundant database writes, and competing backlog scans. It stores audit history in daily SQLite files and retains the current day plus the previous six days by default. Changing rotation or retention settings discards the existing history and starts fresh.
 
 This specification defines the replacement for [issue 159](https://github.com/agoodkind/agent-gate/issues/159). The repository is pre-alpha and has one consumer. Existing installations have undefined behavior until the user manually runs the new reset command. Implementation does not reset or deploy to the live installation.
+
+## Cover the full reported problem
+
+The goal includes processor usage, disk traffic, hook responsiveness, and bounded history. Rotation alone does not address repeated work on each event.
+
+| Reported problem | Evidence and interpretation | Required result |
+| --- | --- | --- |
+| Automatic maintenance can starve across restarts and reloads. | The scheduler starts a fresh full interval instead of honoring elapsed time. The issue reports a restart cadence near its 24-hour interval. | Use absolute rotation boundaries and expire overdue files after readiness. |
+| Manual cleanup contends with the live writer. | The issue reports one successful 1,000-graph batch in four attempts and an 80,010-graph backlog. The implementation already loops over batches; it exits on contention. | Delete the row-cleanup, lease, and compaction paths. Expire closed database files. |
+| Disk synchronization and database operations add work during hook traffic. | The issue contains stack observations in SQLite, reads, writes, and `fsync`. Those observations are not syscall counts. The current driver's default is already `NORMAL`. | Reduce transactions, payload copies, and index work. Keep `NORMAL` explicit without claiming it is a new performance improvement. |
+| Evaluation writes are canceled or exceed their deadlines. | The issue reports failures at transaction start, evaluation insertion, and layer insertion during active hook traffic. | Remove repeated work before changing timeouts. Propagate cancellation into storage and test hook outcomes under contention. |
+| Stored history keeps growing. | The issue reports growth beyond 5.3 GB while cleanup stalls; this machine later measured about 18 GB. | Expire by age even across downtime. Verify filesystem reclamation. |
+| CPU and solid-state drive (SSD) work can compound as activity and backlog grow. | Source shows repeated executable hashes, several persistence stages, duplicate payloads, per-worker replay scans, and large indexes. The temporary sample below measures the current load but does not prove runaway saturation. | Remove those mechanisms and test whether cost per event grows with backlog under fixed traffic. |
+| Inspection can itself create substantial disk traffic. | Current status creates two database snapshots and performs graph and integrity scans. Its size-pressure path additionally deletes and vacuums a snapshot. | Make status read small metadata and file sizes. It must not copy, scan, or compact history. |
+
+The feedback mechanism under investigation is additional work causing writer waits and deadlines, followed by fallback work and repeated replay attempts that create more work. Treat its existence in the code separately from the amount it contributes on the user's machine. The replacement must eliminate the identified redundant paths and measure the remaining contribution.
+
+## Record the temporary computer sample
+
+The daemon remained running throughout collection. No maintenance, reset, synthetic hook traffic, application build, or database scan ran during the capture. Ordinary interactive tool traffic continued. The temporary counter collector was compiled and calibrated before its own capture, during part of the separate stack-sampling window. All samplers exited after their bounded capture.
+
+The sampled process was PID 5863, launched by launchd, running commit `29ea2ef` with build hash `6e9ca084079c`. The loaded image UUID matched the executable on disk. The executable measured 85,924,448 bytes. Its embedded build information confirmed SQLite driver version `v1.14.49`.
+
+Process resource counters were recorded every five seconds from September 8 at 23:11:27 through 23:12:57 PDT, spanning 90.12 seconds. Mach clock units were converted using the host timebase. A 100 ms CPU control measured 99.8 ms of CPU time after conversion; the initial incorrect unit assumption was rejected before collecting the reported counters.
+
+| Process measurement | Observed result |
+| --- | ---: |
+| CPU time | 6.42 seconds |
+| Average CPU usage, relative to one core | 7.13% |
+| Median / peak CPU usage across five-second intervals | 8.14% / 16.35% |
+| Disk bytes read attributed to the process | 12.91 MB |
+| Disk bytes written attributed to the process | 139.88 MB |
+| Logical-write counter increase | 103.14 MB |
+| Peak disk-write rate across five-second intervals | 4.50 MB/s |
+| Physical memory footprint, start / end / sampled peak | 122.16 / 121.82 / 122.96 MB |
+| Process page-ins | 0 |
+| Intake receipts recorded during the timestamp window | 80 |
+| Completed hot / deferred evaluations during that window | 77 / 77 |
+
+The three consecutive 30-second periods used 9.02%, 5.03%, and 7.34% of one core and wrote 57.99, 35.36, and 46.53 MB. These intervals show variation within one observation; they are not independent controlled benchmark repetitions. Process disk counters include all writes charged to the process and do not identify SSD wear or internal flash write amplification.
+
+A separate 90-second stack sample began at 23:10:37 PDT with a requested 10 ms sampling interval. Its window partly overlaps the resource-counter capture. It recorded 541 top-of-stack observations in SHA-256, 80 in `read`, 32 in `pread`, 24 in `fsync`, and 16 in `pwrite`. SQLite checkpoint stacks included synchronization calls. Most thread observations were waits. Truncated Go ancestry prevents assigning every hash observation to one caller.
+
+System disk counters were collected as a control. Exclude their initial since-boot average. Their later intervals showed other computer activity as well as daemon traffic; they cannot attribute all disk activity to agent-gate. System swap-in, swap-out, and page-out counters did not increase between the surrounding memory snapshots. This capture demonstrates ongoing CPU and disk work, but did not reproduce memory thrashing or establish CPU/SSD saturation.
+
+Raw samples and the temporary collection programs remain in the task's temporary output directory for inspection. The committed tables retain the measured baseline needed for the design. Improvements require a controlled before/after workload; they cannot be claimed from this capture alone.
 
 ## Define the approved behavior
 
@@ -14,9 +60,45 @@ This specification defines the replacement for [issue 159](https://github.com/ag
 - Provide a manual reset command that removes the installation, preserves hooks and `config.toml`, and calls the existing service installer.
 - Keep enforcement, provider handling, and response formatting in the daemon. Hooks remain transport-only.
 
+## Remove repeated CPU and disk work
+
+### Compute process identity once
+
+The current build-hash function opens and hashes the entire executable on each call. Hot evaluation, deferred evaluation, status, and the hot-write failure fallback each call it. A normal hook with deferred completion therefore reads the executable at least twice through this code path. File caching can avoid physical reads while the repeated hashing still consumes CPU.
+
+Compute the executable hash once during process startup, before serving requests. Reuse that immutable value for every evaluation, status request, and failure record. Replacing the executable on disk must not change the running process's recorded identity. A failed read produces an explicit unavailable identity; never publish a partial-file hash. Loaded configuration identity is already cached and needs no additional cache.
+
+### Commit audit results directly
+
+SQLite is the only audit destination and shares the intake database handle. Insert normalized audit rows in the same transaction that commits deferred evaluation and receipt completion. Delete the deferred audit outbox, its payload copies, delivery claims, renewals, per-entry delivered markers, completion records, and replay path.
+
+Keep the initial intake commit and hot completion boundary required for accepted work and the hook response. Keep deferred attempt ownership and fencing. Reduce a normal successful receipt with deferred work to those necessary stages: intake append, hot completion, deferred claim, and atomic deferred completion with audit rows. Long-running claim renewal and actual failures remain separately observable.
+
+For audit-only events outside an evaluation transaction, write the bounded queued batch in one transaction instead of starting one transaction per event. Bound batches by serialized bytes as well as item count. Propagate the owning context through every SQL call and stop canceled work; the current sink's unconditional background context must go.
+
+Do not retry writes on an already-canceled context or recompute expensive identity data to construct a failure record. Keep the existing externally visible fail-open behavior when required persistence fails, and expose the failure without creating an unbounded persistence retry loop.
+
+### Delete unused indexing and retention scaffolding
+
+Remove the full-text command index and its insert, delete, and update triggers. Production queries do not consume that index. For each other secondary index, retain it only when a surviving query or constraint requires it, using query plans and representative data to justify the choice.
+
+Fold detail fields into their owning records where separate tables exist only to support independent expiration. Remove redundant availability manifests and detail-state rewrite paths. Keep repeated entities such as evaluation layers and labels.
+
+Record optional audit detail according to the selected content policy at insertion time. Retain one canonical replay input for an unfinished receipt, including the original normalized input and provider/environment facts needed to evaluate it. Release replay-only content as part of terminal completion when the content policy excludes it. This bounded work-completion cleanup does not reinstate a background retention or demotion engine. The full-detail policy reuses retained canonical input rather than storing another serialized copy.
+
+### Give replay one scheduling owner
+
+Use one scheduler for both current and retained historical backlog. It reads bounded pages and dispatches each eligible receipt once to the existing bounded workers. Workers must not each scan the backlog on their own ticker. Claimed or already-queued work does not create additional evaluation attempts.
+
+Apply bounded backoff to retryable failures and expose attempts, queue depth, and oldest pending age. Cancel owned work promptly during rotation and configuration cuts. Keep replay from delaying readiness or exhausting the synchronous hook's execution capacity.
+
+### Keep inspection cheap
+
+Status and rotation operate on storage metadata and file sizes. They do not create database snapshots, run whole-history integrity scans, estimate protected graphs, delete rows, or vacuum copies. Detail queries visit only the retained files and records needed by their filters. Historical file count alone must not multiply active-writer work per hook.
+
 ## Choose whole-file rotation
 
-Each file contains the complete intake, receipt, evaluation, and audit-delivery graph for requests assigned to that file. Foreign keys and atomic completion remain local to one database. A receipt's deferred work continues in its original database while that database remains retained.
+Each file contains the complete intake, receipt, evaluation, and final audit records for requests assigned to that file. Foreign keys and atomic completion remain local to one database. A receipt's deferred work continues in its original database while that database remains retained.
 
 Whole-file deletion replaces row-level expiration and compaction. The alternatives considered were repairing the existing batch-deletion scheduler and separating unfinished work into a permanent operational database. The first retains writer contention and compaction machinery. The second adds transfer and publication bookkeeping to preserve work that the user explicitly permits expiration to discard.
 
@@ -38,7 +120,7 @@ For the default, a file written today remains alongside the previous six days. H
 
 The configured SQLite base path identifies the storage family. Bucket names include their UTC start timestamp. Resolve one bucket path when opening a store; never resolve the clock separately for individual writes belonging to that store.
 
-Keep existing content-selection overrides. Remove separate summary/detail retention and terminal detail demotion. Collapse `balanced` and `full` into the canonical `full` profile; retain `minimal`. Omitted content is represented as not recorded. Expiration removes the whole graph rather than rewriting its detail state.
+Keep existing content-selection overrides. Remove separate summary/detail retention and terminal audit-detail demotion. Collapse `balanced` and `full` into the canonical `full` profile; retain `minimal`. Omitted content is represented as not recorded. Expiration removes the whole graph rather than rewriting its detail state. Replay-only input follows the work-completion rule above.
 
 ### Record the measurement behind the default
 
@@ -125,6 +207,9 @@ Update configuration defaults, examples, setup, command help, and storage docume
 Use temporary databases and isolated installation roots. Never mutate the live database or restart the user's live service during tests.
 
 - Prove direct schema creation, reopening, foreign keys, atomic completion, and the effective `NORMAL` synchronization setting.
+- Prove concurrent identity reads use the single startup hash, keep that identity after on-disk executable replacement, and reject partial-read hashes.
+- Prove deferred completion persists evaluation and audit rows atomically without an outbox or per-entry delivery transactions. Exercise rollback through observable records, not call-order mocks.
+- Verify optional detail is omitted, replay survives restart while pending, and terminal completion releases excluded replay-only input without losing retained audit content.
 - Exercise hook requests and deferred delivery across rotation, cancellation, reload, restart, and shutdown.
 - Verify elapsed-time expiration after downtime, current-window retention, configuration increases and reductions, equivalent values, invalid edits, and changing policy back to a previous value.
 - Inject interruption after invalidation, during deletion, and before fresh storage becomes ready. Verify retries cannot expose old history.
@@ -132,7 +217,11 @@ Use temporary databases and isolated installation roots. Never mutate the live d
 - Test global ordering, limits, detail lookup, cost aggregation, concurrent readers, and deletion failures through public boundaries.
 - Verify actual filesystem reclamation without row-level expiration or compaction.
 - Exercise reset with running and absent services, repeated invocation, custom paths, partially removed installations, executable restoration, preserved hooks/configuration, and service readiness. Keep service-control fakes limited to the operating-system boundary.
-- Measure disk synchronization and hook latency under identical traffic before and after. Stack-sampling counts do not represent syscall counts.
+- Compare CPU time, executable bytes hashed, transaction count, disk bytes written, final stored bytes, replay attempts, queue depth, and hook latency per input event under identical traffic before and after. Report median and tail across repeated runs.
+- Test idle backlog, steady traffic, bursts, repeated status requests, cancellation, and rotation. Repeat the same input trace with an empty store and a representative retained backlog to expose costs that compound with history size.
+- Require one executable hash per process, one replay scheduling owner, no per-entry outbox writes, no unused full-text-index maintenance, and no history copies or scans from status. A smaller database without these CPU and disk changes does not satisfy this specification.
+- For identical representative active workloads, CPU and disk work per event must improve beyond baseline run-to-run variation. Hook latency, error rates, and completed-work throughput must not regress beyond that variation. Idle work must remain bounded. Record the baseline spread before evaluating the replacement. Keep failures visible instead of relaxing timeouts to make the comparison pass.
+- Measure actual synchronization calls only with a validated syscall or SQLite instrumentation source. Stack-sampling observations do not represent syscall counts. Preserve the explicit `NORMAL` policy but credit no improvement to setting a value the current driver already uses.
 - Run `make test`, `make lint`, and `make check`. Require adversarial review of concurrency and destructive-path handling before merge.
 
 The implementation uses the harness-provided isolated checkout and logical signed commits. Merge, live deployment, and execution of the user's manual reset are separate actions.
