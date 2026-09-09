@@ -190,3 +190,4 @@ create index audit_event_time_idx on events(event_name, time, event_id);
 create index audit_tool_time_idx on events(tool_name, time, event_id);
 create index decision_kind_idx on decisions(kind, event_id);
 create index violation_rule_idx on violations(rule, event_id);
+create index violation_event_idx on violations(event_id);

@@ -223,7 +223,8 @@ func NewEventLoggerWithOptions(ctx context.Context, cfg *config.Config, log *slo
 				}
 				el.wg.Done()
 			}()
-			el.worker(ctx)
+			// Accepted asynchronous events belong to the logger until Close drains them.
+			el.worker(context.WithoutCancel(ctx))
 		}()
 	}
 	return el, nil

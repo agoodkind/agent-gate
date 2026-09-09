@@ -2,6 +2,7 @@ package auditstorage_test
 
 import (
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"goodkind.io/agent-gate/internal/audit"
+	"goodkind.io/agent-gate/internal/auditstorage"
 	"goodkind.io/agent-gate/internal/evaluation"
 	"goodkind.io/agent-gate/internal/intake"
 )
@@ -102,4 +104,61 @@ func TestSurvivingQueryPlans(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+}
+
+func TestAuditEventChildQueryPlans(t *testing.T) {
+	database, err := auditstorage.OpenWriter(t.Context(), filepath.Join(t.TempDir(), "audit.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	events := make([]audit.Event, 0, 200)
+	for index := range 200 {
+		events = append(events, audit.Event{EventID: fmt.Sprintf("child-%03d", index), Violations: []audit.Violation{{Rule: "rule"}}})
+	}
+	if err := audit.WriteEvents(t.Context(), database, events); err != nil {
+		t.Fatal(err)
+	}
+	parentQuery, err := os.ReadFile(filepath.Join("..", "audit", "query_1.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	parentPlan := explainChildQuery(t, database, string(parentQuery)+readFixture(t, "audit_event_filter.sql"))
+	for _, expected := range []string{"SEARCH o USING INDEX sqlite_autoindex_operations_1 (event_id=?)", "SEARCH d USING INDEX sqlite_autoindex_decisions_1 (event_id=?)"} {
+		if !strings.Contains(parentPlan, expected) {
+			t.Errorf("parent query plan lacks %q: %s", expected, parentPlan)
+		}
+	}
+	violationQuery, err := os.ReadFile(filepath.Join("..", "audit", "query_2.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	violationPlan := explainChildQuery(t, database, string(violationQuery))
+	if !strings.Contains(violationPlan, "SEARCH violations USING INDEX violation_event_idx (event_id=?)") || strings.Contains(violationPlan, "TEMP B-TREE") {
+		t.Fatalf("violation query must use event ownership index without sorting: %s", violationPlan)
+	}
+}
+
+func explainChildQuery(t *testing.T, database *sql.DB, query string) string {
+	t.Helper()
+	rows, err := database.QueryContext(t.Context(), "explain query plan "+query, "child-100")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	plans := make([]string, 0)
+	for rows.Next() {
+		var id, parent, unused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+			t.Fatal(err)
+		}
+		plans = append(plans, detail)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	plan := strings.Join(plans, "\n")
+	t.Logf("%s\n%s", query, plan)
+	return plan
 }

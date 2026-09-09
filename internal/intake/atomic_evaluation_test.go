@@ -45,11 +45,7 @@ func TestCommitHotEvaluationRollsBackPendingWhenLedgerInsertFails(t *testing.T) 
 func TestEvaluationDetailFailureRollsBackSummary(t *testing.T) {
 	store := newTestStore(t)
 	receipt := appendAtomicRecord(t, store, "event-detail-rollback")
-	if _, err := store.Handle().Exec(`
-		create trigger fail_evaluation_layer_detail
-		before insert on gate_evaluation_layers
-		begin select raise(abort, 'forced evaluation detail failure'); end
-	`); err != nil {
+	if _, err := store.Handle().Exec(readIntakeSQLFixture(t, "fail_layer_insert.sql")); err != nil {
 		t.Fatalf("create failure trigger: %v", err)
 	}
 	record := atomicEvaluationRecord(receipt, "eval-detail-rollback", "hot", 1)

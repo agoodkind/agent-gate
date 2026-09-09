@@ -686,8 +686,7 @@ func TestEvaluateHookPersistsGenuineEmptyInput(t *testing.T) {
 	var payloadType string
 	err = sqliteStore.Handle().QueryRowContext(
 		context.Background(),
-		`select typeof(wire_input) from intake_events
-		where event_id = ?`,
+		readDaemonSQLFixture(t, "wire_input_type.sql"),
 		record.EventID,
 	).Scan(&payloadType)
 	if err != nil {

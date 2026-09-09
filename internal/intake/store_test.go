@@ -29,9 +29,7 @@ func TestSQLiteStoreAppendPreservesEmptyPayloadAsBlob(t *testing.T) {
 	var payloadLength int
 	err = store.Handle().QueryRowContext(
 		context.Background(),
-		`select typeof(wire_input), length(wire_input)
-		from intake_events
-		where event_id = ?`,
+		readIntakeSQLFixture(t, "wire_input_shape.sql"),
 		appendResult.EventID,
 	).Scan(&payloadType, &payloadLength)
 	if err != nil {

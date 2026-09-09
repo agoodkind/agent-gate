@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/mattn/go-sqlite3"
 	"goodkind.io/agent-gate/internal/auditstorage"
+	"goodkind.io/agent-gate/internal/config"
 )
 
 func testAuditDatabase(t *testing.T) *sql.DB {
@@ -260,6 +262,72 @@ func waitForAuditConnectionWait(t *testing.T, database *sql.DB) {
 			t.Fatal("writer did not wait for reserved connection")
 		}
 		time.Sleep(time.Millisecond)
+	}
+}
+
+func TestReviewConstructorCancellationStillDrains(t *testing.T) {
+	database := testAuditDatabase(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	logger, err := NewEventLoggerWithOptions(ctx, nil, nil, LoggerOptions{SharedDB: database})
+	if err != nil {
+		t.Fatal(err)
+	}
+	connection, err := database.Conn(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	logger.Log("codex", "review", "PreToolUse", "info", "accepted-before-cancel", nil)
+	cancel()
+	if err := connection.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.Close(); err != nil {
+		t.Fatal(err)
+	}
+	count, _ := auditCounts(t, database)
+	if count != 1 {
+		t.Fatalf("Close returned nil, persisted events=%d, want 1", count)
+	}
+}
+
+func TestAuditQueryReturnsEventOwnedChildrenInOrder(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.db")
+	database, err := auditstorage.OpenWriter(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	target := testAuditEvent("target")
+	target.SessionID = "children"
+	target.Operation = Operation{CWD: "/repo", EffectiveCWD: "/repo/sub", Command: "run target", FilePath: "/repo/file"}
+	target.Decision = Decision{Kind: "block", CanBlock: true, RulesChecked: []string{"first", "second"}, RulesMatched: []string{"second"}}
+	target.Violations = []Violation{{Rule: "first", Mode: "audit", Message: "first match"}, {Rule: "second", Mode: "block", Message: "second match"}}
+	empty := testAuditEvent("empty")
+	empty.SessionID = "children"
+	empty.Violations = nil
+	unrelated := testAuditEvent("unrelated")
+	if err := WriteEvents(t.Context(), database, []Event{unrelated, target, empty}); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{Audit: config.Audit{Outputs: config.AuditOutput{SQLite: config.AuditSQLiteOutput{Path: path}}}}
+	records, _, err := QueryReadOnly(t.Context(), cfg, QueryFilter{SessionID: "children"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("records=%+v", records)
+	}
+	for _, record := range records {
+		if record.EventID == "empty" {
+			if len(record.Violations) != 0 {
+				t.Fatalf("unrelated violations returned for empty event: %+v", record.Violations)
+			}
+			continue
+		}
+		if record.EventID != target.EventID || record.Operation != target.Operation || !reflect.DeepEqual(record.Decision, target.Decision) || !reflect.DeepEqual(record.Violations, target.Violations) {
+			t.Fatalf("child records changed: %+v", record)
+		}
 	}
 }
 

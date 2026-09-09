@@ -893,10 +893,7 @@ func TestRunQueryEvaluationsTableIgnoresCorruptDetail(t *testing.T) {
 		t.Fatalf("OpenSQLite: %v", err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	if _, err := store.Handle().Exec(`
-		update gate_evaluation_layers set metadata_json = '{'
-		where evaluation_id = ?
-	`, record.Evaluation.EvaluationID); err != nil {
+	if _, err := store.Handle().Exec(readCLISQLFixture(t, "corrupt_evaluation_metadata.sql"), record.Evaluation.EvaluationID); err != nil {
 		t.Fatalf("corrupt evaluation metadata: %v", err)
 	}
 
@@ -1095,7 +1092,7 @@ func setCLIExportStoredDetailStateWithDatabase(
 ) {
 	t.Helper()
 	if _, err := database.Exec(
-		`update gate_evaluations set content_recorded = ? where evaluation_id = ?`,
+		readCLISQLFixture(t, "set_evaluation_content_recorded.sql"),
 		state == auditstorage.DetailStateAvailable,
 		evaluationID,
 	); err != nil {

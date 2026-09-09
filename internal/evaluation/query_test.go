@@ -138,9 +138,7 @@ func TestStoreListReturnsOrderedSafeTrainingExport(t *testing.T) {
 func TestExportEvaluationsFiltersBeforeCheckingDetail(t *testing.T) {
 	_, database, path, first, second := newEvaluationQueryFixture(t)
 	deleteEvaluationDetail(t, database, first.Evaluation.EvaluationID)
-	if _, err := database.Exec(`
-		update gate_evaluations set content_recorded = 0 where evaluation_id = ?
-	`, first.Evaluation.EvaluationID); err != nil {
+	if _, err := database.Exec(readEvaluationSQLFixture(t, "omit_evaluation_content.sql"), first.Evaluation.EvaluationID); err != nil {
 		t.Fatalf("mark evaluation detail expired: %v", err)
 	}
 
@@ -192,7 +190,7 @@ func TestExportEvaluationsFiltersBeforeCheckingDetail(t *testing.T) {
 
 func deleteEvaluationDetail(t *testing.T, database *sql.DB, evaluationID string) {
 	t.Helper()
-	if _, err := database.Exec("update gate_evaluations set content_recorded = 0, error_json = null where evaluation_id = ?", evaluationID); err != nil {
+	if _, err := database.Exec(readEvaluationSQLFixture(t, "clear_evaluation_error.sql"), evaluationID); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -250,7 +248,7 @@ func TestStoreListRejectsMissingAndCorruptChildRows(t *testing.T) {
 			name: "corrupt metadata",
 			mutate: func(t *testing.T, database *sql.DB, evaluationID string) {
 				t.Helper()
-				if _, err := database.Exec(`update gate_evaluation_layers set metadata_json = '{' where evaluation_id = ? and layer_index = 1`, evaluationID); err != nil {
+				if _, err := database.Exec(readEvaluationSQLFixture(t, "corrupt_layer_metadata.sql"), evaluationID); err != nil {
 					t.Fatalf("corrupt metadata: %v", err)
 				}
 			},
@@ -268,7 +266,7 @@ func TestStoreListRejectsMissingAndCorruptChildRows(t *testing.T) {
 			name: "mismatched output hash",
 			mutate: func(t *testing.T, database *sql.DB, evaluationID string) {
 				t.Helper()
-				if _, err := database.Exec(`update gate_evaluation_layers set output_json = '{"decision":"allow"}' where evaluation_id = ? and layer_index = 1`, evaluationID); err != nil {
+				if _, err := database.Exec(readEvaluationSQLFixture(t, "corrupt_layer_output.sql"), evaluationID); err != nil {
 					t.Fatalf("corrupt output JSON: %v", err)
 				}
 			},
@@ -290,11 +288,7 @@ func TestStoreListRejectsMissingAndCorruptChildRows(t *testing.T) {
 
 func TestStoreListRejectsUnknownV2MetadataAfterRead(t *testing.T) {
 	store, database, _, first, _ := newEvaluationQueryFixture(t)
-	if _, err := database.Exec(`
-		update gate_evaluation_layers
-		set metadata_json = json_set(metadata_json, '$.prompt', 'prohibited')
-		where evaluation_id = ? and layer_index = 1
-	`, first.Evaluation.EvaluationID); err != nil {
+	if _, err := database.Exec(readEvaluationSQLFixture(t, "unknown_layer_metadata.sql"), first.Evaluation.EvaluationID); err != nil {
 		t.Fatalf("corrupt v2 metadata: %v", err)
 	}
 
