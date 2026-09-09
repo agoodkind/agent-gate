@@ -177,7 +177,7 @@ func runInstallAll(args []string, dependencies installDependencies) int {
 	flags.BoolVar(&values.noConfig, "no-config", false, "skip default config creation and merge")
 	flags.BoolVar(&values.noService, "no-service", false, "skip service installation and readiness")
 	flags.StringVar(&values.autoUpdate, "auto-update", "", "set update mode: check, apply, or off")
-	flags.StringVar(&values.auditProfile, "audit-profile", "", "set audit storage profile: balanced, full, or minimal")
+	flags.StringVar(&values.auditProfile, "audit-profile", "", "set audit storage profile: full or minimal")
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
@@ -340,13 +340,12 @@ func validateAutoUpdate(value string) error {
 
 func validateAuditProfile(value string) error {
 	switch config.AuditStorageProfile(value) {
-	case "", config.AuditStorageProfileBalanced, config.AuditStorageProfileFull,
+	case "", config.AuditStorageProfileFull,
 		config.AuditStorageProfileMinimal:
 		return nil
 	default:
 		return fmt.Errorf(
-			"audit profile must be %q, %q, or %q",
-			config.AuditStorageProfileBalanced,
+			"audit profile must be %q or %q",
 			config.AuditStorageProfileFull,
 			config.AuditStorageProfileMinimal,
 		)

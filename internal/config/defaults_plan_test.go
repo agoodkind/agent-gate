@@ -214,7 +214,7 @@ func TestPrepareDefaultsPreservesAuditStorageOverrides(t *testing.T) {
 	configPath := filepath.Join(configDir, "config.toml")
 	initial := `[audit.storage]
 profile = "full"
-maintenance_batch_rows = 17
+retention_buckets = 17
 full_detail_retention = "48h"
 summary_retention = "96h"
 `
@@ -230,7 +230,7 @@ summary_retention = "96h"
 	}
 	for _, want := range []string{
 		`profile = "minimal"`,
-		"maintenance_batch_rows = 17",
+		"retention_buckets = 17",
 		`full_detail_retention = "48h"`,
 		`summary_retention = "96h"`,
 	} {
@@ -356,8 +356,8 @@ func TestPrepareDefaultsAddsBalancedStorageOnlyWhenAbsent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PrepareDefaults: %v", err)
 	}
-	if !strings.Contains(string(plan.Content), "[audit.storage]\nprofile = \"balanced\"") {
-		t.Fatalf("prepared config missing balanced storage:\n%s", plan.Content)
+	if !strings.Contains(string(plan.Content), "[audit.storage]\nprofile = \"full\"") {
+		t.Fatalf("prepared config missing full storage:\n%s", plan.Content)
 	}
 
 	initial = "[audit.storage]\nprofile = \"full\"\n"
@@ -809,7 +809,7 @@ func TestPrepareDefaultsReplacesInlineAuditStorageProfile(t *testing.T) {
 		t.Fatalf("MkdirAll config directory: %v", err)
 	}
 	configPath := filepath.Join(configDir, "config.toml")
-	initial := `audit.storage = { profile = "full", maintenance_batch_rows = 17 }
+	initial := `audit.storage = { profile = "full", retention_buckets = 17 }
 `
 	if err := os.WriteFile(configPath, []byte(initial), 0o600); err != nil {
 		t.Fatalf("WriteFile config: %v", err)
@@ -824,8 +824,8 @@ func TestPrepareDefaultsReplacesInlineAuditStorageProfile(t *testing.T) {
 	if plan.Config.AuditStoragePolicy().Profile != config.AuditStorageProfileMinimal {
 		t.Fatalf("profile = %q, want minimal", plan.Config.AuditStoragePolicy().Profile)
 	}
-	if plan.Config.AuditStoragePolicy().MaintenanceBatchRows != 17 {
-		t.Fatalf("maintenance batch rows = %d, want 17", plan.Config.AuditStoragePolicy().MaintenanceBatchRows)
+	if plan.Config.AuditStoragePolicy().RetentionBuckets != 17 {
+		t.Fatalf("retention buckets = %d, want 17", plan.Config.AuditStoragePolicy().RetentionBuckets)
 	}
 }
 

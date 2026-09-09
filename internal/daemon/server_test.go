@@ -1914,7 +1914,7 @@ violation_message = "alpha blocked"
 enabled = false
 
 [audit.storage]
-max_size_mb = -1
+retention_buckets = -1
 
 [[rules]]
 name = "block-beta"
@@ -1964,7 +1964,7 @@ violation_message = "alpha blocked"
 
 	writeConfig(t, configPath, `
 [audit.storage]
-max_size_mb = "25"
+retention_buckets = "25"
 `)
 	reloadErr := srv.reloadConfig(context.Background())
 	if reloadErr == nil {

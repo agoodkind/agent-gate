@@ -9,11 +9,9 @@ enabled = true
 level = "info"
 
 [audit.storage]
-profile = "balanced"
-maintenance_interval = "24h"
-max_size_mb = 0
-maintenance_batch_rows = 1000
-compact_after_maintenance = true
+profile = "full"
+bucket_interval = "24h"
+retention_buckets = 7
 
 [audit.outputs.sqlite]
 path = ""

@@ -26,13 +26,9 @@ type Store struct {
 // NewStore uses an initialized database owned by its caller.
 func NewStore(ctx context.Context, databasePath string, database *sql.DB) (*Store, error) {
 	store := &Store{database: database, policy: config.AuditStoragePolicy{
-		Profile:                 config.AuditStorageProfileBalanced,
-		MaintenanceInterval:     24 * time.Hour,
-		MaxSizeBytes:            0,
-		MaintenanceBatchRows:    1000,
-		CompactAfterMaintenance: true,
-		FullDetailRetention:     168 * time.Hour,
-		SummaryRetention:        720 * time.Hour,
+		Profile:          config.AuditStorageProfileFull,
+		BucketInterval:   24 * time.Hour,
+		RetentionBuckets: 7,
 		Detail: config.AuditStorageDetailPolicy{
 			WireInput: true, NormalizedInput: true, ProviderEvidence: true,
 			EnvironmentEvidence: true, EvaluationContent: true,

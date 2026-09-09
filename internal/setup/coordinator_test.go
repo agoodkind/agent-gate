@@ -28,7 +28,7 @@ func TestSetupNonInteractiveFreshInstallDoesNotCreateAuditDatabase(t *testing.T)
 	}
 	plan, err := Prepare(t.Context(), Options{
 		BinPath: binPath, Providers: []installer.Provider{installer.ProviderClaude},
-		AuditProfile: config.AuditStorageProfileBalanced, AutoUpdate: config.UpdateModeApply,
+		AuditProfile: config.AuditStorageProfileFull, AutoUpdate: config.UpdateModeApply,
 	}, dependencies)
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
@@ -44,7 +44,7 @@ func TestSetupPrepareGeneratesVerificationIDBeforeInstallation(t *testing.T) {
 	_, err := Prepare(t.Context(), Options{
 		BinPath:      writeSetupExecutable(t),
 		Providers:    []installer.Provider{installer.ProviderCodex},
-		AuditProfile: config.AuditStorageProfileBalanced,
+		AuditProfile: config.AuditStorageProfileFull,
 		AutoUpdate:   config.UpdateModeApply,
 	}, Dependencies{
 		NewSetupID: func() (string, error) { return "", errors.New("entropy unavailable") },
@@ -66,7 +66,7 @@ func TestSetupNonInteractiveRejectsEmptyProviderSelection(t *testing.T) {
 		prepareCalls := 0
 		_, err := Prepare(t.Context(), Options{
 			BinPath: "unused", Providers: providers,
-			AuditProfile: config.AuditStorageProfileBalanced, AutoUpdate: config.UpdateModeApply,
+			AuditProfile: config.AuditStorageProfileFull, AutoUpdate: config.UpdateModeApply,
 		}, Dependencies{PrepareInstallation: func(installer.InstallationOptions) (*installer.InstallationPlan, error) {
 			prepareCalls++
 			return nil, nil

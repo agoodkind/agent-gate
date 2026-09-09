@@ -90,11 +90,10 @@ func (prompter *setupPrompter) SelectAuditProfile(
 ) (config.AuditStorageProfile, error) {
 	defaultProfile := policy.Profile
 	switch defaultProfile {
-	case config.AuditStorageProfileBalanced,
-		config.AuditStorageProfileFull,
+	case config.AuditStorageProfileFull,
 		config.AuditStorageProfileMinimal:
 	default:
-		defaultProfile = config.AuditStorageProfileBalanced
+		defaultProfile = config.AuditStorageProfileFull
 	}
 	for {
 		value, err := prompter.readChoice("Select audit profile", string(defaultProfile))
@@ -105,12 +104,11 @@ func (prompter *setupPrompter) SelectAuditProfile(
 		}
 		profile := config.AuditStorageProfile(value)
 		switch profile {
-		case config.AuditStorageProfileBalanced,
-			config.AuditStorageProfileFull,
+		case config.AuditStorageProfileFull,
 			config.AuditStorageProfileMinimal:
 			return profile, nil
 		default:
-			if _, writeErr := fmt.Fprintln(prompter.writer, "select balanced, full, or minimal"); writeErr != nil {
+			if _, writeErr := fmt.Fprintln(prompter.writer, "select full or minimal"); writeErr != nil {
 				wrappedErr := fmt.Errorf("write audit profile error: %w", writeErr)
 				slog.Warn("setup audit profile output failed", "err", wrappedErr)
 				return "", wrappedErr

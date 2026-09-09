@@ -579,7 +579,6 @@ func TestRunQuerySeenAcceptsSharedAndIntakeFilters(t *testing.T) {
 	}
 }
 
-
 func TestRunQueryDecisionsPreservesAuditQueryBehavior(t *testing.T) {
 	setupQueryEnvironment(t)
 	logger, err := audit.NewEventLoggerWithOptions(context.Background(), &config.Config{}, nil, audit.LoggerOptions{QueueLimit: 0})
@@ -1259,7 +1258,7 @@ func TestRunConfigCheckPrintsEffectiveAuditStoragePolicy(t *testing.T) {
 	}
 	want := "" +
 		"agent-gate: config ok\n" +
-		"audit storage: balanced\n"
+		"audit storage: full\n"
 	if stdout != want {
 		t.Fatalf("runConfig() stdout = %q, want %q", stdout, want)
 	}
@@ -1268,7 +1267,7 @@ func TestRunConfigCheckPrintsEffectiveAuditStoragePolicy(t *testing.T) {
 	}
 }
 
-func TestRunConfigCheckPrintsConfiguredAuditStorageSize(t *testing.T) {
+func TestRunConfigCheckPrintsConfiguredAuditStorageProfile(t *testing.T) {
 	setupQueryEnvironment(t)
 	configPath := config.Path()
 	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
@@ -1276,10 +1275,9 @@ func TestRunConfigCheckPrintsConfiguredAuditStorageSize(t *testing.T) {
 	}
 	body := `
 [audit.storage]
-profile = "full"
-maintenance_interval = "12h"
-max_size_mb = 25
-maintenance_batch_rows = 123
+profile = "minimal"
+bucket_interval = "12h"
+retention_buckets = 3
 `
 	if err := os.WriteFile(configPath, []byte(body), 0o600); err != nil {
 		t.Fatalf("WriteFile config: %v", err)
@@ -1291,7 +1289,7 @@ maintenance_batch_rows = 123
 	}
 	want := "" +
 		"agent-gate: config ok\n" +
-		"audit storage: full\n"
+		"audit storage: minimal\n"
 	if stdout != want {
 		t.Fatalf("runConfig() stdout = %q, want %q", stdout, want)
 	}
@@ -1306,7 +1304,7 @@ func TestRunConfigCheckRejectsInvalidAuditStorage(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
 		t.Fatalf("MkdirAll config: %v", err)
 	}
-	if err := os.WriteFile(configPath, []byte("[audit.storage]\nmax_size_mb = -1\n"), 0o600); err != nil {
+	if err := os.WriteFile(configPath, []byte("[audit.storage]\nretention_buckets = -1\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile config: %v", err)
 	}
 
@@ -1317,7 +1315,7 @@ func TestRunConfigCheckRejectsInvalidAuditStorage(t *testing.T) {
 	if stdout != "" {
 		t.Fatalf("runConfig() stdout = %q, want empty", stdout)
 	}
-	if !strings.Contains(stderr, "audit.storage.max_size_mb must not be negative") {
+	if !strings.Contains(stderr, "audit.storage: retention buckets must be positive") {
 		t.Fatalf("runConfig() stderr = %q, want audit storage validation error", stderr)
 	}
 }

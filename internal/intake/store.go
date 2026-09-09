@@ -125,10 +125,10 @@ type SQLiteOptions struct {
 	Log    *slog.Logger
 }
 
-// OpenSQLite opens the durable intake store with the balanced content policy.
+// OpenSQLite opens the durable intake store with the full content policy.
 func OpenSQLite(ctx context.Context, path string, log *slog.Logger) (*Store, error) {
 	return openSQLite(ctx, SQLiteOptions{
-		Path: path, Policy: balancedAuditStoragePolicy(), Log: log,
+		Path: path, Policy: fullAuditStoragePolicy(), Log: log,
 	})
 }
 
@@ -165,15 +165,11 @@ func openSQLite(ctx context.Context, options SQLiteOptions) (*Store, error) {
 	return store, nil
 }
 
-func balancedAuditStoragePolicy() config.AuditStoragePolicy {
+func fullAuditStoragePolicy() config.AuditStoragePolicy {
 	return config.AuditStoragePolicy{
-		Profile:                 config.AuditStorageProfileBalanced,
-		MaintenanceInterval:     24 * time.Hour,
-		MaxSizeBytes:            0,
-		MaintenanceBatchRows:    1000,
-		CompactAfterMaintenance: true,
-		FullDetailRetention:     168 * time.Hour,
-		SummaryRetention:        720 * time.Hour,
+		Profile:          config.AuditStorageProfileFull,
+		BucketInterval:   24 * time.Hour,
+		RetentionBuckets: 7,
 		Detail: config.AuditStorageDetailPolicy{
 			WireInput: true, NormalizedInput: true, ProviderEvidence: true,
 			EnvironmentEvidence: true, EvaluationContent: true,
