@@ -186,12 +186,12 @@ func TestConcurrentAppendsKeepReceiptsOnCanonicalEvent(t *testing.T) {
 func newReceiptTestStore(t *testing.T) (*intake.Store, string) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "audit.db")
-	store, err := intake.OpenSQLite(context.Background(), path, nil)
+	store, err := openFixtureIntake(t, context.Background(), path, nil)
 	if err != nil {
 		t.Fatalf("OpenSQLite: %v", err)
 	}
 	t.Cleanup(func() {
-		if err := store.Close(); err != nil {
+		if err := store.Handle().Close(); err != nil {
 			t.Fatalf("Close: %v", err)
 		}
 	})

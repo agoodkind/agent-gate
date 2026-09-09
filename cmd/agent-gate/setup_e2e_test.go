@@ -70,10 +70,11 @@ func TestSetupEndToEndVerifiesInstalledProviderCommands(t *testing.T) {
 		t.Fatalf("Listen daemon socket: %v", err)
 	}
 	log := slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil))
-	daemonServer, err := daemon.New(log, cfg)
+	daemonServer, err := daemon.New(t.Context(), log, cfg)
 	if err != nil {
 		t.Fatalf("daemon.New: %v", err)
 	}
+	daemonServer.StartAuditScheduler(t.Context())
 	grpcServer := grpc.NewServer()
 	daemonpb.RegisterAgentGateDServer(grpcServer, daemonServer)
 	serveResult := make(chan error, 1)

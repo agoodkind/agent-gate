@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"goodkind.io/agent-gate/internal/audit"
+	"goodkind.io/agent-gate/internal/auditstorage"
 	"goodkind.io/agent-gate/internal/config"
 	"goodkind.io/agent-gate/internal/hook"
 	"goodkind.io/agent-gate/internal/intake"
@@ -34,14 +35,21 @@ type deferredProcessor struct {
 	claimOwner         string
 	claimLease         time.Duration
 	claimRenewInterval time.Duration
+	cancel             context.CancelFunc
+	catalog            *auditstorage.Catalog
+	bucket             auditstorage.Bucket
+	now                func() time.Time
+	notify             func()
+	queueMu            sync.Mutex
+	queued             map[ReplayKey]int
+	queuedBytes        int
 }
 
 var deferredProcessorSequence atomic.Uint64
 
 type deferredWork struct {
+	bucket    auditstorage.Bucket
 	receiptID int64
-	eventID   string
-	hotEvent  hook.DeferredAuditEvent
 }
 
 func newDeferredProcessor(
@@ -60,6 +68,7 @@ func newDeferredProcessor(
 	if log == nil {
 		log = slog.Default()
 	}
+	ctx, cancel := context.WithCancel(ctx)
 
 	processor := &deferredProcessor{
 		events:             make(chan deferredWork, queueLimit),
@@ -77,6 +86,9 @@ func newDeferredProcessor(
 		),
 		claimLease:         cfg.DeferredClaimLease(),
 		claimRenewInterval: cfg.DeferredClaimRenewInterval(),
+		cancel:             cancel,
+		catalog:            nil, bucket: auditstorage.Bucket{ID: "", Path: "", Start: time.Time{}}, now: time.Now, notify: nil,
+		queueMu: sync.Mutex{}, queued: make(map[ReplayKey]int), queuedBytes: 0,
 	}
 
 	for range workers {
@@ -92,69 +104,29 @@ func newDeferredProcessor(
 	return processor
 }
 
-func (p *deferredProcessor) ReplayPending(ctx context.Context) error {
-	if p == nil || p.store == nil {
-		return nil
-	}
-
-	receiptIDs, err := p.store.ListPending(ctx)
-	if err != nil {
-		if p.log != nil {
-			p.log.WarnContext(ctx, "replay pending deferred intake failed", "err", err)
-		}
-		err = fmt.Errorf("replay pending deferred intake: %w", err)
-	} else {
-		var emptyEvent hook.DeferredAuditEvent
-		for _, receiptID := range receiptIDs {
-			p.processEvent(ctx, deferredWork{
-				receiptID: receiptID, eventID: "", hotEvent: emptyEvent,
-			})
-		}
-	}
-	return err
-}
-
-func (p *deferredProcessor) Enqueue(receiptID int64, eventID string, hotEvent hook.DeferredAuditEvent) bool {
-	if p == nil || p.store == nil || receiptID <= 0 || eventID == "" || p.stopping.Load() {
-		return false
-	}
-
-	select {
-	case p.events <- deferredWork{receiptID: receiptID, eventID: eventID, hotEvent: hotEvent}:
-		return true
-	default:
-		if p.log != nil {
-			p.log.Warn("deferred intake queue full; leaving event durable for replay",
-				"event_id", eventID,
-				"queue_depth", len(p.events),
-				"queue_limit", cap(p.events),
-			)
-		}
-		return false
-	}
-}
-
 func (p *deferredProcessor) Close() {
 	if p == nil {
 		return
 	}
 	if p.stopping.Swap(true) {
+		p.wg.Wait()
 		return
 	}
 	close(p.done)
+	if p.cancel != nil {
+		p.cancel()
+	}
 	p.wg.Wait()
 }
 
 func (p *deferredProcessor) worker(ctx context.Context) {
-	replayTicker := time.NewTicker(p.claimLease)
-	defer replayTicker.Stop()
 	for {
 		select {
 		case work := <-p.events:
-			p.processEvent(ctx, work)
-		case <-replayTicker.C:
-			_ = p.ReplayPending(ctx)
+			p.processDispatch(ctx, work)
 		case <-p.done:
+			return
+		case <-ctx.Done():
 			return
 		}
 	}
@@ -169,13 +141,9 @@ func (p *deferredProcessor) processEvent(ctx context.Context, work deferredWork)
 			return
 		}
 		if p.log != nil {
-			p.log.WarnContext(ctx, "claim deferred intake failed", "event_id", work.eventID, "err", err)
+			p.log.WarnContext(ctx, "claim deferred intake failed", "receipt_id", work.receiptID, "err", err)
 		}
 		return
-	}
-	var hotEvent *hook.DeferredAuditEvent
-	if work.hotEvent.Valid {
-		hotEvent = &work.hotEvent
 	}
 	processingCtx, cancel := context.WithCancel(ctx)
 	stopRenewal := make(chan struct{})
@@ -201,7 +169,7 @@ func (p *deferredProcessor) processEvent(ctx context.Context, work deferredWork)
 	}()
 	defer stopRenewalAndWait()
 	defer cancel()
-	p.processRecord(processingCtx, record, claim, hotEvent, stopRenewalAndWait)
+	p.processRecord(processingCtx, record, claim, stopRenewalAndWait)
 }
 
 func (p *deferredProcessor) renewClaim(
@@ -239,16 +207,15 @@ func (p *deferredProcessor) processRecord(
 	ctx context.Context,
 	record intake.Record,
 	claim intake.DeferredClaim,
-	hotEvent *hook.DeferredAuditEvent,
 	afterCommit func(),
 ) {
-	deferredEvent, ok := p.rebuildDeferredAudit(ctx, record, hotEvent)
-	if !ok {
+	deferredEvent, ok := p.rebuildDeferredAudit(ctx, record)
+	if !ok || ctx.Err() != nil {
 		p.releaseClaim(ctx, claim)
 		return
 	}
 	mode := "deferred"
-	if hotEvent == nil {
+	if claim.Attempt > 1 {
 		mode = "deferred_replay"
 	}
 	attempt := claim.Attempt
@@ -284,6 +251,9 @@ func (p *deferredProcessor) processRecord(
 	if err := p.evaluationRecorder.CommitDeferredEvaluation(
 		ctx, claim, evaluationRecord, auditEntries,
 	); err != nil {
+		if errors.Is(err, intake.ErrDeferredClaimLost) {
+			return
+		}
 		p.logDeferredFailure(ctx, record, "evaluation_persistence_failed", err)
 		p.releaseClaim(ctx, claim)
 		return
@@ -294,10 +264,21 @@ func (p *deferredProcessor) processRecord(
 }
 
 func (p *deferredProcessor) releaseClaim(ctx context.Context, claim intake.DeferredClaim) {
-	if err := p.store.ReleaseDeferredClaim(ctx, claim); err != nil &&
+	now := p.now()
+	nextAttempt := now.Add(auditRetryDelay(claim.Attempt))
+	if !p.bucket.Start.IsZero() {
+		policy := p.cfg.AuditStoragePolicy()
+		expires := p.bucket.Start.Add(time.Duration(policy.RetentionBuckets) * policy.BucketInterval)
+		if nextAttempt.After(expires) {
+			nextAttempt = expires
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	if err := p.store.ScheduleDeferredRetry(ctx, claim, nextAttempt); err != nil &&
 		!errors.Is(err, intake.ErrDeferredClaimLost) && p.log != nil {
 		p.log.WarnContext(
-			ctx, "release deferred intake claim failed",
+			ctx, "schedule deferred intake retry failed",
 			"receipt_id", claim.ReceiptID, "attempt", claim.Attempt, "err", err,
 		)
 	}
@@ -360,14 +341,13 @@ func captureDeferredAudit(
 	collector := &normalizedAuditCollector{
 		sink: replayableSink, entries: make([]audit.NormalizedEntry, 0, 3),
 	}
-	hook.WriteDeferredAudit(ctx, event, collector)
+	hook.WriteDeferredFindings(ctx, event, collector)
 	return collector.entries, nil
 }
 
 func (p *deferredProcessor) rebuildDeferredAudit(
 	ctx context.Context,
 	record intake.Record,
-	hotEvent *hook.DeferredAuditEvent,
 ) (hook.DeferredAuditEvent, bool) {
 	getenv := func(key string) string {
 		return record.EnvFingerprint[key]
@@ -384,63 +364,11 @@ func (p *deferredProcessor) rebuildDeferredAudit(
 		Classification: classification,
 	}
 
-	var merged hook.DeferredAuditEvent
-	if hotEvent != nil && hotEvent.Valid {
-		merged = *hotEvent
-	} else {
-		syncCfg := hook.ReplaySyncConfig(p.cfg)
-		syncEval := hook.EvaluateClassifiedHotWithEventID(
-			ctx,
-			evaluationInput,
-			syncCfg,
-			getenv,
-			record.EventID,
-		)
-		if !syncEval.Deferred.Valid {
-			if p.log != nil {
-				p.log.WarnContext(ctx, "replay sync evaluation produced invalid deferred event", "event_id", record.EventID)
-			}
-			var empty hook.DeferredAuditEvent
-			return empty, false
-		}
-		merged = syncEval.Deferred
+	if p.inferRuntime != nil {
+		ctx = rules.WithInferRuntime(ctx, p.inferRuntime)
 	}
-	syncRules, deferredRules := hook.PartitionRules(p.cfg)
-	deferredCfg := hook.DeferredConfig(p.cfg)
-	if hotEvent == nil || !hotEvent.Valid {
-		replaySyncCfg := hook.ReplaySyncConfig(p.cfg)
-		replayDeferredCfg := hook.ReplayDeferredConfig(p.cfg)
-		syncRules = replaySyncCfg.Rules
-		deferredRules = replayDeferredCfg.Rules
-		deferredCfg = replayDeferredCfg
-	}
-	merged.Rules = append(append([]config.Rule(nil), syncRules...), deferredRules...)
-
-	if len(deferredRules) > 0 {
-		collector := &inferenceTraceSink{traces: nil}
-		deferredCtx := rules.WithInferenceTraceCollector(ctx, collector)
-		if p.inferRuntime != nil {
-			deferredCtx = rules.WithInferRuntime(deferredCtx, p.inferRuntime)
-		}
-		deferredEval := hook.EvaluateClassifiedHotWithEventID(
-			deferredCtx,
-			evaluationInput,
-			deferredCfg,
-			getenv,
-			record.EventID,
-		)
-		if deferredEval.Deferred.Valid {
-			merged.AuditOnlyViolations = append(
-				append([]rules.Violation(nil), merged.AuditOnlyViolations...),
-				deferredEval.Deferred.AuditOnlyViolations...,
-			)
-			merged.InferenceTraces = append(merged.InferenceTraces, collector.snapshot()...)
-			merged.Trace = deferredEval.Trace
-		} else if p.log != nil {
-			p.log.WarnContext(ctx, "replay deferred evaluation produced invalid deferred event", "event_id", record.EventID)
-		}
-	}
-	return merged, true
+	result := hook.EvaluateClassifiedHotWithEventID(ctx, evaluationInput, hook.DeferredConfig(p.cfg), getenv, record.EventID)
+	return result.Deferred, result.Deferred.Valid
 }
 
 func replayClassification(record intake.Record, hint hook.System) hook.Classification {

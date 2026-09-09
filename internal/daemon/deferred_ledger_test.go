@@ -9,9 +9,7 @@ import (
 	"time"
 
 	"goodkind.io/agent-gate/internal/audit"
-	"goodkind.io/agent-gate/internal/config"
 	"goodkind.io/agent-gate/internal/evaluation"
-	"goodkind.io/agent-gate/internal/hook"
 	"goodkind.io/agent-gate/internal/intake"
 )
 
@@ -51,6 +49,10 @@ func (store *deferredLedgerStore) ReleaseDeferredClaim(
 ) error {
 	*store.order = append(*store.order, "release")
 	return nil
+}
+
+func (store *deferredLedgerStore) ScheduleDeferredRetry(ctx context.Context, claim intake.DeferredClaim, _ time.Time) error {
+	return store.ReleaseDeferredClaim(ctx, claim)
 }
 
 func (store *deferredLedgerStore) RenewDeferredClaim(
@@ -105,6 +107,7 @@ func (recorder *orderedDeferredRecorder) CommitHotEvaluation(
 	_ int64,
 	_ bool,
 	record evaluation.Record,
+	_ []audit.NormalizedEntry,
 ) error {
 	return recorder.RecordCompleted(ctx, record)
 }
@@ -314,10 +317,9 @@ func TestDeferredImmediateEvaluationUsesReceiptAndCommitsBeforeCompletion(t *tes
 	store := &deferredLedgerStore{record: record, order: &order}
 	recorder := &orderedDeferredRecorder{order: &order, records: nil}
 	processor := deferredLedgerProcessor(t, store, recorder, &orderedDurableAuditSink{order: &order})
-	hotEvent := deferredLedgerHotEvent(t, processor.cfg, record)
 
 	processor.processRecord(
-		context.Background(), record, deferredLedgerClaim(record), &hotEvent, nil,
+		context.Background(), record, deferredLedgerClaim(record), nil,
 	)
 
 	if len(recorder.records) != 1 {
@@ -345,9 +347,7 @@ func TestDeferredReplayEvaluationUsesNextAttempt(t *testing.T) {
 	recorder := &orderedDeferredRecorder{order: &order, records: nil}
 	processor := deferredLedgerProcessor(t, store, recorder, &orderedDurableAuditSink{order: &order})
 
-	if err := processor.ReplayPending(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	processor.processEvent(context.Background(), deferredWork{receiptID: record.ReceiptID})
 
 	if len(recorder.records) != 1 {
 		t.Fatalf("records = %d, want 1", len(recorder.records))
@@ -366,10 +366,9 @@ func TestDeferredLedgerFailureLeavesReceiptPending(t *testing.T) {
 		order: &order, records: nil, err: errors.New("ledger unavailable"),
 	}
 	processor := deferredLedgerProcessor(t, store, recorder, &orderedDurableAuditSink{order: &order})
-	hotEvent := deferredLedgerHotEvent(t, processor.cfg, record)
 
 	processor.processRecord(
-		context.Background(), record, deferredLedgerClaim(record), &hotEvent, nil,
+		context.Background(), record, deferredLedgerClaim(record), nil,
 	)
 
 	if joined := joinDeferredOrder(order); joined != "commit,release" {
@@ -416,18 +415,6 @@ func deferredLedgerClaim(record intake.Record) intake.DeferredClaim {
 		Owner: "test-owner", Attempt: record.DeferredReplays + 1,
 		ExpiresAt: time.Now().Add(time.Minute),
 	}
-}
-
-func deferredLedgerHotEvent(
-	t *testing.T,
-	cfg *config.Config,
-	record intake.Record,
-) hook.DeferredAuditEvent {
-	t.Helper()
-	return evaluateHotWithEventIDForTest(
-		context.Background(), record.RawPayload, hook.SyncConfig(cfg),
-		hook.SystemCodex, func(string) string { return "" }, record.EventID,
-	).Deferred
 }
 
 func joinDeferredOrder(values []string) string {

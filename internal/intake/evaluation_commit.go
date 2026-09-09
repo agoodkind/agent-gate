@@ -18,14 +18,15 @@ var ErrDeferredClaimUnavailable = errors.New("deferred claim unavailable")
 // ErrDeferredClaimLost means a processor no longer owns the claimed attempt.
 var ErrDeferredClaimLost = errors.New("deferred claim lost")
 
-// CommitHotEvaluation atomically stores the hot evaluation and, when needed,
-// marks its receipt pending for deferred processing.
+// CommitHotEvaluation atomically stores the hot evaluation and audit entries
+// and, when needed, marks its receipt pending for deferred processing.
 func (s *Store) CommitHotEvaluation(
 	ctx context.Context,
 	eventID string,
 	receiptID int64,
 	deferredPending bool,
 	record evaluation.Record,
+	auditEntries []audit.NormalizedEntry,
 ) error {
 	transaction, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -50,6 +51,13 @@ func (s *Store) CommitHotEvaluation(
 	}
 	if err := s.evaluations.RecordCompletedInTx(ctx, transaction, record); err != nil {
 		return wrapLoggedError(ctx, s.log, "record completed hot evaluation", err)
+	}
+	events := make([]audit.Event, 0, len(auditEntries))
+	for _, entry := range auditEntries {
+		events = append(events, entry.Event)
+	}
+	if err := audit.WriteEventsInTx(ctx, transaction, events); err != nil {
+		return wrapError("write completed hot audit", err)
 	}
 	if err := s.clearTerminalInput(ctx, transaction, canonicalEventID); err != nil {
 		return err
@@ -84,7 +92,7 @@ func (s *Store) ClaimDeferred(
 		_ = transaction.Rollback()
 	}()
 	result, err := transaction.ExecContext(ctx, evaluationCommitSQL1, owner, formatDeferredTime(expiresAt), formatDeferredTime(now), receiptID,
-		DeferredStatePending, formatDeferredTime(now))
+		DeferredStatePending, formatDeferredTime(now), formatDeferredTime(now))
 	if err != nil {
 		return Record{}, DeferredClaim{}, wrapLoggedError(ctx, s.log, "claim deferred receipt", err)
 	}
@@ -244,7 +252,7 @@ func receiptEventID(ctx context.Context, transaction *sql.Tx, receiptID int64) (
 }
 
 func formatDeferredTime(value time.Time) string {
-	return value.UTC().Format(time.RFC3339Nano)
+	return value.UTC().Format("2006-01-02T15:04:05.000000000Z")
 }
 
 //go:embed evaluation_commit_1.sql

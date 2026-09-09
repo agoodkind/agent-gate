@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"goodkind.io/agent-gate/internal/audit"
-	"goodkind.io/agent-gate/internal/config"
 	"goodkind.io/agent-gate/internal/evaluation"
 	"goodkind.io/agent-gate/internal/intake"
 )
@@ -22,8 +21,8 @@ type intakeStore interface {
 	) (intake.Record, intake.DeferredClaim, error)
 	RenewDeferredClaim(context.Context, intake.DeferredClaim, time.Duration) error
 	ReleaseDeferredClaim(context.Context, intake.DeferredClaim) error
+	ScheduleDeferredRetry(context.Context, intake.DeferredClaim, time.Time) error
 	ListPending(context.Context) ([]int64, error)
-	Close() error
 }
 
 type sqliteEvaluationRecorder struct {
@@ -50,9 +49,10 @@ func (recorder sqliteEvaluationRecorder) CommitHotEvaluation(
 	receiptID int64,
 	deferredPending bool,
 	record evaluation.Record,
+	auditEntries []audit.NormalizedEntry,
 ) error {
 	if err := recorder.store.CommitHotEvaluation(
-		ctx, eventID, receiptID, deferredPending, record,
+		ctx, eventID, receiptID, deferredPending, record, auditEntries,
 	); err != nil {
 		if recorder.log != nil {
 			recorder.log.WarnContext(ctx, "commit hot evaluation failed", "err", err)
@@ -96,23 +96,8 @@ type sqliteIntakeStore struct {
 	log   *slog.Logger
 }
 
-func newSQLiteIntakeStore(ctx context.Context, cfg *config.Config, log *slog.Logger) (*sqliteIntakeStore, error) {
-	path := intake.DefaultSQLitePath()
-	var policy config.AuditStoragePolicy
-	if cfg != nil {
-		path = cfg.AuditSQLitePath()
-		policy = cfg.AuditStoragePolicy()
-	}
-	store, err := intake.OpenSQLiteWithOptions(ctx, intake.SQLiteOptions{
-		Path: path, Policy: policy, Log: log,
-	})
-	if err != nil {
-		if log != nil {
-			log.WarnContext(ctx, "open sqlite intake store failed", "path", path, "err", err)
-		}
-		return nil, fmt.Errorf("open sqlite intake store: %w", err)
-	}
-	return &sqliteIntakeStore{store: store, log: log}, nil
+func (s *sqliteIntakeStore) ScheduleDeferredRetry(ctx context.Context, claim intake.DeferredClaim, nextAttempt time.Time) error {
+	return wrapServerError("schedule deferred retry", s.store.ScheduleDeferredRetry(ctx, claim, nextAttempt))
 }
 
 func (s *sqliteIntakeStore) Append(ctx context.Context, record intake.Record) (intake.AppendResult, error) {
@@ -264,17 +249,4 @@ func (s *sqliteIntakeStore) Evaluations() evaluationRecorder {
 		return nil
 	}
 	return sqliteEvaluationRecorder{store: s.store, log: s.log}
-}
-
-func (s *sqliteIntakeStore) Close() error {
-	if s == nil || s.store == nil {
-		return nil
-	}
-	if err := s.store.Close(); err != nil {
-		if s.log != nil {
-			s.log.Warn("close intake store failed", "err", err)
-		}
-		return fmt.Errorf("close intake store: %w", err)
-	}
-	return nil
 }

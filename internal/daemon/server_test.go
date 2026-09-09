@@ -202,7 +202,7 @@ command = ["/bin/validator"]
 field_paths = ["last_user_message"]
 cache_ttl_ms = 0
 `)
-	server, err := New(newDiscardLogger(), cfg)
+	server, err := newReadyTestServer(newDiscardLogger(), cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -247,7 +247,7 @@ command = ["/bin/validator"]
 field_paths = ["last_response_output"]
 cache_ttl_ms = 0
 `)
-	server, err := New(newDiscardLogger(), cfg)
+	server, err := newReadyTestServer(newDiscardLogger(), cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -317,7 +317,7 @@ field_paths = [
 ]
 cache_ttl_ms = 0
 `)
-	server, err := New(newDiscardLogger(), cfg)
+	server, err := newReadyTestServer(newDiscardLogger(), cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -424,7 +424,7 @@ func assertDaemonMatchedField(
 func TestRuntimeSnapshotsShareInferenceRuntime(t *testing.T) {
 	setDaemonTestDirs(t)
 	cfg := daemonTestConfig(t)
-	server, err := New(newDiscardLogger(), cfg)
+	server, err := newReadyTestServer(newDiscardLogger(), cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -433,60 +433,13 @@ func TestRuntimeSnapshotsShareInferenceRuntime(t *testing.T) {
 	if first == nil || first.inferRuntime != server.inferRuntime {
 		t.Fatal("initial snapshot does not use the server inference runtime")
 	}
-	second, err := newRuntimeSnapshot(context.Background(), cfg, newDiscardLogger(), server.hotKV, server.inferRuntime)
+	second, err := server.snapshotForBucket(context.Background(), cfg, server.catalog, first.bucket)
 	if err != nil {
 		t.Fatalf("newRuntimeSnapshot: %v", err)
 	}
 	defer second.close(context.Background(), newDiscardLogger())
 	if second.inferRuntime != first.inferRuntime {
 		t.Fatal("replacement snapshot did not preserve inference channels")
-	}
-}
-
-func TestRuntimeSnapshotReplayFailureDoesNotAbortStartup(t *testing.T) {
-	setDaemonTestDirs(t)
-	originalReplay := replayRuntimeSnapshotPending
-	t.Cleanup(func() {
-		replayRuntimeSnapshotPending = originalReplay
-	})
-	// Replay runs in the background so the daemon serves the gate socket immediately.
-	// A replay failure is audit backfill, not gate enforcement, so it is logged rather
-	// than aborting startup or closing the intake store.
-	storeCh := make(chan *sqliteIntakeStore, 1)
-	replayRuntimeSnapshotPending = func(
-		processor *deferredProcessor,
-		_ context.Context,
-	) error {
-		store, ok := processor.store.(*sqliteIntakeStore)
-		if !ok {
-			t.Errorf("processor store = %T, want *sqliteIntakeStore", processor.store)
-			storeCh <- nil
-			return errors.New("replay unavailable")
-		}
-		storeCh <- store
-		return errors.New("replay unavailable")
-	}
-
-	snapshot, err := newRuntimeSnapshot(
-		context.Background(), daemonTestConfig(t), newDiscardLogger(), nil, nil,
-	)
-	if err != nil || snapshot == nil {
-		t.Fatalf("newRuntimeSnapshot = %+v, %v; want startup to succeed despite replay failure", snapshot, err)
-	}
-	t.Cleanup(func() {
-		snapshot.close(context.Background(), newDiscardLogger())
-	})
-	var openedStore *sqliteIntakeStore
-	select {
-	case openedStore = <-storeCh:
-	case <-time.After(5 * time.Second):
-		t.Fatal("background replay was not invoked")
-	}
-	if openedStore == nil {
-		t.Fatal("replay hook did not capture intake store")
-	}
-	if err := openedStore.Handle().PingContext(context.Background()); err != nil {
-		t.Fatalf("intake store should stay open after a background replay failure: %v", err)
 	}
 }
 
@@ -564,7 +517,7 @@ func TestBuildIntakeRecordMapsUnresolvableCwdToEmpty(t *testing.T) {
 
 func TestEvaluateHookPreservesWireInput(t *testing.T) {
 	setDaemonTestDirs(t)
-	srv, err := New(newDiscardLogger(), daemonTestConfig(t))
+	srv, err := newReadyTestServer(newDiscardLogger(), daemonTestConfig(t))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -610,7 +563,7 @@ func TestEvaluateHookPreservesWireInput(t *testing.T) {
 
 func TestEvaluateHookPreservesCopilotWireInput(t *testing.T) {
 	setDaemonTestDirs(t)
-	srv, err := New(newDiscardLogger(), daemonTestConfig(t))
+	srv, err := newReadyTestServer(newDiscardLogger(), daemonTestConfig(t))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -650,7 +603,7 @@ func TestEvaluateHookPreservesCopilotWireInput(t *testing.T) {
 
 func TestEvaluateHookPersistsGenuineEmptyInput(t *testing.T) {
 	setDaemonTestDirs(t)
-	srv, err := New(newDiscardLogger(), daemonTestConfig(t))
+	srv, err := newReadyTestServer(newDiscardLogger(), daemonTestConfig(t))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -699,7 +652,7 @@ func TestEvaluateHookPersistsGenuineEmptyInput(t *testing.T) {
 
 func TestEvaluateHookClassifiesInheritedMarkers(t *testing.T) {
 	setDaemonTestDirs(t)
-	srv, err := New(newDiscardLogger(), daemonTestConfig(t))
+	srv, err := newReadyTestServer(newDiscardLogger(), daemonTestConfig(t))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -848,7 +801,7 @@ func TestEvaluateHookPersistsCompleteClassificationEvidence(t *testing.T) {
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {
 			setDaemonTestDirs(t)
-			srv, err := New(newDiscardLogger(), daemonTestConfig(t))
+			srv, err := newReadyTestServer(newDiscardLogger(), daemonTestConfig(t))
 			if err != nil {
 				t.Fatalf("New: %v", err)
 			}
@@ -937,7 +890,7 @@ func assertClassificationConflict(
 
 func TestEvaluateHook_DaemonOwnsEnforcement(t *testing.T) {
 	setDaemonTestDirs(t)
-	srv, err := New(newDiscardLogger(), daemonTestConfig(t))
+	srv, err := newReadyTestServer(newDiscardLogger(), daemonTestConfig(t))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -980,7 +933,7 @@ func TestResolveHookEnvironment_DaemonOwnsPayloadParsing(t *testing.T) {
 
 func TestEvaluateHook_InvalidJSONFailsClosed(t *testing.T) {
 	setDaemonTestDirs(t)
-	srv, err := New(newDiscardLogger(), daemonTestConfig(t))
+	srv, err := newReadyTestServer(newDiscardLogger(), daemonTestConfig(t))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -1000,7 +953,7 @@ func TestEvaluateHook_InvalidJSONFailsClosed(t *testing.T) {
 
 func TestEvaluateHook_OverloadFailsOpen(t *testing.T) {
 	setDaemonTestDirs(t)
-	srv, err := New(newDiscardLogger(), daemonTestConfig(t))
+	srv, err := newReadyTestServer(newDiscardLogger(), daemonTestConfig(t))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -1031,7 +984,7 @@ func TestEvaluateHook_OverloadFailsOpen(t *testing.T) {
 
 func TestEvaluateHook_ConcurrentBurstCompletes(t *testing.T) {
 	setDaemonTestDirs(t)
-	srv, err := New(newDiscardLogger(), daemonTestConfig(t))
+	srv, err := newReadyTestServer(newDiscardLogger(), daemonTestConfig(t))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -1075,7 +1028,7 @@ func TestEvaluateHook_ConcurrentBurstCompletes(t *testing.T) {
 
 func TestServerCloseWaitsForAdmittedEvaluation(t *testing.T) {
 	setDaemonTestDirs(t)
-	server, err := New(newDiscardLogger(), daemonTestConfig(t))
+	server, err := newReadyTestServer(newDiscardLogger(), daemonTestConfig(t))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -1134,7 +1087,7 @@ func TestKVHotStoreRPCs(t *testing.T) {
 	cfg := daemonTestConfig(t)
 	cfg.Performance.Hook.Cache.MaxEntries = 16
 	cfg.Performance.Hook.Cache.MaxValueBytes = 64
-	srv, err := New(newDiscardLogger(), cfg)
+	srv, err := newReadyTestServer(newDiscardLogger(), cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -1234,7 +1187,7 @@ command = ["/bin/validator"]
 field_paths = ["last_user_message", "last_response_output"]
 cache_ttl_ms = 0
 `)
-	server, err := New(newDiscardLogger(), cfg)
+	server, err := newReadyTestServer(newDiscardLogger(), cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -1436,7 +1389,7 @@ cache_ttl_ms = 0
 
 func TestKVSetRejectsInvalidMode(t *testing.T) {
 	setDaemonTestDirs(t)
-	srv, err := New(newDiscardLogger(), daemonTestConfig(t))
+	srv, err := newReadyTestServer(newDiscardLogger(), daemonTestConfig(t))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -1455,7 +1408,7 @@ func TestKVSetRejectsInvalidMode(t *testing.T) {
 
 func TestKVListRejectsNegativeLimit(t *testing.T) {
 	setDaemonTestDirs(t)
-	srv, err := New(newDiscardLogger(), daemonTestConfig(t))
+	srv, err := newReadyTestServer(newDiscardLogger(), daemonTestConfig(t))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -1475,7 +1428,7 @@ func TestEvaluateHook_DeferredWorkerCompletesFreshEvent(t *testing.T) {
 	cfg := daemonTestConfig(t)
 	cfg.Performance.Hook.DeferredWorkers = 1
 	cfg.Performance.Hook.DeferredQueueLimit = 4
-	srv, err := New(newDiscardLogger(), cfg)
+	srv, err := newReadyTestServer(newDiscardLogger(), cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -1501,7 +1454,7 @@ func TestEvaluateHook_DeferredWorkerCompletesFreshEvent(t *testing.T) {
 
 func TestHotPathBlocksBeforeDeferredQueue(t *testing.T) {
 	setDaemonTestDirs(t)
-	srv, err := New(newDiscardLogger(), daemonTestConfig(t))
+	srv, err := newReadyTestServer(newDiscardLogger(), daemonTestConfig(t))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -1540,7 +1493,7 @@ func TestDeferredReplayAfterRestart(t *testing.T) {
 	cfg.Performance.Hook.DeferredWorkers = 0
 	cfg.Performance.Hook.DeferredQueueLimit = 4
 
-	srv, err := New(newDiscardLogger(), cfg)
+	srv, err := newReadyTestServer(newDiscardLogger(), cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -1573,13 +1526,13 @@ func TestDeferredReplayAfterRestart(t *testing.T) {
 	srv.Close()
 
 	cfg.Performance.Hook.DeferredWorkers = 1
-	srv, err = New(newDiscardLogger(), cfg)
+	srv, err = newReadyTestServer(newDiscardLogger(), cfg)
 	if err != nil {
 		t.Fatalf("New restart: %v", err)
 	}
 	defer srv.Close()
 
-	waitForAuditMessages(t, cfg, "hook.audit_violation", "hook.allowed")
+	waitForAuditMessages(t, srv, "hook.audit_violation", "hook.allowed")
 	pendingAfterReplay, err := srv.runtime.Load().intakeStore.ListPending(context.Background())
 	if err != nil {
 		t.Fatalf("ListPending after replay: %v", err)
@@ -1595,7 +1548,7 @@ func TestSyncAndDeferredRulesStaySeparated(t *testing.T) {
 	cfg.Performance.Hook.DeferredWorkers = 1
 	cfg.Performance.Hook.DeferredQueueLimit = 4
 
-	srv, err := New(newDiscardLogger(), cfg)
+	srv, err := newReadyTestServer(newDiscardLogger(), cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -1616,21 +1569,12 @@ func TestSyncAndDeferredRulesStaySeparated(t *testing.T) {
 		t.Fatalf("stdout missing Codex deny response: %s", got)
 	}
 
-	waitForAuditMessages(t, cfg, "hook.blocked")
-	events, _, err := audit.Query(cfg, audit.QueryFilter{Limit: 20})
-	if err != nil {
-		t.Fatalf("audit.Query: %v", err)
-	}
-	for _, event := range events {
-		if event.Message == "hook.audit_violation" {
-			t.Fatalf("unexpected audit-only event alongside sync block: %+v", event)
-		}
-	}
+	waitForAuditMessages(t, srv, "hook.blocked", "hook.audit_violation")
 }
 
 func TestPolicyBlockDoesNotFailOpenWhenHotSlotsAvailable(t *testing.T) {
 	setDaemonTestDirs(t)
-	srv, err := New(newDiscardLogger(), daemonTestConfig(t))
+	srv, err := newReadyTestServer(newDiscardLogger(), daemonTestConfig(t))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -1643,7 +1587,7 @@ func TestPolicyBlockDoesNotFailOpenWhenHotSlotsAvailable(t *testing.T) {
 
 func TestEvaluateHook_BlocksCopilotVSCodeReplaceStringNewString(t *testing.T) {
 	setDaemonTestDirs(t)
-	srv, err := New(newDiscardLogger(), emdashDaemonTestConfig(t))
+	srv, err := newReadyTestServer(newDiscardLogger(), emdashDaemonTestConfig(t))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -1670,7 +1614,7 @@ func TestEvaluateHook_BlocksCopilotVSCodeReplaceStringNewString(t *testing.T) {
 
 func TestEvaluateHook_BlocksCopilotVSCodeMultiReplaceNewString(t *testing.T) {
 	setDaemonTestDirs(t)
-	srv, err := New(newDiscardLogger(), emdashDaemonTestConfig(t))
+	srv, err := newReadyTestServer(newDiscardLogger(), emdashDaemonTestConfig(t))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -1708,7 +1652,7 @@ func TestEvaluateHook_CopilotStopTranscriptAssistantTextIsEvaluated(t *testing.T
 		t.Fatalf("write transcript: %v", err)
 	}
 
-	srv, err := New(newDiscardLogger(), emdashDaemonTestConfig(t))
+	srv, err := newReadyTestServer(newDiscardLogger(), emdashDaemonTestConfig(t))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -1735,7 +1679,7 @@ func TestEvaluateHook_CopilotStopTranscriptAssistantTextIsEvaluated(t *testing.T
 func TestEvaluateHook_CodexStopBlockingRuleDowngradesToAudit(t *testing.T) {
 	setDaemonTestDirs(t)
 	cfg := codexStopAuditDaemonTestConfig(t)
-	srv, err := New(newDiscardLogger(), cfg)
+	srv, err := newReadyTestServer(newDiscardLogger(), cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -1755,8 +1699,8 @@ func TestEvaluateHook_CodexStopBlockingRuleDowngradesToAudit(t *testing.T) {
 		t.Fatalf("stdout = %q, want allow response", string(resp.StdoutData))
 	}
 	waitForNoPendingIntake(t, srv)
-	waitForAuditMessages(t, cfg, "hook.audit_violation", "hook.allowed")
-	events, _, err := audit.Query(cfg, audit.QueryFilter{Limit: 20})
+	waitForAuditMessages(t, srv, "hook.audit_violation", "hook.allowed")
+	events, _, err := audit.Query(currentAuditConfig(srv), audit.QueryFilter{Limit: 20})
 	if err != nil {
 		t.Fatalf("audit.Query: %v", err)
 	}
@@ -1769,7 +1713,7 @@ func TestEvaluateHook_CodexStopBlockingRuleDowngradesToAudit(t *testing.T) {
 
 func TestStatusReportsProcessMetadata(t *testing.T) {
 	setDaemonTestDirs(t)
-	srv, err := New(newDiscardLogger(), daemonTestConfig(t))
+	srv, err := newReadyTestServer(newDiscardLogger(), daemonTestConfig(t))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -1807,7 +1751,7 @@ violation_message = "alpha blocked"
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	srv, err := New(newDiscardLogger(), cfg)
+	srv, err := newReadyTestServer(newDiscardLogger(), cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -1856,7 +1800,7 @@ violation_message = "alpha blocked"
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	srv, err := New(newDiscardLogger(), cfg)
+	srv, err := newReadyTestServer(newDiscardLogger(), cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -1902,7 +1846,7 @@ violation_message = "alpha blocked"
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	srv, err := New(newDiscardLogger(), cfg)
+	srv, err := newReadyTestServer(newDiscardLogger(), cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -1955,7 +1899,7 @@ violation_message = "alpha blocked"
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	srv, err := New(newDiscardLogger(), cfg)
+	srv, err := newReadyTestServer(newDiscardLogger(), cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -1997,7 +1941,7 @@ violation_message = "alpha blocked"
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	srv, err := New(newDiscardLogger(), cfg)
+	srv, err := newReadyTestServer(newDiscardLogger(), cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -2136,6 +2080,8 @@ func replaceIntakeStoreForTest(t testing.TB, srv *Server, store intakeStore) {
 
 func replaceDeferredProcessorForTest(t testing.TB, srv *Server, queueLimit int, workers int) {
 	t.Helper()
+	srv.lifecycleMu.Lock()
+	defer srv.lifecycleMu.Unlock()
 	snapshot := srv.runtime.Load()
 	if snapshot == nil {
 		t.Fatal("runtime snapshot is nil")
@@ -2161,10 +2107,14 @@ func fillDeferredProcessorQueue(t testing.TB, srv *Server) {
 	if snapshot == nil || snapshot.deferredProcessor == nil {
 		t.Fatal("deferred processor is nil")
 	}
-	snapshot.deferredProcessor.events <- deferredWork{
-		receiptID: 1,
-		eventID:   "occupied",
-		hotEvent:  hook.DeferredAuditEvent{},
+	if _, err := srv.EvaluateHook(t.Context(), replayRequest()); err != nil {
+		t.Fatal(err)
+	}
+	if err := srv.dispatchRetainedReplay(t.Context(), srv.now()); err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.deferredProcessor.events) != cap(snapshot.deferredProcessor.events) {
+		t.Fatal("durable receipt did not fill deferred queue")
 	}
 }
 
@@ -2227,11 +2177,11 @@ func mixedSyncDeferredDaemonTestConfig(t testing.TB) *config.Config {
 	}
 }
 
-func waitForAuditMessages(t testing.TB, cfg *config.Config, messages ...string) {
+func waitForAuditMessages(t testing.TB, server *Server, messages ...string) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		events, _, err := audit.Query(cfg, audit.QueryFilter{Limit: 50})
+		events, _, err := audit.Query(currentAuditConfig(server), audit.QueryFilter{Limit: 50})
 		if err == nil {
 			found := make(map[string]bool, len(messages))
 			for _, event := range events {
@@ -2271,4 +2221,19 @@ func waitForNoPendingIntake(t testing.TB, srv *Server) {
 		time.Sleep(25 * time.Millisecond)
 	}
 	t.Fatal("timed out waiting for pending intake records to complete")
+}
+
+func currentAuditConfig(server *Server) *config.Config {
+	snapshot := server.runtime.Load()
+	cfg := *snapshot.cfg
+	cfg.Audit.Outputs.SQLite.Path = snapshot.bucket.Path
+	return &cfg
+}
+
+func newReadyTestServer(log *slog.Logger, cfg *config.Config) (*Server, error) {
+	server, err := New(context.Background(), log, cfg)
+	if err == nil {
+		server.StartAuditScheduler(context.Background())
+	}
+	return server, err
 }

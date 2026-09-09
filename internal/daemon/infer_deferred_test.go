@@ -57,67 +57,6 @@ func (server *deferredInferenceFake) callCount() int {
 	return server.calls
 }
 
-func TestDeferredAuditReusesHotInferenceOutcomeAndTrace(t *testing.T) {
-	fake := newDeferredInferenceFake("")
-	endpoint := startDeferredInferenceServer(t, fake)
-	cfg := loadDeferredInferConfig(t, endpoint)
-	runtime := rules.NewInferRuntimeWithCache(nil, nil)
-	t.Cleanup(runtime.Close)
-	collector := &inferenceTraceSink{traces: nil}
-	ctx := rules.WithInferenceTraceCollector(
-		rules.WithInferRuntime(context.Background(), runtime),
-		collector,
-	)
-	rawPayload := []byte(`{"session_id":"s1","hook_event_name":"PreToolUse","tool_name":"Shell","tool_input":{"command":"echo audit"}}`)
-	syncEvaluation := evaluateHotWithEventIDForTest(
-		ctx,
-		rawPayload,
-		hook.SyncConfig(cfg),
-		hook.SystemCodex,
-		func(string) string { return "" },
-		"evt-infer",
-	)
-	syncEvaluation.Deferred.InferenceTraces = collector.snapshot()
-	processor := newDeferredProcessor(
-		context.Background(),
-		nil,
-		nil,
-		cfg,
-		runtime,
-		1,
-		0,
-		newDiscardLogger(),
-	)
-	t.Cleanup(processor.Close)
-	record := intake.Record{
-		EventID:        "evt-infer",
-		System:         "codex",
-		SessionID:      "s1",
-		EventName:      "PreToolUse",
-		RawPayload:     rawPayload,
-		EnvFingerprint: map[string]string{},
-	}
-
-	deferredEvent, ok := processor.rebuildDeferredAudit(
-		context.Background(),
-		record,
-		&syncEvaluation.Deferred,
-	)
-
-	if !ok {
-		t.Fatal("rebuildDeferredAudit returned invalid event")
-	}
-	if fake.callCount() != 1 {
-		t.Fatalf("inference calls = %d, want 1", fake.callCount())
-	}
-	if len(deferredEvent.InferenceTraces) != 1 || deferredEvent.InferenceTraces[0].LayerName != "classification" {
-		t.Fatalf("inference traces = %+v", deferredEvent.InferenceTraces)
-	}
-	if len(deferredEvent.AuditOnlyViolations) != 1 {
-		t.Fatalf("audit-only violations = %d, want 1", len(deferredEvent.AuditOnlyViolations))
-	}
-}
-
 func TestDurableDeferredReplayExcludesSynchronousInference(t *testing.T) {
 	fake := newDeferredInferenceFake("")
 	endpoint := startDeferredInferenceServer(t, fake)
@@ -142,7 +81,7 @@ func TestDurableDeferredReplayExcludesSynchronousInference(t *testing.T) {
 		EnvFingerprint: map[string]string{},
 	}
 
-	deferredEvent, ok := processor.rebuildDeferredAudit(context.Background(), record, nil)
+	deferredEvent, ok := processor.rebuildDeferredAudit(context.Background(), record)
 
 	if !ok {
 		t.Fatal("rebuildDeferredAudit returned invalid event")
@@ -155,7 +94,7 @@ func TestDurableDeferredReplayExcludesSynchronousInference(t *testing.T) {
 	}
 }
 
-func TestDurableDeferredReplayExcludesAuditInferenceAndReportsEvaluatedRules(t *testing.T) {
+func TestDurableDeferredReplayRunsAuditInferenceAndReportsEvaluatedRules(t *testing.T) {
 	fake := newDeferredInferenceFake("")
 	endpoint := startDeferredInferenceServer(t, fake)
 	cfg := loadDeferredAuditInferConfig(t, endpoint)
@@ -179,23 +118,23 @@ func TestDurableDeferredReplayExcludesAuditInferenceAndReportsEvaluatedRules(t *
 		EnvFingerprint: map[string]string{},
 	}
 
-	deferredEvent, ok := processor.rebuildDeferredAudit(context.Background(), record, nil)
+	deferredEvent, ok := processor.rebuildDeferredAudit(context.Background(), record)
 
 	if !ok {
 		t.Fatal("rebuildDeferredAudit returned invalid event")
 	}
-	if fake.callCount() != 0 {
-		t.Fatalf("inference calls = %d, want 0", fake.callCount())
+	if fake.callCount() != 1 {
+		t.Fatalf("inference calls = %d, want 1", fake.callCount())
 	}
-	if len(deferredEvent.Rules) != 0 {
-		t.Fatalf("reported evaluated rules = %+v, want none", deferredEvent.Rules)
+	if len(deferredEvent.Rules) != 1 {
+		t.Fatalf("reported evaluated rules = %+v, want one deferred rule", deferredEvent.Rules)
 	}
 	if deferredEvent.Decision != hook.ResponseDecisionAllow {
 		t.Fatalf("reconstructed decision = %q, want allow", deferredEvent.Decision)
 	}
 }
 
-func TestDeferredAuditOnlyInferenceUsesDaemonRuntimeAndAppendsTraces(t *testing.T) {
+func TestDeferredAuditOnlyInferenceUsesDaemonRuntimeAndOwnTrace(t *testing.T) {
 	fake := newDeferredInferenceFake("")
 	endpoint, connections := startCountedDeferredInferenceServer(t, fake)
 	cfg := loadDeferredAuditInferConfig(t, endpoint)
@@ -216,15 +155,6 @@ func TestDeferredAuditOnlyInferenceUsesDaemonRuntimeAndAppendsTraces(t *testing.
 
 	for i := range 2 {
 		eventID := "evt-audit-" + strconv.Itoa(i+1)
-		hotEvent := evaluateHotWithEventIDForTest(
-			context.Background(),
-			rawPayload,
-			hook.SyncConfig(cfg),
-			hook.SystemCodex,
-			func(string) string { return "" },
-			eventID,
-		).Deferred
-		hotEvent.InferenceTraces = []rules.InferenceTrace{{LayerName: "hot-layer"}}
 		record := intake.Record{
 			EventID:        eventID,
 			System:         "codex",
@@ -237,17 +167,12 @@ func TestDeferredAuditOnlyInferenceUsesDaemonRuntimeAndAppendsTraces(t *testing.
 		deferredEvent, ok := processor.rebuildDeferredAudit(
 			context.Background(),
 			record,
-			&hotEvent,
 		)
 		if !ok {
 			t.Fatal("rebuildDeferredAudit returned invalid event")
 		}
-		if len(deferredEvent.InferenceTraces) != 2 {
-			t.Fatalf("inference traces = %+v", deferredEvent.InferenceTraces)
-		}
-		if deferredEvent.InferenceTraces[0].LayerName != "hot-layer" ||
-			deferredEvent.InferenceTraces[1].LayerName != "audit-classification" {
-			t.Fatalf("inference trace order = %+v", deferredEvent.InferenceTraces)
+		if len(deferredEvent.Trace.Layers) != 1 || deferredEvent.Trace.Layers[0].LayerName != "audit-classification" {
+			t.Fatalf("deferred layers = %+v", deferredEvent.Trace.Layers)
 		}
 	}
 

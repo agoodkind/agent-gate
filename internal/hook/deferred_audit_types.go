@@ -5,7 +5,7 @@ import (
 	"goodkind.io/agent-gate/internal/rules"
 )
 
-// HotEvaluation is the synchronous hook decision plus deferred audit payload.
+// HotEvaluation contains a rendered hook response and its audit evidence.
 type HotEvaluation struct {
 	Stdout                  []byte
 	Stderr                  []byte
@@ -30,7 +30,7 @@ type TemporalResponseOutput struct {
 	Output string
 }
 
-// DeferredAuditEvent is the durable audit input rebuilt from stored intake.
+// DeferredAuditEvent contains the audit evidence from one evaluated phase.
 type DeferredAuditEvent struct {
 	Valid               bool
 	RawBytes            []byte
@@ -45,7 +45,6 @@ type DeferredAuditEvent struct {
 	BlockingViolations  []rules.Violation
 	AuditOnlyViolations []rules.Violation
 	ResponseEffects     []ResponseEffectRecord
-	InferenceTraces     []rules.InferenceTrace
 	Trace               rules.DecisionTrace
 	Decision            ResponseDecision
 	DiagnosticText      string

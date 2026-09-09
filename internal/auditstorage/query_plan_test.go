@@ -19,11 +19,11 @@ import (
 )
 
 func TestSurvivingQueryPlans(t *testing.T) {
-	store, err := intake.OpenSQLite(t.Context(), filepath.Join(t.TempDir(), "audit.db"), nil)
+	store, err := openFixtureIntake(t, t.Context(), filepath.Join(t.TempDir(), "audit.db"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = store.Close() })
+	t.Cleanup(func() { _ = store.Handle().Close() })
 	output := json.RawMessage(`{}`)
 	digest := sha256.Sum256(output)
 	events := make([]audit.Event, 0, 200)
@@ -39,7 +39,7 @@ func TestSurvivingQueryPlans(t *testing.T) {
 			Layers:     []evaluation.Layer{{LayerIndex: 0, Kind: "deterministic", Name: "rules", Status: "complete", Outcome: "nonmatch", InputJSON: output, OutputJSON: output, OutputHash: "sha256:" + hex.EncodeToString(digest[:]), MetadataJSON: json.RawMessage(`{"schema_version":1}`), StartedAt: at, CompletedAt: at}},
 			Labels:     []evaluation.Label{{Namespace: "label", LabelVersion: 1, Verdict: "allow", Source: "test", CreatedAt: at}},
 		}
-		if err := store.CommitHotEvaluation(t.Context(), id, receipt.ReceiptID, index%3 == 0, record); err != nil {
+		if err := store.CommitHotEvaluation(t.Context(), id, receipt.ReceiptID, index%3 == 0, record, nil); err != nil {
 			t.Fatal(err)
 		}
 		events = append(events, audit.Event{EventID: id, SchemaVersion: 1, Time: at.Format(time.RFC3339Nano), System: "codex", SessionID: "session-1", EventName: "PreToolUse", ToolName: "Shell", Decision: audit.Decision{Kind: "allow"}, Violations: []audit.Violation{{Rule: "rule"}}})

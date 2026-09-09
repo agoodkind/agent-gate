@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
@@ -71,6 +72,7 @@ type EventLogger struct {
 	stopping        bool
 	closeDone       chan struct{}
 	closeErr        error
+	workerCancel    context.CancelFunc
 
 	wg       sync.WaitGroup
 	log      *slog.Logger
@@ -180,6 +182,8 @@ func NewEventLoggerWithOptions(ctx context.Context, cfg *config.Config, log *slo
 		queueLimit = cfg.AuditQueueLimit()
 	}
 	el := new(EventLogger)
+	workerContext, workerCancel := context.WithCancel(context.WithoutCancel(ctx))
+	el.workerCancel = workerCancel
 	el.closeDone = make(chan struct{})
 	el.minLevel = parseLevel(level)
 	el.enabled = true
@@ -207,6 +211,7 @@ func NewEventLoggerWithOptions(ctx context.Context, cfg *config.Config, log *slo
 	}
 	if el.enabled {
 		if err := el.configureOutputs(ctx, cfg); err != nil {
+			workerCancel()
 			return nil, err
 		}
 	}
@@ -224,7 +229,7 @@ func NewEventLoggerWithOptions(ctx context.Context, cfg *config.Config, log *slo
 				el.wg.Done()
 			}()
 			// Accepted asynchronous events belong to the logger until Close drains them.
-			el.worker(context.WithoutCancel(ctx))
+			el.worker(workerContext)
 		}()
 	}
 	return el, nil
@@ -404,9 +409,17 @@ func (el *EventLogger) recordDrop(system, sessionID, eventName, msg string) {
 // Close stops the background worker, drains the queue to all configured
 // outputs, and releases their resources. Close is idempotent.
 func (el *EventLogger) Close() error {
+	return el.CloseContext(context.Background())
+}
+
+// CloseContext drains accepted events until the shutdown deadline, then cancels writes.
+// It joins the writer before returning so borrowed databases can close safely.
+func (el *EventLogger) CloseContext(ctx context.Context) error {
 	if el == nil {
 		return nil
 	}
+	stopCancellation := context.AfterFunc(ctx, el.workerCancel)
+	defer stopCancellation()
 	el.mu.Lock()
 	if el.stopping {
 		el.mu.Unlock()
@@ -418,9 +431,11 @@ func (el *EventLogger) Close() error {
 	el.mu.Unlock()
 
 	el.wg.Wait()
+	el.workerCancel()
 	if el.writer != nil {
 		el.closeErr = el.writer.Close()
 	}
+	el.closeErr = errors.Join(el.closeErr, ctx.Err())
 	close(el.closeDone)
 	return el.closeErr
 }

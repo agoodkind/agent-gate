@@ -21,8 +21,8 @@ func BenchmarkAuditTrace(b *testing.B) {
 		fake := newDeferredInferenceFake(`{"decision":"block"}`)
 		endpoint := startAuditTraceInferenceServer(b, fake)
 		cfg := auditTraceConfig(b, endpoint)
-		databasePath := cfg.AuditSQLitePath()
 		srv := newAuditTraceServer(b, cfg)
+		databasePath := srv.runtime.Load().bucket.Path
 		requests := auditPerformanceTrace()
 
 		b.ResetTimer()
@@ -71,21 +71,8 @@ func assertAuditTraceResponse(
 
 func newAuditTraceServer(b *testing.B, cfg *config.Config) *Server {
 	b.Helper()
-	originalReplay := replayRuntimeSnapshotPending
-	replayFinished := make(chan struct{})
-	replayRuntimeSnapshotPending = func(
-		processor *deferredProcessor,
-		ctx context.Context,
-	) error {
-		defer close(replayFinished)
-		return originalReplay(processor, ctx)
-	}
-	b.Cleanup(func() {
-		replayRuntimeSnapshotPending = originalReplay
-	})
 	srv := newBenchmarkServer(b, cfg)
-	<-replayFinished
-	replayRuntimeSnapshotPending = originalReplay
+	<-srv.auditStarted
 	return srv
 }
 
@@ -316,7 +303,7 @@ func newBenchmarkServer(b *testing.B, cfg *config.Config) *Server {
 	b.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
 	b.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
 	b.Setenv("XDG_RUNTIME_DIR", filepath.Join(dir, "runtime"))
-	srv, err := New(newDiscardLogger(), cfg)
+	srv, err := newReadyTestServer(newDiscardLogger(), cfg)
 	if err != nil {
 		b.Fatalf("New: %v", err)
 	}

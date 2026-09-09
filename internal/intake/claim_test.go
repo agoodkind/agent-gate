@@ -10,14 +10,14 @@ import (
 )
 
 func TestExpiredDeferredClaimCanBeReclaimed(t *testing.T) {
-	store, err := OpenSQLite(
+	store, err := openFixtureIntake(t,
 		context.Background(), filepath.Join(t.TempDir(), "audit.db"), nil,
 	)
 	if err != nil {
 		t.Fatalf("OpenSQLite: %v", err)
 	}
 	t.Cleanup(func() {
-		if err := store.Close(); err != nil {
+		if err := store.Handle().Close(); err != nil {
 			t.Errorf("Close: %v", err)
 		}
 	})
@@ -63,14 +63,14 @@ func TestExpiredDeferredClaimCanBeReclaimed(t *testing.T) {
 }
 
 func TestRenewedDeferredClaimCannotBeReclaimedAfterOriginalExpiry(t *testing.T) {
-	store, err := OpenSQLite(
+	store, err := openFixtureIntake(t,
 		context.Background(), filepath.Join(t.TempDir(), "audit.db"), nil,
 	)
 	if err != nil {
 		t.Fatalf("OpenSQLite: %v", err)
 	}
 	t.Cleanup(func() {
-		if err := store.Close(); err != nil {
+		if err := store.Handle().Close(); err != nil {
 			t.Errorf("Close: %v", err)
 		}
 	})

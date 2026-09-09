@@ -32,30 +32,6 @@ const (
 	inferenceCacheNamespace = "infer-condition"
 )
 
-// InferenceTrace is the payload-free record of one attempted inference layer.
-type InferenceTrace struct {
-	LayerName          string             `json:"layer_name"`
-	ConditionIndex     int                `json:"condition_index"`
-	Outcome            string             `json:"outcome"`
-	Status             string             `json:"status"`
-	Latency            time.Duration      `json:"latency"`
-	CacheHit           bool               `json:"cache_hit"`
-	ErrorClass         string             `json:"error_class,omitempty"`
-	VerifiedProvenance VerifiedProvenance `json:"verified_provenance"`
-}
-
-// InferenceTraceCollector receives sanitized in-memory layer traces.
-type InferenceTraceCollector interface {
-	CollectInferenceTrace(InferenceTrace)
-}
-
-type inferenceTraceCollectorKey struct{}
-
-// WithInferenceTraceCollector attaches a collector to an evaluation context.
-func WithInferenceTraceCollector(ctx context.Context, collector InferenceTraceCollector) context.Context {
-	return context.WithValue(ctx, inferenceTraceCollectorKey{}, collector)
-}
-
 type inferFlight struct {
 	done   chan struct{}
 	result inferResult
@@ -277,9 +253,6 @@ func (runtime *InferRuntime) evaluate(ctx context.Context, fields FieldSet, rule
 	)
 	blocked := inferResultBlocks(condition, result)
 	completed := runtime.now()
-	runtime.collectTrace(
-		ctx, condition, conditionIndex, input, cacheKey, result, completed.Sub(started),
-	)
 	runtime.collectRichTrace(ctx, rule, condition, conditionIndex, input, contextWorkspace, contextSession, cacheKey, started, completed, result)
 	if result.errored {
 		runtime.log.WarnContext(ctx, "inference condition failed",
@@ -856,36 +829,6 @@ func grpcErrorClass(err error) string {
 	default:
 		return "rpc_error"
 	}
-}
-
-func (runtime *InferRuntime) collectTrace(
-	ctx context.Context,
-	condition *config.Condition,
-	conditionIndex int,
-	input string,
-	cacheKey string,
-	result inferResult,
-	latency time.Duration,
-) {
-	collector, _ := ctx.Value(inferenceTraceCollectorKey{}).(InferenceTraceCollector)
-	if collector == nil {
-		return
-	}
-	outcome := "nonmatched"
-	statusValue := "complete"
-	if result.matched {
-		outcome = "matched"
-	}
-	if result.errored {
-		outcome = "nonmatched"
-		statusValue = "error"
-	}
-	collector.CollectInferenceTrace(InferenceTrace{
-		LayerName: condition.LayerName, ConditionIndex: conditionIndex,
-		Outcome: outcome, Status: statusValue, Latency: latency,
-		CacheHit: result.cacheHit, ErrorClass: result.errorClass,
-		VerifiedProvenance: verifiedInferenceProvenance(condition, input, cacheKey, result),
-	})
 }
 
 func verifiedInferenceProvenance(

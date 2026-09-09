@@ -29,7 +29,7 @@ func TestPolicyResetDiscardsCurrentFilenameHistory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	store, err := intake.OpenSQLite(t.Context(), current.Path, nil)
+	store, err := openFixtureIntake(t, t.Context(), current.Path, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,7 +37,7 @@ func TestPolicyResetDiscardsCurrentFilenameHistory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Close(); err != nil {
+	if err := store.Handle().Close(); err != nil {
 		t.Fatal(err)
 	}
 	policy.Retained = 3
@@ -54,11 +54,11 @@ func TestPolicyResetDiscardsCurrentFilenameHistory(t *testing.T) {
 	if _, err := os.Stat(old.Path); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("old bucket remains: %v", err)
 	}
-	store, err = intake.OpenSQLite(t.Context(), replacement.Path, nil)
+	store, err = openFixtureIntake(t, t.Context(), replacement.Path, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = store.Close() }()
+	defer func() { _ = store.Handle().Close() }()
 	query, err := os.ReadFile("testdata/catalog_event_count.sql")
 	if err != nil {
 		t.Fatal(err)

@@ -8,17 +8,16 @@ import (
 	"testing"
 
 	"goodkind.io/agent-gate/internal/config"
-	"goodkind.io/agent-gate/internal/intake"
 )
 
 func TestRunAuditStatusReportsFileSizes(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
-	store, err := intake.OpenSQLite(t.Context(), config.DefaultAuditSQLitePath(), nil)
+	store, err := openFixtureIntake(t, t.Context(), config.DefaultAuditSQLitePath(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Close(); err != nil {
+	if err := store.Handle().Close(); err != nil {
 		t.Fatal(err)
 	}
 	info, err := os.Stat(config.DefaultAuditSQLitePath())
@@ -61,11 +60,11 @@ func setupAuditCommandEnvironment(t *testing.T, configBody string) {
 
 func createAuditCommandDatabase(t *testing.T) {
 	t.Helper()
-	store, err := intake.OpenSQLite(t.Context(), config.DefaultAuditSQLitePath(), nil)
+	store, err := openFixtureIntake(t, t.Context(), config.DefaultAuditSQLitePath(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Close(); err != nil {
+	if err := store.Handle().Close(); err != nil {
 		t.Fatal(err)
 	}
 }

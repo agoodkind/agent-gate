@@ -136,3 +136,16 @@ func (c *Config) AuditStoragePolicy() AuditStoragePolicy {
 	}
 	return c.auditStoragePolicy
 }
+
+// PrepareAuditStorage validates storage for configurations constructed in memory.
+func (c *Config) PrepareAuditStorage() error {
+	if c == nil || c.Unusable() {
+		return fmt.Errorf("audit storage requires a usable configuration")
+	}
+	policy, err := resolveAuditStorage(c.Audit.Storage)
+	if err != nil {
+		return err
+	}
+	c.auditStoragePolicy = policy
+	return nil
+}

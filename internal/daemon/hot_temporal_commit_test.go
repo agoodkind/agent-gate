@@ -35,7 +35,7 @@ cache_ttl_ms = 0
 `)
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&logs, nil))
-	server, err := New(logger, cfg)
+	server, err := newReadyTestServer(logger, cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

@@ -64,7 +64,7 @@ field_paths = [
 ]
 cache_ttl_ms = 0
 `, scriptPath))
-	server, err := New(newDiscardLogger(), cfg)
+	server, err := newReadyTestServer(newDiscardLogger(), cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

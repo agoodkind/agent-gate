@@ -74,6 +74,11 @@ func NewCatalog(options CatalogOptions) (*Catalog, error) {
 	return &Catalog{options: options, filesystemCheckpoint: nil}, nil
 }
 
+// SameStorage compares canonical storage families without opening their history.
+func (catalog *Catalog) SameStorage(other *Catalog) bool {
+	return catalog != nil && other != nil && catalog.options.BasePath == other.options.BasePath
+}
+
 func bucketStart(now time.Time, interval time.Duration) time.Time {
 	seconds := int64(interval / time.Second)
 	value := now.Unix()

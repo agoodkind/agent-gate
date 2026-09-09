@@ -60,7 +60,7 @@ func TestDeferredCompletionReopensWithAuditEvents(t *testing.T) {
 	if err := store.CommitDeferredEvaluation(ctx, claim, record, atomicAuditEntries(receipt.EventID)); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Close(); err != nil {
+	if err := store.Handle().Close(); err != nil {
 		t.Fatal(err)
 	}
 	reopened := openAtomicStore(t, path)

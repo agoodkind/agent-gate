@@ -22,6 +22,7 @@ import (
 
 	"goodkind.io/agent-gate/api/daemonpb"
 	"goodkind.io/agent-gate/internal/audit"
+	"goodkind.io/agent-gate/internal/auditstorage"
 	"goodkind.io/agent-gate/internal/config"
 	"goodkind.io/agent-gate/internal/gitbranch"
 	"goodkind.io/agent-gate/internal/hook"
@@ -38,6 +39,8 @@ const configReloadDebounce = 200 * time.Millisecond
 const intakeParseFailed = "intake_parse_failed"
 
 type runtimeSnapshot struct {
+	bucket             auditstorage.Bucket
+	bucketHandle       *auditstorage.BucketHandle
 	cfg                *config.Config
 	eventLogger        *audit.EventLogger
 	intakeStore        intakeStore
@@ -48,21 +51,6 @@ type runtimeSnapshot struct {
 	hotEvaluate        func(context.Context, hook.EvaluationInput, *config.Config, func(string) string, string) hook.HotEvaluation
 	execRuntime        *rules.ExecRuntime
 	inferRuntime       *rules.InferRuntime
-}
-
-type inferenceTraceSink struct {
-	traces []rules.InferenceTrace
-}
-
-func (sink *inferenceTraceSink) CollectInferenceTrace(trace rules.InferenceTrace) {
-	sink.traces = append(sink.traces, trace)
-}
-
-func (sink *inferenceTraceSink) snapshot() []rules.InferenceTrace {
-	if sink == nil {
-		return nil
-	}
-	return append([]rules.InferenceTrace(nil), sink.traces...)
 }
 
 // Server implements the AgentGateD gRPC service.
@@ -81,6 +69,18 @@ type Server struct {
 	closing       bool
 	updateCancel  context.CancelFunc
 	stopDaemon    func()
+	catalog       *auditstorage.Catalog
+	shutdown      <-chan struct{}
+	auditCancel   context.CancelFunc
+	cancel        context.CancelFunc
+	now           func() time.Time
+	auditTicks    <-chan time.Time
+	auditWake     chan struct{}
+	auditOnce     sync.Once
+	auditWG       sync.WaitGroup
+	auditStarted  chan struct{}
+	closeOnce     sync.Once
+	retryWait     func(context.Context, time.Duration) error
 
 	overloadLogMu       sync.Mutex
 	lastOverloadLogTime time.Time
@@ -149,8 +149,16 @@ func zeroConfig() *config.Config {
 	}
 }
 
-// New creates a new daemon Server.
-func New(log *slog.Logger, cfg *config.Config) (*Server, error) {
+// New creates a daemon runtime. StartAuditScheduler follows transport readiness.
+func New(ctx context.Context, log *slog.Logger, cfg *config.Config) (*Server, error) {
+	return newServer(ctx, log, cfg, time.Now)
+}
+
+func newServer(ctx context.Context, log *slog.Logger, cfg *config.Config, now func() time.Time) (*Server, error) {
+	return newServerWithStorageWait(ctx, log, cfg, now, waitAuditRetry)
+}
+
+func newServerWithStorageWait(ctx context.Context, log *slog.Logger, cfg *config.Config, now func() time.Time, wait func(context.Context, time.Duration) error) (*Server, error) {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -162,18 +170,17 @@ func New(log *slog.Logger, cfg *config.Config) (*Server, error) {
 		return nil, fmt.Errorf("invalid hook config: %w", errs[0])
 	}
 	initializeBuildIdentity(log)
+	if !cfg.Unusable() {
+		if err := cfg.PrepareAuditStorage(); err != nil {
+			return nil, wrapServerError("prepare audit storage", err)
+		}
+	}
 
-	hook.WarnCapabilityDowngrades(context.Background(), log, cfg)
+	hook.WarnCapabilityDowngrades(ctx, log, cfg)
 
 	hotStore := hotkv.New(hotKVOptions(cfg))
 	inferRuntime := rules.NewInferRuntimeWithCache(log, hotStore)
-	snapshot, err := newRuntimeSnapshot(context.Background(), cfg, log, hotStore, inferRuntime)
-	if err != nil {
-		inferRuntime.Close()
-		hotStore.Close()
-		log.Error("failed to create runtime snapshot", slog.Any("err", err))
-		return nil, err
-	}
+	lifetime, cancel := context.WithCancel(ctx)
 
 	s := &Server{
 		UnimplementedAgentGateDServer: daemonpb.UnimplementedAgentGateDServer{},
@@ -191,10 +198,23 @@ func New(log *slog.Logger, cfg *config.Config) (*Server, error) {
 		stopDaemon:                    nil,
 		overloadLogMu:                 sync.Mutex{},
 		lastOverloadLogTime:           time.Time{},
+		catalog:                       nil, shutdown: lifetime.Done(), auditCancel: nil, cancel: cancel, now: now,
+		auditTicks: nil, auditWake: make(chan struct{}, 1), auditOnce: sync.Once{}, auditWG: sync.WaitGroup{},
+		closeOnce:    sync.Once{},
+		retryWait:    wait,
+		auditStarted: make(chan struct{}),
+	}
+	snapshot, err := s.initializeAuditStorage(lifetime, cfg)
+	if err != nil {
+		cancel()
+		inferRuntime.Close()
+		hotStore.Close()
+		return nil, err
 	}
 	s.runtime.Store(snapshot)
-	if err := s.startConfigWatcher(); err != nil {
-		snapshot.close(context.Background(), log)
+	if err := s.startConfigWatcher(lifetime); err != nil {
+		cancel()
+		snapshot.close(ctx, log)
 		inferRuntime.Close()
 		hotStore.Close()
 		return nil, err
@@ -210,17 +230,12 @@ func hotKVOptions(cfg *config.Config) hotkv.Options {
 	}
 }
 
-var replayRuntimeSnapshotPending = (*deferredProcessor).ReplayPending
-
-func newRuntimeSnapshot(ctx context.Context, cfg *config.Config, log *slog.Logger, hotStore *hotkv.Store, inferRuntime *rules.InferRuntime) (*runtimeSnapshot, error) {
-	// The intake store is created first so the audit event logger can share its
-	// single SQLite connection pool. One pool serializes intake and audit writes
-	// to audit.db, avoiding the cross-pool SQLITE_BUSY that two pools hit during
-	// the startup replay.
-	intakeStore, err := newSQLiteIntakeStore(ctx, cfg, log)
+func newRuntimeSnapshotForBucket(ctx context.Context, cfg *config.Config, log *slog.Logger, hotStore *hotkv.Store, inferRuntime *rules.InferRuntime, handle *auditstorage.BucketHandle) (*runtimeSnapshot, error) {
+	store, err := intake.NewStore(ctx, handle.Database, cfg.AuditStoragePolicy(), log)
 	if err != nil {
 		return nil, fmt.Errorf("create intake store: %w", err)
 	}
+	intakeStore := &sqliteIntakeStore{store: store, log: log}
 
 	// Refresh the judge-level transcript settings on the daemon-owned runtime, so a
 	// config reload (which rebuilds the snapshot but reuses the runtime) picks up
@@ -262,23 +277,6 @@ func newRuntimeSnapshot(ctx context.Context, cfg *config.Config, log *slog.Logge
 		log,
 	)
 	deferredProcessor.evaluationRecorder = intakeStore.Evaluations()
-	// Replay the pending deferred backlog in the background so the daemon serves the
-	// gate socket immediately. A synchronous replay blocks Serve for as long as the
-	// backlog takes to re-run (each pending event re-runs inference), which leaves the
-	// hook fail-open for the whole startup. Replay is audit backfill, not gate
-	// enforcement, so a replay error is logged rather than aborting startup.
-	go func() {
-		defer func() {
-			if recovered := recover(); recovered != nil && log != nil {
-				log.ErrorContext(ctx, "replay pending intake panic recovered", slog.Any("err", recovered))
-			}
-		}()
-		if err := replayRuntimeSnapshotPending(deferredProcessor, ctx); err != nil {
-			if log != nil {
-				log.WarnContext(ctx, "replay pending intake failed", slog.Any("err", err))
-			}
-		}
-	}()
 	// The detached-validator deadline is pushed onto the runtime here rather
 	// than read from config at the call site, because that call site is a retry
 	// loop and would otherwise reload and recompile the config once per attempt.
@@ -287,6 +285,7 @@ func newRuntimeSnapshot(ctx context.Context, cfg *config.Config, log *slog.Logge
 	execRuntime.SetBackgroundTimeout(cfg.ExecBackgroundTimeout())
 
 	return &runtimeSnapshot{
+		bucket: handle.Bucket, bucketHandle: handle,
 		cfg:                cfg,
 		eventLogger:        eventLogger,
 		intakeStore:        intakeStore,
@@ -318,18 +317,20 @@ func (s *runtimeSnapshot) close(ctx context.Context, log *slog.Logger) {
 		s.deferredProcessor.Close()
 	}
 	if s.eventLogger != nil {
-		if err := s.eventLogger.Close(); err != nil && log != nil {
+		drainContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		if err := s.eventLogger.CloseContext(drainContext); err != nil && log != nil {
 			log.WarnContext(ctx, "audit logger close failed", "err", err)
 		}
 	}
-	if s.intakeStore != nil {
-		if err := s.intakeStore.Close(); err != nil && log != nil {
-			log.WarnContext(ctx, "intake store close failed", "err", err)
+	if s.bucketHandle != nil {
+		if err := s.bucketHandle.Close(); err != nil && log != nil {
+			log.WarnContext(ctx, "audit bucket close failed", "err", err)
 		}
 	}
 }
 
-func (s *Server) startConfigWatcher() error {
+func (s *Server) startConfigWatcher(ctx context.Context) error {
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		s.log.Error("create config watcher failed", slog.Any("err", err))
@@ -349,20 +350,19 @@ func (s *Server) startConfigWatcher() error {
 	}
 
 	s.configWatcher = watcher
-	s.log.InfoContext(context.Background(), "watching config", "path", s.configPath)
+	s.log.InfoContext(ctx, "watching config", "path", s.configPath)
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				s.log.ErrorContext(context.Background(), "config watcher panic", "err", r)
+				s.log.ErrorContext(ctx, "config watcher panic", "err", r)
 			}
 		}()
-		s.watchConfigFile()
+		s.watchConfigFile(ctx)
 	}()
 	return nil
 }
 
-func (s *Server) watchConfigFile() {
-	ctx := context.Background()
+func (s *Server) watchConfigFile(ctx context.Context) {
 	timer := time.NewTimer(configReloadDebounce)
 	if !timer.Stop() {
 		<-timer.C
@@ -421,6 +421,23 @@ func resetTimer(timer *time.Timer, duration time.Duration) {
 func (s *Server) reloadConfig(ctx context.Context) error {
 	s.lifecycleMu.Lock()
 	defer s.lifecycleMu.Unlock()
+	if s.closing {
+		return nil
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				s.log.ErrorContext(ctx, "reload cancellation panic", "err", recovered)
+			}
+		}()
+		select {
+		case <-s.shutdown:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	defer cancel()
 	// Reload degraded, for the same reason the daemon starts degraded: a rule
 	// that will not compile costs that rule, not the whole rule set. A reload
 	// that refuses the file leaves the previous snapshot in place, which is
@@ -449,7 +466,7 @@ func (s *Server) reloadConfig(ctx context.Context) error {
 
 	hook.WarnCapabilityDowngrades(ctx, s.log, candidate)
 
-	newSnapshot, err := newRuntimeSnapshot(ctx, candidate, s.log, s.hotKV, s.inferRuntime)
+	newSnapshot, err := s.replaceAuditSnapshot(ctx, candidate)
 	if err != nil {
 		s.log.WarnContext(ctx, "create runtime snapshot for reloaded config failed", "path", s.configPath, "err", err)
 		return fmt.Errorf("failed to create runtime snapshot for reloaded config: %w", err)
@@ -522,7 +539,7 @@ func (s *Server) EvaluateHook(ctx context.Context, req *daemonpb.EvaluateHookReq
 	}
 	defer s.releaseEvaluateSlot(snapshot)
 
-	ctx, traceSink := hookEvaluationContext(ctx, snapshot)
+	ctx = hookEvaluationContext(ctx, snapshot)
 	envFingerprint := req.GetEnvFingerprint()
 	evaluationInput, normalizationErr := prepareHookEvaluationInput(req)
 
@@ -573,7 +590,6 @@ func (s *Server) EvaluateHook(ctx context.Context, req *daemonpb.EvaluateHookReq
 		getenv,
 		appendResult.EventID,
 	)
-	result.Deferred.InferenceTraces = traceSink.snapshot()
 	systemError := ""
 	errorMessage := ""
 	if intakeErr != nil {
@@ -590,16 +606,10 @@ func (s *Server) EvaluateHook(ctx context.Context, req *daemonpb.EvaluateHookReq
 func hookEvaluationContext(
 	ctx context.Context,
 	snapshot *runtimeSnapshot,
-) (context.Context, *inferenceTraceSink) {
+) context.Context {
 	ctx = rules.WithExecRuntime(ctx, snapshot.execRuntime)
 	ctx = rules.WithInferRuntime(ctx, snapshot.inferRuntime)
-	ctx = rules.WithGitStateReader(ctx, gitbranch.ReadState)
-	var traceSink *inferenceTraceSink
-	if configHasInference(snapshot.cfg) {
-		traceSink = &inferenceTraceSink{traces: nil}
-		ctx = rules.WithInferenceTraceCollector(ctx, traceSink)
-	}
-	return ctx, traceSink
+	return rules.WithGitStateReader(ctx, gitbranch.ReadState)
 }
 
 func prepareHookEvaluationInput(
@@ -669,20 +679,6 @@ func copilotEventHint(argv []string) string {
 		}
 	}
 	return ""
-}
-
-func configHasInference(cfg *config.Config) bool {
-	if cfg == nil {
-		return false
-	}
-	for ruleIndex := range cfg.Rules {
-		for conditionIndex := range cfg.Rules[ruleIndex].Conditions {
-			if config.ConditionKind(cfg.Rules[ruleIndex].Conditions[conditionIndex].Kind) == config.ConditionKindInfer {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 func buildClassifiedIntakeRecord(
@@ -764,19 +760,6 @@ func cloneBytes(value []byte) []byte {
 	cloned := make([]byte, len(value))
 	copy(cloned, value)
 	return cloned
-}
-
-func enqueueDeferredReplay(
-	snapshot *runtimeSnapshot,
-	appendResult intake.AppendResult,
-	deferredEvent hook.DeferredAuditEvent,
-) {
-	if !deferredEvent.Valid {
-		return
-	}
-	if snapshot.deferredProcessor != nil {
-		snapshot.deferredProcessor.Enqueue(appendResult.ReceiptID, appendResult.EventID, deferredEvent)
-	}
 }
 
 func failOpenHotEvaluation(result hook.HotEvaluation) hook.HotEvaluation {

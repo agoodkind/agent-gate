@@ -306,12 +306,12 @@ func newEvaluationQueryFixture(
 	t.Helper()
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "audit.db")
-	intakeStore, err := intake.OpenSQLite(ctx, path, nil)
+	intakeStore, err := openFixtureIntake(t, ctx, path, nil)
 	if err != nil {
 		t.Fatalf("OpenSQLite: %v", err)
 	}
 	t.Cleanup(func() {
-		if err := intakeStore.Close(); err != nil {
+		if err := intakeStore.Handle().Close(); err != nil {
 			t.Fatalf("Close: %v", err)
 		}
 	})

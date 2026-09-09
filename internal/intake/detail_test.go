@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"goodkind.io/agent-gate/internal/auditstorage"
 	"goodkind.io/agent-gate/internal/config"
 	"goodkind.io/agent-gate/internal/intake"
 )
@@ -30,13 +31,13 @@ func TestCanonicalInputRetainedUntilEveryReceiptCompletes(t *testing.T) {
 			if !first.Inserted || second.Inserted || first.ReceiptID == second.ReceiptID {
 				t.Fatalf("receipts: %+v %+v", first, second)
 			}
-			if err := store.CommitHotEvaluation(t.Context(), first.EventID, first.ReceiptID, false, atomicEvaluationRecord(first, "hot-first", "hot", 1)); err != nil {
+			if err := store.CommitHotEvaluation(t.Context(), first.EventID, first.ReceiptID, false, atomicEvaluationRecord(first, "hot-first", "hot", 1), nil); err != nil {
 				t.Fatal(err)
 			}
-			if err := store.CommitHotEvaluation(t.Context(), second.EventID, second.ReceiptID, true, atomicEvaluationRecord(second, "hot-second", "hot", 1)); err != nil {
+			if err := store.CommitHotEvaluation(t.Context(), second.EventID, second.ReceiptID, true, atomicEvaluationRecord(second, "hot-second", "hot", 1), nil); err != nil {
 				t.Fatal(err)
 			}
-			if err := store.Close(); err != nil {
+			if err := store.Handle().Close(); err != nil {
 				t.Fatal(err)
 			}
 			store = openDetailStore(t, path, policy)
@@ -73,10 +74,10 @@ func TestCanonicalEmptyWireInputSurvivesPendingRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.CommitHotEvaluation(t.Context(), receipt.EventID, receipt.ReceiptID, true, atomicEvaluationRecord(receipt, "empty-hot", "hot", 1)); err != nil {
+	if err := store.CommitHotEvaluation(t.Context(), receipt.EventID, receipt.ReceiptID, true, atomicEvaluationRecord(receipt, "empty-hot", "hot", 1), nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Close(); err != nil {
+	if err := store.Handle().Close(); err != nil {
 		t.Fatal(err)
 	}
 	store = openDetailStore(t, path, minimalDetailPolicy())
@@ -95,13 +96,16 @@ func openDetailStore(
 	policy config.AuditStoragePolicy,
 ) *intake.Store {
 	t.Helper()
-	store, err := intake.OpenSQLiteWithOptions(t.Context(), intake.SQLiteOptions{
-		Path: path, Policy: policy, Log: nil,
-	})
+	database, err := auditstorage.OpenWriter(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	store, err := intake.NewStore(t.Context(), database, policy, nil)
 	if err != nil {
 		t.Fatalf("OpenSQLiteWithOptions: %v", err)
 	}
-	t.Cleanup(func() { _ = store.Close() })
+	t.Cleanup(func() { _ = store.Handle().Close() })
 	return store
 }
 
@@ -142,13 +146,13 @@ func TestRecordedInputBitsAccumulateAcrossPolicySnapshots(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := store.CommitHotEvaluation(t.Context(), receipt.EventID, receipt.ReceiptID, false, atomicEvaluationRecord(receipt, fmt.Sprintf("policy-%d", index), "hot", 1)); err != nil {
+		if err := store.CommitHotEvaluation(t.Context(), receipt.EventID, receipt.ReceiptID, false, atomicEvaluationRecord(receipt, fmt.Sprintf("policy-%d", index), "hot", 1), nil); err != nil {
 			t.Fatal(err)
 		}
 		if index > 0 {
 			assertDetailRecord(t, store, receipt.ReceiptID, input)
 		}
-		if err := store.Close(); err != nil {
+		if err := store.Handle().Close(); err != nil {
 			t.Fatal(err)
 		}
 	}

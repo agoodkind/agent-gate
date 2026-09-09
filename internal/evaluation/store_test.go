@@ -306,12 +306,12 @@ func TestStoreRejectsMismatchedReceiptEvent(t *testing.T) {
 
 func TestStoreSchemaHasForeignKeysAndIndices(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "audit.db")
-	intakeStore, err := intake.OpenSQLite(context.Background(), path, nil)
+	intakeStore, err := openFixtureIntake(t, context.Background(), path, nil)
 	if err != nil {
 		t.Fatalf("OpenSQLite: %v", err)
 	}
 	t.Cleanup(func() {
-		if err := intakeStore.Close(); err != nil {
+		if err := intakeStore.Handle().Close(); err != nil {
 			t.Fatalf("Close: %v", err)
 		}
 	})
@@ -379,12 +379,12 @@ func TestStorePersistsLayerVerdict(t *testing.T) {
 func newEvaluationStore(t *testing.T) (*evaluation.Store, intake.AppendResult) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "audit.db")
-	intakeStore, err := intake.OpenSQLite(context.Background(), path, nil)
+	intakeStore, err := openFixtureIntake(t, context.Background(), path, nil)
 	if err != nil {
 		t.Fatalf("OpenSQLite: %v", err)
 	}
 	t.Cleanup(func() {
-		if err := intakeStore.Close(); err != nil {
+		if err := intakeStore.Handle().Close(); err != nil {
 			t.Fatalf("Close: %v", err)
 		}
 	})

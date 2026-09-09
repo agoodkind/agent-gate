@@ -41,7 +41,7 @@ path = "` + databasePath + `"
 	if err != nil {
 		t.Fatalf("LoadExisting: %v", err)
 	}
-	server, err := New(newDiscardLogger(), cfg)
+	server, err := newServer(t.Context(), newDiscardLogger(), cfg, time.Now)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -60,6 +60,9 @@ path = "` + databasePath + `"
 	request := blockingLedgerRequest(t)
 	if _, err := server.EvaluateHook(t.Context(), request); err != nil {
 		t.Fatalf("EvaluateHook: %v", err)
+	}
+	if err := server.dispatchRetainedReplay(t.Context(), server.now()); err != nil {
+		t.Fatal(err)
 	}
 	var work deferredWork
 	select {
@@ -90,7 +93,7 @@ path = "` + databasePath + `"
 	if len(after.RawPayload) != 0 || len(after.NormalizedJSON) != 0 {
 		t.Fatalf("terminal input retained: %+v", after)
 	}
-	events, _, err := audit.QueryReadOnly(t.Context(), cfg, audit.QueryFilter{SessionID: before.SessionID})
+	events, _, err := audit.QueryReadOnly(t.Context(), currentAuditConfig(server), audit.QueryFilter{SessionID: before.SessionID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +108,7 @@ func TestEvaluateHookClosedInferenceErrorBlocksAndPersistsValidLayer(t *testing.
 	endpoint := startDeferredInferenceServer(t, fake)
 	cfg := loadDeferredInferConfig(t, endpoint)
 	cfg.Rules[0].Conditions[0].OnError = "closed"
-	server, err := New(newDiscardLogger(), cfg)
+	server, err := newReadyTestServer(newDiscardLogger(), cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -179,6 +182,7 @@ func (recorder *recordingEvaluationRecorder) CommitHotEvaluation(
 	_ int64,
 	_ bool,
 	record evaluation.Record,
+	_ []audit.NormalizedEntry,
 ) error {
 	if recorder.hotErr != nil {
 		return recorder.hotErr
@@ -203,7 +207,7 @@ func (recorder *recordingEvaluationRecorder) snapshot() []evaluation.Record {
 
 func TestEvaluateHookEvaluationCommitPrecedesBlockingResponse(t *testing.T) {
 	setDaemonTestDirs(t)
-	server, err := New(newDiscardLogger(), daemonTestConfig(t))
+	server, err := newReadyTestServer(newDiscardLogger(), daemonTestConfig(t))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -238,7 +242,7 @@ func TestEvaluateHookEvaluationCommitPrecedesBlockingResponse(t *testing.T) {
 
 func TestEvaluateHookLedgerFailureReturnsFailOpen(t *testing.T) {
 	setDaemonTestDirs(t)
-	server, err := New(newDiscardLogger(), daemonTestConfig(t))
+	server, err := newReadyTestServer(newDiscardLogger(), daemonTestConfig(t))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -262,7 +266,7 @@ func TestEvaluateHookLedgerFailureReturnsFailOpen(t *testing.T) {
 
 func TestEvaluateHookAtomicHotCommitFailureRecordsAndReturnsFailOpen(t *testing.T) {
 	setDaemonTestDirs(t)
-	server, err := New(newDiscardLogger(), daemonTestConfig(t))
+	server, err := newReadyTestServer(newDiscardLogger(), daemonTestConfig(t))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -295,7 +299,7 @@ func TestEvaluateHookFallbackLedgerFailureLogsDistinctStatus(t *testing.T) {
 	setDaemonTestDirs(t)
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&logs, nil))
-	server, err := New(logger, daemonTestConfig(t))
+	server, err := newReadyTestServer(logger, daemonTestConfig(t))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -324,7 +328,7 @@ func TestEvaluateHookFallbackLedgerFailureLogsDistinctStatus(t *testing.T) {
 
 func TestEvaluateHookDuplicateReceiptsCreateDistinctEvaluations(t *testing.T) {
 	setDaemonTestDirs(t)
-	server, err := New(newDiscardLogger(), daemonTestConfig(t))
+	server, err := newReadyTestServer(newDiscardLogger(), daemonTestConfig(t))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -350,7 +354,7 @@ func TestEvaluateHookDuplicateReceiptsCreateDistinctEvaluations(t *testing.T) {
 
 func TestEvaluateHookAllowPersistsEvaluation(t *testing.T) {
 	setDaemonTestDirs(t)
-	server, err := New(newDiscardLogger(), daemonTestConfig(t))
+	server, err := newReadyTestServer(newDiscardLogger(), daemonTestConfig(t))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -377,7 +381,7 @@ func TestEvaluateHookAllowPersistsEvaluation(t *testing.T) {
 
 func TestEvaluateHookParseFailurePersistsValidationEvaluation(t *testing.T) {
 	setDaemonTestDirs(t)
-	server, err := New(newDiscardLogger(), daemonTestConfig(t))
+	server, err := newReadyTestServer(newDiscardLogger(), daemonTestConfig(t))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -417,7 +421,7 @@ func TestEvaluateHookParseFailurePersistsValidationEvaluation(t *testing.T) {
 
 func TestEvaluateHookQueueSaturationAfterEvaluationDoesNotChangeVerdict(t *testing.T) {
 	setDaemonTestDirs(t)
-	server, err := New(newDiscardLogger(), daemonTestConfig(t))
+	server, err := newReadyTestServer(newDiscardLogger(), daemonTestConfig(t))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

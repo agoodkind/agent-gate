@@ -25,7 +25,7 @@ func unusableServer(t *testing.T) *Server {
 	if !cfg.Unusable() {
 		t.Fatal("test fixture did not produce an unusable config")
 	}
-	server, err := New(newDiscardLogger(), cfg)
+	server, err := newReadyTestServer(newDiscardLogger(), cfg)
 	if err != nil {
 		t.Fatalf("New refused an unusable config: %v", err)
 	}
@@ -104,7 +104,7 @@ violation_message = "blocked"
 	if err != nil {
 		t.Fatalf("LoadDegraded: %v", err)
 	}
-	server, err := New(newDiscardLogger(), cfg)
+	server, err := newReadyTestServer(newDiscardLogger(), cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

@@ -7,7 +7,9 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"os/signal"
 	"sync"
+	"syscall"
 
 	"google.golang.org/grpc"
 
@@ -20,7 +22,8 @@ import (
 // It blocks until the server stops. The cfg argument may be nil. In that
 // case the daemon falls back to default XDG paths.
 func Run(log *slog.Logger, cfg *config.Config) error {
-	ctx := context.Background()
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
 	if err := config.EnsureRuntimeDir(); err != nil {
 		log.ErrorContext(ctx, "ensure runtime dir failed", "err", err)
 		return fmt.Errorf("ensure runtime dir: %w", err)
@@ -44,7 +47,7 @@ func Run(log *slog.Logger, cfg *config.Config) error {
 	}
 	defer func() { _ = listener.Close() }()
 
-	srv, err := New(log, cfg)
+	srv, err := New(ctx, log, cfg)
 	if err != nil {
 		log.ErrorContext(ctx, "create daemon server failed", "err", err)
 		return fmt.Errorf("create daemon server: %w", err)
@@ -52,6 +55,8 @@ func Run(log *slog.Logger, cfg *config.Config) error {
 	defer func() { srv.Close() }()
 
 	grpcServer := grpc.NewServer()
+	stopOnCancel := context.AfterFunc(ctx, grpcServer.GracefulStop)
+	defer stopOnCancel()
 	daemonpb.RegisterAgentGateDServer(grpcServer, srv)
 	srv.StartUpdateScheduler(ctx, func() {
 		grpcServer.GracefulStop()
@@ -59,6 +64,7 @@ func Run(log *slog.Logger, cfg *config.Config) error {
 
 	if err := serveAfterReadiness(grpcServer, listener, func() {
 		log.InfoContext(ctx, "daemon listening", "socket", socketPath)
+		srv.StartAuditScheduler(ctx)
 	}); err != nil {
 		log.ErrorContext(ctx, "grpc serve failed", "err", err)
 		return fmt.Errorf("grpc serve: %w", err)

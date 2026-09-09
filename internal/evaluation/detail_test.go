@@ -14,12 +14,12 @@ import (
 
 func TestRecordCompletedCommitsEvaluationSummaryAndDetail(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "audit.db")
-	intakeStore, err := intake.OpenSQLite(t.Context(), path, nil)
+	intakeStore, err := openFixtureIntake(t, t.Context(), path, nil)
 	if err != nil {
 		t.Fatalf("OpenSQLite: %v", err)
 	}
 	t.Cleanup(func() {
-		if err := intakeStore.Close(); err != nil {
+		if err := intakeStore.Handle().Close(); err != nil {
 			t.Errorf("Close: %v", err)
 		}
 	})
@@ -53,7 +53,7 @@ func TestRecordCompletedCommitsEvaluationSummaryAndDetail(t *testing.T) {
 
 func TestCostReportSurvivesEvaluationDetailRemoval(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "audit.db")
-	store, err := intake.OpenSQLite(t.Context(), path, nil)
+	store, err := openFixtureIntake(t, t.Context(), path, nil)
 	if err != nil {
 		t.Fatalf("OpenSQLite: %v", err)
 	}
@@ -78,7 +78,7 @@ func TestCostReportSurvivesEvaluationDetailRemoval(t *testing.T) {
 	if _, err := store.Handle().ExecContext(t.Context(), readEvaluationSQLFixture(t, "clear_evaluation_content.sql")); err != nil {
 		t.Fatalf("delete evaluation detail: %v", err)
 	}
-	if err := store.Close(); err != nil {
+	if err := store.Handle().Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 

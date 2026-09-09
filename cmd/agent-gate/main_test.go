@@ -887,11 +887,11 @@ func TestRunQueryEvaluationsPrintsSafeSummaryTable(t *testing.T) {
 func TestRunQueryEvaluationsTableIgnoresCorruptDetail(t *testing.T) {
 	setupQueryEnvironment(t)
 	record := appendCLIQueryEvaluation(t)
-	store, err := intake.OpenSQLite(t.Context(), config.DefaultAuditSQLitePath(), nil)
+	store, err := openFixtureIntake(t, t.Context(), config.DefaultAuditSQLitePath(), nil)
 	if err != nil {
 		t.Fatalf("OpenSQLite: %v", err)
 	}
-	t.Cleanup(func() { _ = store.Close() })
+	t.Cleanup(func() { _ = store.Handle().Close() })
 	if _, err := store.Handle().Exec(readCLISQLFixture(t, "corrupt_evaluation_metadata.sql"), record.Evaluation.EvaluationID); err != nil {
 		t.Fatalf("corrupt evaluation metadata: %v", err)
 	}
@@ -996,12 +996,12 @@ func appendCLIExportEvaluation(
 ) evaluation.Record {
 	t.Helper()
 	ctx := context.Background()
-	store, err := intake.OpenSQLite(ctx, config.DefaultAuditSQLitePath(), nil)
+	store, err := openFixtureIntake(t, ctx, config.DefaultAuditSQLitePath(), nil)
 	if err != nil {
 		t.Fatalf("OpenSQLite: %v", err)
 	}
 	t.Cleanup(func() {
-		if err := store.Close(); err != nil {
+		if err := store.Handle().Close(); err != nil {
 			t.Fatalf("Close: %v", err)
 		}
 	})

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"goodkind.io/agent-gate/api/daemonpb"
+	"goodkind.io/agent-gate/internal/audit"
 	"goodkind.io/agent-gate/internal/hook"
 	"goodkind.io/agent-gate/internal/intake"
 	"goodkind.io/agent-gate/internal/version"
@@ -52,12 +53,17 @@ func (s *Server) commitHotEvaluation(
 		return s.discardedVerdict(ctx, input, "evaluation recorder unavailable")
 	}
 	deferredPending := result.Deferred.Valid && systemError == ""
+	var auditEntries []audit.NormalizedEntry
+	if systemError == "" {
+		auditEntries = captureHotAudit(ctx, result.Deferred, input.Snapshot.eventLogger)
+	}
 	if err := input.Snapshot.evaluationRecorder.CommitHotEvaluation(
 		ctx,
 		input.AppendResult.EventID,
 		input.AppendResult.ReceiptID,
 		deferredPending,
 		record,
+		auditEntries,
 	); err != nil {
 		result = failOpenHotEvaluation(result)
 		failureRecord := buildHotEvaluationRecord(hotEvaluationRecordInput{
@@ -95,12 +101,27 @@ func (s *Server) commitHotEvaluation(
 		}
 	}
 	if systemError == "" {
-		enqueueDeferredReplay(input.Snapshot, input.AppendResult, result.Deferred)
+		s.wakeAuditScheduler()
 	}
 	return &daemonpb.EvaluateHookResponse{
 		ExitCode: clampExitCode(result.ExitCode), StdoutData: append([]byte(nil), result.Stdout...),
 		StderrData: append([]byte(nil), result.Stderr...),
 	}
+}
+
+func captureHotAudit(
+	ctx context.Context,
+	event hook.DeferredAuditEvent,
+	logger *audit.EventLogger,
+) []audit.NormalizedEntry {
+	if logger == nil || !logger.Enabled() || !event.Valid {
+		return nil
+	}
+	collector := &normalizedAuditCollector{
+		sink: audit.NewLocalSink(logger), entries: make([]audit.NormalizedEntry, 0, 3),
+	}
+	hook.WriteDeferredAudit(ctx, event, collector)
+	return collector.entries
 }
 
 func (s *Server) logHotEvaluationFailure(

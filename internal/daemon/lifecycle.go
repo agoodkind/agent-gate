@@ -4,6 +4,19 @@ import "context"
 
 // Close shuts down daemon-owned resources.
 func (s *Server) Close() {
+	s.closeOnce.Do(s.close)
+}
+
+func (s *Server) close() {
+	s.cfgMu.Lock()
+	if s.cancel != nil {
+		s.cancel()
+	}
+	if s.auditCancel != nil {
+		s.auditCancel()
+	}
+	s.cfgMu.Unlock()
+	s.auditWG.Wait()
 	s.lifecycleMu.Lock()
 	defer s.lifecycleMu.Unlock()
 	s.cfgMu.Lock()

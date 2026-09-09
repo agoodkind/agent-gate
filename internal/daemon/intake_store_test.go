@@ -11,12 +11,12 @@ import (
 
 func TestSQLiteEvaluationRecorderNilLoggerPreservesStoreErrors(t *testing.T) {
 	ctx := context.Background()
-	store, err := intake.OpenSQLite(ctx, filepath.Join(t.TempDir(), "audit.db"), nil)
+	store, err := openFixtureIntake(t, ctx, filepath.Join(t.TempDir(), "audit.db"), nil)
 	if err != nil {
 		t.Fatalf("OpenSQLite: %v", err)
 	}
 	t.Cleanup(func() {
-		if err := store.Close(); err != nil {
+		if err := store.Handle().Close(); err != nil {
 			t.Fatalf("Close: %v", err)
 		}
 	})
@@ -35,7 +35,7 @@ func TestSQLiteEvaluationRecorderNilLoggerPreservesStoreErrors(t *testing.T) {
 		{
 			name: "commit hot evaluation",
 			run: func() error {
-				return recorder.CommitHotEvaluation(ctx, "event", 1, true, evaluation.Record{})
+				return recorder.CommitHotEvaluation(ctx, "event", 1, true, evaluation.Record{}, nil)
 			},
 		},
 		{

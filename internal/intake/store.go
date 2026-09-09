@@ -103,7 +103,7 @@ type AppendResult struct {
 	Inserted  bool
 }
 
-// Store owns the SQLite-backed durable intake tables.
+// Store accesses the SQLite-backed durable intake tables.
 type Store struct {
 	db          *sql.DB
 	log         *slog.Logger
@@ -113,68 +113,19 @@ type Store struct {
 
 var intakeNow = time.Now
 
-// DefaultSQLitePath returns the default SQLite path used for durable intake.
-func DefaultSQLitePath() string {
-	return config.DefaultAuditSQLitePath()
-}
-
-// SQLiteOptions configures one immutable intake store policy snapshot.
-type SQLiteOptions struct {
-	Path   string
-	Policy config.AuditStoragePolicy
-	Log    *slog.Logger
-}
-
-// OpenSQLite opens the durable intake store with the full content policy.
-func OpenSQLite(ctx context.Context, path string, log *slog.Logger) (*Store, error) {
-	return openSQLite(ctx, SQLiteOptions{
-		Path: path, Policy: fullAuditStoragePolicy(), Log: log,
-	})
-}
-
-// OpenSQLiteWithOptions opens the durable intake store with one policy snapshot.
-func OpenSQLiteWithOptions(ctx context.Context, options SQLiteOptions) (*Store, error) {
-	if options.Policy.Profile == "" {
-		return OpenSQLite(ctx, options.Path, options.Log)
+// NewStore borrows a catalog database without taking ownership of its lifetime.
+func NewStore(ctx context.Context, database *sql.DB, policy config.AuditStoragePolicy, log *slog.Logger) (*Store, error) {
+	if database == nil {
+		return nil, errors.New("intake database is required")
 	}
-	return openSQLite(ctx, options)
-}
-
-func openSQLite(ctx context.Context, options SQLiteOptions) (*Store, error) {
-	if strings.TrimSpace(options.Path) == "" {
-		options.Path = DefaultSQLitePath()
+	if log == nil {
+		log = slog.Default()
 	}
-	if options.Log == nil {
-		options.Log = slog.Default()
-	}
-	db, err := auditstorage.OpenWriter(ctx, options.Path)
+	evaluations, err := evaluation.NewStoreWithPolicy(ctx, "", database, policy)
 	if err != nil {
-		return nil, wrapLoggedError(ctx, options.Log, "open intake sqlite db", err)
+		return nil, wrapLoggedError(ctx, log, "create borrowed evaluation store", err)
 	}
-	store := &Store{
-		db:          db,
-		log:         options.Log,
-		policy:      options.Policy,
-		evaluations: nil,
-	}
-	store.evaluations, err = evaluation.NewStoreWithPolicy(ctx, options.Path, db, options.Policy)
-	if err != nil {
-		_ = db.Close()
-		return nil, wrapLoggedError(ctx, options.Log, "init evaluation store", err)
-	}
-	return store, nil
-}
-
-func fullAuditStoragePolicy() config.AuditStoragePolicy {
-	return config.AuditStoragePolicy{
-		Profile:          config.AuditStorageProfileFull,
-		BucketInterval:   24 * time.Hour,
-		RetentionBuckets: 7,
-		Detail: config.AuditStorageDetailPolicy{
-			WireInput: true, NormalizedInput: true, ProviderEvidence: true,
-			EnvironmentEvidence: true, EvaluationContent: true,
-		},
-	}
+	return &Store{db: database, log: log, policy: policy, evaluations: evaluations}, nil
 }
 
 // Handle returns the underlying SQLite handle so a co-located writer, namely the
@@ -194,17 +145,6 @@ func (s *Store) Evaluations() *evaluation.Store {
 		return nil
 	}
 	return s.evaluations
-}
-
-// Close closes the underlying SQLite handle.
-func (s *Store) Close() error {
-	if s == nil || s.db == nil {
-		return nil
-	}
-	if err := s.db.Close(); err != nil {
-		return wrapLoggedError(context.Background(), s.log, "close intake sqlite db", err)
-	}
-	return nil
 }
 
 // Append inserts one durable intake record, deduping by stable event id.

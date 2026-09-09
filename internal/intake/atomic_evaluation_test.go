@@ -28,7 +28,7 @@ func TestCommitHotEvaluationRollsBackPendingWhenLedgerInsertFails(t *testing.T) 
 
 	err := store.CommitHotEvaluation(
 		context.Background(), receipt.EventID, receipt.ReceiptID, true,
-		atomicEvaluationRecord(receipt, "eval-hot-rollback", "hot", 1),
+		atomicEvaluationRecord(receipt, "eval-hot-rollback", "hot", 1), nil,
 	)
 	if err == nil {
 		t.Fatal("CommitHotEvaluation succeeded with failing evaluation trigger")
@@ -52,7 +52,7 @@ func TestEvaluationDetailFailureRollsBackSummary(t *testing.T) {
 	record.Layers = []evaluation.Layer{atomicEvaluationLayer()}
 
 	err := store.CommitHotEvaluation(
-		t.Context(), receipt.EventID, receipt.ReceiptID, true, record,
+		t.Context(), receipt.EventID, receipt.ReceiptID, true, record, nil,
 	)
 	if err == nil {
 		t.Fatal("CommitHotEvaluation succeeded with failing detail trigger")
@@ -83,7 +83,7 @@ func TestCommitHotEvaluationStoresPendingAndLedgerTogether(t *testing.T) {
 	record := atomicEvaluationRecord(receipt, "eval-hot-commit", "hot", 1)
 
 	if err := store.CommitHotEvaluation(
-		context.Background(), receipt.EventID, receipt.ReceiptID, true, record,
+		context.Background(), receipt.EventID, receipt.ReceiptID, true, record, nil,
 	); err != nil {
 		t.Fatalf("CommitHotEvaluation: %v", err)
 	}
@@ -226,12 +226,12 @@ func appendAtomicRecord(
 
 func openAtomicStore(t *testing.T, path string) *intake.Store {
 	t.Helper()
-	store, err := intake.OpenSQLite(context.Background(), path, nil)
+	store, err := openFixtureIntake(t, context.Background(), path, nil)
 	if err != nil {
 		t.Fatalf("OpenSQLite: %v", err)
 	}
 	t.Cleanup(func() {
-		if err := store.Close(); err != nil {
+		if err := store.Handle().Close(); err != nil {
 			t.Errorf("Close: %v", err)
 		}
 	})
