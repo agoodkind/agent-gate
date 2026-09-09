@@ -7,9 +7,9 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -228,10 +228,11 @@ func StopService(ctx context.Context, options ServiceStatusOptions) error {
 
 func daemonPIDs(ctx context.Context, options ServiceStatusOptions) ([]int, error) {
 	options = normalizeServiceStatus(options)
-	pattern := "^" + regexp.QuoteMeta(filepath.Clean(options.BinaryPath)) + " daemon$"
-	output, err := options.Runner.OutputContext(ctx, "pgrep", "-f", pattern)
+	// The executable file identifies symlink-launched processes independently of argv.
+	// Exclude this reset process, which runs the same installed executable.
+	output, err := options.Runner.OutputContext(ctx, "lsof", "-t", "-a", "-u", strconv.Itoa(options.UserID), "-p", "^"+strconv.Itoa(os.Getpid()), "-d", "txt", "--", options.BinaryPath)
 	var exitError *exec.ExitError
-	if errors.Is(err, ErrServiceAbsent) || (errors.As(err, &exitError) && exitError.ExitCode() == 1) {
+	if errors.Is(err, ErrServiceAbsent) || (errors.As(err, &exitError) && exitError.ExitCode() == 1 && len(output) == 0) {
 		return nil, nil
 	}
 	if err != nil {
@@ -245,5 +246,19 @@ func daemonPIDs(ctx context.Context, options ServiceStatusOptions) ([]int, error
 		}
 		pids = append(pids, pid)
 	}
-	return pids, nil
+	slices.Sort(pids)
+	var matched []int
+	for _, pid := range slices.Compact(pids) {
+		identity, err := (NativeProcessControl{}).Inspect(pid)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, resetFailure("inspect executable process candidate", err)
+		}
+		if identity.PID == pid && identity.Start != "" && identity.Executable == options.BinaryPath {
+			matched = append(matched, pid)
+		}
+	}
+	return matched, nil
 }

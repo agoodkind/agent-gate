@@ -193,7 +193,7 @@ func (f *resetInstallationFixture) Output(name string, args ...string) ([]byte, 
 }
 func (f *resetInstallationFixture) OutputContext(_ context.Context, name string, args ...string) ([]byte, error) {
 	command := strings.Join(args, " ")
-	if name == "pgrep" {
+	if name == "pgrep" || name == "lsof" {
 		return nil, installer.ErrServiceAbsent
 	}
 	if name != "launchctl" && name != "systemctl" {

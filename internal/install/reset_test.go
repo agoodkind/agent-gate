@@ -204,7 +204,7 @@ func TestResetDiscardsCorruptMetadataWithoutDatabaseInspection(t *testing.T) {
 func TestResetFailedShutdownLeavesDatabase(t *testing.T) {
 	options := resetTestOptions(t)
 	runner := resetTestRunner(func(name string, args ...string) ([]byte, error) {
-		if name == "pgrep" {
+		if name == "pgrep" || name == "lsof" {
 			return nil, ErrServiceAbsent
 		}
 		if strings.Contains(strings.Join(args, " "), "bootout") || strings.Contains(strings.Join(args, " "), " stop ") {
