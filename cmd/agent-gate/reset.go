@@ -208,7 +208,7 @@ Without --apply, nothing is changed.
 
 Targets:
   database  Delete audit databases and catalog state
-  state     Delete all generated state, including databases and logs
+	  state     Delete generated state and logs
   logs      Delete operational and fail-open logs
   cache     Delete cached data
   sockets   Delete runtime sockets and locks
@@ -229,7 +229,7 @@ func resetTargetDescription(target string) string {
 	case installer.ResetTargetDatabase:
 		return "Deletes audit databases and catalog state."
 	case installer.ResetTargetState:
-		return "Deletes all generated state, including databases and logs."
+		return "Deletes generated state and logs."
 	case installer.ResetTargetLogs:
 		return "Deletes operational and fail-open logs."
 	case installer.ResetTargetCache:

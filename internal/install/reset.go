@@ -34,7 +34,7 @@ type ResetTarget string
 const (
 	// ResetTargetDatabase deletes audit databases and catalog state.
 	ResetTargetDatabase ResetTarget = "database"
-	// ResetTargetState deletes generated state.
+	// ResetTargetState deletes generated state and logs.
 	ResetTargetState ResetTarget = "state"
 	// ResetTargetLogs deletes operational logs.
 	ResetTargetLogs ResetTarget = "logs"
