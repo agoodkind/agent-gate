@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // ErrServiceAbsent is the typed result of a missing service or daemon query.
@@ -213,7 +214,11 @@ func StopService(ctx context.Context, options ServiceStatusOptions) error {
 	if err != nil {
 		return resetFailure("stop managed service", err)
 	}
-	state, err = InspectService(ctx, options)
+	if servicePlatform(options.Platform) == servicePlatformDarwin {
+		state, err = waitForResetServiceAbsence(ctx, options)
+	} else {
+		state, err = InspectService(ctx, options)
+	}
 	if err != nil {
 		return err
 	}
@@ -224,6 +229,28 @@ func StopService(ctx context.Context, options ServiceStatusOptions) error {
 		return errors.New("managed service remains running after stop")
 	}
 	return nil
+}
+
+func waitForResetServiceAbsence(
+	ctx context.Context,
+	options ServiceStatusOptions,
+) (ServiceState, error) {
+	var state ServiceState
+	for range serviceWaitAttempts {
+		var err error
+		state, err = InspectService(ctx, options)
+		if err != nil || state.Absent {
+			return state, err
+		}
+		timer := time.NewTimer(serviceWaitSleep)
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			timer.Stop()
+			return state, resetFailure("wait for launchd exit", ctx.Err())
+		}
+	}
+	return state, nil
 }
 
 func daemonPIDs(ctx context.Context, options ServiceStatusOptions) ([]int, error) {

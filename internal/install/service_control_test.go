@@ -72,3 +72,40 @@ func TestResetServiceStopsOnlySelectedJob(t *testing.T) {
 		})
 	}
 }
+
+func TestResetServiceWaitsForLaunchdBootout(t *testing.T) {
+	options := resetTestOptions(t)
+	bootedOut := false
+	postBootoutPrints := 0
+	runner := resetTestRunner(func(name string, args ...string) ([]byte, error) {
+		command := name + " " + strings.Join(args, " ")
+		if strings.Contains(command, "bootout") {
+			bootedOut = true
+			return nil, nil
+		}
+		if bootedOut {
+			postBootoutPrints++
+			if postBootoutPrints > 1 {
+				return nil, ErrServiceAbsent
+			}
+		}
+		return []byte(fmt.Sprintf(
+			"program = %s\narguments = {\n%s\ndaemon\n}\nstate = waiting\n",
+			options.ExecutablePath,
+			options.ExecutablePath,
+		)), nil
+	})
+
+	err := StopService(t.Context(), ServiceStatusOptions{
+		Platform:   "darwin",
+		BinaryPath: options.ExecutablePath,
+		UserID:     12345,
+		Runner:     runner,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if postBootoutPrints != 2 {
+		t.Fatalf("post-bootout inspections = %d, want 2", postBootoutPrints)
+	}
+}
