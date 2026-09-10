@@ -351,7 +351,9 @@ func TestReplaySchedulerEnforcesIdentifierByteBudget(t *testing.T) {
 	}
 	defer server.Close()
 	replaceDeferredProcessorForTest(t, server, 10000, 0)
-	const receipts = 4000
+	bucket := server.runtime.Load().bucket
+	identifierBytes := replayMetadataBytes + len(bucket.ID) + len(bucket.Path)
+	receipts := replayDispatchBytes/identifierBytes + 1
 	for range receipts {
 		if _, err := server.EvaluateHook(t.Context(), replayRequest()); err != nil {
 			t.Fatal(err)
@@ -366,8 +368,8 @@ func TestReplaySchedulerEnforcesIdentifierByteBudget(t *testing.T) {
 	if len(processor.queued) == 0 || len(processor.queued) >= receipts || processor.queuedBytes > replayDispatchBytes {
 		t.Fatalf("identifier budget failed: %d entries, %d bytes", len(processor.queued), processor.queuedBytes)
 	}
-	if processor.queuedBytes < replayDispatchBytes-1024 {
-		t.Fatalf("dispatcher stopped before its byte budget: %d", processor.queuedBytes)
+	if replayDispatchBytes-processor.queuedBytes >= identifierBytes {
+		t.Fatalf("dispatcher left space for another %d-byte identifier: %d bytes queued", identifierBytes, processor.queuedBytes)
 	}
 }
 

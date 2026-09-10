@@ -217,7 +217,7 @@ func (f *resetInstallationFixture) OutputContext(_ context.Context, name string,
 		f.loaded = false
 		return nil, nil
 	}
-	if strings.HasPrefix(command, "bootstrap ") || strings.Contains(command, " restart ") {
+	if strings.HasPrefix(command, "bootstrap ") || strings.Contains(command, " restart ") || strings.Contains(command, " enable --now ") {
 		f.child = exec.Command(f.bin, "daemon")
 		f.child.Env = os.Environ()
 		if err := f.child.Start(); err != nil {
@@ -230,6 +230,19 @@ func (f *resetInstallationFixture) OutputContext(_ context.Context, name string,
 		return []byte(strconv.Itoa(f.child.Process.Pid)), nil
 	}
 	return nil, nil
+}
+
+func TestResetFixtureSystemdEnableStartsDaemon(t *testing.T) {
+	fixture := newResetInstallationFixture(t)
+	if err := fixture.Run("systemctl", "--user", "enable", "--now", "agent-gate.service"); err != nil {
+		t.Fatal(err)
+	}
+	if fixture.child == nil {
+		t.Fatal("systemctl enable --now did not start the fixture daemon")
+	}
+	if err := waitForInstalledDaemon(fixture.bin); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestResetReinstallsAndPreservesConfiguration(t *testing.T) {
