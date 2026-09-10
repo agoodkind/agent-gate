@@ -297,7 +297,9 @@ func (plan *ResetPlan) stopManagedReset(ctx context.Context) error {
 }
 
 func (plan *ResetPlan) requiresServiceStop() bool {
-	return !plan.selects(ResetTargetConfig) && !plan.selects(ResetTargetHooks)
+	return slices.ContainsFunc(plan.options.Targets, func(target ResetTarget) bool {
+		return target != ResetTargetConfig && target != ResetTargetHooks
+	})
 }
 
 type resetStage struct {
