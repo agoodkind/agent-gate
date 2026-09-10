@@ -31,7 +31,7 @@ func main() {
 	if len(os.Args) != 2 {
 		panic("provide qualification output directory")
 	}
-	fmt.Println("# Audit qualification results\n\nEach cell reports the median of successful independent processes. Baseline failures invalidate the acceptance verdict for that case. CPU and disk counts cover the measured process; synchronization calls remain unmeasured.")
+	fmt.Println("# Audit qualification results\n\nEach numeric cell reports the median of successful independent processes. Interval cells also report how many processes produced a complete sample. Baseline failures invalidate the acceptance verdict for that case. CPU and disk counts cover the measured process; synchronization calls remain unmeasured.")
 	for _, history := range []string{"empty", "seven"} {
 		for _, scenario := range []string{"burst", "steady", "status", "cancellation", "backlog"} {
 			baseline, baselineFailures := readResults(os.Args[1], "baseline", history, scenario)
@@ -56,8 +56,8 @@ func main() {
 			row("Oldest trace pending ns", values(baseline, func(r result) float64 { return float64(r.OldestPendingNS) }), values(candidate, func(r result) float64 { return float64(r.OldestPendingNS) }), "descriptive", valid)
 			row("Max retries/observed receipt", values(baseline, maximumRetries), values(candidate, maximumRetries), "descriptive", valid)
 			row("Final bytes/retained receipt", values(baseline, retainedBytes), values(candidate, retainedBytes), "descriptive", valid)
-			row("Worst sampled 5s CPU ns", values(baseline, peakCPU), values(candidate, peakCPU), "descriptive", valid)
-			row("Worst sampled 5s disk bytes", values(baseline, peakDisk), values(candidate, peakDisk), "descriptive", valid)
+			optionalRow("Worst sampled 5s CPU ns", baseline, candidate, peakCPU)
+			optionalRow("Worst sampled 5s disk bytes", baseline, candidate, peakDisk)
 		}
 	}
 }
@@ -120,6 +120,55 @@ func row(name string, baseline, candidate []float64, rule string, valid bool) {
 	fmt.Printf("| %s | %.2f | %.2f..%.2f | %.2f | %s |\n", name, base, baseline[0], baseline[len(baseline)-1], after, verdict)
 }
 
+func optionalRow(
+	name string,
+	baselineResults []result,
+	candidateResults []result,
+	extract func(result) (float64, bool),
+) {
+	baseline := optionalValues(baselineResults, extract)
+	candidate := optionalValues(candidateResults, extract)
+	fmt.Printf(
+		"| %s | %s | %s | %s | descriptive |\n",
+		name,
+		formatOptionalMedian(baseline, len(baselineResults)),
+		formatOptionalRange(baseline, len(baselineResults)),
+		formatOptionalMedian(candidate, len(candidateResults)),
+	)
+}
+
+func optionalValues(
+	results []result,
+	extract func(result) (float64, bool),
+) []float64 {
+	values := make([]float64, 0, len(results))
+	for _, current := range results {
+		value, available := extract(current)
+		if available {
+			values = append(values, value)
+		}
+	}
+	slices.Sort(values)
+	return values
+}
+
+func formatOptionalMedian(values []float64, total int) string {
+	if len(values) == 0 {
+		return fmt.Sprintf("unavailable (0/%d sampled)", total)
+	}
+	return fmt.Sprintf("%.2f (%d/%d sampled)", median(values), len(values), total)
+}
+
+func formatOptionalRange(values []float64, total int) string {
+	if len(values) == 0 {
+		return fmt.Sprintf("unavailable (0/%d sampled)", total)
+	}
+	return fmt.Sprintf(
+		"%.2f..%.2f (%d/%d sampled)",
+		values[0], values[len(values)-1], len(values), total,
+	)
+}
+
 func quantile(values []int64, percent int) float64 {
 	if len(values) == 0 {
 		return 0
@@ -143,17 +192,23 @@ func retainedBytes(current result) float64 {
 	}
 	return float64(total) / float64(1200+current.SeededReceipts)
 }
-func peakCPU(current result) float64 {
-	var maximum uint64
-	for _, interval := range current.Intervals {
+func peakCPU(current result) (float64, bool) {
+	if len(current.Intervals) == 0 {
+		return 0, false
+	}
+	maximum := current.Intervals[0].CPUNS
+	for _, interval := range current.Intervals[1:] {
 		maximum = max(maximum, interval.CPUNS)
 	}
-	return float64(maximum)
+	return float64(maximum), true
 }
-func peakDisk(current result) float64 {
-	var maximum uint64
-	for _, interval := range current.Intervals {
+func peakDisk(current result) (float64, bool) {
+	if len(current.Intervals) == 0 {
+		return 0, false
+	}
+	maximum := current.Intervals[0].DiskBytes
+	for _, interval := range current.Intervals[1:] {
 		maximum = max(maximum, interval.DiskBytes)
 	}
-	return float64(maximum)
+	return float64(maximum), true
 }
