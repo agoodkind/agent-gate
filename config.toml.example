@@ -33,11 +33,6 @@ retention_buckets = 7
 # The database owns durable intake, derived decisions, and evaluator records.
 path = ""
 
-[paths]
-# Legacy compatibility path for older per-conversation logs. Current audit
-# state does not use this directory.
-conversations_dir = ""
-
 [update]
 enabled = true
 mode = "check" # check | apply

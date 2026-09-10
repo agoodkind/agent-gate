@@ -215,8 +215,7 @@ func TestPrepareDefaultsPreservesAuditStorageOverrides(t *testing.T) {
 	initial := `[audit.storage]
 profile = "full"
 retention_buckets = 17
-full_detail_retention = "48h"
-summary_retention = "96h"
+bucket_interval = "12h"
 `
 	if err := os.WriteFile(configPath, []byte(initial), 0o600); err != nil {
 		t.Fatalf("WriteFile initial config: %v", err)
@@ -231,8 +230,7 @@ summary_retention = "96h"
 	for _, want := range []string{
 		`profile = "minimal"`,
 		"retention_buckets = 17",
-		`full_detail_retention = "48h"`,
-		`summary_retention = "96h"`,
+		`bucket_interval = "12h"`,
 	} {
 		if !strings.Contains(string(plan.Content), want) {
 			t.Fatalf("prepared config missing %q:\n%s", want, plan.Content)
@@ -339,7 +337,7 @@ func TestPrepareDefaultsReplacesMultilineAuditStorageProfile(t *testing.T) {
 	}
 }
 
-func TestPrepareDefaultsAddsBalancedStorageOnlyWhenAbsent(t *testing.T) {
+func TestPrepareDefaultsAddsFullStorageOnlyWhenAbsent(t *testing.T) {
 	configHome := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", configHome)
 	configDir := filepath.Join(configHome, "agent-gate")

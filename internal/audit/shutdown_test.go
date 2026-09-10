@@ -11,6 +11,7 @@ import (
 )
 
 func TestLoggerShutdownBoundsBlockedBorrowedWriter(t *testing.T) {
+	audit.CaptureCancellationForTest(t)
 	cfg := testConfig(t)
 	database, err := auditstorage.OpenWriter(t.Context(), cfg.AuditSQLitePath())
 	if err != nil {
@@ -47,6 +48,7 @@ func TestLoggerShutdownBoundsBlockedBorrowedWriter(t *testing.T) {
 }
 
 func TestLoggerShutdownDrainsAfterOwnerCancellation(t *testing.T) {
+	audit.CaptureCancellationForTest(t)
 	cfg := testConfig(t)
 	owner, cancelOwner := context.WithCancel(t.Context())
 	logger, err := audit.NewEventLoggerWithOptions(owner, cfg, nil, audit.LoggerOptions{SharedDB: retainedQueryDatabase(t, cfg)})

@@ -1,9 +1,11 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -64,14 +66,21 @@ field_paths = [
 ]
 cache_ttl_ms = 0
 `, scriptPath))
-	server, err := newReadyTestServer(newDiscardLogger(), cfg)
+	var diagnostics bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&diagnostics, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	t.Cleanup(func() {
+		if t.Failed() {
+			t.Logf("temporal gate diagnostics:\n%s", diagnostics.String())
+		}
+	})
+	server, err := newReadyTestServer(logger, cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
 	defer server.Close()
 	server.runtime.Load().execRuntime = rules.NewExecRuntimeWithCache(
 		execconcern.OSRunner{},
-		newDiscardLogger(),
+		logger,
 		server.hotKV,
 	)
 

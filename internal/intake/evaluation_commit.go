@@ -180,7 +180,7 @@ func (s *Store) CommitDeferredEvaluation(
 	}()
 	now := intakeNow().UTC()
 	result, err := transaction.ExecContext(ctx, evaluationCommitSQL5, DeferredStateComplete, formatDeferredTime(now), claim.ReceiptID, claim.EventID,
-		DeferredStatePending, claim.Owner, claim.Attempt, formatDeferredTime(now))
+		DeferredStatePending, claim.Owner, claim.Attempt)
 	if err != nil {
 		return wrapLoggedError(ctx, s.log, "complete claimed deferred receipt", err)
 	}

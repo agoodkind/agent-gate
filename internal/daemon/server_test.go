@@ -39,6 +39,7 @@ func setDaemonTestDirs(t testing.TB) {
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
 	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
 	t.Setenv("XDG_RUNTIME_DIR", filepath.Join(dir, "runtime"))
+	captureCancellationLogs(t)
 }
 
 func daemonTestConfig(t testing.TB) *config.Config {

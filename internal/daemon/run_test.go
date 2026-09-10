@@ -97,7 +97,7 @@ func TestDaemonListenerCreatesSocketPath(t *testing.T) {
 	}
 }
 
-func TestMaintenanceSchedulerStartsAfterServeAcceptLoop(t *testing.T) {
+func TestAuditSchedulerStartsAfterServeAcceptLoop(t *testing.T) {
 	listener := newControlledAcceptListener()
 	server := grpc.NewServer()
 	started := make(chan struct{})
@@ -109,7 +109,7 @@ func TestMaintenanceSchedulerStartsAfterServeAcceptLoop(t *testing.T) {
 	<-listener.addrEntered
 	select {
 	case <-started:
-		t.Fatal("maintenance scheduler started before Serve reached Accept")
+		t.Fatal("audit scheduler started before Serve reached Accept")
 	default:
 	}
 	listener.allowAddrOnce.Do(func() { close(listener.allowAddr) })
@@ -117,7 +117,7 @@ func TestMaintenanceSchedulerStartsAfterServeAcceptLoop(t *testing.T) {
 	select {
 	case <-started:
 	case <-time.After(time.Second):
-		t.Fatal("maintenance scheduler did not start after Serve entered Accept")
+		t.Fatal("audit scheduler did not start after Serve entered Accept")
 	}
 	server.Stop()
 	if err := <-serveDone; err != nil && !errors.Is(err, grpc.ErrServerStopped) {

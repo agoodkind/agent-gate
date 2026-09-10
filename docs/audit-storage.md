@@ -1,24 +1,55 @@
-# Audit Storage
+# Configure audit storage
 
-Agent Gate creates one current SQLite schema for a new database. It does not upgrade existing audit databases.
+Configure how long Agent Gate keeps audit history, inspect its files, or reset the installation.
 
-## Choose a profile
+## Configure rotation
 
-`minimal` records summaries while omitting most completed detail. Replayable work keeps the content required to finish safely.
+Changing the database path, rotation interval, or retained count permanently deletes existing audit history, including unfinished work. The same cut applies when the daemon next starts after an offline edit. Equivalent durations such as `24h` and `1440m` preserve history.
 
-Every event has a durable summary. Detail includes wire input, normalized input, provider evidence, environment evidence, and evaluation content. Queries report detail as available or not recorded.
+Edit the installed configuration using the annotated [configuration example](../config.toml.example):
 
-Edit profile and content-selection keys in the annotated [configuration example](../config.toml.example). A missing audit storage configuration table resolves to `balanced`.
+```toml
+[audit.storage]
+profile = "full"
+bucket_interval = "24h"
+retention_buckets = 7
+```
+
+Use a positive whole-second interval and positive retained count. These defaults retain today's UTC window and the previous six windows. Expiration deletes whole files, including unfinished work; downtime counts toward their age. Retention limits age, not total bytes.
+
+Choose `minimal` to omit completed detail, or `full` to retain it. Content-selection overrides apply when records are written. Changing only content selection does not discard existing history. Pending work keeps the input needed to finish.
+
+Validate the saved configuration:
+
+<!-- doc-test: run -->
+```sh
+agent-gate config check
+```
 
 ## Inspect storage
 
-Status reports database and write-ahead log sizes without writing the database.
+Run status to inspect the current bucket, retained file sizes, normalized policy, next boundary, and any pending reset or cleanup error. Status reads metadata and file sizes without opening or copying databases.
 
 <!-- doc-test: run fixture=query -->
 ```sh
 agent-gate audit status
+agent-gate audit status --json
 ```
 
-## Replace incompatible storage
+## Reset the installation
 
-To install a release with no database compatibility, stop the daemon and preserve any required export. Remove the database and its `-wal` and `-shm` sidecars together. The next daemon start creates the current schema.
+Reset permanently deletes audit history and owned installation state. It stops the owned service and daemon, preserves hooks and configuration, restores the executable, and runs the existing service installer. It creates no backup and does not convert old databases.
+
+Run reset explicitly when replacing incompatible storage or clearing the installation:
+
+<!-- doc-test: skip reason=destructive-installation-reset -->
+```sh
+agent-gate reset
+```
+
+If reset fails, correct the reported cause and run it again. Deleted history stays deleted. Verify service readiness after a successful reset:
+
+<!-- doc-test: run -->
+```sh
+agent-gate daemon status
+```

@@ -139,7 +139,7 @@ else
         setup \
         --non-interactive \
         --providers claude,codex,cursor,gemini,copilot \
-        --audit-profile balanced \
+        --audit-profile full \
         --auto-update apply </dev/null &
 fi
 CHILD_PIDS+=("$!")

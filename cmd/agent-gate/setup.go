@@ -72,14 +72,14 @@ func runSetupWithDependencies(
 Flags:
   --non-interactive  Run setup without prompts
   --providers        Select a nonempty comma-separated provider list
-  --audit-profile    Select balanced, full, or minimal
+  --audit-profile    Select full or minimal
   --auto-update      Select check, apply, or off
   --bin-path         Use the installed agent-gate binary at PATH
   --json             Print machine-readable JSON lines`)
 	}
 	flags.BoolVar(&values.nonInteractive, "non-interactive", false, "run setup without prompts")
 	flags.StringVar(&values.providerNames, "providers", "", "comma-separated providers")
-	flags.StringVar(&values.auditProfile, "audit-profile", "", "audit storage profile: balanced, full, or minimal")
+	flags.StringVar(&values.auditProfile, "audit-profile", "", "audit storage profile: full or minimal")
 	flags.StringVar(&values.autoUpdate, "auto-update", "", "update mode: check, apply, or off")
 	flags.StringVar(&values.binPath, "bin-path", "", "path to the installed agent-gate binary")
 	flags.BoolVar(&values.jsonOutput, "json", false, "print machine-readable JSON lines")

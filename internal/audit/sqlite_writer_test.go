@@ -23,6 +23,7 @@ import (
 
 func testAuditDatabase(t *testing.T) *sql.DB {
 	t.Helper()
+	CaptureCancellationForTest(t)
 	database, err := auditstorage.OpenWriter(t.Context(), filepath.Join(t.TempDir(), "audit.db"))
 	if err != nil {
 		t.Fatal(err)

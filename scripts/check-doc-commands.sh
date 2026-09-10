@@ -31,7 +31,7 @@ trap handle_interrupt INT TERM
 source "$REPO_ROOT/scripts/testdata/doc-command-environment.sh"
 
 cd "$REPO_ROOT"
-go build -tags sqlite_fts5 -o "$AGENT_GATE_BIN" ./cmd/agent-gate
+go build -o "$AGENT_GATE_BIN" ./cmd/agent-gate
 export PATH="$DOC_TEST_ROOT:$PATH"
 
 run_block() {
@@ -43,9 +43,6 @@ run_block() {
         return
     fi
     prepare_doc_fixture
-    if [[ "$command_text" == *"audit compact --full"* ]]; then
-        stop_doc_daemon
-    fi
     if bash -euo pipefail -c "$command_text"; then
         return
     else
