@@ -64,6 +64,9 @@ func runResetWithDependencies(
 		return reportResetError(stderr, "lock", errors.Join(err, ctx.Err()))
 	}
 	defer func() { _ = lock.Close() }()
+	if isOnlyResetTarget(targets, installer.ResetTargetHooks) {
+		return applyHookReset(stdout, stderr, dependencies)
+	}
 	path, err := dependencies.resolveExecutable()
 	if err != nil {
 		return reportResetError(stderr, "prepare", err)
@@ -84,13 +87,10 @@ func runResetWithDependencies(
 		return reportResetError(stderr, "apply", err)
 	}
 	if slices.Contains(targets, installer.ResetTargetHooks) {
-		hooks, err := dependencies.prepareHooks(installer.HooksOptions{HomeDir: userHomeDir(), Stdout: stdout})
-		if err != nil {
-			return reportResetError(stderr, "remove hooks", err)
-		}
-		if err := dependencies.applyHooks(hooks); err != nil {
-			return reportResetError(stderr, "remove hooks", err)
-		}
+		return applyHookReset(stdout, stderr, dependencies)
+	}
+	if !resetNeedsServiceReinstall(targets) {
+		return 0
 	}
 	code := runInstallWithDependencies([]string{"service", "--bin-path", path}, dependencies.install)
 	if code != 0 {
@@ -110,14 +110,16 @@ func resetOptions(
 	targets []installer.ResetTarget,
 ) (installer.ResetOptions, error) {
 	var cfg config.Config
-	data, err := os.ReadFile(config.Path())
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return installer.ResetOptions{}, err
-	}
-	if len(data) > 0 {
-		if err := toml.Unmarshal(data, &cfg); err != nil {
-			slog.Warn("reset configuration parse failed", "err", err)
-			return installer.ResetOptions{}, fmt.Errorf("parse removal paths: %w", err)
+	if slices.Contains(targets, installer.ResetTargetDatabase) {
+		data, err := os.ReadFile(config.Path())
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return installer.ResetOptions{}, err
+		}
+		if len(data) > 0 {
+			if err := toml.Unmarshal(data, &cfg); err != nil {
+				slog.Warn("reset configuration parse failed", "err", err)
+				return installer.ResetOptions{}, fmt.Errorf("parse removal paths: %w", err)
+			}
 		}
 	}
 	home, err := os.UserHomeDir()
@@ -139,9 +141,28 @@ func resetPreservedPaths(home string, targets []installer.ResetTarget) []string 
 	return paths
 }
 
-func userHomeDir() string {
-	home, _ := os.UserHomeDir()
-	return home
+func applyHookReset(stdout io.Writer, stderr io.Writer, dependencies resetDependencies) int {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return reportResetError(stderr, "remove hooks", err)
+	}
+	hooks, err := dependencies.prepareHooks(installer.HooksOptions{HomeDir: home, Stdout: stdout})
+	if err != nil {
+		return reportResetError(stderr, "remove hooks", err)
+	}
+	if err := dependencies.applyHooks(hooks); err != nil {
+		return reportResetError(stderr, "remove hooks", err)
+	}
+	return 0
+}
+
+func isOnlyResetTarget(targets []installer.ResetTarget, target installer.ResetTarget) bool {
+	return len(targets) == 1 && targets[0] == target
+}
+
+func resetNeedsServiceReinstall(targets []installer.ResetTarget) bool {
+	return !isOnlyResetTarget(targets, installer.ResetTargetConfig) &&
+		!isOnlyResetTarget(targets, installer.ResetTargetHooks)
 }
 
 var resetTargets = map[string]installer.ResetTarget{

@@ -246,24 +246,10 @@ func ApplyReset(ctx context.Context, plan *ResetPlan) (resultErr error) {
 			resultErr = errors.Join(resultErr, plan.cleanupStage(context.WithoutCancel(ctx), stage.dir, stage.path, teardown))
 		}()
 	}
-	if err := StopService(ctx, plan.options.Control); err != nil {
-		return &ResetError{Stage: "stop service", Err: err}
+	if err := plan.stopManagedReset(ctx); err != nil {
+		return err
 	}
-	for _, identity := range plan.processes {
-		if err := stopResetProcess(ctx, plan.options.Processes, identity, 10*time.Second); err != nil {
-			return &ResetError{Stage: "stop daemon", Err: err}
-		}
-	}
-	remaining, err := daemonPIDs(ctx, plan.options.Control)
-	if err != nil {
-		return &ResetError{Stage: "stop daemon", Err: err}
-	}
-	for _, pid := range remaining {
-		if _, err := plan.options.Processes.Inspect(pid); !errors.Is(err, os.ErrNotExist) {
-			return &ResetError{Stage: "stop daemon", Err: errors.Join(err, errors.New("a daemon appeared after shutdown"))}
-		}
-	}
-	if plan.selects(ResetTargetDatabase) || plan.selects(ResetTargetState) {
+	if plan.selects(ResetTargetDatabase) {
 		if err := plan.catalog.Purge(ctx, plan.validatePaths); err != nil {
 			return &ResetError{Stage: "purge", Err: err}
 		}
@@ -284,6 +270,34 @@ func ApplyReset(ctx context.Context, plan *ResetPlan) (resultErr error) {
 		teardown = false
 	}
 	return nil
+}
+
+func (plan *ResetPlan) stopManagedReset(ctx context.Context) error {
+	if !plan.requiresServiceStop() {
+		return nil
+	}
+	if err := StopService(ctx, plan.options.Control); err != nil {
+		return &ResetError{Stage: "stop service", Err: err}
+	}
+	for _, identity := range plan.processes {
+		if err := stopResetProcess(ctx, plan.options.Processes, identity, 10*time.Second); err != nil {
+			return &ResetError{Stage: "stop daemon", Err: err}
+		}
+	}
+	remaining, err := daemonPIDs(ctx, plan.options.Control)
+	if err != nil {
+		return &ResetError{Stage: "stop daemon", Err: err}
+	}
+	for _, pid := range remaining {
+		if _, err := plan.options.Processes.Inspect(pid); !errors.Is(err, os.ErrNotExist) {
+			return &ResetError{Stage: "stop daemon", Err: errors.Join(err, errors.New("a daemon appeared after shutdown"))}
+		}
+	}
+	return nil
+}
+
+func (plan *ResetPlan) requiresServiceStop() bool {
+	return !plan.selects(ResetTargetConfig) && !plan.selects(ResetTargetHooks)
 }
 
 type resetStage struct {
