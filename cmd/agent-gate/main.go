@@ -189,7 +189,7 @@ func runCLIWithHook(
 	case commandInstall:
 		return runInstall(args[1:])
 	case commandReset:
-		return runReset(args[1:])
+		return runReset(args[1:], stdout, stderr)
 	case commandSetup:
 		return runSetup(args[1:], stdout, stderr)
 	case commandUpdate:

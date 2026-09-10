@@ -24,7 +24,51 @@ type ResetOptions struct {
 	ConfigDir      string
 	Audit          auditstorage.CatalogOptions
 	PreservedPaths []string
+	Targets        []ResetTarget
 	Processes      ProcessControl
+}
+
+// ResetTarget names one independently selectable installation artifact.
+type ResetTarget string
+
+const (
+	// ResetTargetDatabase deletes audit databases and catalog state.
+	ResetTargetDatabase ResetTarget = "database"
+	// ResetTargetState deletes generated state.
+	ResetTargetState ResetTarget = "state"
+	// ResetTargetLogs deletes operational logs.
+	ResetTargetLogs ResetTarget = "logs"
+	// ResetTargetCache deletes cached data.
+	ResetTargetCache ResetTarget = "cache"
+	// ResetTargetSockets deletes runtime sockets and locks.
+	ResetTargetSockets ResetTarget = "sockets"
+	// ResetTargetService reinstalls the user service.
+	ResetTargetService ResetTarget = "service"
+	// ResetTargetBinary reinstalls the current binary.
+	ResetTargetBinary ResetTarget = "binary"
+	// ResetTargetConfig deletes Agent Gate configuration.
+	ResetTargetConfig ResetTarget = "config"
+	// ResetTargetHooks removes Agent Gate hook registrations.
+	ResetTargetHooks ResetTarget = "hooks"
+)
+
+// DefaultResetTargets returns the targets selected by reset --apply.
+func DefaultResetTargets() []ResetTarget {
+	return []ResetTarget{
+		ResetTargetDatabase,
+		ResetTargetState,
+		ResetTargetLogs,
+		ResetTargetCache,
+		ResetTargetSockets,
+		ResetTargetService,
+		ResetTargetBinary,
+	}
+}
+
+// AllResetTargets returns every supported reset target.
+func AllResetTargets() []ResetTarget {
+	targets := DefaultResetTargets()
+	return append(targets, ResetTargetConfig, ResetTargetHooks)
 }
 
 // ResetPlan freezes paths and identities observed before shutdown.
@@ -67,6 +111,9 @@ func PrepareReset(options ResetOptions) (*ResetPlan, error) {
 	options.PreservedPaths = slices.Clone(options.PreservedPaths)
 	if len(options.PreservedPaths) == 0 {
 		return nil, errors.New("reset requires preserved configuration and hook paths")
+	}
+	if err := validateResetTargets(options.Targets); err != nil {
+		return nil, err
 	}
 	for _, path := range []*string{&options.StateDir, &options.CacheDir, &options.RuntimeDir, &options.ConfigDir} {
 		if !filepath.IsAbs(*path) || filepath.Base(filepath.Clean(*path)) != "agent-gate" {
@@ -124,27 +171,53 @@ func PrepareReset(options ResetOptions) (*ResetPlan, error) {
 	return plan, nil
 }
 
-func (plan *ResetPlan) removalPaths() ([]string, error) {
+func validateResetTargets(targets []ResetTarget) error {
+	if len(targets) == 0 {
+		return errors.New("reset requires a target")
+	}
+	for _, target := range targets {
+		if !slices.Contains(AllResetTargets(), target) {
+			return fmt.Errorf("unknown reset target %q", target)
+		}
+	}
+	return nil
+}
+
+func (plan *ResetPlan) removalPaths() []string {
 	options := plan.options
-	paths := []string{options.StateDir, options.CacheDir, options.RuntimeDir, plan.servicePath, options.ExecutablePath}
-	entries, err := os.ReadDir(options.ConfigDir)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return nil, resetFailure("prepare reset", err)
-	}
-	for _, entry := range entries {
-		path := filepath.Join(options.ConfigDir, entry.Name())
-		preserved := false
-		for _, keep := range options.PreservedPaths {
-			if filepath.Clean(path) == filepath.Clean(keep) {
-				preserved = true
-				break
-			}
-		}
-		if !preserved {
-			paths = append(paths, path)
+	var paths []string
+	if plan.selects(ResetTargetState) {
+		paths = append(paths, options.StateDir)
+	} else if plan.selects(ResetTargetLogs) {
+		for _, name := range []string{
+			"agent-gate.log",
+			"agent-gate.jsonl",
+			"agent-gate.jsonl.lock",
+			"fail-open.jsonl",
+		} {
+			paths = append(paths, filepath.Join(options.StateDir, name))
 		}
 	}
-	return paths, nil
+	if plan.selects(ResetTargetCache) {
+		paths = append(paths, options.CacheDir)
+	}
+	if plan.selects(ResetTargetSockets) {
+		paths = append(paths, options.RuntimeDir)
+	}
+	if plan.selects(ResetTargetService) {
+		paths = append(paths, plan.servicePath)
+	}
+	if plan.selects(ResetTargetBinary) {
+		paths = append(paths, options.ExecutablePath)
+	}
+	if plan.selects(ResetTargetConfig) {
+		paths = append(paths, options.ConfigDir)
+	}
+	return paths
+}
+
+func (plan *ResetPlan) selects(target ResetTarget) bool {
+	return slices.Contains(plan.options.Targets, target)
 }
 
 // ApplyReset stages the executable, proves shutdown, purges storage, and restores it.
@@ -159,33 +232,20 @@ func ApplyReset(ctx context.Context, plan *ResetPlan) (resultErr error) {
 	if plan == nil {
 		return &ResetError{Stage: "prepare", Err: errors.New("reset plan is required")}
 	}
-	stageDir, err := os.MkdirTemp(filepath.Dir(plan.options.RuntimeDir), ".agent-gate-reset-")
-	if err != nil {
-		return &ResetError{Stage: "stage", Err: err}
-	}
-	staged := filepath.Join(stageDir, "agent-gate")
-	stageReady := false
-	teardown := false
-	defer func() {
-		resultErr = errors.Join(resultErr, plan.cleanupStage(context.WithoutCancel(ctx), stageDir, staged, teardown && stageReady))
-	}()
-	paths, err := plan.removalPaths()
-	if err != nil {
-		return &ResetError{Stage: "preflight", Err: err}
-	}
+	paths := plan.removalPaths()
 	if err := plan.validatePaths(paths); err != nil {
 		return &ResetError{Stage: "preflight", Err: err}
 	}
-	for _, path := range paths {
-		overlap, err := resetPathContains(path, stageDir)
-		if err != nil || overlap {
-			return &ResetError{Stage: "stage", Err: errors.Join(err, errors.New("staging overlaps removal scope"))}
-		}
-	}
-	if err := copyResetExecutable(ctx, plan.options.ExecutablePath, staged); err != nil {
+	stage, err := prepareResetStage(ctx, plan, paths)
+	if err != nil {
 		return &ResetError{Stage: "stage", Err: err}
 	}
-	stageReady = true
+	teardown := false
+	if stage.ready {
+		defer func() {
+			resultErr = errors.Join(resultErr, plan.cleanupStage(context.WithoutCancel(ctx), stage.dir, stage.path, teardown))
+		}()
+	}
 	if err := StopService(ctx, plan.options.Control); err != nil {
 		return &ResetError{Stage: "stop service", Err: err}
 	}
@@ -203,10 +263,12 @@ func ApplyReset(ctx context.Context, plan *ResetPlan) (resultErr error) {
 			return &ResetError{Stage: "stop daemon", Err: errors.Join(err, errors.New("a daemon appeared after shutdown"))}
 		}
 	}
-	if err := plan.catalog.Purge(ctx, plan.validatePaths); err != nil {
-		return &ResetError{Stage: "purge", Err: err}
+	if plan.selects(ResetTargetDatabase) || plan.selects(ResetTargetState) {
+		if err := plan.catalog.Purge(ctx, plan.validatePaths); err != nil {
+			return &ResetError{Stage: "purge", Err: err}
+		}
 	}
-	teardown = true
+	teardown = stage.ready
 	for _, path := range paths {
 		if err := ctx.Err(); err != nil {
 			return &ResetError{Stage: "remove", Err: err}
@@ -215,11 +277,47 @@ func ApplyReset(ctx context.Context, plan *ResetPlan) (resultErr error) {
 			return &ResetError{Stage: "remove", Err: fmt.Errorf("%s: %w", path, err)}
 		}
 	}
-	if err := copyResetExecutable(ctx, staged, plan.options.ExecutablePath); err != nil {
-		return &ResetError{Stage: "restore", Err: err}
+	if stage.ready {
+		if err := copyResetExecutable(ctx, stage.path, plan.options.ExecutablePath); err != nil {
+			return &ResetError{Stage: "restore", Err: err}
+		}
+		teardown = false
 	}
-	teardown = false
 	return nil
+}
+
+type resetStage struct {
+	dir   string
+	path  string
+	ready bool
+}
+
+func prepareResetStage(ctx context.Context, plan *ResetPlan, paths []string) (resetStage, error) {
+	slog.DebugContext(ctx, "stage reset executable", "reset_binary", plan.selects(ResetTargetBinary))
+	if !plan.selects(ResetTargetBinary) {
+		return resetStage{dir: "", path: "", ready: false}, nil
+	}
+	dir, err := os.MkdirTemp(filepath.Dir(plan.options.RuntimeDir), ".agent-gate-reset-")
+	if err != nil {
+		slog.WarnContext(ctx, "create reset stage failed", "err", err)
+		return resetStage{dir: "", path: "", ready: false}, fmt.Errorf("create reset stage: %w", err)
+	}
+	stage := resetStage{dir: dir, path: filepath.Join(dir, "agent-gate"), ready: false}
+	for _, path := range paths {
+		overlap, err := resetPathContains(path, stage.dir)
+		if err != nil || overlap {
+			_ = os.RemoveAll(stage.dir)
+			slog.WarnContext(ctx, "reset stage overlaps removal scope", "path", path, "err", err)
+			return resetStage{}, errors.Join(err, errors.New("staging overlaps removal scope"))
+		}
+	}
+	if err := copyResetExecutable(ctx, plan.options.ExecutablePath, stage.path); err != nil {
+		_ = os.RemoveAll(stage.dir)
+		slog.WarnContext(ctx, "copy reset executable failed", "err", err)
+		return resetStage{}, err
+	}
+	stage.ready = true
+	return stage, nil
 }
 
 func (plan *ResetPlan) cleanupStage(ctx context.Context, directory string, executable string, restore bool) error {

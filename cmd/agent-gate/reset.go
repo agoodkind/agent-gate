@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"github.com/gofrs/flock"
@@ -21,64 +23,92 @@ type resetDependencies struct {
 	prepareReset      func(installer.ResetOptions) (*installer.ResetPlan, error)
 	applyReset        func(context.Context, *installer.ResetPlan) error
 	install           installDependencies
+	prepareHooks      func(installer.HooksOptions) (*installer.HookInstallationPlan, error)
+	applyHooks        func(*installer.HookInstallationPlan) error
 }
 
 func defaultResetDependencies() resetDependencies {
-	return resetDependencies{resolveExecutable: os.Executable, prepareReset: installer.PrepareReset, applyReset: installer.ApplyReset, install: defaultInstallDependencies()}
+	return resetDependencies{resolveExecutable: os.Executable, prepareReset: installer.PrepareReset, applyReset: installer.ApplyReset, install: defaultInstallDependencies(), prepareHooks: installer.PrepareHookRemoval, applyHooks: installer.ApplyHookInstallation}
 }
 
-func runReset(args []string) int { return runResetWithDependencies(args, defaultResetDependencies()) }
+func runReset(args []string, stdout io.Writer, stderr io.Writer) int {
+	return runResetWithDependencies(args, stdout, stderr, defaultResetDependencies())
+}
 
-func runResetWithDependencies(args []string, dependencies resetDependencies) int {
-	if len(args) != 0 {
-		fmt.Fprintln(os.Stderr, "usage: agent-gate reset")
+func runResetWithDependencies(
+	args []string,
+	stdout io.Writer,
+	stderr io.Writer,
+	dependencies resetDependencies,
+) int {
+	targets, apply, helpTarget, err := parseResetCommand(args)
+	if err != nil {
+		fmt.Fprintf(stderr, "agent-gate reset: %v\n", err)
+		writeResetHelp(stderr, "")
 		return 2
+	}
+	if !apply {
+		writeResetHelp(stdout, helpTarget)
+		return 0
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	lockPath := filepath.Join(filepath.Dir(config.RuntimeDir()), "agent-gate-reset.lock")
 	if err := os.MkdirAll(filepath.Dir(lockPath), 0o700); err != nil {
-		return reportResetError("lock", err)
+		return reportResetError(stderr, "lock", err)
 	}
 	lock := flock.New(lockPath)
 	locked, err := lock.TryLockContext(ctx, 100*time.Millisecond)
 	if err != nil || !locked {
 		_ = lock.Close()
-		return reportResetError("lock", errors.Join(err, ctx.Err()))
+		return reportResetError(stderr, "lock", errors.Join(err, ctx.Err()))
 	}
 	defer func() { _ = lock.Close() }()
 	path, err := dependencies.resolveExecutable()
 	if err != nil {
-		return reportResetError("prepare", err)
+		return reportResetError(stderr, "prepare", err)
 	}
 	path, err = installer.CanonicalExecutablePath(path)
 	if err != nil {
-		return reportResetError("prepare", err)
+		return reportResetError(stderr, "prepare", err)
 	}
-	options, err := resetOptions(path)
+	options, err := resetOptions(path, stdout, targets)
 	if err != nil {
-		return reportResetError("prepare", err)
+		return reportResetError(stderr, "prepare", err)
 	}
 	plan, err := dependencies.prepareReset(options)
 	if err != nil {
-		return reportResetError("prepare", err)
+		return reportResetError(stderr, "prepare", err)
 	}
 	if err := dependencies.applyReset(ctx, plan); err != nil {
-		return reportResetError("apply", err)
+		return reportResetError(stderr, "apply", err)
+	}
+	if slices.Contains(targets, installer.ResetTargetHooks) {
+		hooks, err := dependencies.prepareHooks(installer.HooksOptions{HomeDir: userHomeDir(), Stdout: stdout})
+		if err != nil {
+			return reportResetError(stderr, "remove hooks", err)
+		}
+		if err := dependencies.applyHooks(hooks); err != nil {
+			return reportResetError(stderr, "remove hooks", err)
+		}
 	}
 	code := runInstallWithDependencies([]string{"service", "--bin-path", path}, dependencies.install)
 	if code != 0 {
-		fmt.Fprintln(os.Stderr, "agent-gate reset: reinstall failed; executable restored, old data removed")
+		fmt.Fprintln(stderr, "agent-gate reset: reinstall failed; selected data removed")
 	}
 	return code
 }
 
-func reportResetError(stage string, err error) int {
-	fmt.Fprintf(os.Stderr, "agent-gate reset: %s: %v\n", stage, err)
+func reportResetError(stderr io.Writer, stage string, err error) int {
+	fmt.Fprintf(stderr, "agent-gate reset: %s: %v\n", stage, err)
 	return 1
 }
 
-func resetOptions(path string) (installer.ResetOptions, error) {
+func resetOptions(
+	path string,
+	stdout io.Writer,
+	targets []installer.ResetTarget,
+) (installer.ResetOptions, error) {
 	var cfg config.Config
 	data, err := os.ReadFile(config.Path())
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -95,8 +125,105 @@ func resetOptions(path string) (installer.ResetOptions, error) {
 		return installer.ResetOptions{}, err
 	}
 	return installer.ResetOptions{
-		ExecutablePath: path, Service: installer.ServiceOptions{BinPath: path, Stdout: os.Stdout},
-		StateDir: config.DefaultStateDir(), CacheDir: config.DefaultCacheDir(), RuntimeDir: config.RuntimeDir(), ConfigDir: config.DefaultConfigDir(), Audit: cfg.AuditCatalogOptions(),
-		PreservedPaths: []string{config.Path(), filepath.Join(home, ".claude", "settings.json"), filepath.Join(home, ".codex", "config.toml"), filepath.Join(home, ".cursor", "hooks.json"), filepath.Join(home, ".gemini", "settings.json"), filepath.Join(home, ".copilot", "hooks", "agent-gate.json")},
+		ExecutablePath: path, Service: installer.ServiceOptions{BinPath: path, Stdout: stdout},
+		StateDir: config.DefaultStateDir(), CacheDir: config.DefaultCacheDir(), RuntimeDir: config.RuntimeDir(), ConfigDir: config.DefaultConfigDir(), Audit: cfg.AuditCatalogOptions(), Targets: targets,
+		PreservedPaths: resetPreservedPaths(home, targets),
 	}, nil
+}
+
+func resetPreservedPaths(home string, targets []installer.ResetTarget) []string {
+	paths := []string{filepath.Join(home, ".claude", "settings.json"), filepath.Join(home, ".codex", "config.toml"), filepath.Join(home, ".cursor", "hooks.json"), filepath.Join(home, ".gemini", "settings.json"), filepath.Join(home, ".copilot", "hooks", "agent-gate.json")}
+	if !slices.Contains(targets, installer.ResetTargetConfig) {
+		paths = append(paths, config.DefaultConfigDir())
+	}
+	return paths
+}
+
+func userHomeDir() string {
+	home, _ := os.UserHomeDir()
+	return home
+}
+
+var resetTargets = map[string]installer.ResetTarget{
+	"database": installer.ResetTargetDatabase,
+	"state":    installer.ResetTargetState,
+	"logs":     installer.ResetTargetLogs,
+	"cache":    installer.ResetTargetCache,
+	"sockets":  installer.ResetTargetSockets,
+	"service":  installer.ResetTargetService,
+	"binary":   installer.ResetTargetBinary,
+	"config":   installer.ResetTargetConfig,
+	"hooks":    installer.ResetTargetHooks,
+}
+
+func parseResetCommand(args []string) ([]installer.ResetTarget, bool, string, error) {
+	if len(args) == 0 || (len(args) == 1 && (args[0] == "--help" || args[0] == "-h")) {
+		return nil, false, "", nil
+	}
+	if len(args) == 1 && args[0] == "--apply" {
+		return installer.DefaultResetTargets(), true, "", nil
+	}
+	target, found := resetTargets[args[0]]
+	if !found {
+		return nil, false, "", fmt.Errorf("unknown target %q", args[0])
+	}
+	if len(args) == 1 || (len(args) == 2 && (args[1] == "--help" || args[1] == "-h")) {
+		return []installer.ResetTarget{target}, false, args[0], nil
+	}
+	if len(args) == 2 && args[1] == "--apply" {
+		return []installer.ResetTarget{target}, true, args[0], nil
+	}
+	return nil, false, "", errors.New("expected a target followed by --apply")
+}
+
+func writeResetHelp(writer io.Writer, target string) {
+	if target != "" {
+		fmt.Fprintf(writer, "Usage: agent-gate reset %s [--apply]\n\n%s\n\nWithout --apply, nothing is changed.\n", target, resetTargetDescription(target))
+		return
+	}
+	_, _ = io.WriteString(writer, `Usage: agent-gate reset [target] [--apply]
+
+Without --apply, nothing is changed.
+
+Targets:
+  database  Delete audit databases and catalog state
+  state     Delete all generated state, including databases and logs
+  logs      Delete operational and fail-open logs
+  cache     Delete cached data
+  sockets   Delete runtime sockets and locks
+  service   Reinstall the user service
+	  binary    Reinstall the current binary
+	  config    Delete Agent Gate configuration
+	  hooks     Remove Agent Gate hook registrations
+
+The default reset keeps configuration and provider hooks.
+"agent-gate reset config --apply" deletes only Agent Gate configuration.
+"agent-gate reset hooks --apply" removes only Agent Gate hook registrations.
+Use "agent-gate reset --apply" to reset every target.
+`)
+}
+
+func resetTargetDescription(target string) string {
+	switch installer.ResetTarget(target) {
+	case installer.ResetTargetDatabase:
+		return "Deletes audit databases and catalog state."
+	case installer.ResetTargetState:
+		return "Deletes all generated state, including databases and logs."
+	case installer.ResetTargetLogs:
+		return "Deletes operational and fail-open logs."
+	case installer.ResetTargetCache:
+		return "Deletes cached data."
+	case installer.ResetTargetSockets:
+		return "Deletes runtime sockets and locks."
+	case installer.ResetTargetService:
+		return "Reinstalls the user service."
+	case installer.ResetTargetBinary:
+		return "Reinstalls the current binary."
+	case installer.ResetTargetConfig:
+		return "Deletes only Agent Gate configuration."
+	case installer.ResetTargetHooks:
+		return "Removes only Agent Gate hook registrations."
+	default:
+		return ""
+	}
 }
