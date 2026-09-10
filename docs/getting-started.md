@@ -56,7 +56,7 @@ agent-gate query decisions --since 24h --decision block
 
 ## Upgrade or recover
 
-Audit database upgrades are not supported. Follow the [Audit Storage](audit-storage.md) upgrade and retention warning before installing a new release.
+Audit database upgrades are not supported. To replace incompatible storage, follow [Reset the installation](audit-storage.md#reset-the-installation).
 
 <!-- doc-test: skip reason=changes-installed-release -->
 ```sh
@@ -64,4 +64,4 @@ agent-gate update check
 agent-gate update apply
 ```
 
-Use the exact repair command printed by setup when configuration, service, or hook installation fails. The command repairs only the failed prepared stage. Provider hooks remain installed when maintenance or storage setup fails.
+Use the exact repair command printed by setup when configuration, service, or hook installation fails. The command repairs only the failed prepared stage.

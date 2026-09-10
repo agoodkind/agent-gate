@@ -35,12 +35,10 @@ func TestIdentityHashesExactLoadedTOMLBytes(t *testing.T) {
 
 func TestIdentityUsesStableStructuralFallback(t *testing.T) {
 	first := &Config{
-		Log:   Log{Level: "info"},
-		Paths: Paths{ConversationsDir: "/tmp/conversations"},
+		Log: Log{Level: "info"},
 	}
 	second := &Config{
-		Log:   Log{Level: "info"},
-		Paths: Paths{ConversationsDir: "/tmp/conversations"},
+		Log: Log{Level: "info"},
 	}
 
 	firstIdentity, err := first.Identity()

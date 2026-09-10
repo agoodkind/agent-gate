@@ -10,7 +10,6 @@ import (
 	"log/slog"
 	"os"
 
-	"goodkind.io/agent-gate/internal/auditmaintenance"
 	"goodkind.io/agent-gate/internal/config"
 	installer "goodkind.io/agent-gate/internal/install"
 	"goodkind.io/agent-gate/internal/setup"
@@ -40,9 +39,6 @@ type setupPreviewOutput struct {
 	Phase           string                    `json:"phase"`
 	Providers       []installer.Provider      `json:"providers"`
 	EffectivePolicy config.AuditStoragePolicy `json:"effective_policy"`
-	DatabaseExists  bool                      `json:"database_exists"`
-	ExistingRecords *int64                    `json:"existing_records,omitempty"`
-	Maintenance     *auditmaintenance.Plan    `json:"maintenance,omitempty"`
 }
 
 type setupCompleteOutput struct {
@@ -76,14 +72,14 @@ func runSetupWithDependencies(
 Flags:
   --non-interactive  Run setup without prompts
   --providers        Select a nonempty comma-separated provider list
-  --audit-profile    Select balanced, full, or minimal
+  --audit-profile    Select full or minimal
   --auto-update      Select check, apply, or off
   --bin-path         Use the installed agent-gate binary at PATH
   --json             Print machine-readable JSON lines`)
 	}
 	flags.BoolVar(&values.nonInteractive, "non-interactive", false, "run setup without prompts")
 	flags.StringVar(&values.providerNames, "providers", "", "comma-separated providers")
-	flags.StringVar(&values.auditProfile, "audit-profile", "", "audit storage profile: balanced, full, or minimal")
+	flags.StringVar(&values.auditProfile, "audit-profile", "", "audit storage profile: full or minimal")
 	flags.StringVar(&values.autoUpdate, "auto-update", "", "update mode: check, apply, or off")
 	flags.StringVar(&values.binPath, "bin-path", "", "path to the installed agent-gate binary")
 	flags.BoolVar(&values.jsonOutput, "json", false, "print machine-readable JSON lines")
@@ -140,7 +136,6 @@ Flags:
 		confirmed, confirmErr := prompter.Confirm(PlanSummary{
 			Providers:       plan.Providers,
 			EffectivePolicy: plan.EffectivePolicy,
-			Maintenance:     plan.Maintenance,
 		})
 		if confirmErr != nil {
 			return writeSetupFailure(stderr, false, 2, fmt.Errorf("preflight: %w", confirmErr))
@@ -298,11 +293,6 @@ func writeSetupPreview(writer io.Writer, jsonOutput bool, plan *setup.Plan) erro
 	if jsonOutput {
 		output := setupPreviewOutput{
 			Phase: "preview", Providers: plan.Providers, EffectivePolicy: plan.EffectivePolicy,
-			DatabaseExists: plan.Maintenance != nil, ExistingRecords: nil, Maintenance: plan.Maintenance,
-		}
-		if plan.Maintenance == nil {
-			zero := int64(0)
-			output.ExistingRecords = &zero
 		}
 		if err := json.NewEncoder(writer).Encode(output); err != nil {
 			wrappedErr := fmt.Errorf("encode setup preview: %w", err)
@@ -312,12 +302,6 @@ func writeSetupPreview(writer io.Writer, jsonOutput bool, plan *setup.Plan) erro
 		return nil
 	}
 	writeAuditStoragePolicy(writer, plan.EffectivePolicy)
-	if plan.Maintenance == nil {
-		fmt.Fprintln(writer, "existing audit records: 0")
-		fmt.Fprintln(writer, "estimated delete bytes: 0")
-		return nil
-	}
-	writeAuditPlan(writer, *plan.Maintenance)
 	return nil
 }
 
@@ -334,8 +318,9 @@ func writeSetupComplete(writer io.Writer, jsonOutput bool, result setup.Result) 
 	for _, probe := range result.Probes {
 		fmt.Fprintf(
 			writer,
-			"verified %s: receipt %d, evaluation %s, decision %s\n",
+			"verified %s: bucket %s, receipt %d, evaluation %s, decision %s\n",
 			probe.Provider,
+			probe.BucketID,
 			probe.ReceiptID,
 			probe.EvaluationID,
 			probe.Decision,

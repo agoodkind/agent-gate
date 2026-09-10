@@ -2,34 +2,15 @@ package evaluation_test
 
 import (
 	"context"
-	"database/sql"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 
-	"goodkind.io/agent-gate/internal/auditstorage"
 	"goodkind.io/agent-gate/internal/evaluation"
+	"goodkind.io/agent-gate/internal/intake"
 )
-
-const costLayerSchema = `create table gate_evaluation_layers (
-	evaluation_id text not null,
-	layer_index integer not null,
-	kind text not null,
-	model_name text not null default '',
-	upstream_metadata_status text not null default '',
-	request_id text not null default '',
-	requested_model text not null default '',
-	prompt_tokens integer not null default 0,
-	cached_tokens integer not null default 0,
-	completion_tokens integer not null default 0,
-	completed_at text not null,
-	cache_status text not null default '',
-	cache_key_hash text not null default '',
-	primary key(evaluation_id, layer_index)
-)`
 
 type costLayerRow struct {
 	evaluationID string
@@ -47,57 +28,42 @@ type costLayerRow struct {
 	cacheKey     string
 }
 
-func TestCostReportRejectsUnresolvedCutover(t *testing.T) {
-	path := newCostFixture(t, nil)
-	if err := auditstorage.WriteCutoverJournal(auditstorage.CutoverJournal{
-		DatabasePath: path, RunID: "run", Phase: auditstorage.CutoverInstalled,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	_, err := evaluation.CostReport(t.Context(), path, costPricing(), evaluation.CostFilter{})
-	if err == nil || !strings.Contains(err.Error(), "recovery is required") {
-		t.Fatalf("CostReport error = %v, want recovery required", err)
-	}
-}
-
-func TestCostReportRejectsUnresolvedCutoverWhenDatabaseIsMissing(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "audit.db")
-	if err := auditstorage.WriteCutoverJournal(auditstorage.CutoverJournal{
-		DatabasePath: path, RunID: "run", Phase: auditstorage.CutoverOriginalRenamed,
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	_, err := evaluation.CostReport(t.Context(), path, costPricing(), evaluation.CostFilter{})
-	if err == nil || !strings.Contains(err.Error(), "recovery is required") {
-		t.Fatalf("CostReport error = %v, want recovery required", err)
-	}
-}
-
 func newCostFixture(t *testing.T, rows []costLayerRow) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "audit.db")
-	database, err := sql.Open("sqlite3", path)
+	store, err := openFixtureIntake(t, t.Context(), path, nil)
 	if err != nil {
-		t.Fatalf("open fixture db: %v", err)
+		t.Fatal(err)
 	}
-	defer func() {
-		_ = database.Close()
-	}()
-	if _, err := database.Exec(costLayerSchema); err != nil {
-		t.Fatalf("create fixture schema: %v", err)
-	}
+	grouped := make(map[string][]costLayerRow)
 	for _, row := range rows {
-		if _, err := database.Exec(`insert into gate_evaluation_layers
-			(evaluation_id, layer_index, kind, model_name, upstream_metadata_status,
-			 request_id, requested_model, prompt_tokens, cached_tokens, completion_tokens,
-			 completed_at, cache_status, cache_key_hash)
-			values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			row.evaluationID, row.layerIndex, row.kind, row.model, row.status,
-			row.requestID, row.requested, row.prompt, row.cached, row.completion,
-			row.completedAt, row.cacheStatus, row.cacheKey,
-		); err != nil {
-			t.Fatalf("insert fixture row: %v", err)
+		grouped[row.evaluationID] = append(grouped[row.evaluationID], row)
+	}
+	for id, items := range grouped {
+		receipt, err := store.Append(t.Context(), intake.Record{EventID: id, RawPayload: []byte("{}")})
+		if err != nil {
+			t.Fatal(err)
+		}
+		record := completeRecord(receipt)
+		record.Evaluation.EvaluationID = id
+		record.Layers = nil
+		for index, item := range items {
+			layer := completeRecord(receipt).Layers[1]
+			layer.LayerIndex, layer.ParentLayerIndex = index, nil
+			layer.Kind, layer.ModelName = item.kind, item.model
+			layer.CompletedAt, err = time.Parse(time.RFC3339Nano, item.completedAt)
+			if err != nil {
+				t.Fatal(err)
+			}
+			layer.CacheStatus, layer.CacheKeyHash = item.cacheStatus, item.cacheKey
+			layer.MetadataJSON = costLayerMetadata("cost", item.requestID, item.requested, item.prompt, item.cached, item.completion)
+			if item.status == "absent" {
+				layer.MetadataJSON = []byte("{}")
+			}
+			record.Layers = append(record.Layers, layer)
+		}
+		if err := store.Evaluations().RecordCompleted(t.Context(), record); err != nil {
+			t.Fatal(err)
 		}
 	}
 	return path
@@ -125,7 +91,7 @@ func TestCostReportDeduplicatesBatchCallsAndPrices(t *testing.T) {
 	}
 	path := newCostFixture(t, rows)
 
-	result, err := evaluation.CostReport(context.Background(), path, costPricing(), evaluation.CostFilter{})
+	result, err := evaluation.CostReport(context.Background(), fixtureConfig(t, path), costPricing(), evaluation.CostFilter{})
 	if err != nil {
 		t.Fatalf("CostReport: %v", err)
 	}
@@ -169,7 +135,7 @@ func TestCostReportDedupCacheStats(t *testing.T) {
 		{"eval-3", 1, "inference", "gpt-5.4-mini", "present", "r3", "gpt-5.4-mini", 10, 0, 1, day + "T03:00:00Z", "miss", "ckh-3"},
 	}
 	path := newCostFixture(t, rows)
-	result, err := evaluation.CostReport(context.Background(), path, costPricing(), evaluation.CostFilter{})
+	result, err := evaluation.CostReport(context.Background(), fixtureConfig(t, path), costPricing(), evaluation.CostFilter{})
 	if err != nil {
 		t.Fatalf("CostReport: %v", err)
 	}
@@ -191,7 +157,7 @@ func TestCostReportAppliesWindowFilter(t *testing.T) {
 		Since: time.Date(2026, 7, 11, 0, 0, 0, 0, time.UTC),
 		Until: time.Date(2026, 7, 12, 0, 0, 0, 0, time.UTC),
 	}
-	result, err := evaluation.CostReport(context.Background(), path, costPricing(), filter)
+	result, err := evaluation.CostReport(context.Background(), fixtureConfig(t, path), costPricing(), filter)
 	if err != nil {
 		t.Fatalf("CostReport: %v", err)
 	}
@@ -210,7 +176,7 @@ func TestCostReportAppliesWindowFilter(t *testing.T) {
 
 func TestCostReportHandlesMissingHistory(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "missing.db")
-	result, err := evaluation.CostReport(context.Background(), missing, costPricing(), evaluation.CostFilter{})
+	result, err := evaluation.CostReport(context.Background(), fixtureConfig(t, missing), costPricing(), evaluation.CostFilter{})
 	if err != nil {
 		t.Fatalf("CostReport missing db: %v", err)
 	}

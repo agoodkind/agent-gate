@@ -3,12 +3,10 @@ package audit
 import (
 	"context"
 	"database/sql"
+	_ "embed"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
-	"net/url"
-	"os"
 	"strings"
 	"time"
 
@@ -20,12 +18,16 @@ import (
 
 // QueryRecord is the public query projection of an audit event.
 type QueryRecord struct {
+	BucketID string `json:"bucket_id"`
 	Event
 	Detail auditstorage.DetailProjection `json:"detail"`
 }
 
-// QueryFilter narrows the set of audit events returned by [Query].
+// QueryFilter narrows the set of audit events returned by [QueryReadOnly].
 type QueryFilter struct {
+	BucketID  string
+	EventID   string
+	Offset    int
 	Since     time.Time
 	Until     time.Time
 	System    string
@@ -41,88 +43,86 @@ type queryArg struct {
 	Value string
 }
 
-// Query returns audit events matching filter from the SQLite audit store. The
-// returned source name is always "sqlite"; it is retained for callers that
-// surface which backend served the query.
-func Query(cfg *config.Config, filter QueryFilter) ([]QueryRecord, string, error) {
-	events, err := querySQLite(cfg, filter, false)
-	if err != nil {
-		return nil, "sqlite", err
+// QueryReadOnly returns a globally ordered page from retained audit buckets.
+func QueryReadOnly(ctx context.Context, cfg *config.Config, filter QueryFilter) ([]QueryRecord, string, error) {
+	if filter.Limit == 0 {
+		filter.Limit = 100
 	}
-	return events, "sqlite", nil
+	records := make([]QueryRecord, 0)
+	err := Walk(ctx, cfg, filter, func(record QueryRecord) error { records = append(records, record); return nil })
+	return records, "sqlite", err
 }
 
-// QueryReadOnly returns audit events through a read-only SQLite connection.
-func QueryReadOnly(
-	ctx context.Context,
-	cfg *config.Config,
-	filter QueryFilter,
-) ([]QueryRecord, string, error) {
-	events, err := querySQLiteContext(ctx, cfg, filter, true)
-	if err != nil {
-		return nil, "sqlite", err
+// Walk streams retained audit events; zero limit visits every matching event.
+func Walk(ctx context.Context, cfg *config.Config, filter QueryFilter, yield func(QueryRecord) error) error {
+	if err := auditstorage.ValidatePage(filter.Limit, filter.Offset); err != nil {
+		return storageError("read retained history", err)
 	}
-	return events, "sqlite", nil
+	set, err := cfg.ReadAuditHistory(ctx, filter.BucketID)
+	if err != nil {
+		return storageError("read retained history", err)
+	}
+	defer func() { _ = set.Close() }()
+	err = auditstorage.Merge(ctx, set, filter.Limit, filter.Offset,
+		func(handle *auditstorage.BucketHandle, cursor *auditstorage.QuerySummary) ([]auditstorage.QuerySummary, error) {
+			where, args := queryWhere(filter)
+			if cursor != nil {
+				if where == "" {
+					where = " where "
+				} else {
+					where += " and "
+				}
+				where += auditKeysetSQL
+				args = append(args, queryArg{Value: cursor.Time}, queryArg{Value: cursor.ID})
+			}
+			rows, err := queryAuditRows(ctx, handle.Database, auditSummarySQL+where+auditPageSQL, args)
+			if err != nil {
+				return nil, storageError("read query rows", err)
+			}
+			defer func() { _ = rows.Close() }()
+			var result []auditstorage.QuerySummary
+			for rows.Next() {
+				var row auditstorage.QuerySummary
+				if err := rows.Scan(&row.ID, &row.Time); err != nil {
+					return nil, storageError("read query rows", err)
+				}
+				result = append(result, row)
+			}
+			return result, rows.Err()
+		},
+		func(handle *auditstorage.BucketHandle, row auditstorage.QuerySummary) error {
+			records, err := queryRecords(ctx, handle.Database, selectedAuditFilter(row.ID))
+			if err != nil {
+				return storageError("read retained history", err)
+			}
+			if len(records) != 1 {
+				return fmt.Errorf("audit event %q disappeared during read", row.ID)
+			}
+			records[0].BucketID = handle.Bucket.ID
+			return yield(records[0])
+		})
+	if err != nil {
+		return storageError("walk retained history", err)
+	}
+	return nil
 }
 
-func querySQLite(cfg *config.Config, filter QueryFilter, readOnly bool) ([]QueryRecord, error) {
-	return querySQLiteContext(context.Background(), cfg, filter, readOnly)
-}
-
-func querySQLiteContext(
-	ctx context.Context,
-	cfg *config.Config,
-	filter QueryFilter,
-	readOnly bool,
-) ([]QueryRecord, error) {
+func queryRecords(ctx context.Context, db *sql.DB, filter QueryFilter) ([]QueryRecord, error) {
 	log := slog.Default()
-	path := config.DefaultAuditSQLitePath()
-	if cfg != nil {
-		path = cfg.AuditSQLitePath()
-	}
-	if err := auditstorage.GuardDatabasePath(path); err != nil {
-		return nil, fmt.Errorf("guard audit query cutover: %w", err)
-	}
-	if _, err := os.Stat(path); err != nil {
-		log.WarnContext(ctx, "stat audit sqlite path failed", slog.String("path", path), slog.Any("err", err))
-		return nil, fmt.Errorf("stat audit sqlite path: %w", err)
-	}
-	databasePath := path
-	if readOnly {
-		databasePath = auditReadOnlySQLiteDSN(path)
-	}
-	db, err := sql.Open("sqlite3", databasePath)
-	if err != nil {
-		log.WarnContext(ctx, "open audit sqlite db failed", slog.String("path", path), slog.Any("err", err))
-		return nil, fmt.Errorf("open audit sqlite db: %w", err)
-	}
-	defer func() { _ = db.Close() }()
-
 	where, args := queryWhere(filter)
 	limit := ""
 	if filter.Limit > 0 {
 		limit = fmt.Sprintf(" limit %d", filter.Limit)
 	}
-	payloadColumns, err := auditPayloadProjectionColumns(ctx, db)
-	if err != nil {
-		return nil, err
-	}
-	const baseQuery = `select e.event_id, e.schema_version, e.time, e.level, e.message, e.system, e.session_id, e.turn_id, e.event_name, e.tool_use_id, e.tool_name, e.raw_payload_hash,
-		coalesce(o.cwd, ''), coalesce(o.effective_cwd, ''), coalesce(o.command, ''), coalesce(o.file_path, ''),
-		coalesce(d.kind, ''), coalesce(d.can_block, 0), coalesce(d.rules_checked_json, '[]'), coalesce(d.rules_matched_json, '[]'),`
-	const queryFrom = `
-		from events e
-		left join operations o on o.event_id = e.event_id
-		left join decisions d on d.event_id = e.event_id
-		`
+	baseQuery := querySQL1
 	rows, err := queryAuditRows(
 		ctx,
 		db,
-		baseQuery+payloadColumns+queryFrom+where+` order by e.time desc`+limit,
+		baseQuery+where+` order by e.time desc`+limit,
 		args,
 	)
 	if err != nil {
-		log.WarnContext(ctx, "query audit events failed", slog.String("path", path), slog.Any("err", err))
+		log.WarnContext(ctx, "query audit events failed", slog.Any("err", err))
 		return nil, fmt.Errorf("query audit events: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
@@ -132,168 +132,34 @@ func querySQLiteContext(
 		var record QueryRecord
 		var checked, matched string
 		var canBlock int
-		var payloadRecorded sql.NullInt64
-		var payloadAvailable sql.NullInt64
-		var stateChangedAt sql.NullString
-		var protected sql.NullInt64
 		if err := rows.Scan(&record.EventID, &record.SchemaVersion, &record.Time, &record.Level, &record.Message,
 			&record.System, &record.SessionID, &record.TurnID, &record.EventName, &record.ToolUseID, &record.ToolName, &record.RawPayloadHash,
 			&record.Operation.CWD, &record.Operation.EffectiveCWD, &record.Operation.Command, &record.Operation.FilePath,
-			&record.Decision.Kind, &canBlock, &checked, &matched, &payloadRecorded,
-			&payloadAvailable, &stateChangedAt, &protected); err != nil {
-			log.WarnContext(ctx, "scan audit event row failed", slog.String("path", path), slog.Any("err", err))
+			&record.Decision.Kind, &canBlock, &checked, &matched); err != nil {
+			log.WarnContext(ctx, "scan audit event row failed", slog.Any("err", err))
 			return nil, fmt.Errorf("scan audit event row: %w", err)
 		}
 		record.Decision.CanBlock = canBlock != 0
 		_ = json.Unmarshal([]byte(checked), &record.Decision.RulesChecked)
 		_ = json.Unmarshal([]byte(matched), &record.Decision.RulesMatched)
-		violations, err := sqliteViolations(ctx, db, record.EventID)
-		if err != nil {
-			return nil, err
-		}
-		record.Violations = violations
-		record.Detail = projectAuditPayloadDetail(
-			payloadRecorded, payloadAvailable, stateChangedAt, protected,
-		)
+		record.Detail = auditstorage.ProjectDetail(0, 0, 0)
 		out = append(out, record)
 	}
 	if err := rows.Err(); err != nil {
-		log.WarnContext(ctx, "iterate audit event rows failed", slog.String("path", path), slog.Any("err", err))
+		log.WarnContext(ctx, "iterate audit event rows failed", slog.Any("err", err))
 		return nil, fmt.Errorf("iterate audit events: %w", err)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, storageError("read query rows", err)
+	}
+	for index := range out {
+		violations, err := sqliteViolations(ctx, db, out[index].EventID)
+		if err != nil {
+			return nil, storageError("read query rows", err)
+		}
+		out[index].Violations = violations
+	}
 	return out, nil
-}
-
-func auditReadOnlySQLiteDSN(path string) string {
-	location := url.URL{Scheme: "file", Path: path}
-	values := url.Values{}
-	values.Set("mode", "ro")
-	location.RawQuery = values.Encode()
-	return location.String()
-}
-
-func auditPayloadProjectionColumns(ctx context.Context, database *sql.DB) (string, error) {
-	hasRecordedState, err := auditColumnExists(
-		ctx, database, "deferred_audit_outbox_entries", "payload_recorded",
-	)
-	if err != nil {
-		return "", err
-	}
-	if hasRecordedState {
-		return `
-		(select payload_recorded from deferred_audit_outbox_entries payload_header
-			where payload_header.audit_event_id = e.event_id
-			order by payload_header.receipt_id desc limit 1),
-		(select case when payload_header.payload_available = 1 and exists (
-				select 1 from deferred_audit_outbox_entry_details payload_detail
-				where payload_detail.receipt_id = payload_header.receipt_id
-					and payload_detail.entry_index = payload_header.entry_index
-			) then 1 else 0 end
-			from deferred_audit_outbox_entries payload_header
-			where payload_header.audit_event_id = e.event_id
-			order by payload_header.receipt_id desc limit 1),
-		(select payload_state_changed_at from deferred_audit_outbox_entries payload_header
-			where payload_header.audit_event_id = e.event_id
-			order by payload_header.receipt_id desc limit 1),
-		exists (
-			select 1 from deferred_audit_outbox_entries protected_entry
-			join deferred_audit_outbox protected_outbox
-				on protected_outbox.receipt_id = protected_entry.receipt_id
-			where protected_entry.audit_event_id = e.event_id
-				and (protected_outbox.state = 'pending'
-					or protected_entry.delivered_at is null)
-				and exists (
-					select 1 from deferred_audit_outbox_entry_details protected_detail
-					where protected_detail.receipt_id = protected_entry.receipt_id
-						and protected_detail.entry_index = protected_entry.entry_index
-				)
-		)`, nil
-	}
-	hasCompatibilityPayload, err := auditColumnExists(
-		ctx, database, "deferred_audit_outbox_entries", "payload_json",
-	)
-	if err != nil {
-		return "", err
-	}
-	if hasCompatibilityPayload {
-		return `
-		(select 1 from deferred_audit_outbox_entries compatibility_entry
-			where compatibility_entry.audit_event_id = e.event_id
-				and compatibility_entry.payload_json is not null limit 1),
-		(select 1 from deferred_audit_outbox_entries compatibility_entry
-			where compatibility_entry.audit_event_id = e.event_id
-				and compatibility_entry.payload_json is not null limit 1),
-		null,
-		0`, nil
-	}
-	return "cast(null as integer), cast(null as integer), cast(null as text), 0", nil
-}
-
-func auditColumnExists(
-	ctx context.Context,
-	database *sql.DB,
-	tableName string,
-	columnName string,
-) (bool, error) {
-	var exists int
-	err := database.QueryRowContext(ctx, `
-		select 1 from pragma_table_info(?) where name = ?
-	`, tableName, columnName).Scan(&exists)
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
-	}
-	if err != nil {
-		log := slog.Default()
-		log.WarnContext(
-			ctx,
-			"query audit column metadata failed",
-			slog.String("table", tableName),
-			slog.String("column", columnName),
-			slog.Any("err", err),
-		)
-		return false, fmt.Errorf("query audit column metadata: %w", err)
-	}
-	return exists == 1, nil
-}
-
-func projectAuditPayloadDetail(
-	payloadRecorded sql.NullInt64,
-	payloadAvailable sql.NullInt64,
-	stateChangedAt sql.NullString,
-	protected sql.NullInt64,
-) auditstorage.DetailProjection {
-	if !payloadRecorded.Valid {
-		return auditstorage.ProjectDetail(nil, nil, nil, auditstorage.DetailStateAvailable, "", nil)
-	}
-	requested := []auditstorage.DetailClass{auditstorage.DetailClassDeferredAuditPayload}
-	recorded := make([]auditstorage.DetailClass, 0, 1)
-	if payloadRecorded.Int64 != 0 {
-		recorded = append(recorded, auditstorage.DetailClassDeferredAuditPayload)
-	}
-	available := make([]auditstorage.DetailClass, 0, 1)
-	if payloadAvailable.Int64 != 0 {
-		available = append(available, auditstorage.DetailClassDeferredAuditPayload)
-	}
-	storedState := auditstorage.DetailStateAvailable
-	if payloadRecorded.Int64 == 0 {
-		storedState = auditstorage.DetailStateNotRecorded
-	}
-	if payloadRecorded.Int64 != 0 && payloadAvailable.Int64 == 0 {
-		storedState = auditstorage.DetailStateExpired
-	}
-	if payloadRecorded.Int64 == 0 && payloadAvailable.Int64 != 0 {
-		storedState = auditstorage.DetailStateProtected
-	}
-	protectedClasses := make([]auditstorage.DetailClass, 0, 1)
-	if protected.Valid && protected.Int64 != 0 {
-		protectedClasses = append(
-			protectedClasses, auditstorage.DetailClassDeferredAuditPayload,
-		)
-	}
-	return auditstorage.ProjectDetail(
-		recorded, available, requested, storedState, stateChangedAt.String,
-		protectedClasses,
-	)
 }
 
 func queryWhere(filter QueryFilter) (string, []queryArg) {
@@ -303,11 +169,14 @@ func queryWhere(filter QueryFilter) (string, []queryArg) {
 		clauses = append(clauses, clause)
 		args = append(args, queryArg{Value: arg})
 	}
+	if filter.EventID != "" {
+		add("e.event_id = ?", filter.EventID)
+	}
 	if !filter.Since.IsZero() {
-		add("e.time >= ?", filter.Since.UTC().Format(time.RFC3339Nano))
+		add("e.time >= ?", auditstorage.FormatTime(filter.Since))
 	}
 	if !filter.Until.IsZero() {
-		add("e.time <= ?", filter.Until.UTC().Format(time.RFC3339Nano))
+		add("e.time <= ?", auditstorage.FormatTime(filter.Until))
 	}
 	if filter.System != "" {
 		add("e.system = ?", filter.System)
@@ -335,32 +204,11 @@ func queryWhere(filter QueryFilter) (string, []queryArg) {
 
 func queryAuditRows(ctx context.Context, db *sql.DB, query string, args []queryArg) (*sql.Rows, error) {
 	log := slog.Default()
-	var rows *sql.Rows
-	var err error
-	switch len(args) {
-	case 0:
-		rows, err = db.QueryContext(ctx, query)
-	case 1:
-		rows, err = db.QueryContext(ctx, query, args[0].Value)
-	case 2:
-		rows, err = db.QueryContext(ctx, query, args[0].Value, args[1].Value)
-	case 3:
-		rows, err = db.QueryContext(ctx, query, args[0].Value, args[1].Value, args[2].Value)
-	case 4:
-		rows, err = db.QueryContext(ctx, query, args[0].Value, args[1].Value, args[2].Value, args[3].Value)
-	case 5:
-		rows, err = db.QueryContext(ctx, query, args[0].Value, args[1].Value, args[2].Value, args[3].Value, args[4].Value)
-	case 6:
-		rows, err = db.QueryContext(ctx, query, args[0].Value, args[1].Value, args[2].Value, args[3].Value, args[4].Value, args[5].Value)
-	case 7:
-		rows, err = db.QueryContext(ctx, query, args[0].Value, args[1].Value, args[2].Value, args[3].Value, args[4].Value, args[5].Value, args[6].Value)
-	case 8:
-		rows, err = db.QueryContext(ctx, query, args[0].Value, args[1].Value, args[2].Value, args[3].Value, args[4].Value, args[5].Value, args[6].Value, args[7].Value)
-	default:
-		err := errors.New("too many audit query filters")
-		log.ErrorContext(ctx, "audit query argument limit exceeded", slog.Int("arg_count", len(args)), slog.Any("err", err))
-		return nil, err
+	values := make([]any, 0, len(args))
+	for _, arg := range args {
+		values = append(values, arg.Value)
 	}
+	rows, err := db.QueryContext(ctx, query, values...)
 	if err != nil {
 		log.WarnContext(ctx, "query audit rows failed", slog.Int("arg_count", len(args)), slog.Any("err", err))
 		return nil, fmt.Errorf("query audit rows: %w", err)
@@ -370,7 +218,7 @@ func queryAuditRows(ctx context.Context, db *sql.DB, query string, args []queryA
 
 func sqliteViolations(ctx context.Context, db *sql.DB, eventID string) ([]Violation, error) {
 	log := slog.Default()
-	rows, err := db.QueryContext(ctx, `select rule, mode, field_path, file_path, start, end, message from violations where event_id = ? order by id`, eventID)
+	rows, err := db.QueryContext(ctx, querySQL2, eventID)
 	if err != nil {
 		log.WarnContext(ctx, "query audit violations failed", slog.String("event_id", eventID), slog.Any("err", err))
 		return nil, fmt.Errorf("query audit violations: %w", err)
@@ -390,4 +238,25 @@ func sqliteViolations(ctx context.Context, db *sql.DB, eventID string) ([]Violat
 		return nil, fmt.Errorf("iterate audit violations: %w", err)
 	}
 	return out, nil
+}
+
+//go:embed query_1.sql
+var querySQL1 string
+
+//go:embed query_2.sql
+var querySQL2 string
+
+//go:embed query_summary.sql
+var auditSummarySQL string
+
+//go:embed query_page.sql
+var auditPageSQL string
+
+//go:embed query_keyset.sql
+var auditKeysetSQL string
+
+func selectedAuditFilter(eventID string) QueryFilter {
+	var filter QueryFilter
+	filter.EventID, filter.Limit = eventID, 1
+	return filter
 }

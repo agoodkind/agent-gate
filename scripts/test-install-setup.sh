@@ -74,6 +74,19 @@ prepare_case() {
     export READ_SETUP_INPUT=0
 }
 
+feed_setup_input() {
+    local attempt
+    printf '%s\n' confirmed
+    # Darwin script can deliver EOF before buffered input if the producer exits.
+    for attempt in {1..100}; do
+        if [[ -f "$CAPTURE_DIR/setup-input" ]]; then
+            return
+        fi
+        sleep 0.05
+    done
+    fail "setup did not read terminal input"
+}
+
 export PATH="$FIXTURE_DIR:$PATH"
 export FAKE_HOSTED_INSTALLER="$FIXTURE_DIR/hosted-installer"
 export FAKE_AGENT_GATE="$FIXTURE_DIR/agent-gate"
@@ -94,53 +107,57 @@ assert_bytes "$CAPTURE_DIR/hosted-args" \
     setup \
     --non-interactive \
     --providers claude,codex,cursor,gemini,copilot \
-    --audit-profile balanced \
+    --audit-profile full \
     --auto-update apply
 assert_bytes "$CAPTURE_DIR/setup-args" \
     setup \
     --non-interactive \
     --providers claude,codex,cursor,gemini,copilot \
-    --audit-profile balanced \
+    --audit-profile full \
     --auto-update apply
 assert_download_removed "$CAPTURE_DIR"
 
 prepare_case interactive
 export EXPECT_TTY=1
 export READ_SETUP_INPUT=1
-if [[ "$(uname -s)" == Darwin ]]; then
-    printf '%s\n' confirmed | script -q /dev/null "$FIXTURE_DIR/tty-driver" &
-else
-    printf '%s\n' confirmed | script -q -e -c "$FIXTURE_DIR/tty-driver" /dev/null &
-fi
-interactive_pid=$!
-CHILD_PIDS+=("$interactive_pid")
-interactive_finished=false
-for _ in {1..100}; do
-    if ! kill -0 "$interactive_pid" 2>/dev/null; then
-        interactive_finished=true
-        break
-    fi
-    sleep 0.05
-done
-if [[ "$interactive_finished" != true ]]; then
-    if kill -TERM "$interactive_pid"; then
-        if wait "$interactive_pid"; then
-            :
-        else
-            :
+(
+    for _ in {1..100}; do
+        if [[ -f "$CAPTURE_DIR/interactive-finished" ]]; then
+            exit 0
         fi
+        sleep 0.05
+    done
+    printf 'timed out\n' >"$CAPTURE_DIR/interactive-timeout"
+    if [[ -f "$CAPTURE_DIR/wrapper-pid" ]]; then
+        kill -TERM "$(<"$CAPTURE_DIR/wrapper-pid")"
     fi
-    CHILD_PIDS=()
+) &
+watchdog_pid=$!
+CHILD_PIDS+=("$watchdog_pid")
+interactive_status=0
+# Keep the terminal driver in the foreground while its watchdog runs separately.
+if [[ "$(uname -s)" == Darwin ]]; then
+    if feed_setup_input | script -q /dev/null "$FIXTURE_DIR/tty-driver"; then
+        :
+    else
+        interactive_status=$?
+    fi
+else
+    if feed_setup_input | script -q -e -c "$FIXTURE_DIR/tty-driver" /dev/null; then
+        :
+    else
+        interactive_status=$?
+    fi
+fi
+touch "$CAPTURE_DIR/interactive-finished"
+wait "$watchdog_pid"
+CHILD_PIDS=()
+if [[ -f "$CAPTURE_DIR/interactive-timeout" ]]; then
     fail "interactive setup did not complete after reading terminal input"
 fi
-if wait "$interactive_pid"; then
-    :
-else
-    interactive_status=$?
-    CHILD_PIDS=()
+if [[ "$interactive_status" -ne 0 ]]; then
     fail "interactive setup returned $interactive_status"
 fi
-CHILD_PIDS=()
 if [[ "$(<"$CAPTURE_DIR/setup-input")" != confirmed ]]; then
     fail "interactive setup did not receive terminal input"
 fi
@@ -254,13 +271,13 @@ export READ_SETUP_INPUT=1
 signal_pid=$!
 CHILD_PIDS+=("$signal_pid")
 if [[ "$(uname -s)" == Darwin ]]; then
-    if printf '%s\n' confirmed | script -q /dev/null "$FIXTURE_DIR/tty-driver"; then
+    if feed_setup_input | script -q /dev/null "$FIXTURE_DIR/tty-driver"; then
         interrupt_status=0
     else
         interrupt_status=$?
     fi
 else
-    if printf '%s\n' confirmed | script -q -e -c "$FIXTURE_DIR/tty-driver" /dev/null; then
+    if feed_setup_input | script -q -e -c "$FIXTURE_DIR/tty-driver" /dev/null; then
         interrupt_status=0
     else
         interrupt_status=$?

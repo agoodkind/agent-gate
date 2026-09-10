@@ -327,7 +327,9 @@ func validateDefaultsOptions(options EnsureDefaultsOptions) error {
 		)
 	}
 	if options.AuditProfile != "" {
-		if _, err := auditStorageProfilePolicy(options.AuditProfile); err != nil {
+		var storage AuditStorage
+		storage.Profile = string(options.AuditProfile)
+		if _, err := resolveAuditStorage(storage); err != nil {
 			return err
 		}
 	}
@@ -339,7 +341,9 @@ func mergeAuditStorageDefaults(
 	profile AuditStorageProfile,
 ) (string, error) {
 	if profile != "" {
-		if _, err := auditStorageProfilePolicy(profile); err != nil {
+		var storage AuditStorage
+		storage.Profile = string(profile)
+		if _, err := resolveAuditStorage(storage); err != nil {
 			return "", err
 		}
 	}
@@ -380,7 +384,7 @@ func mergeAuditStorageDefaults(
 		if location.present {
 			return contents, nil
 		}
-		return appendAuditStorageTable(contents, AuditStorageProfileBalanced), nil
+		return appendAuditStorageTable(contents, AuditStorageProfileFull), nil
 	}
 	if location.tableStart >= 0 {
 		return insertConfigLine(lines, location.tableStart+1, fmt.Sprintf("profile = %q\n", profile)), nil

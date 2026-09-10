@@ -23,77 +23,20 @@ func loadAuditStorageConfig(t *testing.T, body string) *config.Config {
 	return cfg
 }
 
-func TestAuditStoragePolicyDefaultsToBalanced(t *testing.T) {
+func TestAuditStoragePolicyDefaultsToFull(t *testing.T) {
 	cfg := loadAuditStorageConfig(t, "[audit]\nenabled = true\n")
-
 	policy := cfg.AuditStoragePolicy()
-
-	if policy.Profile != config.AuditStorageProfileBalanced {
-		t.Fatalf("profile = %q, want balanced", policy.Profile)
-	}
-	if policy.FullDetailRetention != 168*time.Hour {
-		t.Fatalf("detail retention = %s, want 168h", policy.FullDetailRetention)
-	}
-	if policy.SummaryRetention != 720*time.Hour {
-		t.Fatalf("summary retention = %s, want 720h", policy.SummaryRetention)
-	}
-	if policy.MaintenanceInterval != 24*time.Hour {
-		t.Fatalf("maintenance interval = %s, want 24h", policy.MaintenanceInterval)
-	}
-	if policy.MaxSizeBytes != 0 {
-		t.Fatalf("max size = %d, want disabled", policy.MaxSizeBytes)
-	}
-	if policy.MaintenanceBatchRows != 1000 {
-		t.Fatalf("maintenance batch rows = %d, want 1000", policy.MaintenanceBatchRows)
-	}
-	if !policy.CompactAfterMaintenance {
-		t.Fatal("compact after maintenance = false, want true")
+	if policy.Profile != config.AuditStorageProfileFull || policy.BucketInterval != 24*time.Hour || policy.RetentionBuckets != 7 {
+		t.Fatalf("unexpected defaults: %+v", policy)
 	}
 	assertAuditStorageDetail(t, policy.Detail, true)
 }
 
 func TestAuditStorageProfiles(t *testing.T) {
-	testCases := []struct {
-		name            string
-		profile         config.AuditStorageProfile
-		detailRetention time.Duration
-		detailEnabled   bool
-	}{
-		{
-			name:            "balanced",
-			profile:         config.AuditStorageProfileBalanced,
-			detailRetention: 168 * time.Hour,
-			detailEnabled:   true,
-		},
-		{
-			name:            "full",
-			profile:         config.AuditStorageProfileFull,
-			detailRetention: 720 * time.Hour,
-			detailEnabled:   true,
-		},
-		{
-			name:            "minimal",
-			profile:         config.AuditStorageProfileMinimal,
-			detailRetention: 0,
-			detailEnabled:   false,
-		},
-	}
-	for _, testCase := range testCases {
-		t.Run(testCase.name, func(t *testing.T) {
-			cfg := loadAuditStorageConfig(t, "[audit.storage]\nprofile = \""+testCase.name+"\"\n")
-
-			policy := cfg.AuditStoragePolicy()
-
-			if policy.Profile != testCase.profile {
-				t.Fatalf("profile = %q, want %q", policy.Profile, testCase.profile)
-			}
-			if policy.FullDetailRetention != testCase.detailRetention {
-				t.Fatalf("detail retention = %s, want %s", policy.FullDetailRetention, testCase.detailRetention)
-			}
-			if policy.SummaryRetention != 720*time.Hour {
-				t.Fatalf("summary retention = %s, want 720h", policy.SummaryRetention)
-			}
-			assertAuditStorageDetail(t, policy.Detail, testCase.detailEnabled)
+	for _, profile := range []string{"full", "minimal"} {
+		t.Run(profile, func(t *testing.T) {
+			cfg := loadAuditStorageConfig(t, "[audit.storage]\nprofile = \""+profile+"\"\n")
+			assertAuditStorageDetail(t, cfg.AuditStoragePolicy().Detail, profile == "full")
 		})
 	}
 }
@@ -101,14 +44,9 @@ func TestAuditStorageProfiles(t *testing.T) {
 func TestAuditStoragePolicyAppliesEveryOverride(t *testing.T) {
 	cfg := loadAuditStorageConfig(t, `
 [audit.storage]
-profile = "balanced"
-maintenance_interval = "12h"
-max_size_mb = 25
-maintenance_batch_rows = 123
-compact_after_maintenance = false
-full_detail_retention = "24h"
-summary_retention = "48h"
-
+profile = "full"
+bucket_interval = "12h"
+retention_buckets = 3
 [audit.storage.detail]
 wire_input = false
 normalized_input = false
@@ -116,26 +54,9 @@ provider_evidence = false
 environment_evidence = false
 evaluation_content = false
 `)
-
 	policy := cfg.AuditStoragePolicy()
-
-	if policy.MaintenanceInterval != 12*time.Hour {
-		t.Fatalf("maintenance interval = %s, want 12h", policy.MaintenanceInterval)
-	}
-	if policy.MaxSizeBytes != 25_000_000 {
-		t.Fatalf("max size = %d, want %d", policy.MaxSizeBytes, 25_000_000)
-	}
-	if policy.MaintenanceBatchRows != 123 {
-		t.Fatalf("maintenance batch rows = %d, want 123", policy.MaintenanceBatchRows)
-	}
-	if policy.CompactAfterMaintenance {
-		t.Fatal("compact after maintenance = true, want explicit false")
-	}
-	if policy.FullDetailRetention != 24*time.Hour {
-		t.Fatalf("detail retention = %s, want 24h", policy.FullDetailRetention)
-	}
-	if policy.SummaryRetention != 48*time.Hour {
-		t.Fatalf("summary retention = %s, want 48h", policy.SummaryRetention)
+	if policy.Rotation().Interval != 12*time.Hour || policy.Rotation().Retained != 3 {
+		t.Fatalf("policy = %+v", policy)
 	}
 	assertAuditStorageDetail(t, policy.Detail, false)
 }
@@ -144,7 +65,6 @@ func TestAuditStoragePolicyAllowsMinimalDetailOverrides(t *testing.T) {
 	cfg := loadAuditStorageConfig(t, `
 [audit.storage]
 profile = "minimal"
-
 [audit.storage.detail]
 wire_input = true
 normalized_input = true
@@ -152,78 +72,54 @@ provider_evidence = true
 environment_evidence = true
 evaluation_content = true
 `)
-
 	assertAuditStorageDetail(t, cfg.AuditStoragePolicy().Detail, true)
 }
 
-func TestAuditStorageMaxSizeZeroDisablesSizeTarget(t *testing.T) {
-	cfg := loadAuditStorageConfig(t, "[audit.storage]\nmax_size_mb = 0\n")
-
-	if size := cfg.AuditStoragePolicy().MaxSizeBytes; size != 0 {
-		t.Fatalf("max size = %d, want disabled", size)
-	}
-}
-
 func TestAuditStorageRejectsInvalidValues(t *testing.T) {
-	testCases := []struct {
-		name    string
-		body    string
-		message string
-	}{
-		{name: "negative size", body: "max_size_mb = -1", message: "max_size_mb"},
-		{name: "unknown profile", body: `profile = "archive"`, message: "profile"},
-		{name: "zero batch", body: "maintenance_batch_rows = 0", message: "maintenance_batch_rows"},
-		{name: "negative batch", body: "maintenance_batch_rows = -1", message: "maintenance_batch_rows"},
-		{name: "zero interval", body: `maintenance_interval = "0s"`, message: "maintenance_interval"},
-		{name: "negative interval", body: `maintenance_interval = "-1h"`, message: "maintenance_interval"},
-		{name: "invalid interval", body: `maintenance_interval = "daily"`, message: "maintenance_interval"},
-		{name: "zero detail duration", body: `full_detail_retention = "0s"`, message: "full_detail_retention"},
-		{name: "negative detail duration", body: `full_detail_retention = "-1h"`, message: "full_detail_retention"},
-		{name: "zero summary duration", body: `summary_retention = "0s"`, message: "summary_retention"},
-		{name: "negative summary duration", body: `summary_retention = "-1h"`, message: "summary_retention"},
-		{name: "summary shorter than detail", body: `full_detail_retention = "48h"` + "\n" + `summary_retention = "24h"`, message: "summary_retention"},
-	}
-	for _, testCase := range testCases {
-		t.Run(testCase.name, func(t *testing.T) {
+	for _, body := range []string{
+		`profile = "balanced"`, `profile = "archive"`,
+		`bucket_interval = "0s"`, `bucket_interval = "-1h"`,
+		`bucket_interval = "daily"`, `bucket_interval = "1.5s"`,
+		`bucket_interval = "999999999999h"`, `retention_buckets = 0`,
+		`retention_buckets = -1`, `retention_buckets = 9223372036854775807`,
+	} {
+		t.Run(body, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "config.toml")
-			body := "[audit.storage]\n" + testCase.body + "\n"
-			if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
-				t.Fatalf("WriteFile: %v", err)
+			if err := os.WriteFile(path, []byte("[audit.storage]\n"+body+"\n"), 0o600); err != nil {
+				t.Fatal(err)
 			}
-
-			_, err := config.LoadExisting(path)
-			if err == nil {
-				t.Fatal("LoadExisting accepted invalid audit storage")
-			}
-			if !strings.Contains(err.Error(), testCase.message) {
-				t.Fatalf("LoadExisting error = %q, want %q", err, testCase.message)
+			for _, loader := range []func(string) (*config.Config, error){config.LoadExisting, config.LoadDegradedPath} {
+				_, err := loader(path)
+				if err == nil || !strings.Contains(err.Error(), "audit.storage") {
+					t.Fatalf("invalid storage accepted: %v", err)
+				}
 			}
 		})
 	}
 }
 
-func TestAuditStorageDegradedLoadRetainsDetailAndDisablesMaintenance(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.toml")
-	if err := os.WriteFile(path, []byte("[audit.storage]\nmax_size_mb = -1\n"), 0o600); err != nil {
-		t.Fatalf("WriteFile: %v", err)
+func TestAuditCatalogOptionsUseStableUserPaths(t *testing.T) {
+	directory := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", filepath.Join(directory, "state"))
+	t.Setenv("XDG_RUNTIME_DIR", filepath.Join(directory, "runtime"))
+	cfg := loadAuditStorageConfig(t, "[audit.outputs.sqlite]\npath = \"/custom/audit.db\"\n")
+	options := cfg.AuditCatalogOptions()
+	if options.BasePath != "/custom/audit.db" || options.StatePath != filepath.Join(config.DefaultStateDir(), "audit-storage.json") || options.CoordinationPath != filepath.Join(filepath.Dir(config.RuntimeDir()), "agent-gate-audit.lock") {
+		t.Fatalf("options = %+v", options)
 	}
+}
 
+func TestUndecodableConfigCannotProvideRotationPolicy(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("[audit.storage]\nbucket_interval = 12\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	cfg, err := config.LoadDegradedPath(path)
 	if err != nil {
-		t.Fatalf("LoadDegradedPath: %v", err)
+		t.Fatal(err)
 	}
-
-	policy := cfg.AuditStoragePolicy()
-	if policy.MaintenanceInterval != 0 {
-		t.Fatalf("maintenance interval = %s, want disabled", policy.MaintenanceInterval)
-	}
-	assertAuditStorageDetail(t, policy.Detail, true)
-	failures := cfg.Failures()
-	if len(failures) != 1 {
-		t.Fatalf("failures = %v, want one audit storage failure", failures)
-	}
-	if failures[0].Kind != config.LoadFailureSection || failures[0].Scope != "audit.storage" {
-		t.Fatalf("failure = %+v, want audit.storage section", failures[0])
+	if cfg.AuditStoragePolicy().Rotation().Validate() == nil {
+		t.Fatal("invalid document supplied destructive fallback policy")
 	}
 }
 

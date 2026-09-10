@@ -1,15 +1,5 @@
 // Package config resolves XDG base directories and loads agent-gate's
 // TOML config.
-//
-// Path resolution order for every configurable path:
-//
-//  1. Explicit value in TOML [paths] table (highest priority).
-//  2. Relevant XDG env var ($XDG_CONFIG_HOME, $XDG_STATE_HOME,
-//     $XDG_RUNTIME_DIR, ...).
-//  3. XDG spec default (~/.config, ~/.local/state, ...).
-//
-// The functions in this file implement steps 2 and 3. Step 1 is applied
-// by the methods on Config in config.go.
 package config
 
 import (
@@ -84,13 +74,6 @@ func DefaultCacheDir() string {
 		base = filepath.Join(home, ".cache")
 	}
 	return filepath.Join(base, appName)
-}
-
-// DefaultConversationsDir returns the XDG-derived base directory for
-// per-conversation audit logs. Each conversation gets its own subfolder
-// under <state>/conversations/<system>/<session_id>/.
-func DefaultConversationsDir() string {
-	return filepath.Join(DefaultStateDir(), "conversations")
 }
 
 // DefaultUpdateStatePath returns the persisted auto-update state path.

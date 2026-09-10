@@ -29,9 +29,7 @@ func TestSQLiteStoreAppendPreservesEmptyPayloadAsBlob(t *testing.T) {
 	var payloadLength int
 	err = store.Handle().QueryRowContext(
 		context.Background(),
-		`select typeof(content), length(content)
-		from intake_event_details
-		where event_id = ? and detail_class = 'wire_input'`,
+		readIntakeSQLFixture(t, "wire_input_shape.sql"),
 		appendResult.EventID,
 	).Scan(&payloadType, &payloadLength)
 	if err != nil {
@@ -266,12 +264,12 @@ func TestSQLiteStoreRejectsDeferredStateForUnknownEvent(t *testing.T) {
 func newTestStore(t *testing.T) *intake.Store {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "sqlite", "audit.db")
-	store, err := intake.OpenSQLite(context.Background(), path, nil)
+	store, err := openFixtureIntake(t, context.Background(), path, nil)
 	if err != nil {
 		t.Fatalf("OpenSQLite: %v", err)
 	}
 	t.Cleanup(func() {
-		if err := store.Close(); err != nil {
+		if err := store.Handle().Close(); err != nil {
 			t.Fatalf("Close: %v", err)
 		}
 	})

@@ -18,7 +18,7 @@ import (
 type evaluationRecorder interface {
 	RecordCompleted(context.Context, evaluation.Record) error
 	CommitHotEvaluation(
-		context.Context, string, int64, bool, evaluation.Record,
+		context.Context, string, int64, bool, evaluation.Record, []audit.NormalizedEntry,
 	) error
 	CommitDeferredEvaluation(
 		context.Context, intake.DeferredClaim, evaluation.Record, []audit.NormalizedEntry,

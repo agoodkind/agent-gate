@@ -1,245 +1,92 @@
 package intake_test
 
 import (
-	"database/sql"
+	"bytes"
 	"encoding/json"
-	"errors"
+	"fmt"
 	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
-
-	"goodkind.io/agent-gate/internal/auditstorage"
 	"goodkind.io/agent-gate/internal/config"
 	"goodkind.io/agent-gate/internal/intake"
 )
 
-var intakeDetailClasses = []string{
-	"environment_evidence",
-	"normalized_input",
-	"provider_evidence",
-	"wire_input",
-}
-
-func TestAppendCommitsSummaryAndConfiguredDetailTogether(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "audit.db")
-	store := openDetailStore(t, path, fullDetailPolicy())
-	record := populatedDetailRecord("event-detail")
-
-	first, err := store.Append(t.Context(), record)
-	if err != nil {
-		t.Fatalf("Append first: %v", err)
-	}
-	second, err := store.Append(t.Context(), record)
-	if err != nil {
-		t.Fatalf("Append second: %v", err)
-	}
-	if !first.Inserted || second.Inserted || second.ReceiptID <= first.ReceiptID {
-		t.Fatalf("append results = %#v, %#v", first, second)
-	}
-	assertDetailRecord(t, store, second.ReceiptID, record)
-	assertDetailRows(t, store.Handle(), record.EventID, auditstorage.DetailStateAvailable)
-	assertDetailTableCount(t, store.Handle(), "intake_events", 1)
-	assertDetailTableCount(t, store.Handle(), "intake_receipts", 2)
-}
-
-func TestOpenSQLiteMigratesLegacyIntakeDetail(t *testing.T) {
-	t.Skip("database backward compatibility was removed")
-	t.Run("fidelity and idempotence", func(t *testing.T) {
-		path := installLegacyAuditFixture(t)
-		store := openDetailStore(t, path, fullDetailPolicy())
-
-		legacy, err := store.GetReceipt(t.Context(), 1)
-		if err != nil {
-			t.Fatalf("GetReceipt migrated: %v", err)
-		}
-		assertLegacyDetailValues(t, legacy)
-		assertDetailRows(t, store.Handle(), legacy.EventID, auditstorage.DetailStateAvailable)
-		assertSchemaVersion(t, store.Handle(), 6)
-		appliedAt, err := auditstorage.MigrationAppliedAt(t.Context(), store.Handle(), 2)
-		if err != nil {
-			t.Fatalf("MigrationAppliedAt first open: %v", err)
-		}
-		if err := store.Close(); err != nil {
-			t.Fatalf("Close first store: %v", err)
-		}
-
-		reopened := openDetailStore(t, path, fullDetailPolicy())
-		reopenedRecord, err := reopened.GetReceipt(t.Context(), 1)
-		if err != nil {
-			t.Fatalf("GetReceipt reopened: %v", err)
-		}
-		assertLegacyDetailValues(t, reopenedRecord)
-		reopenedAppliedAt, err := auditstorage.MigrationAppliedAt(t.Context(), reopened.Handle(), 2)
-		if err != nil {
-			t.Fatalf("MigrationAppliedAt reopen: %v", err)
-		}
-		if !reopenedAppliedAt.Equal(appliedAt) {
-			t.Fatalf("migration timestamp changed from %s to %s", appliedAt, reopenedAppliedAt)
-		}
-	})
-
-	t.Run("failure rolls back copied detail", func(t *testing.T) {
-		path := installLegacyAuditFixture(t)
-		database := openSQLiteHandle(t, path)
-		if _, err := database.ExecContext(t.Context(), `
-			create table intake_event_detail_manifest (id integer primary key)
-		`); err != nil {
-			t.Fatalf("install migration failure: %v", err)
-		}
-		if err := database.Close(); err != nil {
-			t.Fatalf("close fixture handle: %v", err)
-		}
-
-		store, err := intake.OpenSQLiteWithOptions(t.Context(), intake.SQLiteOptions{
-			Path: path, Policy: fullDetailPolicy(), Log: nil,
+func TestCanonicalInputRetainedUntilEveryReceiptCompletes(t *testing.T) {
+	for _, policy := range []config.AuditStoragePolicy{fullDetailPolicy(), minimalDetailPolicy()} {
+		t.Run(string(policy.Profile), func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "audit.db")
+			store := openDetailStore(t, path, policy)
+			input := populatedDetailRecord("repeated")
+			first, err := store.Append(t.Context(), input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			second, err := store.Append(t.Context(), input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !first.Inserted || second.Inserted || first.ReceiptID == second.ReceiptID {
+				t.Fatalf("receipts: %+v %+v", first, second)
+			}
+			if err := store.CommitHotEvaluation(t.Context(), first.EventID, first.ReceiptID, false, atomicEvaluationRecord(first, "hot-first", "hot", 1), nil); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.CommitHotEvaluation(t.Context(), second.EventID, second.ReceiptID, true, atomicEvaluationRecord(second, "hot-second", "hot", 1), nil); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.Handle().Close(); err != nil {
+				t.Fatal(err)
+			}
+			store = openDetailStore(t, path, policy)
+			replay, claim, err := store.ClaimDeferred(t.Context(), second.ReceiptID, "owner", time.Minute)
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertRecordDetailEqual(t, replay, input)
+			if err := store.CommitDeferredEvaluation(t.Context(), claim, atomicEvaluationRecord(second, "deferred", "deferred", claim.Attempt), nil); err != nil {
+				t.Fatal(err)
+			}
+			got, err := store.GetReceipt(t.Context(), second.ReceiptID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if policy.Detail.WireInput {
+				assertRecordDetailEqual(t, got, input)
+			} else if got.RawPayload != nil || got.NormalizedJSON != nil || got.ClassificationJSON != nil || len(got.EnvFingerprint) != 0 {
+				t.Fatalf("terminal input retained: %+v", got)
+			}
+			third, err := store.Append(t.Context(), input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertDetailRecord(t, store, third.ReceiptID, input)
 		})
-		if err == nil {
-			_ = store.Close()
-			t.Fatal("OpenSQLiteWithOptions error = nil, want migration failure")
-		}
-		database = openSQLiteHandle(t, path)
-		defer func() { _ = database.Close() }()
-		var rawPayload []byte
-		if err := database.QueryRowContext(
-			t.Context(), `select raw_payload from intake_events where event_id = 'event-legacy'`,
-		).Scan(&rawPayload); err != nil {
-			t.Fatalf("read legacy detail after failure: %v", err)
-		}
-		if string(rawPayload) != `{"wire":"legacy"}` {
-			t.Fatalf("legacy raw payload after failure = %q, want preserved", rawPayload)
-		}
-		version, err := auditstorage.SchemaVersion(t.Context(), database)
-		if err != nil {
-			t.Fatalf("SchemaVersion after failure: %v", err)
-		}
-		if version != 1 {
-			t.Fatalf("schema version after failure = %d, want 1", version)
-		}
-		var detailTable string
-		err = database.QueryRowContext(
-			t.Context(),
-			`select name from sqlite_schema where type = 'table' and name = 'intake_event_details'`,
-		).Scan(&detailTable)
-		if !errors.Is(err, sql.ErrNoRows) {
-			t.Fatalf("detail table lookup error = %v, want sql.ErrNoRows", err)
-		}
-	})
-}
-
-func assertLegacyDetailValues(t *testing.T, record intake.Record) {
-	t.Helper()
-	if got, want := string(record.RawPayload), `{"wire":"legacy"}`; got != want {
-		t.Fatalf("raw payload = %q, want %q", got, want)
-	}
-	if got, want := string(record.NormalizedJSON), `{"normalized":"legacy"}`; got != want {
-		t.Fatalf("normalized JSON = %q, want %q", got, want)
-	}
-	if got, want := string(record.ClassificationJSON), `{"resolved_provider":"codex","result":"resolved"}`; got != want {
-		t.Fatalf("classification JSON = %q, want %q", got, want)
-	}
-	wantEnvironment := map[string]string{"CODEX_THREAD_ID": "legacy-thread"}
-	if !reflect.DeepEqual(record.EnvFingerprint, wantEnvironment) {
-		t.Fatalf("environment = %#v, want %#v", record.EnvFingerprint, wantEnvironment)
 	}
 }
 
-func TestPendingReplayProtectsDisabledIntakeDetail(t *testing.T) {
+func TestCanonicalEmptyWireInputSurvivesPendingRestart(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "audit.db")
 	store := openDetailStore(t, path, minimalDetailPolicy())
-	record := populatedDetailRecord("event-protected")
-	result, err := store.Append(t.Context(), record)
+	receipt, err := store.Append(t.Context(), intake.Record{EventID: "empty", RawPayload: []byte{}})
 	if err != nil {
-		t.Fatalf("Append: %v", err)
+		t.Fatal(err)
 	}
-	if err := store.MarkDeferredPending(t.Context(), result.EventID, result.ReceiptID); err != nil {
-		t.Fatalf("MarkDeferredPending: %v", err)
+	if err := store.CommitHotEvaluation(t.Context(), receipt.EventID, receipt.ReceiptID, true, atomicEvaluationRecord(receipt, "empty-hot", "hot", 1), nil); err != nil {
+		t.Fatal(err)
 	}
-	assertDetailRows(t, store.Handle(), result.EventID, auditstorage.DetailStateProtected)
-	if err := store.Close(); err != nil {
-		t.Fatalf("Close before replay: %v", err)
+	if err := store.Handle().Close(); err != nil {
+		t.Fatal(err)
 	}
-
-	reopened := openDetailStore(t, path, minimalDetailPolicy())
-	var replayed intake.Record
-	if err := reopened.ReplayDeferredPending(t.Context(), 1, func(record intake.Record) error {
-		replayed = record
-		return nil
-	}); err != nil {
-		t.Fatalf("ReplayDeferredPending: %v", err)
-	}
-	if replayed.ReceiptID != result.ReceiptID {
-		t.Fatalf("replayed receipt = %d, want %d", replayed.ReceiptID, result.ReceiptID)
-	}
-	assertRecordDetailEqual(t, replayed, record)
-}
-
-func TestDuplicateAppendRestoresDemotedDetailForDeferredReplay(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "audit.db")
-	store := openDetailStore(t, path, minimalDetailPolicy())
-	record := populatedDetailRecord("event-duplicate-replay")
-	first, err := store.Append(t.Context(), record)
+	store = openDetailStore(t, path, minimalDetailPolicy())
+	input, _, err := store.ClaimDeferred(t.Context(), receipt.ReceiptID, "owner", time.Minute)
 	if err != nil {
-		t.Fatalf("Append first: %v", err)
+		t.Fatal(err)
 	}
-	hotEvaluation := atomicEvaluationRecord(first, "evaluation-duplicate-first", "hot", 1)
-	if err := store.CommitHotEvaluation(
-		t.Context(), first.EventID, first.ReceiptID, false, hotEvaluation,
-	); err != nil {
-		t.Fatalf("CommitHotEvaluation: %v", err)
+	if input.RawPayload == nil || !bytes.Equal(input.RawPayload, []byte{}) {
+		t.Fatalf("empty wire = %#v", input.RawPayload)
 	}
-	assertDisabledGraphDetailDemoted(t, store.Handle(), first.EventID, 1)
-
-	duplicate, err := store.Append(t.Context(), record)
-	if err != nil {
-		t.Fatalf("Append duplicate: %v", err)
-	}
-	if duplicate.Inserted || duplicate.EventID != first.EventID ||
-		duplicate.ReceiptID <= first.ReceiptID {
-		t.Fatalf("duplicate append = %+v, first = %+v", duplicate, first)
-	}
-	if err := store.MarkDeferredPending(
-		t.Context(), duplicate.EventID, duplicate.ReceiptID,
-	); err != nil {
-		t.Fatalf("MarkDeferredPending duplicate: %v", err)
-	}
-	replayed, claim, err := store.ClaimDeferred(
-		t.Context(), duplicate.ReceiptID, "duplicate-owner", 30*time.Second,
-	)
-	if err != nil {
-		t.Fatalf("ClaimDeferred duplicate: %v", err)
-	}
-	if claim.ReceiptID != duplicate.ReceiptID || claim.EventID != first.EventID {
-		t.Fatalf("duplicate claim = %+v", claim)
-	}
-	assertRecordDetailEqual(t, replayed, record)
-	assertDetailRows(
-		t,
-		store.Handle(),
-		first.EventID,
-		auditstorage.DetailStateProtected,
-	)
-}
-
-func TestAppendRollsBackSummaryWhenDetailWriteFails(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "audit.db")
-	store := openDetailStore(t, path, fullDetailPolicy())
-	if _, err := store.Handle().ExecContext(t.Context(), `
-		create trigger fail_intake_detail before insert on intake_event_details
-		begin select raise(abort, 'forced detail failure'); end
-	`); err != nil {
-		t.Fatalf("create failure trigger: %v", err)
-	}
-
-	if _, err := store.Append(t.Context(), populatedDetailRecord("event-rollback")); err == nil {
-		t.Fatal("Append error = nil, want detail failure")
-	}
-	assertDetailTableCount(t, store.Handle(), "intake_events", 0)
-	assertDetailTableCount(t, store.Handle(), "intake_event_details", 0)
-	assertDetailTableCount(t, store.Handle(), "intake_event_detail_manifest", 0)
-	assertDetailTableCount(t, store.Handle(), "intake_receipts", 0)
 }
 
 func openDetailStore(
@@ -248,14 +95,7 @@ func openDetailStore(
 	policy config.AuditStoragePolicy,
 ) *intake.Store {
 	t.Helper()
-	store, err := intake.OpenSQLiteWithOptions(t.Context(), intake.SQLiteOptions{
-		Path: path, Policy: policy, Log: nil,
-	})
-	if err != nil {
-		t.Fatalf("OpenSQLiteWithOptions: %v", err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
-	return store
+	return openQueryBucket(t, path, &policy)
 }
 
 func populatedDetailRecord(eventID string) intake.Record {
@@ -286,6 +126,54 @@ func minimalDetailPolicy() config.AuditStoragePolicy {
 	return config.AuditStoragePolicy{Profile: config.AuditStorageProfileMinimal}
 }
 
+func TestRecordedInputBitsAccumulateAcrossPolicySnapshots(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.db")
+	input := populatedDetailRecord("policy-change")
+	for index, policy := range []config.AuditStoragePolicy{minimalDetailPolicy(), fullDetailPolicy(), minimalDetailPolicy()} {
+		store := openDetailStore(t, path, policy)
+		receipt, err := store.Append(t.Context(), input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := store.CommitHotEvaluation(t.Context(), receipt.EventID, receipt.ReceiptID, false, atomicEvaluationRecord(receipt, fmt.Sprintf("policy-%d", index), "hot", 1), nil); err != nil {
+			t.Fatal(err)
+		}
+		if index > 0 {
+			assertDetailRecord(t, store, receipt.ReceiptID, input)
+		}
+		if err := store.Handle().Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	result, err := intake.Query(t.Context(), queryConfig(path), intake.QueryFilter{EventID: input.EventID, IncludeNormalized: true, IncludeEnv: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Records) != 1 || len(result.Records[0].Detail.RecordedClasses) != 4 {
+		t.Fatalf("retained classes: %+v", result.Records)
+	}
+}
+
+func TestReplayOnlyInputDoesNotAppearAsRecordedContent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.db")
+	store := openDetailStore(t, path, minimalDetailPolicy())
+	receipt, err := store.Append(t.Context(), populatedDetailRecord("replay-only"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := intake.Query(t.Context(), queryConfig(path), intake.QueryFilter{EventID: receipt.EventID, IncludeNormalized: true, IncludeEnv: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Records) != 1 {
+		t.Fatalf("records: %+v", result.Records)
+	}
+	record := result.Records[0]
+	if len(record.Detail.RecordedClasses) != 0 || len(record.Detail.AvailableClasses) != 0 || record.NormalizedJSON != nil || record.Classification != nil || record.EnvFingerprint != nil {
+		t.Fatalf("replay-only input exposed: %+v", record)
+	}
+}
+
 func assertDetailRecord(
 	t *testing.T,
 	store *intake.Store,
@@ -307,64 +195,5 @@ func assertRecordDetailEqual(t *testing.T, got intake.Record, want intake.Record
 		!reflect.DeepEqual(got.ClassificationJSON, want.ClassificationJSON) ||
 		!reflect.DeepEqual(got.EnvFingerprint, want.EnvFingerprint) {
 		t.Fatalf("record detail = %#v, want %#v", got, want)
-	}
-}
-
-func assertDetailRows(
-	t *testing.T,
-	database *sql.DB,
-	eventID string,
-	wantState auditstorage.DetailState,
-) {
-	t.Helper()
-	rows, err := database.QueryContext(t.Context(), `
-		select detail_class from intake_event_details
-		where event_id = ? order by detail_class
-	`, eventID)
-	if err != nil {
-		t.Fatalf("query intake detail rows: %v", err)
-	}
-	defer func() { _ = rows.Close() }()
-	var classes []string
-	for rows.Next() {
-		var class string
-		if err := rows.Scan(&class); err != nil {
-			t.Fatalf("scan intake detail class: %v", err)
-		}
-		classes = append(classes, class)
-	}
-	if err := rows.Err(); err != nil {
-		t.Fatalf("iterate intake detail classes: %v", err)
-	}
-	if !reflect.DeepEqual(classes, intakeDetailClasses) {
-		t.Fatalf("detail classes = %v, want %v", classes, intakeDetailClasses)
-	}
-	var recordedClasses string
-	var availableClasses string
-	var state auditstorage.DetailState
-	var stateChangedAt string
-	if err := database.QueryRowContext(t.Context(), `
-		select recorded_classes_json, available_classes_json, state, state_changed_at
-		from intake_event_detail_manifest where event_id = ?
-	`, eventID).Scan(&recordedClasses, &availableClasses, &state, &stateChangedAt); err != nil {
-		t.Fatalf("query intake detail manifest: %v", err)
-	}
-	wantClasses := `["wire_input","normalized_input","provider_evidence","environment_evidence"]`
-	if recordedClasses != wantClasses || availableClasses != wantClasses ||
-		state != wantState || stateChangedAt == "" {
-		t.Fatalf("detail manifest = (%s, %s, %q, %q)", recordedClasses, availableClasses, state, stateChangedAt)
-	}
-}
-
-func assertDetailTableCount(t *testing.T, database *sql.DB, table string, want int) {
-	t.Helper()
-	var count int
-	if err := database.QueryRowContext(
-		t.Context(), "select count(*) from "+table,
-	).Scan(&count); err != nil {
-		t.Fatalf("count %s: %v", table, err)
-	}
-	if count != want {
-		t.Fatalf("%s count = %d, want %d", table, count, want)
 	}
 }

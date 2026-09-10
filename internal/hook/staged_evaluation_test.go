@@ -41,23 +41,6 @@ func (server *stagedInferenceFake) calledModels() []string {
 	return append([]string(nil), server.models...)
 }
 
-type stagedTraceCollector struct {
-	mu     sync.Mutex
-	traces []rules.InferenceTrace
-}
-
-func (collector *stagedTraceCollector) CollectInferenceTrace(trace rules.InferenceTrace) {
-	collector.mu.Lock()
-	defer collector.mu.Unlock()
-	collector.traces = append(collector.traces, trace)
-}
-
-func (collector *stagedTraceCollector) snapshot() []rules.InferenceTrace {
-	collector.mu.Lock()
-	defer collector.mu.Unlock()
-	return append([]rules.InferenceTrace(nil), collector.traces...)
-}
-
 func startStagedInferenceServer(t *testing.T, fake *stagedInferenceFake) string {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -87,12 +70,12 @@ func loadStagedHookConfig(t *testing.T, endpoint string, body string) *config.Co
 	return cfg
 }
 
-func stagedContext(t *testing.T, collector *stagedTraceCollector) context.Context {
+func stagedContext(t *testing.T) context.Context {
 	t.Helper()
 	runtime := rules.NewInferRuntimeWithCache(nil, nil)
 	t.Cleanup(runtime.Close)
 	ctx := rules.WithInferRuntime(context.Background(), runtime)
-	return rules.WithInferenceTraceCollector(ctx, collector)
+	return ctx
 }
 
 func completeStagedReply(decision string) *inferencepb.InferReply {
@@ -134,10 +117,9 @@ violation_message = "deterministic blocked"
 field_paths = ["tool_input.command"]
 pattern = "blocked"
 `)
-	collector := &stagedTraceCollector{}
 
 	evaluation := evaluateHot(
-		stagedContext(t, collector),
+		stagedContext(t),
 		[]byte(stagedPreToolPayload),
 		cfg,
 		hook.SystemCodex,
@@ -150,7 +132,7 @@ pattern = "blocked"
 	if models := fake.calledModels(); len(models) != 0 {
 		t.Fatalf("inference models = %v, want none", models)
 	}
-	if traces := collector.snapshot(); len(traces) != 0 {
+	if traces := attemptedStagedInference(evaluation.Trace); len(traces) != 0 {
 		t.Fatalf("inference traces = %+v, want none", traces)
 	}
 }
@@ -204,10 +186,9 @@ response_json_equals = "block"
 model = "gpt-5.4-mini"
 reasoning_effort = "high"
 `)
-	collector := &stagedTraceCollector{}
 
 	evaluation := evaluateHot(
-		stagedContext(t, collector),
+		stagedContext(t),
 		[]byte(stagedPreToolPayload),
 		cfg,
 		hook.SystemCodex,
@@ -220,7 +201,7 @@ reasoning_effort = "high"
 	if models := fake.calledModels(); strings.Join(models, ",") != "v4,gpt-5.4-mini" {
 		t.Fatalf("inference models = %v", models)
 	}
-	if traces := collector.snapshot(); len(traces) != 2 {
+	if traces := attemptedStagedInference(evaluation.Trace); len(traces) != 2 {
 		t.Fatalf("inference traces = %+v, want two", traces)
 	}
 }
@@ -255,11 +236,10 @@ violation_message = "deterministic blocked"
 field_paths = ["last_assistant_message"]
 pattern = "blocked"
 `)
-	collector := &stagedTraceCollector{}
 	rawPayload := []byte(`{"hook_event_name":"Stop","session_id":"s1","turn_id":"t1","stop_hook_active":false,"last_assistant_message":"blocked"}`)
 
 	evaluation := evaluateHot(
-		stagedContext(t, collector),
+		stagedContext(t),
 		rawPayload,
 		cfg,
 		hook.SystemCodex,
@@ -277,7 +257,7 @@ pattern = "blocked"
 	if models := fake.calledModels(); len(models) != 0 {
 		t.Fatalf("inference models = %v, want none", models)
 	}
-	if traces := collector.snapshot(); len(traces) != 0 {
+	if traces := attemptedStagedInference(evaluation.Trace); len(traces) != 0 {
 		t.Fatalf("inference traces = %+v, want none", traces)
 	}
 }
@@ -329,11 +309,10 @@ response_json_field = "decision"
 response_json_equals = "block"
 model = "later-model"
 `)
-	collector := &stagedTraceCollector{}
 	started := time.Now()
 
 	evaluation := evaluateHot(
-		stagedContext(t, collector),
+		stagedContext(t),
 		[]byte(stagedPreToolPayload),
 		cfg,
 		hook.SystemCodex,
@@ -349,8 +328,8 @@ model = "later-model"
 	if models := fake.calledModels(); strings.Join(models, ",") != "slow-model" {
 		t.Fatalf("inference models = %v, want only slow-model", models)
 	}
-	traces := collector.snapshot()
-	if len(traces) != 1 || traces[0].ErrorClass != "deadline_exceeded" {
+	traces := attemptedStagedInference(evaluation.Trace)
+	if len(traces) != 1 || traces[0].ErrorCode != "deadline_exceeded" {
 		t.Fatalf("inference traces = %+v", traces)
 	}
 	if len(evaluation.Trace.Layers) != 2 {
@@ -428,10 +407,9 @@ violation_message = "deterministic two"
 field_paths = ["tool_input.command"]
 pattern = "command"
 `)
-	collector := &stagedTraceCollector{}
 
 	evaluation := evaluateHot(
-		stagedContext(t, collector),
+		stagedContext(t),
 		[]byte(stagedPreToolPayload),
 		cfg,
 		hook.SystemCodex,
@@ -448,4 +426,14 @@ pattern = "command"
 	if models := fake.calledModels(); strings.Join(models, ",") != "model-one,model-two" {
 		t.Fatalf("inference model order = %v", models)
 	}
+}
+
+func attemptedStagedInference(trace rules.DecisionTrace) []rules.LayerTrace {
+	var attempted []rules.LayerTrace
+	for _, layer := range trace.Layers {
+		if layer.Kind == "inference" && layer.Status != "skipped" {
+			attempted = append(attempted, layer)
+		}
+	}
+	return attempted
 }

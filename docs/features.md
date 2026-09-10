@@ -59,7 +59,9 @@ agent-gate query decisions --since 24h
 agent-gate query evaluations --since 24h
 ```
 
-Complete exports require the requested detail classes. Expired or unrecorded detail fails the export unless the command explicitly allows skipping incomplete records.
+Hot and deferred findings are separate audit results. Each records the rules run in that phase. Deferred findings can follow a blocked hook without changing its response or repeating its response effects.
+
+Complete exports require the requested detail classes. Unrecorded detail fails the export unless the command explicitly allows skipping incomplete records.
 
 <!-- doc-test: run fixture=query -->
 ```sh
@@ -79,4 +81,4 @@ agent-gate update status
 
 ## Limits
 
-Hooks depend on the supervised daemon for enforcement. Transport failures allow the provider action. Provider event schemas and response capabilities differ. Inference decisions depend on the configured endpoint and its evidence. Retention can remove completed detail that later exports request.
+Hooks depend on the supervised daemon for enforcement. Transport failures allow the provider action. Provider event schemas and response capabilities differ. Inference decisions depend on the configured endpoint and its evidence. Expired history is absent from queries and exports.

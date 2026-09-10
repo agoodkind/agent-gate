@@ -70,10 +70,11 @@ func TestSetupEndToEndVerifiesInstalledProviderCommands(t *testing.T) {
 		t.Fatalf("Listen daemon socket: %v", err)
 	}
 	log := slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil))
-	daemonServer, err := daemon.New(log, cfg)
+	daemonServer, err := daemon.New(t.Context(), log, cfg)
 	if err != nil {
 		t.Fatalf("daemon.New: %v", err)
 	}
+	daemonServer.StartAuditScheduler(t.Context())
 	grpcServer := grpc.NewServer()
 	daemonpb.RegisterAgentGateDServer(grpcServer, daemonServer)
 	serveResult := make(chan error, 1)
@@ -142,7 +143,7 @@ func assertSetupDurableStateAfterClose(t *testing.T, cfg *config.Config, setupID
 		}
 		evaluationResult, err := evaluation.Query(
 			context.Background(),
-			cfg.AuditSQLitePath(),
+			cfg,
 			evaluation.QueryFilter{
 				Mode: "hot", System: system, SessionID: setupID,
 				DetailMode: evaluation.QueryDetailSummary, Limit: 2,

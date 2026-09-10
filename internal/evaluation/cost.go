@@ -3,10 +3,13 @@ package evaluation
 import (
 	"context"
 	"database/sql"
-	"errors"
+	_ "embed"
 	"math"
-	"os"
+	"slices"
+	"strings"
 	"time"
+
+	"goodkind.io/agent-gate/internal/config"
 )
 
 // daysPerMonth projects an observed spend rate to a monthly figure, the number a
@@ -115,14 +118,14 @@ func estimatedCostMicros(promptTokens, cachedTokens, completionTokens int64, pri
 	return int64(math.Round(micros))
 }
 
-// CostReport reads recorded judge inference layers from an existing SQLite path
+// CostReport reads recorded judge inference layers from retained audit buckets
 // and returns per-model and per-day estimated cost plus the dedup cache-hit rate,
 // without creating or migrating the database. Tokens come from durable summary
 // columns and are deduplicated by upstream request id so a batch call copied
 // across rule layers is billed once.
 func CostReport(
 	ctx context.Context,
-	path string,
+	cfg *config.Config,
 	pricing map[string]ModelPricing,
 	filter CostFilter,
 ) (CostReportResult, error) {
@@ -139,43 +142,46 @@ func CostReport(
 		Source:                 "sqlite",
 		Note:                   "",
 	}
-	if err := guardEvaluationDatabasePath(path); err != nil {
-		return CostReportResult{}, err
+	set, err := cfg.ReadAuditHistory(ctx, "")
+	if err != nil {
+		return CostReportResult{}, wrapError("read retained costs", err)
 	}
-	if _, err := os.Stat(path); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			result.Note = "no evaluation history exists yet"
-			return result, nil
+	defer func() { _ = set.Close() }()
+	merged := make(map[string]callAggregate)
+	for _, handle := range set.Handles {
+		aggregates, err := queryCostAggregates(ctx, handle.Database, filter)
+		if err != nil {
+			return CostReportResult{}, err
 		}
-		return CostReportResult{}, wrapError("stat evaluation sqlite path", err)
+		for _, item := range aggregates {
+			key := item.day + "\x00" + item.model
+			value := merged[key]
+			value.model, value.day = item.model, item.day
+			value.calls += item.calls
+			value.promptTokens += item.promptTokens
+			value.cachedTokens += item.cachedTokens
+			value.completionTokens += item.completionTokens
+			value.earliest = earliestTime(value.earliest, item.earliest)
+			value.latest = laterTime(value.latest, item.latest)
+			merged[key] = value
+		}
+		cache, err := queryDedupCacheStats(ctx, handle.Database, filter)
+		if err != nil {
+			return CostReportResult{}, err
+		}
+		result.DedupCache.Hits += cache.Hits
+		result.DedupCache.Misses += cache.Misses
 	}
-	database, err := sql.Open("sqlite3", queryReadOnlySQLiteDSN(path))
-	if err != nil {
-		return CostReportResult{}, wrapError("open evaluation sqlite db read-only", err)
+	aggregates := make([]callAggregate, 0, len(merged))
+	for _, item := range merged {
+		aggregates = append(aggregates, item)
 	}
-	defer func() {
-		_ = database.Close()
-	}()
-	if err := database.PingContext(ctx); err != nil {
-		return CostReportResult{}, wrapError("ping evaluation sqlite db read-only", err)
-	}
-	exists, err := queryTableExists(ctx, database, "gate_evaluation_layers")
-	if err != nil {
-		return CostReportResult{}, err
-	}
-	if !exists {
-		result.Note = "no evaluation history exists yet"
-		return result, nil
-	}
-	aggregates, err := queryCostAggregates(ctx, database, filter)
-	if err != nil {
-		return CostReportResult{}, err
-	}
-	cache, err := queryDedupCacheStats(ctx, database, filter)
-	if err != nil {
-		return CostReportResult{}, err
-	}
-	result.DedupCache = cache
+	slices.SortFunc(aggregates, func(left, right callAggregate) int {
+		if order := strings.Compare(left.day, right.day); order != 0 {
+			return order
+		}
+		return strings.Compare(left.model, right.model)
+	})
 	buildCostReport(&result, aggregates, pricing)
 	if len(result.Models) == 0 && result.Note == "" {
 		result.Note = "no judge calls with recorded token usage in range"
@@ -192,31 +198,7 @@ func queryCostAggregates(
 	filter CostFilter,
 ) ([]callAggregate, error) {
 	since, until := costWindowArgs(filter)
-	const query = `
-		with calls as (
-			select
-				request_id,
-				max(coalesce(nullif(model_name, ''), requested_model)) as model_name,
-				max(prompt_tokens) as prompt_tokens,
-				max(completion_tokens) as completion_tokens,
-				max(cached_tokens) as cached_tokens,
-				min(completed_at) as first_at
-			from gate_evaluation_layers
-			where kind = 'inference'
-				and upstream_metadata_status = 'present'
-				and request_id != ''
-				and coalesce(nullif(model_name, ''), requested_model, '') != ''
-				and (? = '' or completed_at >= ?)
-				and (? = '' or completed_at <= ?)
-			group by request_id
-		)
-		select model_name, substr(first_at, 1, 10) as day, count(*) as calls,
-			coalesce(sum(prompt_tokens), 0), coalesce(sum(completion_tokens), 0),
-			coalesce(sum(cached_tokens), 0), min(first_at), max(first_at)
-		from calls
-		group by model_name, day
-		order by day, model_name
-	`
+	query := costSQL1
 	rows, err := database.QueryContext(ctx, query, since, since, until, until)
 	if err != nil {
 		return nil, wrapError("query judge cost aggregates", err)
@@ -261,15 +243,7 @@ func queryDedupCacheStats(
 	filter CostFilter,
 ) (DedupCacheStats, error) {
 	since, until := costWindowArgs(filter)
-	const query = `
-		select cache_status, count(distinct cache_key_hash)
-		from gate_evaluation_layers
-		where kind = 'inference'
-			and cache_status in ('hit', 'miss')
-			and (? = '' or completed_at >= ?)
-			and (? = '' or completed_at <= ?)
-		group by cache_status
-	`
+	query := costSQL2
 	rows, err := database.QueryContext(ctx, query, since, since, until, until)
 	if err != nil {
 		return DedupCacheStats{}, wrapError("query judge dedup cache stats", err)
@@ -407,3 +381,9 @@ func laterTime(current, candidate time.Time) time.Time {
 	}
 	return current
 }
+
+//go:embed cost_1.sql
+var costSQL1 string
+
+//go:embed cost_2.sql
+var costSQL2 string

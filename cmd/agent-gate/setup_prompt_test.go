@@ -66,7 +66,7 @@ func TestSetupPrompterRetriesInvalidInput(t *testing.T) {
 	if !confirmed {
 		t.Fatal("confirmation = false, want true")
 	}
-	for _, want := range []string{"unknown provider", "select balanced, full, or minimal", "enter yes or no"} {
+	for _, want := range []string{"unknown provider", "select full or minimal", "enter yes or no"} {
 		if !strings.Contains(output.String(), want) {
 			t.Fatalf("output = %q, want %q", output.String(), want)
 		}

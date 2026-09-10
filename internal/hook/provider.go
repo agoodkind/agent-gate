@@ -77,7 +77,6 @@ func emptyDeferredAuditEvent(system System) DeferredAuditEvent {
 		BlockingViolations:  nil,
 		AuditOnlyViolations: nil,
 		ResponseEffects:     nil,
-		InferenceTraces:     nil,
 		Trace:               emptyDecisionTrace(),
 		Decision:            ResponseDecisionAllow,
 		DiagnosticText:      "",
@@ -276,7 +275,6 @@ func newDeferredAuditEvent(
 		BlockingViolations:  blockingViolations,
 		AuditOnlyViolations: auditOnlyViolations,
 		ResponseEffects:     responseEffects,
-		InferenceTraces:     nil,
 		Trace:               trace,
 		Decision:            decision,
 		DiagnosticText:      diagnosticText,
@@ -361,8 +359,8 @@ func payloadPromptText(payload Payload) string {
 	return ""
 }
 
-// WriteDeferredAudit performs audit normalization, enrichment, and logging
-// after the hook response decision has already been rendered.
+// WriteDeferredAudit emits the original rendered decision, violations, and
+// response effects. The daemon captures these entries during hot completion.
 func WriteDeferredAudit(ctx context.Context, event DeferredAuditEvent, sink audit.Sink) {
 	if sink == nil || !event.Valid {
 		return
@@ -372,6 +370,15 @@ func WriteDeferredAudit(ctx context.Context, event DeferredAuditEvent, sink audi
 		auditReceivedFields(ctx, event, sink)
 	}
 	writeDecisionAudit(ctx, event, sink)
+}
+
+// WriteDeferredFindings emits only deferred audit violations, including after
+// a hot block. Deferred work cannot emit an allow decision or response effects.
+func WriteDeferredFindings(ctx context.Context, event DeferredAuditEvent, sink audit.Sink) {
+	if sink == nil || !event.Valid {
+		return
+	}
+	writeAuditFindings(ctx, event, sink, decisionAuditAttrs(event))
 }
 
 func shouldWriteReceivedAudit(event DeferredAuditEvent) bool {
@@ -391,9 +398,9 @@ func auditReceivedFields(ctx context.Context, event DeferredAuditEvent, sink aud
 	sink.Log(ctx, event.SystemString, event.SessionID, event.EventName, "info", "hook.received", infoAttrs)
 }
 
-func writeDecisionAudit(ctx context.Context, event DeferredAuditEvent, sink audit.Sink) {
+func decisionAuditAttrs(event DeferredAuditEvent) []slog.Attr {
 	checked := rules.CheckedRuleNames(event.SystemString, event.EventName, event.Rules)
-	base := []slog.Attr{
+	return []slog.Attr{
 		slog.String("system", event.SystemString),
 		slog.String("event", event.EventName),
 		slog.String("session_id", event.SessionID),
@@ -405,7 +412,10 @@ func writeDecisionAudit(ctx context.Context, event DeferredAuditEvent, sink audi
 		slog.String("ti_command", event.Fields.ToolInputCommand),
 		slog.String("ti_file_path", event.Fields.ToolInputFilePath),
 	}
+}
 
+func writeDecisionAudit(ctx context.Context, event DeferredAuditEvent, sink audit.Sink) {
+	base := decisionAuditAttrs(event)
 	if event.Decision == ResponseDecisionBlock {
 		attrs := audit.AttrsFromSlog(append(
 			base,
@@ -418,15 +428,7 @@ func writeDecisionAudit(ctx context.Context, event DeferredAuditEvent, sink audi
 		return
 	}
 
-	if len(event.AuditOnlyViolations) > 0 {
-		attrs := audit.AttrsFromSlog(append(
-			base,
-			slog.String("decision", "audit_only"),
-			slog.Any("blocking_rules", matchRuleNames(event.AuditOnlyViolations)),
-			slog.String("violation_message", rules.FormatViolations(event.AuditOnlyViolations)),
-		))
-		sink.Log(ctx, event.SystemString, event.SessionID, event.EventName, "info", "hook.audit_violation", attrs)
-	}
+	writeAuditFindings(ctx, event, sink, base)
 	writeResponseEffectAudit(ctx, event, sink)
 
 	allowAttrs := audit.AttrsFromSlog(append(
@@ -436,6 +438,19 @@ func writeDecisionAudit(ctx context.Context, event DeferredAuditEvent, sink audi
 		slog.String("violation_message", ""),
 	))
 	sink.Log(ctx, event.SystemString, event.SessionID, event.EventName, "info", "hook.allowed", allowAttrs)
+}
+
+func writeAuditFindings(ctx context.Context, event DeferredAuditEvent, sink audit.Sink, base []slog.Attr) {
+	if len(event.AuditOnlyViolations) == 0 {
+		return
+	}
+	attrs := audit.AttrsFromSlog(append(
+		base,
+		slog.String("decision", "audit_only"),
+		slog.Any("blocking_rules", matchRuleNames(event.AuditOnlyViolations)),
+		slog.String("violation_message", rules.FormatViolations(event.AuditOnlyViolations)),
+	))
+	sink.Log(ctx, event.SystemString, event.SessionID, event.EventName, "info", "hook.audit_violation", attrs)
 }
 
 func writeResponseEffectAudit(ctx context.Context, event DeferredAuditEvent, sink audit.Sink) {

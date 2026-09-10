@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
-	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -21,56 +20,6 @@ import (
 	"goodkind.io/agent-gate/internal/evaluation"
 	"goodkind.io/agent-gate/internal/intake"
 )
-
-func TestNewStoreMigrationRecordsSharedSchemaVersion(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "evaluation.db")
-	database, err := sql.Open("sqlite3", path)
-	if err != nil {
-		t.Fatalf("open database: %v", err)
-	}
-	database.SetMaxOpenConns(1)
-	t.Cleanup(func() {
-		if err := database.Close(); err != nil {
-			t.Fatalf("close database: %v", err)
-		}
-	})
-
-	if _, err := evaluation.NewStore(t.Context(), path, database); err != nil {
-		t.Fatalf("NewStore: %v", err)
-	}
-	version, err := auditstorage.SchemaVersion(t.Context(), database)
-	if err != nil {
-		t.Fatalf("SchemaVersion: %v", err)
-	}
-	if version != 1 {
-		t.Fatalf("schema version = %d, want 1", version)
-	}
-}
-
-func TestNewSQLiteStoreRejectsUnresolvedCutoverBeforeDatabaseCreation(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "audit.db")
-	if err := auditstorage.WriteCutoverJournal(auditstorage.CutoverJournal{
-		DatabasePath: path,
-		RunID:        "run",
-		Phase:        auditstorage.CutoverPrepared,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	database, err := sql.Open("sqlite3", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = database.Close() })
-
-	_, err = evaluation.NewStore(t.Context(), path, database)
-
-	if err == nil || !strings.Contains(err.Error(), "recovery is required") {
-		t.Fatalf("NewSQLiteStore error = %v, want recovery required", err)
-	}
-	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Fatalf("database stat error = %v, want missing", err)
-	}
-}
 
 func TestStoreRoundTripsCompletedEvaluation(t *testing.T) {
 	store, receipt := newEvaluationStore(t)
@@ -319,7 +268,7 @@ func TestStoreRejectsUnsafeV2Metadata(t *testing.T) {
 
 func TestNewStoreEnablesForeignKeyEnforcement(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "evaluation.db")
-	database, err := sql.Open("sqlite3", path)
+	database, err := auditstorage.OpenWriter(t.Context(), path)
 	if err != nil {
 		t.Fatalf("open database: %v", err)
 	}
@@ -357,20 +306,17 @@ func TestStoreRejectsMismatchedReceiptEvent(t *testing.T) {
 
 func TestStoreSchemaHasForeignKeysAndIndices(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "audit.db")
-	intakeStore, err := intake.OpenSQLite(context.Background(), path, nil)
+	intakeStore, err := openFixtureIntake(t, context.Background(), path, nil)
 	if err != nil {
 		t.Fatalf("OpenSQLite: %v", err)
 	}
 	t.Cleanup(func() {
-		if err := intakeStore.Close(); err != nil {
+		if err := intakeStore.Handle().Close(); err != nil {
 			t.Fatalf("Close: %v", err)
 		}
 	})
 
-	database, err := sql.Open("sqlite3", path)
-	if err != nil {
-		t.Fatalf("open schema database: %v", err)
-	}
+	database := intakeStore.Handle()
 	t.Cleanup(func() {
 		if err := database.Close(); err != nil {
 			t.Fatalf("close schema database: %v", err)
@@ -381,14 +327,8 @@ func TestStoreSchemaHasForeignKeysAndIndices(t *testing.T) {
 	assertForeignKey(t, database, "gate_evaluation_layers", "gate_evaluations")
 	assertForeignKey(t, database, "gate_evaluation_layers", "gate_evaluation_layers")
 	assertForeignKey(t, database, "gate_evaluation_labels", "gate_evaluations")
-	assertForeignKey(t, database, "gate_evaluation_details", "gate_evaluations")
-	assertForeignKey(t, database, "gate_evaluation_layer_details", "gate_evaluation_layers")
-	assertForeignKey(t, database, "gate_evaluation_label_details", "gate_evaluation_labels")
-	assertIndex(t, database, "gate_evaluations", "gate_evaluations_event_id_idx")
-	assertIndex(t, database, "gate_evaluations", "gate_evaluations_receipt_id_idx")
-	assertIndex(t, database, "gate_evaluation_layers", "gate_evaluation_layers_kind_name_idx")
-	assertIndex(t, database, "gate_evaluation_layers", "gate_evaluation_layers_verdict_idx")
-	assertIndex(t, database, "gate_evaluation_labels", "gate_evaluation_labels_verdict_idx")
+	assertIndex(t, database, "gate_evaluations", "evaluation_event_idx")
+	assertIndex(t, database, "gate_evaluations", "evaluation_attempt_idx")
 }
 
 func TestStorePersistsLayerVerdict(t *testing.T) {
@@ -433,73 +373,15 @@ func TestStorePersistsLayerVerdict(t *testing.T) {
 	}
 }
 
-func TestStoreMigratesMissingLayerVerdict(t *testing.T) {
-	t.Skip("database backward compatibility was removed")
-	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "audit.db")
-	intakeStore, err := intake.OpenSQLite(ctx, path, nil)
-	if err != nil {
-		t.Fatalf("OpenSQLite: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := intakeStore.Close(); err != nil {
-			t.Fatalf("Close: %v", err)
-		}
-	})
-	receipt, err := intakeStore.Append(ctx, intake.Record{
-		EventID:        "evt-verdict-migration",
-		System:         "codex",
-		SessionID:      "session-verdict",
-		EventName:      "PreToolUse",
-		RawPayload:     []byte(`{"command":"make test"}`),
-		NormalizedJSON: json.RawMessage(`{"command":"make test"}`),
-	})
-	if err != nil {
-		t.Fatalf("Append: %v", err)
-	}
-	record := completeRecord(receipt)
-	record.Evaluation.EvaluationID = "eval-verdict-legacy"
-	if err := intakeStore.Evaluations().RecordCompleted(ctx, record); err != nil {
-		t.Fatalf("RecordCompleted legacy row: %v", err)
-	}
-	if _, err := intakeStore.Handle().ExecContext(
-		ctx,
-		`drop index if exists gate_evaluation_layers_verdict_idx`,
-	); err != nil {
-		t.Fatalf("drop verdict index: %v", err)
-	}
-	if _, err := intakeStore.Handle().ExecContext(
-		ctx,
-		`alter table gate_evaluation_layers drop column verdict`,
-	); err != nil {
-		t.Fatalf("remove verdict column: %v", err)
-	}
-	resetAuditSchemaVersion(t, intakeStore.Handle())
-
-	migratedStore, err := evaluation.NewStore(ctx, path, intakeStore.Handle())
-	if err != nil {
-		t.Fatalf("NewStore migration: %v", err)
-	}
-	got, err := migratedStore.Get(ctx, record.Evaluation.EvaluationID)
-	if err != nil {
-		t.Fatalf("Get migrated evaluation: %v", err)
-	}
-	for _, layer := range got.Layers {
-		if layer.Verdict != "" {
-			t.Fatalf("layer %d verdict = %q, want empty after migration", layer.LayerIndex, layer.Verdict)
-		}
-	}
-}
-
 func newEvaluationStore(t *testing.T) (*evaluation.Store, intake.AppendResult) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "audit.db")
-	intakeStore, err := intake.OpenSQLite(context.Background(), path, nil)
+	intakeStore, err := openFixtureIntake(t, context.Background(), path, nil)
 	if err != nil {
 		t.Fatalf("OpenSQLite: %v", err)
 	}
 	t.Cleanup(func() {
-		if err := intakeStore.Close(); err != nil {
+		if err := intakeStore.Handle().Close(); err != nil {
 			t.Fatalf("Close: %v", err)
 		}
 	})
@@ -519,16 +401,6 @@ func newEvaluationStore(t *testing.T) (*evaluation.Store, intake.AppendResult) {
 		t.Fatalf("Append: %v", err)
 	}
 	return intakeStore.Evaluations(), receipt
-}
-
-func resetAuditSchemaVersion(t *testing.T, database *sql.DB) {
-	t.Helper()
-	if _, err := database.Exec(`drop table audit_schema_migrations`); err != nil {
-		t.Fatalf("remove schema version from legacy database: %v", err)
-	}
-	if _, err := database.Exec(`pragma user_version = 0`); err != nil {
-		t.Fatalf("reset legacy user version: %v", err)
-	}
 }
 
 func completeRecord(receipt intake.AppendResult) evaluation.Record {

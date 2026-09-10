@@ -58,8 +58,8 @@ func TestBuildHotEvaluationRecordPersistsOrderedExactLayers(t *testing.T) {
 			EventName: "PreToolUse", SessionID: "session", EventID: "event-1", CWD: "/repo",
 			Fields: rules.FieldSet{}, Rules: nil,
 			BlockingViolations:  []rules.Violation{{RuleName: "infer-rule"}},
-			AuditOnlyViolations: nil, InferenceTraces: nil,
-			Decision: hook.ResponseDecisionBlock, DiagnosticText: "blocked",
+			AuditOnlyViolations: nil,
+			Decision:            hook.ResponseDecisionBlock, DiagnosticText: "blocked",
 		},
 		Trace: trace,
 	}
@@ -126,8 +126,8 @@ func TestBuildHotEvaluationRecordUsesActualFailOpenResult(t *testing.T) {
 				EventName: "PreToolUse", SessionID: "session", EventID: "event-fail-open", CWD: "",
 				Fields: rules.FieldSet{}, Rules: nil,
 				BlockingViolations:  []rules.Violation{{RuleName: "would-block"}},
-				AuditOnlyViolations: nil, InferenceTraces: nil,
-				Decision: hook.ResponseDecisionBlock, DiagnosticText: "blocked",
+				AuditOnlyViolations: nil,
+				Decision:            hook.ResponseDecisionBlock, DiagnosticText: "blocked",
 			},
 			Trace: rules.DecisionTrace{
 				Deterministic: rules.DeterministicTrace{
@@ -211,8 +211,8 @@ func TestHotFinalDispositionRecordsProviderSubstitution(t *testing.T) {
 			EventName: "PostToolUse", SessionID: "session", EventID: "event", CWD: "",
 			Fields: rules.FieldSet{}, Rules: nil,
 			BlockingViolations:  []rules.Violation{{RuleName: "post-rule"}},
-			AuditOnlyViolations: nil, InferenceTraces: nil,
-			Decision: hook.ResponseDecisionBlock, DiagnosticText: "substitute result",
+			AuditOnlyViolations: nil,
+			Decision:            hook.ResponseDecisionBlock, DiagnosticText: "substitute result",
 		},
 	}, "")
 

@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"goodkind.io/agent-gate/internal/auditmaintenance"
 	"goodkind.io/agent-gate/internal/config"
 	installer "goodkind.io/agent-gate/internal/install"
 	"goodkind.io/agent-gate/internal/setup"
@@ -28,12 +27,11 @@ func TestSetupNonInteractivePreviewsBeforeWrites(t *testing.T) {
 				return &setup.Plan{
 					Providers:       []installer.Provider{installer.ProviderCodex},
 					EffectivePolicy: config.AuditStoragePolicy{Profile: config.AuditStorageProfileMinimal},
-					Maintenance:     &auditmaintenance.Plan{EstimatedDeleteBytes: 37},
 				}, nil
 			},
 			Apply: func(context.Context, *setup.Plan, setup.Dependencies) (setup.Result, error) {
 				applyCalls++
-				if !strings.Contains(stdout.String(), "estimated delete bytes: 37") {
+				if !strings.Contains(stdout.String(), "audit storage: minimal") {
 					t.Fatalf("stdout before apply = %q", stdout.String())
 				}
 				return setup.Result{SetupID: "setup-48"}, nil
@@ -47,7 +45,7 @@ func TestSetupNonInteractivePreviewsBeforeWrites(t *testing.T) {
 
 func TestSetupNonInteractiveRequiresProviderSelection(t *testing.T) {
 	exitCode, stderr := runSetupError(t, []string{
-		"--non-interactive", "--audit-profile", "balanced", "--auto-update", "apply",
+		"--non-interactive", "--audit-profile", "full", "--auto-update", "apply",
 	})
 	if exitCode != 2 || !strings.Contains(stderr, "--providers is required") {
 		t.Fatalf("exit code = %d, stderr = %q", exitCode, stderr)
@@ -56,7 +54,7 @@ func TestSetupNonInteractiveRequiresProviderSelection(t *testing.T) {
 
 func TestSetupNonInteractiveRejectsEmptyProviderSelection(t *testing.T) {
 	exitCode, stderr := runSetupError(t, []string{
-		"--non-interactive", "--providers", "", "--audit-profile", "balanced", "--auto-update", "apply",
+		"--non-interactive", "--providers", "", "--audit-profile", "full", "--auto-update", "apply",
 	})
 	if exitCode != 2 || !strings.Contains(stderr, "at least one provider is required") {
 		t.Fatalf("exit code = %d, stderr = %q", exitCode, stderr)
@@ -74,7 +72,7 @@ func TestSetupNonInteractiveRequiresAuditProfile(t *testing.T) {
 
 func TestSetupNonInteractiveRequiresAutoUpdateMode(t *testing.T) {
 	exitCode, stderr := runSetupError(t, []string{
-		"--non-interactive", "--providers", "claude", "--audit-profile", "balanced",
+		"--non-interactive", "--providers", "claude", "--audit-profile", "full",
 	})
 	if exitCode != 2 || !strings.Contains(stderr, "--auto-update is required") {
 		t.Fatalf("exit code = %d, stderr = %q", exitCode, stderr)
@@ -117,7 +115,7 @@ func TestSetupNonInteractiveJSONOutputIsMachineReadable(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	exitCode := runSetupWithDependencies(
-		[]string{"--non-interactive", "--providers", "claude", "--audit-profile", "balanced", "--auto-update", "apply", "--json"},
+		[]string{"--non-interactive", "--providers", "claude", "--audit-profile", "full", "--auto-update", "apply", "--json"},
 		&stdout,
 		&stderr,
 		setupCommandDependencies{
@@ -125,7 +123,7 @@ func TestSetupNonInteractiveJSONOutputIsMachineReadable(t *testing.T) {
 			Prepare: func(context.Context, setup.Options, setup.Dependencies) (*setup.Plan, error) {
 				return &setup.Plan{
 					Providers:       []installer.Provider{installer.ProviderClaude},
-					EffectivePolicy: config.AuditStoragePolicy{Profile: config.AuditStorageProfileBalanced},
+					EffectivePolicy: config.AuditStoragePolicy{Profile: config.AuditStorageProfileFull},
 				}, nil
 			},
 			Apply: func(context.Context, *setup.Plan, setup.Dependencies) (setup.Result, error) {
@@ -136,7 +134,7 @@ func TestSetupNonInteractiveJSONOutputIsMachineReadable(t *testing.T) {
 	if exitCode != 0 || stderr.Len() != 0 {
 		t.Fatalf("exit code = %d, stderr = %q", exitCode, stderr.String())
 	}
-	for _, want := range []string{`"phase":"preview"`, `"existing_records":0`, `"phase":"complete"`, `"setup_id":"setup-json"`} {
+	for _, want := range []string{`"phase":"preview"`, `"phase":"complete"`, `"setup_id":"setup-json"`} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Fatalf("stdout = %q, want %q", stdout.String(), want)
 		}
@@ -150,7 +148,7 @@ func TestSetupInteractivePreviewsConfirmsAppliesAndPrintsEveryProvider(t *testin
 		providers: []installer.Provider{installer.ProviderClaude, installer.ProviderCursor},
 		profile:   config.AuditStorageProfileMinimal,
 		confirm: func(summary PlanSummary) (bool, error) {
-			if !strings.Contains(stdout.String(), "estimated delete bytes: 41") {
+			if !strings.Contains(stdout.String(), "audit storage: minimal") {
 				t.Fatalf("stdout before confirmation = %q", stdout.String())
 			}
 			return true, nil
@@ -173,7 +171,6 @@ func TestSetupInteractivePreviewsConfirmsAppliesAndPrintsEveryProvider(t *testin
 			return &setup.Plan{
 				Providers:       append([]installer.Provider(nil), options.Providers...),
 				EffectivePolicy: config.AuditStoragePolicy{Profile: options.AuditProfile},
-				Maintenance:     &auditmaintenance.Plan{EstimatedDeleteBytes: 41},
 			}, nil
 		},
 		Apply: func(context.Context, *setup.Plan, setup.Dependencies) (setup.Result, error) {
@@ -205,7 +202,7 @@ func TestSetupInteractiveCancellationClosesPlanWithoutApply(t *testing.T) {
 		LoadConfig: func() (*config.Config, error) { return &config.Config{}, nil },
 		Prompter: &scriptedSetupPrompter{
 			providers: []installer.Provider{installer.ProviderCodex},
-			profile:   config.AuditStorageProfileBalanced,
+			profile:   config.AuditStorageProfileFull,
 			confirm:   func(PlanSummary) (bool, error) { return false, nil },
 		},
 		Prepare: func(context.Context, setup.Options, setup.Dependencies) (*setup.Plan, error) {
@@ -234,7 +231,7 @@ func TestSetupInteractiveRejectsEmptySelectionBeforePrepare(t *testing.T) {
 		LoadConfig:        func() (*config.Config, error) { return &config.Config{}, nil },
 		Prompter: &scriptedSetupPrompter{
 			providers: []installer.Provider{},
-			profile:   config.AuditStorageProfileBalanced,
+			profile:   config.AuditStorageProfileFull,
 		},
 		Prepare: func(context.Context, setup.Options, setup.Dependencies) (*setup.Plan, error) {
 			t.Fatal("Prepare called for empty selection")
@@ -265,7 +262,7 @@ func runSetupFailure(t *testing.T, prepareErr error, applyErr error) (int, strin
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	exitCode := runSetupWithDependencies(
-		[]string{"--non-interactive", "--providers", "codex", "--audit-profile", "balanced", "--auto-update", "apply"},
+		[]string{"--non-interactive", "--providers", "codex", "--audit-profile", "full", "--auto-update", "apply"},
 		&stdout,
 		&stderr,
 		setupCommandDependencies{

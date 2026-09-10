@@ -18,6 +18,8 @@ func boolp(v bool) *bool { return &v }
 func testConfig(t *testing.T) *config.Config {
 	t.Helper()
 	dir := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+	t.Setenv("XDG_RUNTIME_DIR", filepath.Join(dir, "runtime"))
 	return &config.Config{
 		Audit: config.Audit{
 			Enabled: boolp(true),
@@ -28,32 +30,6 @@ func testConfig(t *testing.T) *config.Config {
 				},
 			},
 		},
-	}
-}
-
-func TestEventLoggerMigrationRecordsSharedSchemaVersion(t *testing.T) {
-	cfg := testConfig(t)
-	logger, err := audit.NewEventLoggerWithOptions(
-		t.Context(), cfg, nil, audit.LoggerOptions{QueueLimit: 0},
-	)
-	if err != nil {
-		t.Fatalf("NewEventLogger: %v", err)
-	}
-	if err := logger.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-
-	database, err := sql.Open("sqlite3", cfg.AuditSQLitePath())
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	t.Cleanup(func() { _ = database.Close() })
-	version, err := auditstorage.SchemaVersion(t.Context(), database)
-	if err != nil {
-		t.Fatalf("SchemaVersion: %v", err)
-	}
-	if version != 1 {
-		t.Fatalf("schema version = %d, want 1", version)
 	}
 }
 
@@ -218,7 +194,7 @@ func TestEventLogger_NormalizedReplayPreservesIdentityAndDoesNotDuplicate(t *tes
 
 func TestQuery_SQLite(t *testing.T) {
 	cfg := testConfig(t)
-	logger, err := audit.NewEventLoggerWithOptions(context.Background(), cfg, nil, audit.LoggerOptions{QueueLimit: 0})
+	logger, err := audit.NewEventLoggerWithOptions(context.Background(), cfg, nil, audit.LoggerOptions{QueueLimit: 0, SharedDB: retainedQueryDatabase(t, cfg)})
 	if err != nil {
 		t.Fatalf("NewEventLogger: %v", err)
 	}
@@ -234,7 +210,7 @@ func TestQuery_SQLite(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 
-	events, source, err := audit.Query(cfg, audit.QueryFilter{Decision: "block", Rule: "use-make-not-go-direct"})
+	events, source, err := audit.QueryReadOnly(t.Context(), cfg, audit.QueryFilter{Decision: "block", Rule: "use-make-not-go-direct"})
 	if err != nil {
 		t.Fatalf("Query: %v", err)
 	}
@@ -258,7 +234,7 @@ func TestQueryReadOnlyReturnsExistingAuditEvents(t *testing.T) {
 		context.Background(),
 		cfg,
 		nil,
-		audit.LoggerOptions{QueueLimit: 0},
+		audit.LoggerOptions{QueueLimit: 0, SharedDB: retainedQueryDatabase(t, cfg)},
 	)
 	if err != nil {
 		t.Fatalf("NewEventLogger: %v", err)

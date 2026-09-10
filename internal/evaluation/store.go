@@ -3,6 +3,7 @@ package evaluation
 import (
 	"context"
 	"database/sql"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,29 +24,17 @@ type Store struct {
 	policy   config.AuditStoragePolicy
 }
 
-// NewStore initializes evaluation storage over a database owned by its caller.
+// NewStore uses an initialized database owned by its caller.
 func NewStore(ctx context.Context, databasePath string, database *sql.DB) (*Store, error) {
-	if err := auditstorage.GuardDatabasePath(databasePath); err != nil {
-		result := fmt.Errorf("guard evaluation sqlite cutover: %w", err)
-		slog.WarnContext(ctx, "guard evaluation sqlite cutover failed", "err", result)
-		return nil, result
-	}
 	store := &Store{database: database, policy: config.AuditStoragePolicy{
-		Profile:                 config.AuditStorageProfileBalanced,
-		MaintenanceInterval:     24 * time.Hour,
-		MaxSizeBytes:            0,
-		MaintenanceBatchRows:    1000,
-		CompactAfterMaintenance: true,
-		FullDetailRetention:     168 * time.Hour,
-		SummaryRetention:        720 * time.Hour,
+		Profile:          config.AuditStorageProfileFull,
+		BucketInterval:   24 * time.Hour,
+		RetentionBuckets: 7,
 		Detail: config.AuditStorageDetailPolicy{
 			WireInput: true, NormalizedInput: true, ProviderEvidence: true,
 			EnvironmentEvidence: true, EvaluationContent: true,
 		},
 	}}
-	if err := store.initialize(ctx); err != nil {
-		return nil, err
-	}
 	return store, nil
 }
 
@@ -107,21 +96,15 @@ func (s *Store) RecordCompletedInTx(
 		}
 		projections[index] = projection
 	}
-	detailState := auditstorage.DetailStateAvailable
-	if !s.policy.Detail.EvaluationContent {
-		detailState = auditstorage.DetailStateProtected
-	}
+	contentRecorded := s.policy.Detail.EvaluationContent
 	if err := insertEvaluation(
 		ctx,
 		transaction,
 		record.Evaluation,
 		len(record.Layers),
 		len(record.Labels),
-		detailState,
+		contentRecorded,
 	); err != nil {
-		return err
-	}
-	if err := insertEvaluationDetail(ctx, transaction, record.Evaluation); err != nil {
 		return err
 	}
 	for index, layer := range record.Layers {
@@ -131,28 +114,13 @@ func (s *Store) RecordCompletedInTx(
 			record.Evaluation.EvaluationID,
 			layer,
 			projections[index],
-		); err != nil {
-			return err
-		}
-		if err := insertLayerDetail(
-			ctx,
-			transaction,
-			record.Evaluation.EvaluationID,
-			layer,
+			contentRecorded,
 		); err != nil {
 			return err
 		}
 	}
 	for _, label := range record.Labels {
-		if err := insertLabel(ctx, transaction, record.Evaluation.EvaluationID, label); err != nil {
-			return err
-		}
-		if err := insertLabelDetail(
-			ctx,
-			transaction,
-			record.Evaluation.EvaluationID,
-			label,
-		); err != nil {
+		if err := insertLabel(ctx, transaction, record.Evaluation.EvaluationID, label, contentRecorded); err != nil {
 			return err
 		}
 	}
@@ -174,13 +142,6 @@ func (s *Store) Get(ctx context.Context, evaluationID string) (Record, error) {
 		return Record{}, err
 	}
 	return Record{Evaluation: evaluation, Layers: layers, Labels: labels}, nil
-}
-
-func (s *Store) initialize(ctx context.Context) error {
-	if err := auditstorage.Migrate(ctx, s.database); err != nil {
-		return wrapError("migrate evaluation schema", err)
-	}
-	return nil
 }
 
 func validateRecord(record Record) error {
@@ -250,17 +211,9 @@ func insertEvaluation(
 	value Evaluation,
 	layerCount int,
 	labelCount int,
-	detailState auditstorage.DetailState,
+	contentRecorded bool,
 ) error {
-	_, err := transaction.ExecContext(ctx, `
-		insert into gate_evaluations (
-			evaluation_id, receipt_id, event_id, attempt, mode, config_hash,
-			engine_version, engine_commit, engine_build_hash, input_hash,
-			started_at, completed_at, final_verdict, final_source,
-			enforcement_action, enforced, total_latency_us, layer_count, label_count,
-			detail_state
-		) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`,
+	_, err := transaction.ExecContext(ctx, storeSQL1,
 		value.EvaluationID,
 		value.ReceiptID,
 		value.EventID,
@@ -280,25 +233,11 @@ func insertEvaluation(
 		value.TotalLatencyUS,
 		layerCount,
 		labelCount,
-		detailState,
+		contentRecorded,
+		retainedBytes(value.ErrorJSON, contentRecorded),
 	)
 	if err != nil {
 		return wrapError("insert evaluation", err)
-	}
-	return nil
-}
-
-func insertEvaluationDetail(
-	ctx context.Context,
-	transaction *sql.Tx,
-	value Evaluation,
-) error {
-	_, err := transaction.ExecContext(ctx, `
-		insert into gate_evaluation_details (evaluation_id, error_json)
-		values (?, ?)
-	`, value.EvaluationID, []byte(value.ErrorJSON))
-	if err != nil {
-		return wrapError("insert evaluation detail", err)
 	}
 	return nil
 }
@@ -331,18 +270,9 @@ func insertLayer(
 	evaluationID string,
 	value Layer,
 	projection layerSummaryProjection,
+	contentRecorded bool,
 ) error {
-	_, err := transaction.ExecContext(ctx, `
-		insert into gate_evaluation_layers (
-			evaluation_id, layer_index, parent_layer_index, kind, name, status, outcome, verdict,
-			input_reference, input_hash, output_hash, started_at, completed_at,
-			latency_us, service_name, service_version,
-			model_name, model_version, prompt_hash, schema_hash, cache_status,
-			cache_key_hash, cache_entry_version, cache_expires_at, error_code,
-			retry_count, rule_name, checked_rules_json, upstream_metadata_status,
-			request_id, requested_model, prompt_tokens, cached_tokens, completion_tokens
-		) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`,
+	_, err := transaction.ExecContext(ctx, storeSQL2,
 		evaluationID,
 		value.LayerIndex,
 		value.ParentLayerIndex,
@@ -377,27 +307,13 @@ func insertLayer(
 		projection.cost.PromptTokens,
 		projection.cost.CachedTokens,
 		projection.cost.CompletionTokens,
+		retainedBytes(value.InputJSON, contentRecorded),
+		retainedBytes(value.OutputJSON, contentRecorded),
+		retainedBytes(value.MetadataJSON, contentRecorded),
+		retainedString(value.ErrorMessage, contentRecorded),
 	)
 	if err != nil {
 		return wrapError(fmt.Sprintf("insert evaluation layer %d", value.LayerIndex), err)
-	}
-	return nil
-}
-
-func insertLayerDetail(
-	ctx context.Context,
-	transaction *sql.Tx,
-	evaluationID string,
-	value Layer,
-) error {
-	_, err := transaction.ExecContext(ctx, `
-		insert into gate_evaluation_layer_details (
-			evaluation_id, layer_index, input_json, output_json, metadata_json, error_message
-		) values (?, ?, ?, ?, ?, ?)
-	`, evaluationID, value.LayerIndex, []byte(value.InputJSON), []byte(value.OutputJSON),
-		[]byte(value.MetadataJSON), value.ErrorMessage)
-	if err != nil {
-		return wrapError(fmt.Sprintf("insert evaluation layer %d detail", value.LayerIndex), err)
 	}
 	return nil
 }
@@ -407,13 +323,9 @@ func insertLabel(
 	transaction *sql.Tx,
 	evaluationID string,
 	value Label,
+	contentRecorded bool,
 ) error {
-	_, err := transaction.ExecContext(ctx, `
-		insert into gate_evaluation_labels (
-			evaluation_id, namespace, label_version, verdict, source,
-			confidence, created_at
-		) values (?, ?, ?, ?, ?, ?, ?)
-	`,
+	_, err := transaction.ExecContext(ctx, storeSQL3,
 		evaluationID,
 		value.Namespace,
 		value.LabelVersion,
@@ -421,6 +333,7 @@ func insertLabel(
 		value.Source,
 		value.Confidence,
 		formatTime(value.CreatedAt),
+		retainedString(value.Rationale, contentRecorded),
 	)
 	if err != nil {
 		message := fmt.Sprintf(
@@ -433,41 +346,12 @@ func insertLabel(
 	return nil
 }
 
-func insertLabelDetail(
-	ctx context.Context,
-	transaction *sql.Tx,
-	evaluationID string,
-	value Label,
-) error {
-	_, err := transaction.ExecContext(ctx, `
-		insert into gate_evaluation_label_details (
-			evaluation_id, namespace, label_version, rationale
-		) values (?, ?, ?, ?)
-	`, evaluationID, value.Namespace, value.LabelVersion, value.Rationale)
-	if err != nil {
-		message := fmt.Sprintf(
-			"insert evaluation label %q version %d detail",
-			value.Namespace,
-			value.LabelVersion,
-		)
-		return wrapError(message, err)
-	}
-	return nil
-}
-
 func (s *Store) getEvaluation(ctx context.Context, evaluationID string) (Evaluation, error) {
 	var value Evaluation
 	var startedAt string
 	var completedAt string
-	err := s.database.QueryRowContext(ctx, `
-		select g.evaluation_id, g.receipt_id, g.event_id, g.attempt, g.mode,
-			g.config_hash, g.engine_version, g.engine_commit, g.engine_build_hash,
-			g.input_hash, g.started_at, g.completed_at, g.final_verdict, g.final_source,
-			g.enforcement_action, g.enforced, g.total_latency_us, d.error_json
-		from gate_evaluations g
-		join gate_evaluation_details d on d.evaluation_id = g.evaluation_id
-		where g.evaluation_id = ?
-	`, evaluationID).Scan(
+	var errorJSON []byte
+	err := s.database.QueryRowContext(ctx, storeSQL4, evaluationID).Scan(
 		&value.EvaluationID,
 		&value.ReceiptID,
 		&value.EventID,
@@ -485,7 +369,7 @@ func (s *Store) getEvaluation(ctx context.Context, evaluationID string) (Evaluat
 		&value.EnforcementAction,
 		&value.Enforced,
 		&value.TotalLatencyUS,
-		&value.ErrorJSON,
+		&errorJSON,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Evaluation{}, ErrNotFound
@@ -493,6 +377,7 @@ func (s *Store) getEvaluation(ctx context.Context, evaluationID string) (Evaluat
 	if err != nil {
 		return Evaluation{}, wrapError("read evaluation", err)
 	}
+	value.ErrorJSON = json.RawMessage(errorJSON)
 	value.StartedAt, err = parseTime(startedAt)
 	if err != nil {
 		return Evaluation{}, err
@@ -505,20 +390,7 @@ func (s *Store) getEvaluation(ctx context.Context, evaluationID string) (Evaluat
 }
 
 func (s *Store) getLayers(ctx context.Context, evaluationID string) ([]Layer, error) {
-	rows, err := s.database.QueryContext(ctx, `
-		select l.layer_index, l.parent_layer_index, l.kind, l.name, l.status,
-			l.outcome, l.verdict, l.input_reference, d.input_json, l.input_hash,
-			l.output_hash, d.output_json, d.metadata_json, l.started_at, l.completed_at,
-			l.latency_us, l.service_name, l.service_version, l.model_name, l.model_version,
-			l.prompt_hash, l.schema_hash, l.cache_status, l.cache_key_hash,
-			l.cache_entry_version, l.cache_expires_at, l.error_code,
-			d.error_message, l.retry_count
-		from gate_evaluation_layers l
-		join gate_evaluation_layer_details d
-			on d.evaluation_id = l.evaluation_id and d.layer_index = l.layer_index
-		where l.evaluation_id = ?
-		order by l.layer_index
-	`, evaluationID)
+	rows, err := s.database.QueryContext(ctx, storeSQL5, evaluationID)
 	if err != nil {
 		return nil, wrapError("query evaluation layers", err)
 	}
@@ -545,6 +417,8 @@ func scanLayer(rows *sql.Rows) (Layer, error) {
 	var cacheVersion sql.NullInt64
 	var cacheExpiry sql.NullString
 	var metadataJSON []byte
+	var inputJSON, outputJSON []byte
+	var errorMessage sql.NullString
 	var startedAt string
 	var completedAt string
 	err := rows.Scan(
@@ -556,10 +430,10 @@ func scanLayer(rows *sql.Rows) (Layer, error) {
 		&value.Outcome,
 		&value.Verdict,
 		&value.InputReference,
-		&value.InputJSON,
+		&inputJSON,
 		&value.InputHash,
 		&value.OutputHash,
-		&value.OutputJSON,
+		&outputJSON,
 		&metadataJSON,
 		&startedAt,
 		&completedAt,
@@ -575,7 +449,7 @@ func scanLayer(rows *sql.Rows) (Layer, error) {
 		&cacheVersion,
 		&cacheExpiry,
 		&value.ErrorCode,
-		&value.ErrorMessage,
+		&errorMessage,
 		&value.RetryCount,
 	)
 	if err != nil {
@@ -585,6 +459,9 @@ func scanLayer(rows *sql.Rows) (Layer, error) {
 		converted := int(parentIndex.Int64)
 		value.ParentLayerIndex = &converted
 	}
+	value.InputJSON = json.RawMessage(inputJSON)
+	value.OutputJSON = json.RawMessage(outputJSON)
+	value.ErrorMessage = errorMessage.String
 	value.MetadataJSON = json.RawMessage(metadataJSON)
 	if cacheVersion.Valid {
 		value.CacheEntryVersion = &cacheVersion.Int64
@@ -608,16 +485,7 @@ func scanLayer(rows *sql.Rows) (Layer, error) {
 }
 
 func (s *Store) getLabels(ctx context.Context, evaluationID string) ([]Label, error) {
-	rows, err := s.database.QueryContext(ctx, `
-		select l.namespace, l.label_version, l.verdict, l.source, l.confidence,
-			d.rationale, l.created_at
-		from gate_evaluation_labels l
-		join gate_evaluation_label_details d
-			on d.evaluation_id = l.evaluation_id
-			and d.namespace = l.namespace and d.label_version = l.label_version
-		where l.evaluation_id = ?
-		order by l.namespace, l.label_version
-	`, evaluationID)
+	rows, err := s.database.QueryContext(ctx, storeSQL6, evaluationID)
 	if err != nil {
 		return nil, wrapError("query evaluation labels", err)
 	}
@@ -629,13 +497,14 @@ func (s *Store) getLabels(ctx context.Context, evaluationID string) ([]Label, er
 		var label Label
 		var confidence sql.NullFloat64
 		var createdAt string
+		var rationale sql.NullString
 		if err := rows.Scan(
 			&label.Namespace,
 			&label.LabelVersion,
 			&label.Verdict,
 			&label.Source,
 			&confidence,
-			&label.Rationale,
+			&rationale,
 			&createdAt,
 		); err != nil {
 			return nil, wrapError("scan evaluation label", err)
@@ -643,6 +512,7 @@ func (s *Store) getLabels(ctx context.Context, evaluationID string) ([]Label, er
 		if confidence.Valid {
 			label.Confidence = &confidence.Float64
 		}
+		label.Rationale = rationale.String
 		label.CreatedAt, err = parseTime(createdAt)
 		if err != nil {
 			return nil, err
@@ -656,7 +526,7 @@ func (s *Store) getLabels(ctx context.Context, evaluationID string) ([]Label, er
 }
 
 func formatTime(value time.Time) string {
-	return value.UTC().Format(time.RFC3339Nano)
+	return auditstorage.FormatTime(value)
 }
 
 func formatOptionalTime(value *time.Time) sql.NullString {
@@ -678,3 +548,35 @@ func wrapError(message string, err error) error {
 	slog.Warn(message+" failed", "err", err)
 	return fmt.Errorf("%s: %w", message, err)
 }
+
+func retainedBytes(value []byte, recorded bool) []byte {
+	if !recorded {
+		return nil
+	}
+	if value == nil {
+		return []byte{}
+	}
+	return value
+}
+
+func retainedString(value string, recorded bool) sql.NullString {
+	return sql.NullString{String: value, Valid: recorded}
+}
+
+//go:embed store_1.sql
+var storeSQL1 string
+
+//go:embed store_2.sql
+var storeSQL2 string
+
+//go:embed store_3.sql
+var storeSQL3 string
+
+//go:embed store_4.sql
+var storeSQL4 string
+
+//go:embed store_5.sql
+var storeSQL5 string
+
+//go:embed store_6.sql
+var storeSQL6 string

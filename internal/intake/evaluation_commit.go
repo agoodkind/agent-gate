@@ -3,13 +3,12 @@ package intake
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
+	_ "embed"
 	"errors"
 	"strings"
 	"time"
 
 	"goodkind.io/agent-gate/internal/audit"
-	"goodkind.io/agent-gate/internal/auditstorage"
 	"goodkind.io/agent-gate/internal/evaluation"
 )
 
@@ -19,14 +18,15 @@ var ErrDeferredClaimUnavailable = errors.New("deferred claim unavailable")
 // ErrDeferredClaimLost means a processor no longer owns the claimed attempt.
 var ErrDeferredClaimLost = errors.New("deferred claim lost")
 
-// CommitHotEvaluation atomically stores the hot evaluation and, when needed,
-// marks its receipt pending for deferred processing.
+// CommitHotEvaluation atomically stores the hot evaluation and audit entries
+// and, when needed, marks its receipt pending for deferred processing.
 func (s *Store) CommitHotEvaluation(
 	ctx context.Context,
 	eventID string,
 	receiptID int64,
 	deferredPending bool,
 	record evaluation.Record,
+	auditEntries []audit.NormalizedEntry,
 ) error {
 	transaction, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -52,12 +52,14 @@ func (s *Store) CommitHotEvaluation(
 	if err := s.evaluations.RecordCompletedInTx(ctx, transaction, record); err != nil {
 		return wrapLoggedError(ctx, s.log, "record completed hot evaluation", err)
 	}
-	if err := s.demoteDisabledDetailIfTerminal(
-		ctx,
-		transaction,
-		canonicalEventID,
-		intakeNow().UTC(),
-	); err != nil {
+	events := make([]audit.Event, 0, len(auditEntries))
+	for _, entry := range auditEntries {
+		events = append(events, entry.Event)
+	}
+	if err := audit.WriteEventsInTx(ctx, transaction, events); err != nil {
+		return wrapError("write completed hot audit", err)
+	}
+	if err := s.clearTerminalInput(ctx, transaction, canonicalEventID); err != nil {
 		return err
 	}
 	if err := transaction.Commit(); err != nil {
@@ -89,15 +91,8 @@ func (s *Store) ClaimDeferred(
 	defer func() {
 		_ = transaction.Rollback()
 	}()
-	result, err := transaction.ExecContext(ctx, `
-		update intake_deferred
-		set claim_owner = ?, claim_expires_at = ?,
-			claim_attempt = claim_attempt + 1,
-			last_replay_at = ?, replay_count = replay_count + 1
-		where receipt_id = ? and state = ?
-			and (claim_owner is null or claim_expires_at is null or claim_expires_at <= ?)
-	`, owner, formatDeferredTime(expiresAt), formatDeferredTime(now), receiptID,
-		DeferredStatePending, formatDeferredTime(now))
+	result, err := transaction.ExecContext(ctx, evaluationCommitSQL1, owner, formatDeferredTime(expiresAt), formatDeferredTime(now), receiptID,
+		DeferredStatePending, formatDeferredTime(now), formatDeferredTime(now))
 	if err != nil {
 		return Record{}, DeferredClaim{}, wrapLoggedError(ctx, s.log, "claim deferred receipt", err)
 	}
@@ -110,9 +105,7 @@ func (s *Store) ClaimDeferred(
 	}
 	var eventID string
 	var attempt int
-	if err := transaction.QueryRowContext(ctx, `
-		select event_id, claim_attempt from intake_deferred where receipt_id = ?
-	`, receiptID).Scan(&eventID, &attempt); err != nil {
+	if err := transaction.QueryRowContext(ctx, evaluationCommitSQL2, receiptID).Scan(&eventID, &attempt); err != nil {
 		return Record{}, DeferredClaim{}, wrapLoggedError(ctx, s.log, "read deferred claim", err)
 	}
 	if err := transaction.Commit(); err != nil {
@@ -139,12 +132,7 @@ func (s *Store) RenewDeferredClaim(
 		return errors.New("deferred claim lease must be positive")
 	}
 	now := intakeNow().UTC()
-	result, err := s.db.ExecContext(ctx, `
-		update intake_deferred
-		set claim_expires_at = ?
-		where receipt_id = ? and event_id = ? and state = ?
-			and claim_owner = ? and claim_attempt = ? and claim_expires_at > ?
-	`, formatDeferredTime(now.Add(leaseDuration)), claim.ReceiptID, claim.EventID,
+	result, err := s.db.ExecContext(ctx, evaluationCommitSQL3, formatDeferredTime(now.Add(leaseDuration)), claim.ReceiptID, claim.EventID,
 		DeferredStatePending, claim.Owner, claim.Attempt, formatDeferredTime(now))
 	if err != nil {
 		return wrapLoggedError(ctx, s.log, "renew deferred claim", err)
@@ -161,12 +149,7 @@ func (s *Store) RenewDeferredClaim(
 
 // ReleaseDeferredClaim makes a failed attempt immediately retryable.
 func (s *Store) ReleaseDeferredClaim(ctx context.Context, claim DeferredClaim) error {
-	result, err := s.db.ExecContext(ctx, `
-		update intake_deferred
-		set claim_owner = null, claim_expires_at = null
-		where receipt_id = ? and event_id = ? and state = ?
-			and claim_owner = ? and claim_attempt = ?
-	`, claim.ReceiptID, claim.EventID, DeferredStatePending, claim.Owner, claim.Attempt)
+	result, err := s.db.ExecContext(ctx, evaluationCommitSQL4, claim.ReceiptID, claim.EventID, DeferredStatePending, claim.Owner, claim.Attempt)
 	if err != nil {
 		return wrapLoggedError(ctx, s.log, "release deferred claim", err)
 	}
@@ -196,13 +179,8 @@ func (s *Store) CommitDeferredEvaluation(
 		_ = transaction.Rollback()
 	}()
 	now := intakeNow().UTC()
-	result, err := transaction.ExecContext(ctx, `
-		update intake_deferred
-		set state = ?, completed_at = ?, claim_owner = null, claim_expires_at = null
-		where receipt_id = ? and event_id = ? and state = ?
-			and claim_owner = ? and claim_attempt = ? and claim_expires_at > ?
-	`, DeferredStateComplete, formatDeferredTime(now), claim.ReceiptID, claim.EventID,
-		DeferredStatePending, claim.Owner, claim.Attempt, formatDeferredTime(now))
+	result, err := transaction.ExecContext(ctx, evaluationCommitSQL5, DeferredStateComplete, formatDeferredTime(now), claim.ReceiptID, claim.EventID,
+		DeferredStatePending, claim.Owner, claim.Attempt)
 	if err != nil {
 		return wrapLoggedError(ctx, s.log, "complete claimed deferred receipt", err)
 	}
@@ -221,12 +199,14 @@ func (s *Store) CommitDeferredEvaluation(
 	if err := s.evaluations.RecordCompletedInTx(ctx, transaction, record); err != nil {
 		return wrapLoggedError(ctx, s.log, "record completed deferred evaluation", err)
 	}
-	if err := s.insertDeferredAuditOutbox(
-		ctx, transaction, claim, record.Evaluation.EvaluationID, auditEntries,
-	); err != nil {
-		return err
+	events := make([]audit.Event, 0, len(auditEntries))
+	for _, entry := range auditEntries {
+		events = append(events, entry.Event)
 	}
-	if err := s.demoteDisabledDetailIfTerminal(ctx, transaction, claim.EventID, now); err != nil {
+	if err := audit.WriteEventsInTx(ctx, transaction, events); err != nil {
+		return wrapError("write completed deferred audit", err)
+	}
+	if err := s.clearTerminalInput(ctx, transaction, claim.EventID); err != nil {
 		return err
 	}
 	if err := transaction.Commit(); err != nil {
@@ -235,162 +215,12 @@ func (s *Store) CommitDeferredEvaluation(
 	return nil
 }
 
-func (s *Store) demoteDisabledDetailIfTerminal(
-	ctx context.Context,
-	transaction *sql.Tx,
-	eventID string,
-	changedAt time.Time,
-) error {
-	var liveReceiptCount int
-	if err := transaction.QueryRowContext(ctx, `
-		select count(*)
-		from intake_receipts receipt
-		where receipt.event_id = ?
-			and (
-				not exists (
-					select 1 from gate_evaluations hot_evaluation
-					where hot_evaluation.receipt_id = receipt.receipt_id
-						and hot_evaluation.mode = 'hot'
-				)
-				or exists (
-					select 1 from intake_deferred deferred
-					where deferred.receipt_id = receipt.receipt_id
-						and deferred.state = 'pending'
-				)
-				or exists (
-					select 1 from deferred_audit_outbox outbox
-					where outbox.receipt_id = receipt.receipt_id
-						and outbox.state = 'pending'
-				)
-				or exists (
-					select 1
-					from deferred_audit_outbox_entries entry
-					join deferred_audit_outbox outbox
-						on outbox.receipt_id = entry.receipt_id
-					where outbox.receipt_id = receipt.receipt_id
-						and entry.delivered_at is null
-				)
-			)
-	`, eventID).Scan(&liveReceiptCount); err != nil {
-		return wrapError("check terminal audit graph", err)
-	}
-	if liveReceiptCount != 0 {
-		return nil
-	}
-	if err := s.demoteDisabledIntakeDetail(ctx, transaction, eventID, changedAt); err != nil {
-		return err
-	}
-	if err := s.demoteDisabledEvaluationDetail(ctx, transaction, eventID); err != nil {
-		return err
-	}
-	if s.policy.FullDetailRetention > 0 {
-		return nil
-	}
-	if _, err := transaction.ExecContext(ctx, `
-		delete from deferred_audit_outbox_entry_details
-		where exists (
-			select 1 from deferred_audit_outbox_entries entry
-			join deferred_audit_outbox outbox on outbox.receipt_id = entry.receipt_id
-			where entry.receipt_id = deferred_audit_outbox_entry_details.receipt_id
-				and entry.entry_index = deferred_audit_outbox_entry_details.entry_index
-				and outbox.event_id = ?
-				and entry.payload_recorded = 0
-		)
-	`, eventID); err != nil {
-		return wrapError("demote deferred audit payload detail", err)
-	}
-	if _, err := transaction.ExecContext(ctx, `
-		update deferred_audit_outbox_entries
-		set payload_available = 0, payload_state_changed_at = ?
-		where payload_recorded = 0
-			and exists (
-				select 1 from deferred_audit_outbox outbox
-				where outbox.receipt_id = deferred_audit_outbox_entries.receipt_id
-					and outbox.event_id = ?
-			)
-	`, formatDeferredTime(changedAt), eventID); err != nil {
-		return wrapError("mark deferred audit payload not recorded", err)
-	}
-	return nil
-}
+//go:embed clear_terminal_input.sql
+var clearTerminalInputSQL string
 
-func (s *Store) demoteDisabledIntakeDetail(
-	ctx context.Context,
-	transaction *sql.Tx,
-	eventID string,
-	changedAt time.Time,
-) error {
-	enabledClasses := make([]auditstorage.DetailClass, 0, 4)
-	detailPolicies := []struct {
-		class   auditstorage.DetailClass
-		enabled bool
-	}{
-		{class: auditstorage.DetailClassWireInput, enabled: s.policy.Detail.WireInput},
-		{class: auditstorage.DetailClassNormalizedInput, enabled: s.policy.Detail.NormalizedInput},
-		{class: auditstorage.DetailClassProviderEvidence, enabled: s.policy.Detail.ProviderEvidence},
-		{
-			class:   auditstorage.DetailClassEnvironmentEvidence,
-			enabled: s.policy.Detail.EnvironmentEvidence,
-		},
-	}
-	for _, detailPolicy := range detailPolicies {
-		if detailPolicy.enabled {
-			enabledClasses = append(enabledClasses, detailPolicy.class)
-			continue
-		}
-		if _, err := transaction.ExecContext(ctx, `
-			delete from intake_event_details where event_id = ? and detail_class = ?
-		`, eventID, detailPolicy.class); err != nil {
-			return wrapError("demote disabled intake detail", err)
-		}
-	}
-	if len(enabledClasses) == len(detailPolicies) {
-		return nil
-	}
-	encodedClasses, err := json.Marshal(enabledClasses)
-	if err != nil {
-		return wrapError("encode retained intake detail classes", err)
-	}
-	if _, err := transaction.ExecContext(ctx, `
-		update intake_event_detail_manifest
-		set recorded_classes_json = ?, available_classes_json = ?,
-			state = ?, state_changed_at = ?
-		where event_id = ?
-	`, encodedClasses, encodedClasses, auditstorage.DetailStateNotRecorded,
-		formatDeferredTime(changedAt), eventID); err != nil {
-		return wrapError("mark disabled intake detail not recorded", err)
-	}
-	return nil
-}
-
-func (s *Store) demoteDisabledEvaluationDetail(
-	ctx context.Context,
-	transaction *sql.Tx,
-	eventID string,
-) error {
-	if s.policy.Detail.EvaluationContent {
-		return nil
-	}
-	statements := []string{
-		`delete from gate_evaluation_label_details where evaluation_id in (
-			select evaluation_id from gate_evaluations where event_id = ?
-		)`,
-		`delete from gate_evaluation_layer_details where evaluation_id in (
-			select evaluation_id from gate_evaluations where event_id = ?
-		)`,
-		`delete from gate_evaluation_details where evaluation_id in (
-			select evaluation_id from gate_evaluations where event_id = ?
-		)`,
-	}
-	for _, statement := range statements {
-		if _, err := transaction.ExecContext(ctx, statement, eventID); err != nil {
-			return wrapError("demote disabled evaluation detail", err)
-		}
-	}
-	if _, err := transaction.ExecContext(ctx, `
-		update gate_evaluations set detail_state = ? where event_id = ?
-	`, auditstorage.DetailStateNotRecorded, eventID); err != nil {
-		return wrapError("mark disabled evaluation detail not recorded", err)
+func (s *Store) clearTerminalInput(ctx context.Context, transaction *sql.Tx, eventID string) error {
+	if _, err := transaction.ExecContext(ctx, clearTerminalInputSQL, eventID); err != nil {
+		return wrapError("clear terminal replay input", err)
 	}
 	return nil
 }
@@ -402,18 +232,7 @@ func markDeferredPendingInTx(
 	eventID string,
 	now time.Time,
 ) error {
-	_, err := transaction.ExecContext(ctx, `
-		insert into intake_deferred (
-			receipt_id, event_id, state, pending_at, completed_at,
-			last_replay_at, replay_count, claim_owner, claim_expires_at, claim_attempt
-		) values (?, ?, ?, ?, null, cast(null as text), 0, null, cast(null as text), 0)
-		on conflict(receipt_id) do update set
-			state = excluded.state,
-			pending_at = coalesce(intake_deferred.pending_at, excluded.pending_at),
-			completed_at = null,
-			claim_owner = null,
-			claim_expires_at = null
-	`, receiptID, eventID, DeferredStatePending, formatDeferredTime(now))
+	_, err := transaction.ExecContext(ctx, evaluationCommitSQL6, receiptID, eventID, DeferredStatePending, formatDeferredTime(now))
 	if err != nil {
 		return wrapError("mark deferred pending in transaction", err)
 	}
@@ -422,9 +241,7 @@ func markDeferredPendingInTx(
 
 func receiptEventID(ctx context.Context, transaction *sql.Tx, receiptID int64) (string, error) {
 	var eventID string
-	err := transaction.QueryRowContext(ctx, `
-		select event_id from intake_receipts where receipt_id = ?
-	`, receiptID).Scan(&eventID)
+	err := transaction.QueryRowContext(ctx, evaluationCommitSQL7, receiptID).Scan(&eventID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", ErrEventNotFound
 	}
@@ -435,5 +252,26 @@ func receiptEventID(ctx context.Context, transaction *sql.Tx, receiptID int64) (
 }
 
 func formatDeferredTime(value time.Time) string {
-	return value.UTC().Format(time.RFC3339Nano)
+	return value.UTC().Format("2006-01-02T15:04:05.000000000Z")
 }
+
+//go:embed evaluation_commit_1.sql
+var evaluationCommitSQL1 string
+
+//go:embed evaluation_commit_2.sql
+var evaluationCommitSQL2 string
+
+//go:embed evaluation_commit_3.sql
+var evaluationCommitSQL3 string
+
+//go:embed evaluation_commit_4.sql
+var evaluationCommitSQL4 string
+
+//go:embed evaluation_commit_5.sql
+var evaluationCommitSQL5 string
+
+//go:embed evaluation_commit_6.sql
+var evaluationCommitSQL6 string
+
+//go:embed evaluation_commit_7.sql
+var evaluationCommitSQL7 string

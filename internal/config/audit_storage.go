@@ -3,39 +3,30 @@ package config
 import (
 	"fmt"
 	"log/slog"
-	"math"
+	"path/filepath"
 	"time"
+
+	"goodkind.io/agent-gate/internal/auditstorage"
 )
 
 const (
-	// AuditStorageProfileBalanced selects seven-day full-detail retention by default.
-	AuditStorageProfileBalanced AuditStorageProfile = "balanced"
-	// AuditStorageProfileFull selects full-detail retention for the summary window.
+	// AuditStorageProfileFull retains all detail classes.
 	AuditStorageProfileFull AuditStorageProfile = "full"
-	// AuditStorageProfileMinimal selects detail removal after terminal completion.
-	AuditStorageProfileMinimal AuditStorageProfile = "minimal"
-
-	defaultAuditMaintenanceInterval        = 24 * time.Hour
-	defaultAuditMaintenanceBatchRows       = 1000
-	defaultAuditFullRetention              = 720 * time.Hour
-	defaultAuditBalancedRetention          = 168 * time.Hour
-	defaultAuditSummaryRetention           = 720 * time.Hour
-	auditStorageBytesPerMB           int64 = 1_000_000
+	// AuditStorageProfileMinimal removes detail after terminal completion.
+	AuditStorageProfileMinimal   AuditStorageProfile = "minimal"
+	defaultAuditBucketInterval                       = 24 * time.Hour
+	defaultAuditRetentionBuckets                     = 7
 )
 
-// AuditStorageProfile selects the baseline retention and detail policy.
+// AuditStorageProfile selects the baseline detail policy.
 type AuditStorageProfile string
 
 // AuditStorage holds raw values from the [audit.storage] TOML table.
 type AuditStorage struct {
-	Profile                 string             `toml:"profile"`
-	MaintenanceInterval     *string            `toml:"maintenance_interval"`
-	MaxSizeMB               *int64             `toml:"max_size_mb"`
-	MaintenanceBatchRows    *int               `toml:"maintenance_batch_rows"`
-	CompactAfterMaintenance *bool              `toml:"compact_after_maintenance"`
-	FullDetailRetention     *string            `toml:"full_detail_retention"`
-	SummaryRetention        *string            `toml:"summary_retention"`
-	Detail                  AuditStorageDetail `toml:"detail"`
+	Profile          string             `toml:"profile"`
+	BucketInterval   *string            `toml:"bucket_interval"`
+	RetentionBuckets *int               `toml:"retention_buckets"`
+	Detail           AuditStorageDetail `toml:"detail"`
 }
 
 // AuditStorageDetail holds optional detail-class overrides.
@@ -58,143 +49,54 @@ type AuditStorageDetailPolicy struct {
 
 // AuditStoragePolicy is the validated effective audit storage policy.
 type AuditStoragePolicy struct {
-	Profile                 AuditStorageProfile
-	MaintenanceInterval     time.Duration
-	MaxSizeBytes            int64
-	MaintenanceBatchRows    int
-	CompactAfterMaintenance bool
-	FullDetailRetention     time.Duration
-	SummaryRetention        time.Duration
-	Detail                  AuditStorageDetailPolicy
+	Profile          AuditStorageProfile
+	BucketInterval   time.Duration
+	RetentionBuckets int
+	Detail           AuditStorageDetailPolicy
 }
 
 func resolveAuditStorage(raw AuditStorage) (AuditStoragePolicy, error) {
 	profile := AuditStorageProfile(raw.Profile)
 	if profile == "" {
-		profile = AuditStorageProfileBalanced
+		profile = AuditStorageProfileFull
 	}
-
-	policy, err := auditStorageProfilePolicy(profile)
-	if err != nil {
-		return AuditStoragePolicy{}, err
+	var policy AuditStoragePolicy
+	policy.Profile = profile
+	policy.BucketInterval = defaultAuditBucketInterval
+	policy.RetentionBuckets = defaultAuditRetentionBuckets
+	switch profile {
+	case AuditStorageProfileFull:
+		policy.Detail = AuditStorageDetailPolicy{
+			WireInput:           true,
+			NormalizedInput:     true,
+			ProviderEvidence:    true,
+			EnvironmentEvidence: true,
+			EvaluationContent:   true,
+		}
+	case AuditStorageProfileMinimal:
+	default:
+		return AuditStoragePolicy{}, fmt.Errorf("audit.storage.profile: expected %q or %q, got %q", AuditStorageProfileFull, AuditStorageProfileMinimal, profile)
 	}
-
-	if raw.MaintenanceInterval != nil {
-		policy.MaintenanceInterval, err = parseAuditStorageDuration(
-			"maintenance_interval",
-			*raw.MaintenanceInterval,
-		)
+	if raw.BucketInterval != nil {
+		interval, err := time.ParseDuration(*raw.BucketInterval)
 		if err != nil {
-			return AuditStoragePolicy{}, err
+			slog.Warn("invalid audit bucket interval", "err", err)
+			return AuditStoragePolicy{}, fmt.Errorf("audit.storage.bucket_interval: %w", err)
 		}
+		policy.BucketInterval = interval
 	}
-	if raw.MaxSizeMB != nil {
-		if *raw.MaxSizeMB < 0 {
-			return AuditStoragePolicy{}, fmt.Errorf("audit.storage.max_size_mb must not be negative")
-		}
-		if *raw.MaxSizeMB > math.MaxInt64/auditStorageBytesPerMB {
-			return AuditStoragePolicy{}, fmt.Errorf("audit.storage.max_size_mb is too large")
-		}
-		policy.MaxSizeBytes = *raw.MaxSizeMB * auditStorageBytesPerMB
+	if raw.RetentionBuckets != nil {
+		policy.RetentionBuckets = *raw.RetentionBuckets
 	}
-	if raw.MaintenanceBatchRows != nil {
-		if *raw.MaintenanceBatchRows <= 0 {
-			return AuditStoragePolicy{}, fmt.Errorf("audit.storage.maintenance_batch_rows must be positive")
-		}
-		policy.MaintenanceBatchRows = *raw.MaintenanceBatchRows
+	if err := policy.Rotation().Validate(); err != nil {
+		slog.Warn("invalid audit rotation policy", "err", err)
+		return AuditStoragePolicy{}, fmt.Errorf("audit.storage: %w", err)
 	}
-	if raw.CompactAfterMaintenance != nil {
-		policy.CompactAfterMaintenance = *raw.CompactAfterMaintenance
-	}
-	if raw.FullDetailRetention != nil {
-		policy.FullDetailRetention, err = parseAuditStorageDuration(
-			"full_detail_retention",
-			*raw.FullDetailRetention,
-		)
-		if err != nil {
-			return AuditStoragePolicy{}, err
-		}
-	}
-	if raw.SummaryRetention != nil {
-		policy.SummaryRetention, err = parseAuditStorageDuration(
-			"summary_retention",
-			*raw.SummaryRetention,
-		)
-		if err != nil {
-			return AuditStoragePolicy{}, err
-		}
-	}
-	if policy.SummaryRetention < policy.FullDetailRetention {
-		return AuditStoragePolicy{}, fmt.Errorf(
-			"audit.storage.summary_retention must be at least full_detail_retention",
-		)
-	}
-
 	applyAuditStorageDetailOverrides(&policy.Detail, raw.Detail)
 	return policy, nil
 }
 
-func auditStorageProfilePolicy(profile AuditStorageProfile) (AuditStoragePolicy, error) {
-	detailEnabled := AuditStorageDetailPolicy{
-		WireInput:           true,
-		NormalizedInput:     true,
-		ProviderEvidence:    true,
-		EnvironmentEvidence: true,
-		EvaluationContent:   true,
-	}
-	policy := AuditStoragePolicy{
-		Profile:                 profile,
-		MaintenanceInterval:     defaultAuditMaintenanceInterval,
-		MaxSizeBytes:            0,
-		MaintenanceBatchRows:    defaultAuditMaintenanceBatchRows,
-		CompactAfterMaintenance: true,
-		FullDetailRetention:     0,
-		SummaryRetention:        defaultAuditSummaryRetention,
-		Detail:                  detailEnabled,
-	}
-	switch profile {
-	case AuditStorageProfileBalanced:
-		policy.FullDetailRetention = defaultAuditBalancedRetention
-	case AuditStorageProfileFull:
-		policy.FullDetailRetention = defaultAuditFullRetention
-	case AuditStorageProfileMinimal:
-		policy.FullDetailRetention = 0
-		policy.Detail = AuditStorageDetailPolicy{
-			WireInput:           false,
-			NormalizedInput:     false,
-			ProviderEvidence:    false,
-			EnvironmentEvidence: false,
-			EvaluationContent:   false,
-		}
-	default:
-		return AuditStoragePolicy{}, fmt.Errorf(
-			"audit.storage.profile: expected %q, %q, or %q, got %q",
-			AuditStorageProfileBalanced,
-			AuditStorageProfileFull,
-			AuditStorageProfileMinimal,
-			profile,
-		)
-	}
-	return policy, nil
-}
-
-func parseAuditStorageDuration(field string, value string) (time.Duration, error) {
-	duration, err := time.ParseDuration(value)
-	if err != nil {
-		slog.Warn("config audit storage duration parse failed", "field", field, "value", value, "err", err)
-		return 0, fmt.Errorf("audit.storage.%s %q: %w", field, value, err)
-	}
-	if duration <= 0 {
-		slog.Warn("config audit storage duration rejected", "field", field, "value", value)
-		return 0, fmt.Errorf("audit.storage.%s must be positive", field)
-	}
-	return duration, nil
-}
-
-func applyAuditStorageDetailOverrides(
-	policy *AuditStorageDetailPolicy,
-	raw AuditStorageDetail,
-) {
+func applyAuditStorageDetailOverrides(policy *AuditStorageDetailPolicy, raw AuditStorageDetail) {
 	if raw.WireInput != nil {
 		policy.WireInput = *raw.WireInput
 	}
@@ -212,22 +114,17 @@ func applyAuditStorageDetailOverrides(
 	}
 }
 
-func safeDegradedAuditStoragePolicy() AuditStoragePolicy {
-	return AuditStoragePolicy{
-		Profile:                 AuditStorageProfileFull,
-		MaintenanceInterval:     0,
-		MaxSizeBytes:            0,
-		MaintenanceBatchRows:    defaultAuditMaintenanceBatchRows,
-		CompactAfterMaintenance: false,
-		FullDetailRetention:     defaultAuditFullRetention,
-		SummaryRetention:        defaultAuditSummaryRetention,
-		Detail: AuditStorageDetailPolicy{
-			WireInput:           true,
-			NormalizedInput:     true,
-			ProviderEvidence:    true,
-			EnvironmentEvidence: true,
-			EvaluationContent:   true,
-		},
+// Rotation adapts the validated configuration without coupling storage to config.
+func (policy AuditStoragePolicy) Rotation() auditstorage.RotationPolicy {
+	return auditstorage.RotationPolicy{Interval: policy.BucketInterval, Retained: policy.RetentionBuckets}
+}
+
+// AuditCatalogOptions uses stable per-user state and coordination paths.
+func (c *Config) AuditCatalogOptions() auditstorage.CatalogOptions {
+	return auditstorage.CatalogOptions{
+		BasePath:         c.AuditSQLitePath(),
+		StatePath:        filepath.Join(DefaultStateDir(), "audit-storage.json"),
+		CoordinationPath: filepath.Join(filepath.Dir(RuntimeDir()), "agent-gate-audit.lock"),
 	}
 }
 
@@ -238,4 +135,17 @@ func (c *Config) AuditStoragePolicy() AuditStoragePolicy {
 		return policy
 	}
 	return c.auditStoragePolicy
+}
+
+// PrepareAuditStorage validates storage for configurations constructed in memory.
+func (c *Config) PrepareAuditStorage() error {
+	if c == nil || c.Unusable() {
+		return fmt.Errorf("audit storage requires a usable configuration")
+	}
+	policy, err := resolveAuditStorage(c.Audit.Storage)
+	if err != nil {
+		return err
+	}
+	c.auditStoragePolicy = policy
+	return nil
 }

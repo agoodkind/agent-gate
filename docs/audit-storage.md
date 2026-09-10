@@ -1,64 +1,55 @@
-# Audit Storage
+# Configure audit storage
 
-Agent Gate creates one current SQLite schema for a new database. It does not upgrade existing audit databases.
+Configure how long Agent Gate keeps audit history, inspect its files, or reset the installation.
 
-Audit storage defaults to balanced retention. The first due maintenance run may delete completed detail older than 7 days and completed summaries older than 30 days. Stop the daemon, then copy the database and any `-wal` and `-shm` sidecars together when you need an archive.
+## Configure rotation
 
-## Choose a profile
+Changing the database path, rotation interval, or retained count permanently deletes existing audit history, including unfinished work. The same cut applies when the daemon next starts after an offline edit. Equivalent durations such as `24h` and `1440m` preserve history.
 
-`balanced` keeps full detail for 7 days and summaries for 30 days. `full` retains all configured detail until explicit size or retention limits remove it. `minimal` records summaries while omitting most completed detail. Protected or replayable work keeps the content required to finish safely.
+Edit the installed configuration using the annotated [configuration example](../config.toml.example):
 
-Every event has a durable summary. Detail is divided into wire input, normalized input, provider evidence, environment evidence, evaluation content, and deferred audit payload. Queries report detail as available, expired, not recorded, or protected.
+```toml
+[audit.storage]
+profile = "full"
+bucket_interval = "24h"
+retention_buckets = 7
+```
 
-Edit exact profile and override keys in the annotated [configuration example](../config.toml.example). A missing audit storage table resolves to `balanced`.
+Use a positive whole-second interval and positive retained count. These defaults retain today's UTC window and the previous six windows. Expiration deletes whole files, including unfinished work; downtime counts toward their age. Retention limits age, not total bytes.
 
-## Preview and apply maintenance
+Choose `minimal` to omit completed detail, or `full` to retain it. Content-selection overrides apply when records are written. Changing only content selection does not discard existing history. Pending work keeps the input needed to finish.
 
-Status and dry-run commands do not write the database.
+Validate the saved configuration:
+
+<!-- doc-test: run -->
+```sh
+agent-gate config check
+```
+
+## Inspect storage
+
+Run status to inspect the current bucket, retained file sizes, normalized policy, next boundary, and any pending reset or cleanup error. Status reads metadata and file sizes without opening or copying databases.
 
 <!-- doc-test: run fixture=query -->
 ```sh
 agent-gate audit status
-agent-gate audit maintain --dry-run
+agent-gate audit status --json
 ```
 
-Maintenance removes only eligible completed records. It works in bounded batches so intake remains responsive.
+## Reset the installation
 
-<!-- doc-test: run fixture=query -->
+Reset permanently deletes audit history and owned installation state. It stops the owned service and daemon, preserves hooks and configuration, restores the executable, and runs the existing service installer. It creates no backup and does not convert old databases.
+
+Run reset explicitly when replacing incompatible storage or clearing the installation:
+
+<!-- doc-test: skip reason=destructive-installation-reset -->
 ```sh
-agent-gate audit maintain --apply
+agent-gate reset
 ```
 
-The daemon never runs or waits for maintenance during startup. Automatic maintenance starts only after readiness and waits one full configured interval. Reload and restart reset that interval.
+If reset fails, correct the reported cause and run it again. Deleted history stays deleted. Verify service readiness after a successful reset:
 
-## Compact storage
-
-Incremental compaction reclaims a bounded amount of free space and preserves active intake.
-
-<!-- doc-test: run fixture=query -->
+<!-- doc-test: run -->
 ```sh
-agent-gate audit compact --dry-run
-agent-gate audit compact --apply
+agent-gate daemon status
 ```
-
-Full compaction is explicit and offline. Stop the daemon first. Preflight rejects an active daemon before mutation. The command uses a process lock, database lease, verified replacement, and durable recovery journal. It never stops, starts, or restarts the service.
-
-<!-- doc-test: skip reason=requires-stopped-managed-service -->
-```sh
-agent-gate audit compact --full --dry-run
-```
-
-<!-- doc-test: skip reason=destructive-offline-operation -->
-```sh
-agent-gate audit compact --full --apply
-```
-
-Full apply requires exact interactive confirmation and prints a visible fail-open warning. A failure blocks compaction only. Existing hooks and daemon enforcement remain installed.
-
-## Recover storage
-
-If maintenance fails, correct the reported storage or lock error and run the same command again. Do not disable hooks.
-
-If full compaction reports an unresolved journal, leave every database and recovery artifact in place. Keep the daemon stopped and rerun the full apply command to resume verified recovery.
-
-To install a release with no database compatibility, stop the daemon and preserve any required export. Remove the database and its `-wal` and `-shm` sidecars together. The next daemon start creates the current schema.

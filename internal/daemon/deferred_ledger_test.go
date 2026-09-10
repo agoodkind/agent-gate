@@ -9,9 +9,7 @@ import (
 	"time"
 
 	"goodkind.io/agent-gate/internal/audit"
-	"goodkind.io/agent-gate/internal/config"
 	"goodkind.io/agent-gate/internal/evaluation"
-	"goodkind.io/agent-gate/internal/hook"
 	"goodkind.io/agent-gate/internal/intake"
 )
 
@@ -24,7 +22,6 @@ type deferredLedgerStore struct {
 	renewed      chan struct{}
 	releaseRenew chan struct{}
 	renewErr     error
-	auditEntries []intake.DeferredAuditEntry
 }
 
 func (store *deferredLedgerStore) GetReceipt(context.Context, int64) (intake.Record, error) {
@@ -54,6 +51,10 @@ func (store *deferredLedgerStore) ReleaseDeferredClaim(
 	return nil
 }
 
+func (store *deferredLedgerStore) ScheduleDeferredRetry(ctx context.Context, claim intake.DeferredClaim, _ time.Time) error {
+	return store.ReleaseDeferredClaim(ctx, claim)
+}
+
 func (store *deferredLedgerStore) RenewDeferredClaim(
 	context.Context,
 	intake.DeferredClaim,
@@ -73,71 +74,6 @@ func (store *deferredLedgerStore) RenewDeferredClaim(
 
 func (store *deferredLedgerStore) ListPending(context.Context) ([]int64, error) {
 	return []int64{store.replayRecord.ReceiptID}, nil
-}
-
-func (store *deferredLedgerStore) ListPendingDeferredAudit(
-	context.Context,
-	int,
-) ([]int64, error) {
-	if len(store.auditEntries) == 0 {
-		return nil, nil
-	}
-	return []int64{store.replayRecord.ReceiptID}, nil
-}
-
-func (store *deferredLedgerStore) ClaimDeferredAudit(
-	_ context.Context,
-	receiptID int64,
-	owner string,
-	lease time.Duration,
-) ([]intake.DeferredAuditEntry, intake.DeferredAuditClaim, error) {
-	if len(store.auditEntries) == 0 {
-		return nil, intake.DeferredAuditClaim{}, intake.ErrDeferredAuditClaimUnavailable
-	}
-	claim := intake.DeferredAuditClaim{
-		ReceiptID: receiptID, EventID: store.replayRecord.EventID, Owner: owner,
-		Attempt: 1, ExpiresAt: time.Now().Add(lease),
-	}
-	return append([]intake.DeferredAuditEntry(nil), store.auditEntries...), claim, nil
-}
-
-func (store *deferredLedgerStore) RenewDeferredAuditClaim(
-	context.Context,
-	intake.DeferredAuditClaim,
-	time.Duration,
-) error {
-	return nil
-}
-
-func (store *deferredLedgerStore) MarkDeferredAuditEntryDelivered(
-	_ context.Context,
-	_ intake.DeferredAuditClaim,
-	entryIndex int,
-) error {
-	for i := range store.auditEntries {
-		if store.auditEntries[i].Index == entryIndex {
-			store.auditEntries = append(store.auditEntries[:i], store.auditEntries[i+1:]...)
-			return nil
-		}
-	}
-	return intake.ErrDeferredAuditClaimLost
-}
-
-func (store *deferredLedgerStore) CompleteDeferredAudit(
-	context.Context,
-	intake.DeferredAuditClaim,
-) error {
-	if len(store.auditEntries) != 0 {
-		return intake.ErrDeferredAuditClaimLost
-	}
-	return nil
-}
-
-func (store *deferredLedgerStore) ReleaseDeferredAuditClaim(
-	context.Context,
-	intake.DeferredAuditClaim,
-) error {
-	return nil
 }
 
 type orderedDeferredRecorder struct {
@@ -171,6 +107,7 @@ func (recorder *orderedDeferredRecorder) CommitHotEvaluation(
 	_ int64,
 	_ bool,
 	record evaluation.Record,
+	_ []audit.NormalizedEntry,
 ) error {
 	return recorder.RecordCompleted(ctx, record)
 }
@@ -199,14 +136,6 @@ func (recorder *orderedDeferredRecorder) CommitDeferredEvaluation(
 		return recorder.err
 	}
 	recorder.records = append(recorder.records, record)
-	if recorder.store != nil {
-		recorder.store.auditEntries = make([]intake.DeferredAuditEntry, 0, len(auditEntries))
-		for index, entry := range auditEntries {
-			recorder.store.auditEntries = append(recorder.store.auditEntries, intake.DeferredAuditEntry{
-				Index: index, Entry: entry,
-			})
-		}
-	}
 	return nil
 }
 
@@ -245,59 +174,6 @@ func TestDeferredEvaluationRenewsClaimWhileProcessing(t *testing.T) {
 		t.Fatal("deferred claim was not renewed while evaluation remained active")
 	}
 	close(releaseCommit)
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("deferred evaluation did not finish")
-	}
-}
-
-func TestDeferredCommitStopsRenewalBeforeAudit(t *testing.T) {
-	order := make([]string, 0)
-	record := deferredLedgerRecord(46, 0)
-	renewed := make(chan struct{}, 1)
-	releaseRenew := make(chan struct{})
-	store := &deferredLedgerStore{
-		record: record, order: &order, replayRecord: record, renewed: renewed,
-		releaseRenew: releaseRenew, renewErr: intake.ErrDeferredClaimLost,
-	}
-	commitStarted := make(chan struct{}, 1)
-	releaseCommit := make(chan struct{})
-	recorder := &orderedDeferredRecorder{
-		order: &order, records: nil, commitStarted: commitStarted,
-		releaseCommit: releaseCommit,
-	}
-	auditContextErrors := make(chan error, 1)
-	sink := &orderedDurableAuditSink{order: &order, contextErrors: auditContextErrors}
-	processor := deferredLedgerProcessor(t, store, recorder, sink)
-	processor.claimLease = 60 * time.Millisecond
-	processor.claimRenewInterval = 10 * time.Millisecond
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		processor.processEvent(context.Background(), deferredWork{receiptID: record.ReceiptID})
-	}()
-
-	select {
-	case <-commitStarted:
-	case <-time.After(time.Second):
-		t.Fatal("deferred evaluation did not reach commit")
-	}
-	select {
-	case <-renewed:
-	case <-time.After(time.Second):
-		t.Fatal("deferred claim renewal did not overlap commit")
-	}
-	close(releaseCommit)
-	close(releaseRenew)
-	select {
-	case err := <-auditContextErrors:
-		if err != nil {
-			t.Fatalf("audit context error = %v, want nil", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("deferred audit was not written")
-	}
 	select {
 	case <-done:
 	case <-time.After(time.Second):
@@ -441,10 +317,9 @@ func TestDeferredImmediateEvaluationUsesReceiptAndCommitsBeforeCompletion(t *tes
 	store := &deferredLedgerStore{record: record, order: &order}
 	recorder := &orderedDeferredRecorder{order: &order, records: nil}
 	processor := deferredLedgerProcessor(t, store, recorder, &orderedDurableAuditSink{order: &order})
-	hotEvent := deferredLedgerHotEvent(t, processor.cfg, record)
 
 	processor.processRecord(
-		context.Background(), context.Background(), record, deferredLedgerClaim(record), &hotEvent, nil,
+		context.Background(), record, deferredLedgerClaim(record), nil,
 	)
 
 	if len(recorder.records) != 1 {
@@ -459,7 +334,7 @@ func TestDeferredImmediateEvaluationUsesReceiptAndCommitsBeforeCompletion(t *tes
 		got.Layers[1].Name != "audit-result" {
 		t.Fatalf("deferred layers = %+v", got.Layers)
 	}
-	wantOrder := "commit,audit,audit"
+	wantOrder := "commit"
 	if joined := joinDeferredOrder(order); joined != wantOrder {
 		t.Fatalf("order = %q, want %q", joined, wantOrder)
 	}
@@ -472,9 +347,7 @@ func TestDeferredReplayEvaluationUsesNextAttempt(t *testing.T) {
 	recorder := &orderedDeferredRecorder{order: &order, records: nil}
 	processor := deferredLedgerProcessor(t, store, recorder, &orderedDurableAuditSink{order: &order})
 
-	if err := processor.ReplayPending(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	processor.processEvent(context.Background(), deferredWork{receiptID: record.ReceiptID})
 
 	if len(recorder.records) != 1 {
 		t.Fatalf("records = %d, want 1", len(recorder.records))
@@ -493,92 +366,13 @@ func TestDeferredLedgerFailureLeavesReceiptPending(t *testing.T) {
 		order: &order, records: nil, err: errors.New("ledger unavailable"),
 	}
 	processor := deferredLedgerProcessor(t, store, recorder, &orderedDurableAuditSink{order: &order})
-	hotEvent := deferredLedgerHotEvent(t, processor.cfg, record)
 
 	processor.processRecord(
-		context.Background(), context.Background(), record, deferredLedgerClaim(record), &hotEvent, nil,
+		context.Background(), record, deferredLedgerClaim(record), nil,
 	)
 
 	if joined := joinDeferredOrder(order); joined != "commit,release" {
 		t.Fatalf("order = %q, want commit,release", joined)
-	}
-}
-
-func TestDeferredAuditFailureLeavesReceiptPending(t *testing.T) {
-	order := make([]string, 0)
-	record := deferredLedgerRecord(43, 0)
-	store := &deferredLedgerStore{record: record, order: &order}
-	recorder := &orderedDeferredRecorder{order: &order, records: nil}
-	sink := &orderedDurableAuditSink{order: &order, err: errors.New("audit unavailable")}
-	processor := deferredLedgerProcessor(t, store, recorder, sink)
-	hotEvent := deferredLedgerHotEvent(t, processor.cfg, record)
-
-	processor.processRecord(
-		context.Background(), context.Background(), record, deferredLedgerClaim(record), &hotEvent, nil,
-	)
-
-	if joined := joinDeferredOrder(order); joined != "commit,audit" {
-		t.Fatalf("order = %q, want commit,audit", joined)
-	}
-}
-
-func TestDeferredAuditRetryDoesNotReevaluate(t *testing.T) {
-	order := make([]string, 0)
-	record := deferredLedgerRecord(48, 0)
-	store := &deferredLedgerStore{record: record, order: &order, replayRecord: record}
-	recorder := &orderedDeferredRecorder{order: &order, records: nil}
-	sink := &orderedDurableAuditSink{
-		order: &order, err: errors.New("audit unavailable"), delivered: make([]string, 0),
-	}
-	processor := deferredLedgerProcessor(t, store, recorder, sink)
-	hotEvent := deferredLedgerHotEvent(t, processor.cfg, record)
-
-	processor.processRecord(
-		context.Background(), context.Background(), record,
-		deferredLedgerClaim(record), &hotEvent, nil,
-	)
-	if len(recorder.records) != 1 || len(store.auditEntries) == 0 {
-		t.Fatalf("records/outbox = %d/%d, want one evaluation and pending audit", len(recorder.records), len(store.auditEntries))
-	}
-	sink.err = nil
-	if err := processor.ReplayPendingAudit(context.Background()); err != nil {
-		t.Fatalf("ReplayPendingAudit: %v", err)
-	}
-	if len(recorder.records) != 1 {
-		t.Fatalf("evaluation records = %d, want no reevaluation", len(recorder.records))
-	}
-	if len(store.auditEntries) != 0 {
-		t.Fatalf("pending audit entries = %d, want complete", len(store.auditEntries))
-	}
-}
-
-func TestDeferredAuditPartialRetryResumesUndeliveredEntry(t *testing.T) {
-	order := make([]string, 0)
-	record := deferredLedgerRecord(49, 0)
-	store := &deferredLedgerStore{record: record, order: &order, replayRecord: record}
-	recorder := &orderedDeferredRecorder{order: &order, records: nil}
-	sink := &orderedDurableAuditSink{
-		order: &order, failAt: 2, delivered: make([]string, 0),
-	}
-	processor := deferredLedgerProcessor(t, store, recorder, sink)
-	hotEvent := deferredLedgerHotEvent(t, processor.cfg, record)
-
-	processor.processRecord(
-		context.Background(), context.Background(), record,
-		deferredLedgerClaim(record), &hotEvent, nil,
-	)
-	if len(store.auditEntries) != 1 || len(sink.delivered) != 1 {
-		t.Fatalf("pending/delivered = %d/%d, want 1/1", len(store.auditEntries), len(sink.delivered))
-	}
-	sink.failAt = 0
-	if err := processor.ReplayPendingAudit(context.Background()); err != nil {
-		t.Fatalf("ReplayPendingAudit: %v", err)
-	}
-	if len(recorder.records) != 1 || len(sink.delivered) != 2 || sink.calls != 3 {
-		t.Fatalf(
-			"records/delivered/calls = %d/%d/%d, want 1/2/3",
-			len(recorder.records), len(sink.delivered), sink.calls,
-		)
 	}
 }
 
@@ -621,18 +415,6 @@ func deferredLedgerClaim(record intake.Record) intake.DeferredClaim {
 		Owner: "test-owner", Attempt: record.DeferredReplays + 1,
 		ExpiresAt: time.Now().Add(time.Minute),
 	}
-}
-
-func deferredLedgerHotEvent(
-	t *testing.T,
-	cfg *config.Config,
-	record intake.Record,
-) hook.DeferredAuditEvent {
-	t.Helper()
-	return evaluateHotWithEventIDForTest(
-		context.Background(), record.RawPayload, hook.SyncConfig(cfg),
-		hook.SystemCodex, func(string) string { return "" }, record.EventID,
-	).Deferred
 }
 
 func joinDeferredOrder(values []string) string {

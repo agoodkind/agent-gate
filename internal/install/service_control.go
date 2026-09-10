@@ -6,22 +6,31 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
+	"os/exec"
 	"regexp"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 )
 
-// ServiceState describes the configured per-user daemon without changing it.
+// ErrServiceAbsent is the typed result of a missing service or daemon query.
+var ErrServiceAbsent = errors.New("service is absent")
+
+// ServiceState describes the exact managed installation.
 type ServiceState struct {
-	Platform   string `json:"platform"`
-	Managed    bool   `json:"managed"`
-	Running    bool   `json:"running"`
-	BinaryPath string `json:"binary_path"`
+	Absent     bool
+	Running    bool
+	BinaryPath string
+	PID        int
 }
 
-// ServiceStatusOptions configures read-only managed-service inspection.
+// ServiceStatusRunner keeps service inspection and control behind one OS boundary.
+type ServiceStatusRunner interface {
+	OutputContext(context.Context, string, ...string) ([]byte, error)
+}
+
+// ServiceStatusOptions selects the expected installation and service manager.
 type ServiceStatusOptions struct {
 	Platform   string
 	BinaryPath string
@@ -29,138 +38,136 @@ type ServiceStatusOptions struct {
 	Runner     ServiceStatusRunner
 }
 
-// ServiceStatusRunner runs read-only managed-service inspection commands.
-type ServiceStatusRunner interface {
-	OutputContext(ctx context.Context, name string, args ...string) ([]byte, error)
-}
-
-// InspectService confirms the managed daemon identity and current running state.
-func InspectService(ctx context.Context, options ServiceStatusOptions) (ServiceState, error) {
-	if err := ctx.Err(); err != nil {
-		return ServiceState{}, logServiceStatusError(
-			ctx,
-			"inspect managed service failed",
-			fmt.Errorf("inspect managed service: %w", err),
-		)
-	}
-	if strings.TrimSpace(options.BinaryPath) == "" {
-		return ServiceState{}, errors.New("managed service binary path is required")
+func normalizeServiceStatus(options ServiceStatusOptions) ServiceStatusOptions {
+	if options.Platform == "" {
+		options.Platform = runtime.GOOS
 	}
 	if options.Runner == nil {
 		options.Runner = ExecRunner{}
 	}
-	if options.Platform == "" {
-		options.Platform = runtime.GOOS
-	}
 	if options.UserID == 0 {
 		options.UserID = os.Getuid()
 	}
-	expectedBinary := filepath.Clean(options.BinaryPath)
-	var state ServiceState
-	var err error
-	switch servicePlatform(options.Platform) {
-	case servicePlatformDarwin:
-		state, err = inspectLaunchdService(ctx, options.Runner, options.UserID, expectedBinary)
-	case servicePlatformLinux:
-		state, err = inspectSystemdService(ctx, options.Runner, expectedBinary)
-	default:
-		return ServiceState{}, fmt.Errorf("unsupported OS for service status: %s", options.Platform)
+	return options
+}
+
+func launchdTarget(options ServiceStatusOptions) string {
+	return "gui/" + strconv.Itoa(options.UserID) + "/" + launchdLabel
+}
+
+// InspectService refuses malformed output or a service for another executable.
+func InspectService(ctx context.Context, options ServiceStatusOptions) (ServiceState, error) {
+	options = normalizeServiceStatus(options)
+	slog.DebugContext(ctx, "inspect reset service")
+	state, arguments, err := readResetService(ctx, options)
+	if err != nil || state.Absent {
+		return state, err
 	}
-	if err != nil {
-		return ServiceState{}, err
+	if state.BinaryPath == "" || len(arguments) != 2 || arguments[1] != "daemon" {
+		return state, errors.New("managed service does not run the expected daemon command")
 	}
-	if err := ctx.Err(); err != nil {
-		return ServiceState{}, logServiceStatusError(
-			ctx,
-			"inspect managed service failed",
-			fmt.Errorf("inspect managed service: %w", err),
-		)
+	for _, path := range []string{state.BinaryPath, arguments[0]} {
+		canonical, err := CanonicalExecutablePath(path)
+		if err != nil {
+			return state, err
+		}
+		if canonical != options.BinaryPath {
+			return state, fmt.Errorf("managed service executable %q differs from %q", canonical, options.BinaryPath)
+		}
+	}
+	if state.Running && state.PID <= 1 {
+		return state, errors.New("running service has no valid daemon PID")
 	}
 	return state, nil
 }
 
-func inspectLaunchdService(
-	ctx context.Context,
-	runner ServiceStatusRunner,
-	userID int,
-	expectedBinary string,
-) (ServiceState, error) {
-	target := "gui/" + strconv.Itoa(userID) + "/" + launchdLabel
-	output, err := runner.OutputContext(ctx, "launchctl", "print", target)
-	if err != nil {
-		return ServiceState{}, logServiceStatusError(
-			ctx,
-			"inspect launchd service failed",
-			fmt.Errorf("inspect launchd service %s: %w", target, err),
-		)
+func readResetService(ctx context.Context, options ServiceStatusOptions) (ServiceState, []string, error) {
+	var state ServiceState
+	var arguments []string
+	switch servicePlatform(options.Platform) {
+	case servicePlatformDarwin:
+		output, err := options.Runner.OutputContext(ctx, "launchctl", "print", launchdTarget(options))
+		if errors.Is(err, ErrServiceAbsent) || launchdAbsent(output, err) {
+			state.Absent = true
+			return state, nil, nil
+		}
+		if err != nil {
+			return state, nil, resetFailure("inspect launchd job", err)
+		}
+		fields := serviceFields(string(output), " = ")
+		state.BinaryPath = fields["program"]
+		state.Running = fields["state"] == "running"
+		state.PID, err = parseServicePID(fields["pid"])
+		if err != nil {
+			return state, nil, err
+		}
+		arguments = parseLaunchdArguments(string(output))
+	case servicePlatformLinux:
+		output, err := options.Runner.OutputContext(ctx, "systemctl", "--user", "show", systemdServiceName, "--property=LoadState", "--property=ActiveState", "--property=ExecStart", "--property=MainPID")
+		if errors.Is(err, ErrServiceAbsent) {
+			state.Absent = true
+			return state, nil, nil
+		}
+		if err != nil {
+			return state, nil, resetFailure("inspect systemd service", err)
+		}
+		fields := serviceFields(string(output), "=")
+		if fields["LoadState"] == "not-found" {
+			state.Absent = true
+			return state, nil, nil
+		}
+		if fields["LoadState"] != "loaded" {
+			return state, nil, errors.New("systemd service load state is not loaded")
+		}
+		state.Running = fields["ActiveState"] == "active" || fields["ActiveState"] == "activating" || fields["ActiveState"] == "deactivating"
+		state.PID, err = parseServicePID(fields["MainPID"])
+		if err != nil {
+			return state, nil, err
+		}
+		matches := systemdResetProgram.FindStringSubmatch(fields["ExecStart"])
+		if len(matches) == 2 {
+			state.BinaryPath = matches[1]
+		}
+		_, value, found := strings.Cut(fields["ExecStart"], "argv[]=")
+		if found {
+			value, _, _ = strings.Cut(value, " ;")
+			if value == state.BinaryPath+" daemon" {
+				arguments = []string{state.BinaryPath, "daemon"}
+			}
+		}
+	default:
+		return state, nil, fmt.Errorf("unsupported service platform %q", options.Platform)
 	}
-	program := parseLaunchdProgram(string(output))
-	if program == "" {
-		return ServiceState{}, fmt.Errorf("inspect launchd service %s: program is missing", target)
-	}
-	arguments := parseLaunchdArguments(string(output))
-	if filepath.Clean(program) != expectedBinary || !validServiceArguments(arguments, expectedBinary) {
-		return ServiceState{}, fmt.Errorf(
-			"managed service binary is %q, want %q daemon",
-			program,
-			expectedBinary,
-		)
-	}
-	return ServiceState{
-		Platform: "launchd", Managed: true,
-		Running:    strings.Contains(string(output), "state = running"),
-		BinaryPath: program,
-	}, nil
+	return state, arguments, nil
 }
 
-func inspectSystemdService(
-	ctx context.Context,
-	runner ServiceStatusRunner,
-	expectedBinary string,
-) (ServiceState, error) {
-	output, err := runner.OutputContext(
-		ctx,
-		"systemctl", "--user", "show", systemdServiceName,
-		"--property=LoadState", "--property=ActiveState", "--property=ExecStart",
-	)
-	if err != nil {
-		return ServiceState{}, logServiceStatusError(
-			ctx,
-			"inspect systemd service failed",
-			fmt.Errorf("inspect systemd service %s: %w", systemdServiceName, err),
-		)
-	}
-	fields := parseSystemdProperties(string(output))
-	if fields["LoadState"] != "loaded" {
-		return ServiceState{}, fmt.Errorf("managed service %s is not loaded", systemdServiceName)
-	}
-	program := parseSystemdProgram(fields["ExecStart"])
-	if program == "" {
-		return ServiceState{}, fmt.Errorf("inspect systemd service %s: ExecStart path is missing", systemdServiceName)
-	}
-	arguments := parseSystemdArguments(fields["ExecStart"])
-	if filepath.Clean(program) != expectedBinary || !validServiceArguments(arguments, expectedBinary) {
-		return ServiceState{}, fmt.Errorf(
-			"managed service binary is %q, want %q daemon",
-			program,
-			expectedBinary,
-		)
-	}
-	return ServiceState{
-		Platform: "systemd", Managed: true,
-		Running:    fields["ActiveState"] == "active",
-		BinaryPath: program,
-	}, nil
+var systemdResetProgram = regexp.MustCompile(`(?:^|[ ;])path=([^;]+?) ;`)
+
+func launchdAbsent(output []byte, err error) bool {
+	var exitError *exec.ExitError
+	return errors.As(err, &exitError) && exitError.ExitCode() == 113 && strings.Contains(string(output), "Could not find service")
 }
 
-func parseLaunchdProgram(output string) string {
+func serviceFields(output string, separator string) map[string]string {
+	fields := make(map[string]string)
 	for line := range strings.SplitSeq(output, "\n") {
-		key, value, found := strings.Cut(strings.TrimSpace(line), " = ")
-		if found && key == "program" {
-			return strings.TrimSpace(value)
+		key, value, ok := strings.Cut(strings.TrimSpace(line), separator)
+		if ok {
+			fields[key] = strings.TrimSpace(value)
 		}
 	}
-	return ""
+	return fields
+}
+
+func parseServicePID(value string) (int, error) {
+	if value == "" {
+		return 0, nil
+	}
+	pid, err := strconv.Atoi(value)
+	if err != nil || pid < 0 || pid == 1 {
+		return 0, fmt.Errorf("invalid service PID %q", value)
+	}
+	return pid, nil
 }
 
 func parseLaunchdArguments(output string) []string {
@@ -169,9 +176,9 @@ func parseLaunchdArguments(output string) []string {
 		if strings.TrimSpace(line) != "arguments = {" {
 			continue
 		}
-		arguments := make([]string, 0, 2)
-		for _, argumentLine := range lines[index+1:] {
-			argument := strings.TrimSpace(argumentLine)
+		var arguments []string
+		for _, next := range lines[index+1:] {
+			argument := strings.TrimSpace(next)
 			if argument == "}" {
 				return arguments
 			}
@@ -179,51 +186,79 @@ func parseLaunchdArguments(output string) []string {
 				arguments = append(arguments, argument)
 			}
 		}
-		return nil
 	}
 	return nil
 }
 
-func parseSystemdProperties(output string) map[string]string {
-	properties := make(map[string]string)
-	for line := range strings.SplitSeq(output, "\n") {
-		key, value, found := strings.Cut(line, "=")
-		if found {
-			properties[key] = value
-		}
+// StopService unloads only the selected user job, then verifies its stopped state.
+func StopService(ctx context.Context, options ServiceStatusOptions) error {
+	slog.DebugContext(ctx, "stop reset service")
+	options = normalizeServiceStatus(options)
+	state, err := InspectService(ctx, options)
+	if err != nil {
+		return err
 	}
-	return properties
-}
-
-var systemdProgramPattern = regexp.MustCompile(`(?:^|[ ;])path=([^ ;]+)`)
-
-func parseSystemdProgram(execStart string) string {
-	matches := systemdProgramPattern.FindStringSubmatch(execStart)
-	if len(matches) != 2 {
-		return ""
-	}
-	return matches[1]
-}
-
-func parseSystemdArguments(execStart string) []string {
-	const prefix = "argv[]="
-	_, value, found := strings.Cut(execStart, prefix)
-	if !found {
+	if state.Absent {
 		return nil
 	}
-	if arguments, _, hasTerminator := strings.Cut(value, " ;"); hasTerminator {
-		value = arguments
+	switch servicePlatform(options.Platform) {
+	case servicePlatformDarwin:
+		_, err = options.Runner.OutputContext(ctx, "launchctl", "bootout", launchdTarget(options))
+	case servicePlatformLinux:
+		_, err = options.Runner.OutputContext(ctx, "systemctl", "--user", "stop", systemdServiceName)
+		if err == nil {
+			_, err = options.Runner.OutputContext(ctx, "systemctl", "--user", "disable", systemdServiceName)
+		}
 	}
-	return strings.Fields(value)
+	if err != nil {
+		return resetFailure("stop managed service", err)
+	}
+	state, err = InspectService(ctx, options)
+	if err != nil {
+		return err
+	}
+	if options.Platform == "darwin" && !state.Absent {
+		return errors.New("launchd job remains loaded after bootout")
+	}
+	if state.Running || state.PID != 0 {
+		return errors.New("managed service remains running after stop")
+	}
+	return nil
 }
 
-func validServiceArguments(arguments []string, expectedBinary string) bool {
-	return len(arguments) == 2 &&
-		filepath.Clean(arguments[0]) == expectedBinary &&
-		arguments[1] == "daemon"
-}
-
-func logServiceStatusError(ctx context.Context, message string, err error) error {
-	slog.WarnContext(ctx, message, "err", err)
-	return err
+func daemonPIDs(ctx context.Context, options ServiceStatusOptions) ([]int, error) {
+	options = normalizeServiceStatus(options)
+	// The executable file identifies symlink-launched processes independently of argv.
+	// Exclude this reset process, which runs the same installed executable.
+	output, err := options.Runner.OutputContext(ctx, "lsof", "-t", "-a", "-u", strconv.Itoa(options.UserID), "-p", "^"+strconv.Itoa(os.Getpid()), "-d", "txt", "--", options.BinaryPath)
+	var exitError *exec.ExitError
+	if errors.Is(err, ErrServiceAbsent) || (errors.As(err, &exitError) && exitError.ExitCode() == 1 && len(output) == 0) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, resetFailure("enumerate matching daemons", err)
+	}
+	var pids []int
+	for value := range strings.FieldsSeq(string(output)) {
+		pid, err := parseServicePID(value)
+		if err != nil || pid <= 1 {
+			return nil, errors.New("daemon enumeration returned an invalid PID")
+		}
+		pids = append(pids, pid)
+	}
+	slices.Sort(pids)
+	var matched []int
+	for _, pid := range slices.Compact(pids) {
+		identity, err := (NativeProcessControl{}).Inspect(pid)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, resetFailure("inspect executable process candidate", err)
+		}
+		if identity.PID == pid && identity.Start != "" && identity.Executable == options.BinaryPath {
+			matched = append(matched, pid)
+		}
+	}
+	return matched, nil
 }

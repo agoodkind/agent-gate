@@ -8,10 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"os"
-	"time"
 
-	"goodkind.io/agent-gate/internal/auditmaintenance"
 	"goodkind.io/agent-gate/internal/config"
 	installer "goodkind.io/agent-gate/internal/install"
 )
@@ -24,12 +21,11 @@ type Options struct {
 	AutoUpdate   string
 }
 
-// Plan retains a complete installation and its read-only maintenance preview.
+// Plan retains a complete installation.
 type Plan struct {
 	Installation    *installer.InstallationPlan
 	Providers       []installer.Provider
 	EffectivePolicy config.AuditStoragePolicy
-	Maintenance     *auditmaintenance.Plan
 	binPath         string
 	homeDir         string
 	installation    *installer.InstallationPlan
@@ -50,10 +46,6 @@ type Dependencies struct {
 	PrepareInstallation  func(installer.InstallationOptions) (*installer.InstallationPlan, error)
 	ApplyInstallation    func(*installer.InstallationPlan) (installer.ApplyResult, error)
 	VerifyInstalledHooks func(context.Context, ProbeRequest) ([]ProbeResult, error)
-	Preview              func(context.Context, string, config.AuditStoragePolicy, time.Time) (auditmaintenance.Plan, error)
-	Stat                 func(string) (os.FileInfo, error)
-	Lstat                func(string) (os.FileInfo, error)
-	Now                  func() time.Time
 	NewSetupID           func() (string, error)
 	ServiceReady         func(string) error
 	HomeDir              string
@@ -62,7 +54,7 @@ type Dependencies struct {
 	Stdout               io.Writer
 }
 
-// Prepare validates every setup layer and previews existing audit data without writing.
+// Prepare validates every setup layer without writing.
 func Prepare(ctx context.Context, options Options, dependencies Dependencies) (_ *Plan, resultErr error) {
 	if len(options.Providers) == 0 {
 		return nil, errors.New("at least one provider is required")
@@ -124,7 +116,6 @@ func Prepare(ctx context.Context, options Options, dependencies Dependencies) (_
 		Installation:    installation,
 		Providers:       append([]installer.Provider(nil), options.Providers...),
 		EffectivePolicy: policy,
-		Maintenance:     nil,
 		binPath:         canonicalBinPath,
 		homeDir:         dependencies.HomeDir,
 		installation:    installation,
@@ -133,34 +124,6 @@ func Prepare(ctx context.Context, options Options, dependencies Dependencies) (_
 		prepared:        true,
 		setupID:         setupID,
 	}
-	if _, err := dependencies.Stat(databasePath); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			if _, lstatErr := dependencies.Lstat(databasePath); lstatErr == nil {
-				wrappedErr := fmt.Errorf(
-					"audit database path resolves to a missing target: %s: %w",
-					databasePath,
-					os.ErrNotExist,
-				)
-				slog.WarnContext(ctx, "setup audit database path rejected", "err", wrappedErr)
-				return nil, wrappedErr
-			} else if !errors.Is(lstatErr, os.ErrNotExist) {
-				wrappedErr := fmt.Errorf("inspect audit database path entry: %w", lstatErr)
-				slog.WarnContext(ctx, "setup audit database path inspection failed", "err", wrappedErr)
-				return nil, wrappedErr
-			}
-			return plan, nil
-		}
-		wrappedErr := fmt.Errorf("inspect audit database: %w", err)
-		slog.WarnContext(ctx, "setup audit database inspection failed", "err", wrappedErr)
-		return nil, wrappedErr
-	}
-	maintenance, err := dependencies.Preview(ctx, databasePath, policy, dependencies.Now().UTC())
-	if err != nil {
-		wrappedErr := fmt.Errorf("preview audit maintenance: %w", err)
-		slog.WarnContext(ctx, "setup audit maintenance preview failed", "err", wrappedErr)
-		return nil, wrappedErr
-	}
-	plan.Maintenance = &maintenance
 	return plan, nil
 }
 
@@ -211,18 +174,6 @@ func setupDependenciesWithDefaults(dependencies Dependencies) Dependencies {
 	}
 	if dependencies.VerifyInstalledHooks == nil {
 		dependencies.VerifyInstalledHooks = VerifyInstalledHooks
-	}
-	if dependencies.Preview == nil {
-		dependencies.Preview = auditmaintenance.Preview
-	}
-	if dependencies.Stat == nil {
-		dependencies.Stat = os.Stat
-	}
-	if dependencies.Lstat == nil {
-		dependencies.Lstat = os.Lstat
-	}
-	if dependencies.Now == nil {
-		dependencies.Now = time.Now
 	}
 	if dependencies.NewSetupID == nil {
 		dependencies.NewSetupID = newSetupID

@@ -113,191 +113,6 @@ func TestMarkDeferredPendingRejectsMismatchedReceiptEvent(t *testing.T) {
 	}
 }
 
-func TestOpenSQLiteMigratesLegacyDeferredRowsByNewestReceipt(t *testing.T) {
-	t.Skip("database backward compatibility was removed")
-	path := filepath.Join(t.TempDir(), "audit.db")
-	database, err := sql.Open("sqlite3", path)
-	if err != nil {
-		t.Fatalf("open legacy database: %v", err)
-	}
-	_, err = database.Exec(legacyDeferredSchema)
-	if err != nil {
-		t.Fatalf("create legacy deferred database: %v", err)
-	}
-	if err := database.Close(); err != nil {
-		t.Fatalf("close legacy database: %v", err)
-	}
-	store, err := intake.OpenSQLite(context.Background(), path, nil)
-	if err != nil {
-		t.Fatalf("OpenSQLite migration: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := store.Close(); err != nil {
-			t.Fatalf("Close: %v", err)
-		}
-	})
-	pending, err := store.ListDeferredPending(context.Background(), 0)
-	if err != nil {
-		t.Fatalf("ListDeferredPending: %v", err)
-	}
-	if len(pending) != 1 || pending[0].ReceiptID != 2 || pending[0].EventID != "legacy-event" {
-		t.Fatalf("migrated pending = %+v, want newest receipt 2", pending)
-	}
-	var claimAttempt int
-	if err := store.Handle().QueryRow(`
-		select claim_attempt from intake_deferred where receipt_id = 2
-	`).Scan(&claimAttempt); err != nil {
-		t.Fatalf("read migrated claim attempt: %v", err)
-	}
-	if claimAttempt != 1 {
-		t.Fatalf("migrated claim attempt = %d, want replay count 1", claimAttempt)
-	}
-	var repairState string
-	var repairError string
-	err = store.Handle().QueryRow(`
-		select state, repair_error
-		from intake_deferred_repairs
-		where event_id = 'unlinked-event'
-	`).Scan(&repairState, &repairError)
-	if err != nil {
-		t.Fatalf("read deferred repair: %v", err)
-	}
-	if repairState != "pending" || repairError != "missing_receipt" {
-		t.Fatalf("repair = (%q, %q)", repairState, repairError)
-	}
-}
-
-const legacyDeferredSchema = `
-create table intake_events (
-    seq integer primary key autoincrement,
-    event_id text not null unique,
-    schema_version integer not null,
-    recorded_at text not null,
-    system text not null,
-    session_id text not null,
-    turn_id text not null,
-    event_name text not null,
-    tool_name text not null,
-    tool_use_id text not null,
-    cwd text not null,
-    effective_cwd text not null,
-    command text not null,
-    file_path text not null,
-    raw_payload blob not null,
-    raw_payload_hash text not null,
-    normalized_json text not null,
-    env_fingerprint_json text not null default '{}'
-);
-create table intake_receipts (
-    receipt_id integer primary key autoincrement,
-    event_id text not null,
-    received_at text not null
-);
-create table intake_deferred (
-    event_id text primary key,
-    state text not null,
-    pending_at text,
-    completed_at text,
-    last_replay_at text,
-    replay_count integer not null default 0
-);
-insert into intake_events values
-    (1, 'legacy-event', 1, '2026-05-09T00:00:00Z', 'codex', 'session', '', 'PreToolUse', 'Shell', '', '/repo', '/repo', 'echo ok', '', x'7b7d', 'sha256:legacy', '{}', '{}'),
-    (2, 'unlinked-event', 1, '2026-05-09T00:00:01Z', 'codex', 'session', '', 'PreToolUse', 'Shell', '', '/repo', '/repo', 'echo repair', '', x'7b7d', 'sha256:repair', '{}', '{}');
-insert into intake_receipts values
-    (1, 'legacy-event', '2026-05-09T00:00:00Z'),
-    (2, 'legacy-event', '2026-05-09T00:00:01Z');
-insert into intake_deferred values
-    ('legacy-event', 'pending', '2026-05-09T00:00:00Z', null, null, 1),
-    ('unlinked-event', 'pending', '2026-05-09T00:00:01Z', null, null, 0);
-`
-
-func TestOpenSQLiteMigratesPopulatedCurrentDatabase(t *testing.T) {
-	t.Skip("database backward compatibility was removed")
-	path := filepath.Join(t.TempDir(), "audit.db")
-	database, err := sql.Open("sqlite3", path)
-	if err != nil {
-		t.Fatalf("open legacy database: %v", err)
-	}
-	_, err = database.Exec(`
-		create table intake_events (
-			seq integer primary key autoincrement,
-			event_id text not null unique,
-			schema_version integer not null,
-			recorded_at text not null,
-			system text not null,
-			session_id text not null,
-			turn_id text not null,
-			event_name text not null,
-			tool_name text not null,
-			tool_use_id text not null,
-			cwd text not null,
-			effective_cwd text not null,
-			command text not null,
-			file_path text not null,
-			raw_payload blob not null,
-			raw_payload_hash text not null,
-			normalized_json text not null,
-			env_fingerprint_json text not null default '{}',
-			hot_eval_latency_us integer
-		);
-		insert into intake_events values (
-			1, 'legacy-event', 1, '2026-05-09T00:00:00Z', 'codex', 'session', '',
-			'PreToolUse', 'Shell', '', '/repo', '/repo', 'echo ok', '', x'7b7d',
-			'sha256:legacy', '{}', '{}', null
-		);
-		create table intake_receipts (
-			receipt_id integer primary key autoincrement,
-			event_id text not null,
-			received_at text not null
-		);
-		insert into intake_receipts values (
-			1, 'legacy-event', '2026-05-09T00:00:00Z'
-		);
-		create table intake_deferred (
-			receipt_id integer primary key,
-			event_id text not null,
-			state text not null,
-			pending_at text,
-			completed_at text,
-			last_replay_at text,
-			replay_count integer not null default 0
-		);
-		insert into intake_deferred values (
-			1, 'legacy-event', 'pending', '2026-05-09T00:00:00Z', null,
-			'2026-05-09T00:00:01Z', 3
-		);
-	`)
-	if err != nil {
-		t.Fatalf("create populated current database: %v", err)
-	}
-	if err := database.Close(); err != nil {
-		t.Fatalf("close legacy database: %v", err)
-	}
-
-	store, err := intake.OpenSQLite(context.Background(), path, nil)
-	if err != nil {
-		t.Fatalf("OpenSQLite migration: %v", err)
-	}
-	defer func() {
-		if err := store.Close(); err != nil {
-			t.Fatalf("Close: %v", err)
-		}
-	}()
-
-	assertTableCount(t, path, "intake_events", 1)
-	assertTableCount(t, path, "intake_receipts", 1)
-	var claimAttempt int
-	if err := store.Handle().QueryRow(`
-		select claim_attempt from intake_deferred where receipt_id = 1
-	`).Scan(&claimAttempt); err != nil {
-		t.Fatalf("read current-schema claim attempt: %v", err)
-	}
-	if claimAttempt != 3 {
-		t.Fatalf("current-schema claim attempt = %d, want replay count 3", claimAttempt)
-	}
-}
-
 func TestAppendRollsBackEventWhenReceiptInsertFails(t *testing.T) {
 	store, path := newReceiptTestStore(t)
 	_, err := store.Handle().Exec(`
@@ -371,12 +186,12 @@ func TestConcurrentAppendsKeepReceiptsOnCanonicalEvent(t *testing.T) {
 func newReceiptTestStore(t *testing.T) (*intake.Store, string) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "audit.db")
-	store, err := intake.OpenSQLite(context.Background(), path, nil)
+	store, err := openFixtureIntake(t, context.Background(), path, nil)
 	if err != nil {
 		t.Fatalf("OpenSQLite: %v", err)
 	}
 	t.Cleanup(func() {
-		if err := store.Close(); err != nil {
+		if err := store.Handle().Close(); err != nil {
 			t.Fatalf("Close: %v", err)
 		}
 	})
@@ -412,19 +227,4 @@ func assertTableCount(t *testing.T, path string, table string, want int) {
 	if count != want {
 		t.Fatalf("%s count = %d, want %d", table, count, want)
 	}
-}
-
-func TestOpenSQLiteMigratesMaintenanceScheduleToVersionSix(t *testing.T) {
-	store, path := newReceiptTestStore(t)
-	var version int
-	if err := store.Handle().QueryRowContext(
-		t.Context(),
-		`select coalesce(max(version), 0) from audit_schema_migrations`,
-	).Scan(&version); err != nil {
-		t.Fatalf("read audit schema version: %v", err)
-	}
-	if version != 1 {
-		t.Fatalf("audit schema version = %d, want 1", version)
-	}
-	assertTableCount(t, path, "audit_maintenance_schedule", 0)
 }

@@ -136,12 +136,12 @@ func TestVerifyInstalledHooksRequiresExpectedExecutable(t *testing.T) {
 
 func TestReadDurableEvaluationAcceptsCompletedDeferredAllow(t *testing.T) {
 	databasePath := filepath.Join(t.TempDir(), "audit.db")
-	store, err := intake.OpenSQLite(t.Context(), databasePath, nil)
+	store, err := openFixtureIntake(t, t.Context(), databasePath, nil)
 	if err != nil {
 		t.Fatalf("OpenSQLite: %v", err)
 	}
 	t.Cleanup(func() {
-		if err := store.Close(); err != nil {
+		if err := store.Handle().Close(); err != nil {
 			t.Fatalf("Close: %v", err)
 		}
 	})

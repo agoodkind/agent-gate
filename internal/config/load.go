@@ -97,7 +97,8 @@ func loadSource(path string, sourceBytes []byte, strict bool) (*Config, error) {
 	// empty config keeps the caller's Failures the single description of what
 	// happened.
 	if cfg.Unusable() {
-		cfg.auditStoragePolicy = safeDegradedAuditStoragePolicy()
+		// An undecodable file has no validated storage identity. Keep rotation
+		// invalid so a caller cannot use a fallback to destroy existing history.
 		return &cfg, nil
 	}
 	if err := validateSections(log, &cfg, recordOrFail); err != nil {
@@ -159,20 +160,14 @@ func loadSource(path string, sourceBytes []byte, strict bool) (*Config, error) {
 // only for a strict load; a degraded load runs fallback and continues.
 type sectionRecorder func(kind string, scope string, err error, fallback func()) error
 
-// validateSections checks every settings block. A block that will not validate
-// falls back to its defaults on a degraded load rather than killing it. Zeroing
-// the block is what makes every accessor return the documented default, so the
-// daemon runs on known-good numbers instead of not running at all.
+// validateSections rejects invalid storage policies on every load because a
+// fallback could discard history. Other settings can degrade to their defaults.
 func validateSections(log *slog.Logger, cfg *Config, record sectionRecorder) error {
 	storagePolicy, storageErr := resolveAuditStorage(cfg.Audit.Storage)
-	if err := record(LoadFailureSection, "audit.storage", storageErr,
-		func() { cfg.auditStoragePolicy = safeDegradedAuditStoragePolicy() },
-	); err != nil {
-		return err
+	if storageErr != nil {
+		return storageErr
 	}
-	if storageErr == nil {
-		cfg.auditStoragePolicy = storagePolicy
-	}
+	cfg.auditStoragePolicy = storagePolicy
 	if err := record(LoadFailureSection, "performance.hook",
 		validateHookPerformance(cfg.Performance.Hook, cfg.Performance.Limits),
 		func() { cfg.Performance.Hook = zeroHookPerformance },

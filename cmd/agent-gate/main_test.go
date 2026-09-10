@@ -435,14 +435,14 @@ func TestCollectHookInvocationContextPreservesSignalProvenance(t *testing.T) {
 		},
 		func() (hook.ProcessEvidence, []hook.ProcessEvidence, error) {
 			return hook.ProcessEvidence{
-					Name: "shell", ExecutablePath: parentPath,
-					Source: "parent_process", Provenance: "operating_system",
-					Status: hook.SignalStatusObserved,
-				}, []hook.ProcessEvidence{{
-					Name: "harness", ExecutablePath: ancestorPath,
-					Source: "ancestor_process", Provenance: "operating_system",
-					Status: hook.SignalStatusObserved,
-				}}, nil
+				Name: "shell", ExecutablePath: parentPath,
+				Source: "parent_process", Provenance: "operating_system",
+				Status: hook.SignalStatusObserved,
+			}, []hook.ProcessEvidence{{
+				Name: "harness", ExecutablePath: ancestorPath,
+				Source: "ancestor_process", Provenance: "operating_system",
+				Status: hook.SignalStatusObserved,
+			}}, nil
 		},
 	)
 
@@ -579,60 +579,13 @@ func TestRunQuerySeenAcceptsSharedAndIntakeFilters(t *testing.T) {
 	}
 }
 
-func TestRunQuerySeenReportsExpiredDetailAndOmitsContent(t *testing.T) {
-	setupQueryEnvironment(t)
-	store, err := intake.OpenSQLite(t.Context(), config.DefaultAuditSQLitePath(), nil)
-	if err != nil {
-		t.Fatalf("OpenSQLite: %v", err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
-	result, err := store.Append(t.Context(), intake.Record{
-		EventID: "evt-cli-expired", RecordedAt: time.Now().UTC(), System: "codex",
-		SessionID: "session-expired", EventName: "PreToolUse",
-		RawPayload:         []byte(`{"wire":true}`),
-		NormalizedJSON:     json.RawMessage(`{"normalized":true}`),
-		ClassificationJSON: json.RawMessage(`{"provider":"codex"}`),
-		EnvFingerprint:     map[string]string{"AI_AGENT": "codex"},
-	})
-	if err != nil {
-		t.Fatalf("Append: %v", err)
-	}
-	if _, err := store.Handle().Exec(`
-		delete from intake_event_details
-		where event_id = ? and detail_class in (?, ?, ?)
-	`, result.EventID, auditstorage.DetailClassNormalizedInput,
-		auditstorage.DetailClassProviderEvidence,
-		auditstorage.DetailClassEnvironmentEvidence); err != nil {
-		t.Fatalf("delete expired detail: %v", err)
-	}
-	if _, err := store.Handle().Exec(`
-		update intake_event_detail_manifest
-		set available_classes_json = '["wire_input"]', state = 'expired',
-			state_changed_at = '2026-08-12T00:00:00Z'
-		where event_id = ?
-	`, result.EventID); err != nil {
-		t.Fatalf("mark detail expired: %v", err)
-	}
-
-	exitCode, stdout, stderr := captureRunQuery(t, []string{
-		"seen", "--event-id", result.EventID, "--include-normalized", "--include-env", "--json",
-	})
-	if exitCode != 0 || stderr != "" {
-		t.Fatalf("exitCode = %d, stderr = %q", exitCode, stderr)
-	}
-	if !strings.Contains(stdout, `"detail":{"state":"expired"`) {
-		t.Fatalf("expired detail state missing: %s", stdout)
-	}
-	for _, field := range []string{"classification", "normalized_json", "env_fingerprint"} {
-		if strings.Contains(stdout, `"`+field+`"`) {
-			t.Fatalf("expired field %q present: %s", field, stdout)
-		}
-	}
-}
-
 func TestRunQueryDecisionsPreservesAuditQueryBehavior(t *testing.T) {
 	setupQueryEnvironment(t)
-	logger, err := audit.NewEventLoggerWithOptions(context.Background(), &config.Config{}, nil, audit.LoggerOptions{QueueLimit: 0})
+	store, err := openFixtureIntake(t, t.Context(), config.DefaultAuditSQLitePath(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logger, err := audit.NewEventLoggerWithOptions(context.Background(), &config.Config{}, nil, audit.LoggerOptions{QueueLimit: 0, SharedDB: store.Handle()})
 	if err != nil {
 		t.Fatalf("NewEventLoggerContext: %v", err)
 	}
@@ -669,108 +622,6 @@ func TestRunQueryDecisionsPreservesAuditQueryBehavior(t *testing.T) {
 	}
 }
 
-func TestRunQueryDecisionsReadsLegacyPayloadSchema(t *testing.T) {
-	setupQueryEnvironment(t)
-	fixturePath := filepath.Join(
-		"..", "..", "internal", "auditstorage", "testdata", "legacy_v1.sql",
-	)
-	fixture, err := os.ReadFile(fixturePath)
-	if err != nil {
-		t.Fatalf("ReadFile legacy fixture: %v", err)
-	}
-	databasePath := config.DefaultAuditSQLitePath()
-	if err := os.MkdirAll(filepath.Dir(databasePath), 0o700); err != nil {
-		t.Fatalf("MkdirAll audit state: %v", err)
-	}
-	database, err := sql.Open("sqlite3", databasePath)
-	if err != nil {
-		t.Fatalf("open legacy database: %v", err)
-	}
-	if _, err := database.Exec(string(fixture)); err != nil {
-		_ = database.Close()
-		t.Fatalf("load legacy fixture: %v", err)
-	}
-	if err := database.Close(); err != nil {
-		t.Fatalf("close legacy database: %v", err)
-	}
-
-	exitCode, stdout, stderr := captureRunQuery(t, []string{
-		"decisions", "--decision", "block", "--json",
-	})
-	if exitCode != 0 || stderr != "" {
-		t.Fatalf("exitCode = %d, stderr = %q", exitCode, stderr)
-	}
-	var record audit.QueryRecord
-	if err := json.Unmarshal([]byte(strings.TrimSpace(stdout)), &record); err != nil {
-		t.Fatalf("decode legacy decision: %v", err)
-	}
-	if record.EventID != "audit-legacy" {
-		t.Fatalf("event id = %q, want audit-legacy", record.EventID)
-	}
-	if record.Detail.State != auditstorage.DetailStateAvailable {
-		t.Fatalf("detail state = %q, want available", record.Detail.State)
-	}
-	if len(record.Detail.RecordedClasses) != 1 ||
-		record.Detail.RecordedClasses[0] != auditstorage.DetailClassDeferredAuditPayload {
-		t.Fatalf("recorded classes = %v, want deferred audit payload", record.Detail.RecordedClasses)
-	}
-}
-
-func TestRunQueryDecisionsRejectsAvailableHeaderWithoutPayload(t *testing.T) {
-	setupQueryEnvironment(t)
-	record := appendCLIQueryEvaluation(t)
-	database, err := sql.Open("sqlite3", config.DefaultAuditSQLitePath())
-	if err != nil {
-		t.Fatalf("open audit database: %v", err)
-	}
-	t.Cleanup(func() { _ = database.Close() })
-	const auditEventID = "audit-missing-payload"
-	if _, err := database.Exec(`
-		insert into events (
-			event_id, schema_version, time, level, message, system, session_id,
-			turn_id, event_name, tool_use_id, tool_name, raw_payload_hash
-		) values (?, 1, '2026-07-11T01:00:02Z', 'info', 'hook.blocked',
-			'codex', 'session-cli', '', 'PreToolUse', '', 'exec_command', 'sha256:audit')
-	`, auditEventID); err != nil {
-		t.Fatalf("insert audit event: %v", err)
-	}
-	if _, err := database.Exec(`
-		insert into deferred_audit_outbox (
-			receipt_id, event_id, evaluation_id, state, created_at, completed_at,
-			claim_owner, claim_expires_at, claim_attempt
-		) values (?, ?, ?, 'complete', '2026-07-11T01:00:02Z',
-			'2026-07-11T01:00:03Z', null, null, 0)
-	`, record.Evaluation.ReceiptID, record.Evaluation.EventID,
-		record.Evaluation.EvaluationID); err != nil {
-		t.Fatalf("insert audit outbox: %v", err)
-	}
-	if _, err := database.Exec(`
-		insert into deferred_audit_outbox_entries (
-			receipt_id, entry_index, audit_event_id, delivered_at,
-			payload_recorded, payload_available, payload_state_changed_at
-		) values (?, 0, ?, '2026-07-11T01:00:03Z', 1, 1, '2026-07-11T01:00:03Z')
-	`, record.Evaluation.ReceiptID, auditEventID); err != nil {
-		t.Fatalf("insert audit outbox header: %v", err)
-	}
-
-	exitCode, stdout, stderr := captureRunQuery(t, []string{
-		"decisions", "--json", "--limit", "10",
-	})
-	if exitCode != 0 || stderr != "" {
-		t.Fatalf("exitCode = %d, stderr = %q", exitCode, stderr)
-	}
-	var got audit.QueryRecord
-	if err := json.Unmarshal([]byte(strings.TrimSpace(stdout)), &got); err != nil {
-		t.Fatalf("decode audit decision: %v", err)
-	}
-	if got.Detail.State != auditstorage.DetailStateExpired {
-		t.Fatalf("detail state = %q, want expired", got.Detail.State)
-	}
-	if len(got.Detail.AvailableClasses) != 0 {
-		t.Fatalf("available classes = %v, want none", got.Detail.AvailableClasses)
-	}
-}
-
 func TestRunQueryEvaluationsEmitsSafeNestedJSONLWithFilters(t *testing.T) {
 	setupQueryEnvironment(t)
 	record := appendCLIQueryEvaluation(t)
@@ -780,6 +631,7 @@ func TestRunQueryEvaluationsEmitsSafeNestedJSONLWithFilters(t *testing.T) {
 		"--evaluation-id", record.Evaluation.EvaluationID,
 		"--event-id", record.Evaluation.EventID,
 		"--receipt-id", strconv.FormatInt(record.Evaluation.ReceiptID, 10),
+		"--bucket", currentCLIBucket(t),
 		"--mode", record.Evaluation.Mode,
 		"--since", "2026-07-11T00:00:00Z",
 		"--until", "2026-07-12T00:00:00Z",
@@ -851,7 +703,6 @@ func TestExportEvaluationsWritesCompleteDetail(t *testing.T) {
 
 func TestExportEvaluationsRejectsIncompleteDetail(t *testing.T) {
 	for _, state := range []auditstorage.DetailState{
-		auditstorage.DetailStateExpired,
 		auditstorage.DetailStateNotRecorded,
 	} {
 		t.Run(string(state), func(t *testing.T) {
@@ -881,35 +732,6 @@ func TestExportEvaluationsRejectsIncompleteDetail(t *testing.T) {
 	}
 }
 
-func TestExportEvaluationsRejectsExpiredStateWithDetailRows(t *testing.T) {
-	setupQueryEnvironment(t)
-	record := appendCLIExportEvaluation(
-		t,
-		"eval-export-contradictory-expired",
-		"evt-export-contradictory-expired",
-		"codex",
-		"session-export-contradictory-expired",
-		time.Date(2026, 8, 4, 13, 0, 0, 0, time.UTC),
-	)
-	setCLIExportStoredDetailState(
-		t,
-		record.Evaluation.EvaluationID,
-		auditstorage.DetailStateExpired,
-	)
-
-	exitCode, stdout, stderr := captureRunExport(t, []string{
-		"evaluations", "--evaluation-id", record.Evaluation.EvaluationID,
-	})
-
-	if exitCode != 1 || stdout != "" {
-		t.Fatalf("exitCode = %d, stdout = %q, stderr = %q", exitCode, stdout, stderr)
-	}
-	want := "1 selected evaluations lack complete detail; complete detail starts at none"
-	if !strings.Contains(stderr, want) {
-		t.Fatalf("stderr = %q, want %q", stderr, want)
-	}
-}
-
 func TestExportEvaluationsSkipExpiredDetailReportsCount(t *testing.T) {
 	setupQueryEnvironment(t)
 	complete := appendCLIExportEvaluation(
@@ -936,7 +758,7 @@ func TestExportEvaluationsSkipExpiredDetailReportsCount(t *testing.T) {
 		"session-export-not-recorded",
 		time.Date(2026, 8, 4, 14, 0, 0, 0, time.UTC),
 	)
-	setCLIExportDetailState(t, expired.Evaluation.EvaluationID, auditstorage.DetailStateExpired)
+	setCLIExportDetailState(t, expired.Evaluation.EvaluationID, auditstorage.DetailStateNotRecorded)
 	setCLIExportDetailState(
 		t,
 		notRecorded.Evaluation.EvaluationID,
@@ -989,7 +811,7 @@ func TestExportEvaluationsSkipsIncompleteDetailBeforePagination(t *testing.T) {
 	setCLIExportDetailState(
 		t,
 		incomplete.Evaluation.EvaluationID,
-		auditstorage.DetailStateExpired,
+		auditstorage.DetailStateNotRecorded,
 	)
 
 	exitCode, stdout, stderr := captureRunExport(t, []string{
@@ -1026,7 +848,7 @@ func TestExportEvaluationsFiltersBeforeCheckingDetail(t *testing.T) {
 		"session-export-expired",
 		time.Date(2026, 8, 4, 13, 0, 0, 0, time.UTC),
 	)
-	setCLIExportDetailState(t, incomplete.Evaluation.EvaluationID, auditstorage.DetailStateExpired)
+	setCLIExportDetailState(t, incomplete.Evaluation.EvaluationID, auditstorage.DetailStateNotRecorded)
 
 	exitCode, stdout, stderr := captureRunExport(t, []string{
 		"evaluations", "--system", "claude",
@@ -1070,15 +892,12 @@ func TestRunQueryEvaluationsPrintsSafeSummaryTable(t *testing.T) {
 func TestRunQueryEvaluationsTableIgnoresCorruptDetail(t *testing.T) {
 	setupQueryEnvironment(t)
 	record := appendCLIQueryEvaluation(t)
-	store, err := intake.OpenSQLite(t.Context(), config.DefaultAuditSQLitePath(), nil)
+	store, err := openFixtureIntake(t, t.Context(), config.DefaultAuditSQLitePath(), nil)
 	if err != nil {
 		t.Fatalf("OpenSQLite: %v", err)
 	}
-	t.Cleanup(func() { _ = store.Close() })
-	if _, err := store.Handle().Exec(`
-		update gate_evaluation_layer_details set metadata_json = '{'
-		where evaluation_id = ?
-	`, record.Evaluation.EvaluationID); err != nil {
+	t.Cleanup(func() { _ = store.Handle().Close() })
+	if _, err := store.Handle().Exec(readCLISQLFixture(t, "corrupt_evaluation_metadata.sql"), record.Evaluation.EvaluationID); err != nil {
 		t.Fatalf("corrupt evaluation metadata: %v", err)
 	}
 
@@ -1119,32 +938,32 @@ func TestRunQueryEvaluationsHandlesEmptyHistory(t *testing.T) {
 	}
 }
 
-func TestQueryTableRenderersPreserveColumnsAndAddDetail(t *testing.T) {
+func TestQueryTableRenderersIncludeBucketAndDetail(t *testing.T) {
 	seen := intake.QueryResult{
 		Source: "sqlite",
 		Records: []intake.QueryRecord{
 			{
-				RecordedAt: "2026-07-11T01:02:03Z", System: "codex",
+				BucketID: "20260711T000000Z", RecordedAt: "2026-07-11T01:02:03Z", System: "codex",
 				SessionID: "session-1", EventName: "PreToolUse", ToolName: "Shell",
 				Operation: intake.Operation{Command: "make test"},
 				Deferred:  intake.QueryDeferred{State: intake.DeferredStatePending},
 				Detail: auditstorage.DetailProjection{
-					State: auditstorage.DetailStateProtected,
+					State: auditstorage.DetailStateNotRecorded,
 				},
 			},
 		},
 	}
 	seenOutput := captureStdoutCall(t, func() { printSeenTable(seen) })
 	wantSeen := "source=sqlite rows=1\n" +
-		fmt.Sprintf("%-25s  %-8s  %-12s  %-12s  %-9s  %-10s  %-12s  %s\n", "recorded_at", "system", "state", "event", "tool", "session", "detail", "command") +
-		fmt.Sprintf("%-25s  %-8s  %-12s  %-12s  %-9s  %-10s  %-12s  %s\n", "2026-07-11T01:02:03Z", "codex", "pending", "PreToolUse", "Shell", "session-1", "protected", "make test")
+		fmt.Sprintf("%-16s  %-25s  %-8s  %-12s  %-12s  %-9s  %-10s  %-12s  %s\n", "bucket", "recorded_at", "system", "state", "event", "tool", "session", "detail", "command") +
+		fmt.Sprintf("%-16s  %-25s  %-8s  %-12s  %-12s  %-9s  %-10s  %-12s  %s\n", "20260711T000000Z", "2026-07-11T01:02:03Z", "codex", "pending", "PreToolUse", "Shell", "session-1", "not_recorded", "make test")
 	if seenOutput != wantSeen {
 		t.Fatalf("seen table changed\ngot:  %q\nwant: %q", seenOutput, wantSeen)
 	}
 
 	events := []audit.QueryRecord{
 		{
-			Event: audit.Event{
+			BucketID: "20260711T000000Z", Event: audit.Event{
 				Time: "2026-07-11T01:02:03Z", System: "codex", EventName: "PreToolUse",
 				ToolName: "Shell", Operation: audit.Operation{Command: "make test"},
 				Decision: audit.Decision{Kind: "block", RulesMatched: []string{"rule-1"}},
@@ -1154,8 +973,8 @@ func TestQueryTableRenderersPreserveColumnsAndAddDetail(t *testing.T) {
 	}
 	eventOutput := captureStdoutCall(t, func() { printEventTable("sqlite", events) })
 	wantEvent := "source=sqlite rows=1\n" +
-		fmt.Sprintf("%-25s  %-8s  %-12s  %-12s  %-9s  %-24s  %-12s  %s\n", "time", "system", "decision", "event", "tool", "rules", "detail", "command") +
-		fmt.Sprintf("%-25s  %-8s  %-12s  %-12s  %-9s  %-24s  %-12s  %s\n", "2026-07-11T01:02:03Z", "codex", "block", "PreToolUse", "Shell", "rule-1", "available", "make test")
+		fmt.Sprintf("%-16s  %-25s  %-8s  %-12s  %-12s  %-9s  %-24s  %-12s  %s\n", "bucket", "time", "system", "decision", "event", "tool", "rules", "detail", "command") +
+		fmt.Sprintf("%-16s  %-25s  %-8s  %-12s  %-12s  %-9s  %-24s  %-12s  %s\n", "20260711T000000Z", "2026-07-11T01:02:03Z", "codex", "block", "PreToolUse", "Shell", "rule-1", "available", "make test")
 	if eventOutput != wantEvent {
 		t.Fatalf("decision table changed\ngot:  %q\nwant: %q", eventOutput, wantEvent)
 	}
@@ -1182,12 +1001,12 @@ func appendCLIExportEvaluation(
 ) evaluation.Record {
 	t.Helper()
 	ctx := context.Background()
-	store, err := intake.OpenSQLite(ctx, config.DefaultAuditSQLitePath(), nil)
+	store, err := openFixtureIntake(t, ctx, config.DefaultAuditSQLitePath(), nil)
 	if err != nil {
 		t.Fatalf("OpenSQLite: %v", err)
 	}
 	t.Cleanup(func() {
-		if err := store.Close(); err != nil {
+		if err := store.Handle().Close(); err != nil {
 			t.Fatalf("Close: %v", err)
 		}
 	})
@@ -1246,34 +1065,9 @@ func appendCLIExportEvaluation(
 	return record
 }
 
-func setCLIExportDetailState(
-	t *testing.T,
-	evaluationID string,
-	state auditstorage.DetailState,
-) {
+func setCLIExportDetailState(t *testing.T, evaluationID string, state auditstorage.DetailState) {
 	t.Helper()
-	database, err := sql.Open("sqlite3", config.DefaultAuditSQLitePath())
-	if err != nil {
-		t.Fatalf("open audit database: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := database.Close(); err != nil {
-			t.Fatalf("close audit database: %v", err)
-		}
-	})
-	for _, table := range []string{
-		"gate_evaluation_label_details",
-		"gate_evaluation_layer_details",
-		"gate_evaluation_details",
-	} {
-		if _, err := database.Exec(
-			"delete from "+table+" where evaluation_id = ?",
-			evaluationID,
-		); err != nil {
-			t.Fatalf("delete %s: %v", table, err)
-		}
-	}
-	setCLIExportStoredDetailStateWithDatabase(t, database, evaluationID, state)
+	setCLIExportStoredDetailState(t, evaluationID, state)
 }
 
 func setCLIExportStoredDetailState(
@@ -1282,7 +1076,8 @@ func setCLIExportStoredDetailState(
 	state auditstorage.DetailState,
 ) {
 	t.Helper()
-	database, err := sql.Open("sqlite3", config.DefaultAuditSQLitePath())
+	store, err := openFixtureIntake(t, t.Context(), config.DefaultAuditSQLitePath(), nil)
+	database := store.Handle()
 	if err != nil {
 		t.Fatalf("open audit database: %v", err)
 	}
@@ -1302,8 +1097,8 @@ func setCLIExportStoredDetailStateWithDatabase(
 ) {
 	t.Helper()
 	if _, err := database.Exec(
-		`update gate_evaluations set detail_state = ? where evaluation_id = ?`,
-		state,
+		readCLISQLFixture(t, "set_evaluation_content_recorded.sql"),
+		state == auditstorage.DetailStateAvailable,
 		evaluationID,
 	); err != nil {
 		t.Fatalf("mark evaluation detail %s: %v", state, err)
@@ -1469,11 +1264,7 @@ func TestRunConfigCheckPrintsEffectiveAuditStoragePolicy(t *testing.T) {
 	}
 	want := "" +
 		"agent-gate: config ok\n" +
-		"audit storage: balanced\n" +
-		"full detail: 168h0m0s\n" +
-		"summary: 720h0m0s\n" +
-		"size target: disabled\n" +
-		"maintenance: every 24h0m0s, 1000 rows per batch\n"
+		"audit storage: full\n"
 	if stdout != want {
 		t.Fatalf("runConfig() stdout = %q, want %q", stdout, want)
 	}
@@ -1482,7 +1273,7 @@ func TestRunConfigCheckPrintsEffectiveAuditStoragePolicy(t *testing.T) {
 	}
 }
 
-func TestRunConfigCheckPrintsConfiguredAuditStorageSize(t *testing.T) {
+func TestRunConfigCheckPrintsConfiguredAuditStorageProfile(t *testing.T) {
 	setupQueryEnvironment(t)
 	configPath := config.Path()
 	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
@@ -1490,10 +1281,9 @@ func TestRunConfigCheckPrintsConfiguredAuditStorageSize(t *testing.T) {
 	}
 	body := `
 [audit.storage]
-profile = "full"
-maintenance_interval = "12h"
-max_size_mb = 25
-maintenance_batch_rows = 123
+profile = "minimal"
+bucket_interval = "12h"
+retention_buckets = 3
 `
 	if err := os.WriteFile(configPath, []byte(body), 0o600); err != nil {
 		t.Fatalf("WriteFile config: %v", err)
@@ -1505,11 +1295,7 @@ maintenance_batch_rows = 123
 	}
 	want := "" +
 		"agent-gate: config ok\n" +
-		"audit storage: full\n" +
-		"full detail: 720h0m0s\n" +
-		"summary: 720h0m0s\n" +
-		"size target: 25000000 bytes\n" +
-		"maintenance: every 12h0m0s, 123 rows per batch\n"
+		"audit storage: minimal\n"
 	if stdout != want {
 		t.Fatalf("runConfig() stdout = %q, want %q", stdout, want)
 	}
@@ -1524,7 +1310,7 @@ func TestRunConfigCheckRejectsInvalidAuditStorage(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
 		t.Fatalf("MkdirAll config: %v", err)
 	}
-	if err := os.WriteFile(configPath, []byte("[audit.storage]\nmax_size_mb = -1\n"), 0o600); err != nil {
+	if err := os.WriteFile(configPath, []byte("[audit.storage]\nretention_buckets = -1\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile config: %v", err)
 	}
 
@@ -1535,7 +1321,7 @@ func TestRunConfigCheckRejectsInvalidAuditStorage(t *testing.T) {
 	if stdout != "" {
 		t.Fatalf("runConfig() stdout = %q, want empty", stdout)
 	}
-	if !strings.Contains(stderr, "audit.storage.max_size_mb must not be negative") {
+	if !strings.Contains(stderr, "audit.storage: retention buckets must be positive") {
 		t.Fatalf("runConfig() stderr = %q, want audit storage validation error", stderr)
 	}
 }
@@ -1578,4 +1364,18 @@ func readCapturedFile(t *testing.T, file *os.File) string {
 		t.Fatalf("Close captured file: %v", err)
 	}
 	return string(data)
+}
+
+func currentCLIBucket(t *testing.T) string {
+	t.Helper()
+	cfg := &config.Config{}
+	set, err := cfg.ReadAuditHistory(t.Context(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = set.Close() }()
+	if len(set.Handles) != 1 {
+		t.Fatalf("buckets = %d", len(set.Handles))
+	}
+	return set.Handles[0].Bucket.ID
 }

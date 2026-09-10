@@ -15,7 +15,6 @@ import (
 
 	"goodkind.io/agent-gate/api/daemonpb"
 	"goodkind.io/agent-gate/internal/audit"
-	"goodkind.io/agent-gate/internal/auditstorage"
 	"goodkind.io/agent-gate/internal/config"
 	"goodkind.io/agent-gate/internal/evaluation"
 	"goodkind.io/agent-gate/internal/hook"
@@ -42,7 +41,7 @@ path = "` + databasePath + `"
 	if err != nil {
 		t.Fatalf("LoadExisting: %v", err)
 	}
-	server, err := New(newDiscardLogger(), cfg)
+	server, err := newServer(t.Context(), newDiscardLogger(), cfg, time.Now)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -62,6 +61,9 @@ path = "` + databasePath + `"
 	if _, err := server.EvaluateHook(t.Context(), request); err != nil {
 		t.Fatalf("EvaluateHook: %v", err)
 	}
+	if err := server.dispatchRetainedReplay(t.Context(), server.now()); err != nil {
+		t.Fatal(err)
+	}
 	var work deferredWork
 	select {
 	case work = <-controlledProcessor.events:
@@ -79,66 +81,24 @@ path = "` + databasePath + `"
 	if !bytes.Equal(before.RawPayload, request.RawJson) {
 		t.Fatalf("protected raw payload = %q, want %q", before.RawPayload, request.RawJson)
 	}
-	var state auditstorage.DetailState
-	if err := sqliteStore.Handle().QueryRowContext(t.Context(), `
-		select state from intake_event_detail_manifest where event_id = ?
-	`, work.eventID).Scan(&state); err != nil {
-		t.Fatalf("query daemon detail manifest: %v", err)
-	}
-	if state != auditstorage.DetailStateProtected {
-		t.Fatalf("daemon detail state = %q, want protected", state)
-	}
-
 	controlledProcessor.processEvent(t.Context(), work)
-	pendingAudit, err := sqliteStore.store.ListPendingDeferredAudit(t.Context(), 0)
+	pending, err := sqliteStore.ListPending(t.Context())
+	if err != nil || len(pending) != 0 {
+		t.Fatalf("pending: %v, error: %v", pending, err)
+	}
+	after, err := sqliteStore.GetReceipt(t.Context(), work.receiptID)
 	if err != nil {
-		t.Fatalf("ListPendingDeferredAudit: %v", err)
+		t.Fatal(err)
 	}
-	if len(pendingAudit) != 0 {
-		t.Fatalf("pending audit receipts = %v, want none", pendingAudit)
+	if len(after.RawPayload) != 0 || len(after.NormalizedJSON) != 0 {
+		t.Fatalf("terminal input retained: %+v", after)
 	}
-	var intakeDetailCount int
-	if err := sqliteStore.Handle().QueryRowContext(t.Context(), `
-		select manifest.state,
-			(select count(*) from intake_event_details detail
-				where detail.event_id = manifest.event_id)
-		from intake_event_detail_manifest manifest where manifest.event_id = ?
-	`, work.eventID).Scan(&state, &intakeDetailCount); err != nil {
-		t.Fatalf("query terminal daemon detail: %v", err)
+	events, _, err := audit.QueryReadOnly(t.Context(), currentAuditConfig(server), audit.QueryFilter{SessionID: before.SessionID})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if state != auditstorage.DetailStateNotRecorded || intakeDetailCount != 0 {
-		t.Fatalf(
-			"terminal daemon detail = state %q rows %d, want not_recorded and 0",
-			state,
-			intakeDetailCount,
-		)
-	}
-	var outboxEntries int
-	var availablePayloads int
-	var payloadDetails int
-	if err := sqliteStore.Handle().QueryRowContext(t.Context(), `
-		select count(*), coalesce(sum(entry.payload_available), 0),
-			(select count(*)
-			from deferred_audit_outbox_entry_details detail
-			join deferred_audit_outbox outbox on outbox.receipt_id = detail.receipt_id
-			where outbox.event_id = ?)
-		from deferred_audit_outbox_entries entry
-		join deferred_audit_outbox outbox on outbox.receipt_id = entry.receipt_id
-		where outbox.event_id = ?
-	`, work.eventID, work.eventID).Scan(
-		&outboxEntries,
-		&availablePayloads,
-		&payloadDetails,
-	); err != nil {
-		t.Fatalf("query terminal deferred audit payload: %v", err)
-	}
-	if outboxEntries == 0 || availablePayloads != 0 || payloadDetails != 0 {
-		t.Fatalf(
-			"terminal outbox payload = entries %d available %d details %d",
-			outboxEntries,
-			availablePayloads,
-			payloadDetails,
-		)
+	if len(events) == 0 {
+		t.Fatal("completed receipt has no audit events")
 	}
 }
 
@@ -148,7 +108,7 @@ func TestEvaluateHookClosedInferenceErrorBlocksAndPersistsValidLayer(t *testing.
 	endpoint := startDeferredInferenceServer(t, fake)
 	cfg := loadDeferredInferConfig(t, endpoint)
 	cfg.Rules[0].Conditions[0].OnError = "closed"
-	server, err := New(newDiscardLogger(), cfg)
+	server, err := newReadyTestServer(newDiscardLogger(), cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -222,6 +182,7 @@ func (recorder *recordingEvaluationRecorder) CommitHotEvaluation(
 	_ int64,
 	_ bool,
 	record evaluation.Record,
+	_ []audit.NormalizedEntry,
 ) error {
 	if recorder.hotErr != nil {
 		return recorder.hotErr
@@ -246,7 +207,7 @@ func (recorder *recordingEvaluationRecorder) snapshot() []evaluation.Record {
 
 func TestEvaluateHookEvaluationCommitPrecedesBlockingResponse(t *testing.T) {
 	setDaemonTestDirs(t)
-	server, err := New(newDiscardLogger(), daemonTestConfig(t))
+	server, err := newReadyTestServer(newDiscardLogger(), daemonTestConfig(t))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -281,7 +242,7 @@ func TestEvaluateHookEvaluationCommitPrecedesBlockingResponse(t *testing.T) {
 
 func TestEvaluateHookLedgerFailureReturnsFailOpen(t *testing.T) {
 	setDaemonTestDirs(t)
-	server, err := New(newDiscardLogger(), daemonTestConfig(t))
+	server, err := newReadyTestServer(newDiscardLogger(), daemonTestConfig(t))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -305,7 +266,7 @@ func TestEvaluateHookLedgerFailureReturnsFailOpen(t *testing.T) {
 
 func TestEvaluateHookAtomicHotCommitFailureRecordsAndReturnsFailOpen(t *testing.T) {
 	setDaemonTestDirs(t)
-	server, err := New(newDiscardLogger(), daemonTestConfig(t))
+	server, err := newReadyTestServer(newDiscardLogger(), daemonTestConfig(t))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -338,7 +299,7 @@ func TestEvaluateHookFallbackLedgerFailureLogsDistinctStatus(t *testing.T) {
 	setDaemonTestDirs(t)
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&logs, nil))
-	server, err := New(logger, daemonTestConfig(t))
+	server, err := newReadyTestServer(logger, daemonTestConfig(t))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -367,7 +328,7 @@ func TestEvaluateHookFallbackLedgerFailureLogsDistinctStatus(t *testing.T) {
 
 func TestEvaluateHookDuplicateReceiptsCreateDistinctEvaluations(t *testing.T) {
 	setDaemonTestDirs(t)
-	server, err := New(newDiscardLogger(), daemonTestConfig(t))
+	server, err := newReadyTestServer(newDiscardLogger(), daemonTestConfig(t))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -393,7 +354,7 @@ func TestEvaluateHookDuplicateReceiptsCreateDistinctEvaluations(t *testing.T) {
 
 func TestEvaluateHookAllowPersistsEvaluation(t *testing.T) {
 	setDaemonTestDirs(t)
-	server, err := New(newDiscardLogger(), daemonTestConfig(t))
+	server, err := newReadyTestServer(newDiscardLogger(), daemonTestConfig(t))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -420,7 +381,7 @@ func TestEvaluateHookAllowPersistsEvaluation(t *testing.T) {
 
 func TestEvaluateHookParseFailurePersistsValidationEvaluation(t *testing.T) {
 	setDaemonTestDirs(t)
-	server, err := New(newDiscardLogger(), daemonTestConfig(t))
+	server, err := newReadyTestServer(newDiscardLogger(), daemonTestConfig(t))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -460,7 +421,7 @@ func TestEvaluateHookParseFailurePersistsValidationEvaluation(t *testing.T) {
 
 func TestEvaluateHookQueueSaturationAfterEvaluationDoesNotChangeVerdict(t *testing.T) {
 	setDaemonTestDirs(t)
-	server, err := New(newDiscardLogger(), daemonTestConfig(t))
+	server, err := newReadyTestServer(newDiscardLogger(), daemonTestConfig(t))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
