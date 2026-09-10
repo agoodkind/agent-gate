@@ -238,6 +238,64 @@ func ApplyHookInstallation(plan *HookInstallationPlan) error {
 	return nil
 }
 
+// PrepareHookRemoval removes only Agent Gate registrations from selected providers.
+func PrepareHookRemoval(options HooksOptions) (*HookInstallationPlan, error) {
+	providers, err := selectedProviders(options.Providers)
+	if err != nil {
+		return nil, err
+	}
+	homeDir, err := resolvedHomeDir(options.HomeDir)
+	if err != nil {
+		return nil, err
+	}
+	plan := &HookInstallationPlan{writes: nil, writer: options.Stdout}
+	if plan.writer == nil {
+		plan.writer = io.Discard
+	}
+	for _, provider := range providers {
+		path := lifecycleConfigurationPath(homeDir, provider)
+		content, found, err := prepareHookRemoval(provider, path)
+		if err != nil {
+			return nil, err
+		}
+		if found {
+			plan.addWrite(path, provider, content)
+		}
+	}
+	return plan, nil
+}
+
+func prepareHookRemoval(provider Provider, targetPath string) ([]byte, bool, error) {
+	content, err := os.ReadFile(targetPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, false, nil
+	}
+	if err != nil {
+		slog.Warn("read hook removal target failed", "path", targetPath, "err", err)
+		return nil, false, fmt.Errorf("read %s: %w", targetPath, err)
+	}
+	if provider == ProviderCodex {
+		if err := validateCodexManagedBlock(string(content)); err != nil {
+			return nil, false, err
+		}
+		return []byte(removeCodexManagedBlock(string(content))), true, nil
+	}
+	var target map[string]json.RawMessage
+	if err := json.Unmarshal(content, &target); err != nil {
+		return nil, false, fmt.Errorf("parse %s: %w", targetPath, err)
+	}
+	if target == nil {
+		return content, true, nil
+	}
+	cleaned, err := mergeJSONHooks(target["hooks"], json.RawMessage(`{}`))
+	if err != nil {
+		return nil, false, err
+	}
+	target["hooks"] = cleaned
+	output, err := marshalJSONHookConfig(targetPath, target)
+	return output, err == nil, err
+}
+
 func (plan *HookInstallationPlan) addWrite(targetPath string, provider Provider, content []byte) {
 	plan.writes = append(plan.writes, hookInstallationWrite{
 		targetPath: targetPath,

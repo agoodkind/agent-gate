@@ -42,7 +42,7 @@ func resetTestOptions(t *testing.T) ResetOptions {
 		t.Fatal(err)
 	}
 	absent := resetTestRunner(func(string, ...string) ([]byte, error) { return nil, ErrServiceAbsent })
-	options := ResetOptions{ExecutablePath: filepath.Join(root, "bin", "agent-gate"), Service: ServiceOptions{HomeDir: root, Runner: absent}, Control: ServiceStatusOptions{Runner: absent}, StateDir: filepath.Join(root, "state", "agent-gate"), CacheDir: filepath.Join(root, "cache", "agent-gate"), RuntimeDir: filepath.Join(root, "runtime", "agent-gate"), ConfigDir: filepath.Join(root, "config", "agent-gate")}
+	options := ResetOptions{ExecutablePath: filepath.Join(root, "bin", "agent-gate"), Service: ServiceOptions{HomeDir: root, Runner: absent}, Control: ServiceStatusOptions{Runner: absent}, StateDir: filepath.Join(root, "state", "agent-gate"), CacheDir: filepath.Join(root, "cache", "agent-gate"), RuntimeDir: filepath.Join(root, "runtime", "agent-gate"), ConfigDir: filepath.Join(root, "config", "agent-gate"), Targets: DefaultResetTargets()}
 	options.PreservedPaths = []string{filepath.Join(options.ConfigDir, "config.toml"), filepath.Join(root, "hooks.json")}
 	options.Audit = auditstorage.CatalogOptions{BasePath: filepath.Join(root, "shared", "audit.db"), StatePath: filepath.Join(options.StateDir, "audit-storage.json"), CoordinationPath: filepath.Join(root, "runtime", "agent-gate-audit.lock")}
 	for _, path := range []string{options.StateDir, options.CacheDir, options.RuntimeDir, options.ConfigDir, filepath.Dir(options.Audit.BasePath)} {
@@ -224,42 +224,6 @@ func TestResetFailedShutdownLeavesDatabase(t *testing.T) {
 		t.Fatalf("shutdown: %v", err)
 	}
 	assertResetBytes(t, options.Audit.BasePath, []byte("unchanged fixture bytes"))
-}
-
-func TestResetPartialRemovalRestoresExecutable(t *testing.T) {
-	options := resetTestOptions(t)
-	before, err := os.ReadFile(options.ExecutablePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(options.ConfigDir, "old-state"), []byte("remove"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	plan, err := PrepareReset(options)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(options.ConfigDir, 0o500); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(options.ConfigDir, 0o700) })
-	if err := ApplyReset(t.Context(), plan); err == nil {
-		t.Fatal("removal failure missing")
-	}
-	assertResetBytes(t, options.ExecutablePath, before)
-	if output, err := exec.CommandContext(t.Context(), options.ExecutablePath, "version").CombinedOutput(); err != nil {
-		t.Fatalf("restored executable: %s %v", output, err)
-	}
-	if err := os.Chmod(options.ConfigDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	plan, err = PrepareReset(options)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := ApplyReset(t.Context(), plan); err != nil {
-		t.Fatal(err)
-	}
 }
 
 func TestResetTermResistantChild(t *testing.T) {

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -89,7 +90,7 @@ func (f *resetInstallationFixture) InstallUsingExistingInstaller() {
 
 func (f *resetInstallationFixture) SeedAuditAndInstallationState() {
 	f.t.Helper()
-	for _, path := range []string{filepath.Join(config.DefaultStateDir(), "old-state"), filepath.Join(config.DefaultCacheDir(), "old-cache"), filepath.Join(config.RuntimeDir(), "old-runtime"), filepath.Join(config.DefaultConfigDir(), "old-config"), config.DefaultAuditSQLitePath()} {
+	for _, path := range []string{filepath.Join(config.DefaultStateDir(), "old-state"), filepath.Join(config.DefaultCacheDir(), "old-cache"), filepath.Join(config.RuntimeDir(), "old-runtime"), config.DefaultAuditSQLitePath()} {
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			f.t.Fatal(err)
 		}
@@ -98,11 +99,14 @@ func (f *resetInstallationFixture) SeedAuditAndInstallationState() {
 		}
 		f.oldPaths = append(f.oldPaths, path)
 	}
+	if err := os.WriteFile(filepath.Join(config.DefaultConfigDir(), "user-rule.md"), []byte("user authored rule"), 0o600); err != nil {
+		f.t.Fatal(err)
+	}
 }
 
 func (f *resetInstallationFixture) ReadPreservedFiles() map[string][]byte {
 	f.t.Helper()
-	paths := []string{config.Path(), filepath.Join(f.home, ".claude", "settings.json"), filepath.Join(f.home, ".codex", "config.toml"), filepath.Join(f.home, ".cursor", "hooks.json"), filepath.Join(f.home, ".gemini", "settings.json"), filepath.Join(f.home, ".copilot", "hooks", "agent-gate.json")}
+	paths := []string{config.Path(), filepath.Join(config.DefaultConfigDir(), "user-rule.md"), filepath.Join(f.home, ".claude", "settings.json"), filepath.Join(f.home, ".codex", "config.toml"), filepath.Join(f.home, ".cursor", "hooks.json"), filepath.Join(f.home, ".gemini", "settings.json"), filepath.Join(f.home, ".copilot", "hooks", "agent-gate.json")}
 	result := make(map[string][]byte)
 	for _, path := range paths {
 		content, err := os.ReadFile(path)
@@ -128,7 +132,7 @@ func (f *resetInstallationFixture) RunReset() int {
 		return installer.PrepareReset(options)
 	}
 	dependencies.install = f.install
-	return runResetWithDependencies(nil, dependencies)
+	return runResetWithDependencies([]string{"--apply"}, io.Discard, io.Discard, dependencies)
 }
 
 func (f *resetInstallationFixture) AssertPreservedFilesEqual(before map[string][]byte) {
@@ -298,7 +302,7 @@ func TestResetReinstallsAndPreservesConfiguration(t *testing.T) {
 
 func TestResetRejectsArgumentsBeforeMutation(t *testing.T) {
 	dependencies := resetDependencies{resolveExecutable: func() (string, error) { t.Fatal("reset started mutation preparation"); return "", nil }}
-	if code := runResetWithDependencies([]string{"extra"}, dependencies); code != 2 {
+	if code := runResetWithDependencies([]string{"extra"}, io.Discard, io.Discard, dependencies); code != 2 {
 		t.Fatalf("extra argument exit = %d", code)
 	}
 	if code := runCLIWithHook([]string{"reset", "extra"}, &bytes.Buffer{}, &bytes.Buffer{}, func(hookRoute) int { t.Fatal("reset routed to hook"); return 0 }); code != 2 {
