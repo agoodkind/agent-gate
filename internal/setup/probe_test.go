@@ -79,9 +79,15 @@ func TestVerifyInstalledHooksReportsMissingDurableIntake(t *testing.T) {
 		t.Fatalf("ApplyHookInstallation: %v", err)
 	}
 	databasePath := filepath.Join(t.TempDir(), "audit.db")
+	storageRoot := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", filepath.Join(storageRoot, "state"))
+	t.Setenv("XDG_RUNTIME_DIR", filepath.Join(storageRoot, "runtime"))
 	cfg := &config.Config{Audit: config.Audit{Outputs: config.AuditOutput{
 		SQLite: config.AuditSQLiteOutput{Path: databasePath},
 	}}}
+	if err := cfg.PrepareAuditStorage(); err != nil {
+		t.Fatalf("PrepareAuditStorage: %v", err)
+	}
 
 	_, err = VerifyInstalledHooks(t.Context(), ProbeRequest{
 		SetupID:   "missing-intake",
