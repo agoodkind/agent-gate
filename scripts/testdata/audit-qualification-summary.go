@@ -56,8 +56,8 @@ func main() {
 			row("Oldest trace pending ns", values(baseline, func(r result) float64 { return float64(r.OldestPendingNS) }), values(candidate, func(r result) float64 { return float64(r.OldestPendingNS) }), "descriptive", valid)
 			row("Max retries/observed receipt", values(baseline, maximumRetries), values(candidate, maximumRetries), "descriptive", valid)
 			row("Final bytes/retained receipt", values(baseline, retainedBytes), values(candidate, retainedBytes), "descriptive", valid)
-			optionalRow("Worst sampled 5s CPU ns", baseline, candidate, peakCPU)
-			optionalRow("Worst sampled 5s disk bytes", baseline, candidate, peakDisk)
+			optionalRow("Worst sampled 5s CPU ns", baseline, candidate, peakCPU, valid)
+			optionalRow("Worst sampled 5s disk bytes", baseline, candidate, peakDisk, valid)
 		}
 	}
 }
@@ -125,16 +125,25 @@ func optionalRow(
 	baselineResults []result,
 	candidateResults []result,
 	extract func(result) (float64, bool),
+	valid bool,
 ) {
 	baseline := optionalValues(baselineResults, extract)
 	candidate := optionalValues(candidateResults, extract)
 	fmt.Printf(
-		"| %s | %s | %s | %s | descriptive |\n",
+		"| %s | %s | %s | %s | %s |\n",
 		name,
 		formatOptionalMedian(baseline, len(baselineResults)),
 		formatOptionalRange(baseline, len(baselineResults)),
 		formatOptionalMedian(candidate, len(candidateResults)),
+		optionalVerdict(valid),
 	)
+}
+
+func optionalVerdict(valid bool) string {
+	if !valid {
+		return "UNPROVEN"
+	}
+	return "descriptive"
 }
 
 func optionalValues(

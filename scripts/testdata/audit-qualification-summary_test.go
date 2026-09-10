@@ -29,4 +29,10 @@ func TestOptionalMetricFormattingReportsAvailability(t *testing.T) {
 	if got := formatOptionalRange(values, 5); got != "0.00..10.00 (2/5 sampled)" {
 		t.Fatalf("available range = %q", got)
 	}
+	if got := optionalVerdict(false); got != "UNPROVEN" {
+		t.Fatalf("invalid comparison verdict = %q", got)
+	}
+	if got := optionalVerdict(true); got != "descriptive" {
+		t.Fatalf("valid comparison verdict = %q", got)
+	}
 }
