@@ -20,7 +20,7 @@ require (
 	goodkind.io/gksyntax v0.0.0-20260801172749-57c5352a8c01
 	goodkind.io/go-makefile v0.0.0-20260712071637-360d4c3d4fff
 	google.golang.org/grpc v1.83.0
-	google.golang.org/protobuf v1.36.11
+	google.golang.org/protobuf v1.36.12
 )
 
 require (
