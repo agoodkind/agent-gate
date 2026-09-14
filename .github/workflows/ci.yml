@@ -16,3 +16,4 @@ jobs:
     secrets: inherit
     with:
       apt_packages: libpcre2-dev
+      cgo: true
