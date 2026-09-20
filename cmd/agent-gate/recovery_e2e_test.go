@@ -334,7 +334,7 @@ func buildRecoveryTestBinary(t *testing.T) string {
 
 func newRecoveryTestHome(t *testing.T) string {
 	t.Helper()
-	home, err := os.MkdirTemp("/tmp", "agent-gate-recovery.")
+	home, err := os.MkdirTemp("", "agent-gate-recovery.")
 	if err != nil {
 		t.Fatalf("create temporary home: %v", err)
 	}
