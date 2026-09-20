@@ -2200,6 +2200,79 @@ func TestCmdSegments(t *testing.T) {
 			want:    "cd /tmp\ngit commit -m msg",
 		},
 		{
+			name:    "newline chain",
+			payload: map[string]any{"tool_input": map[string]any{"command": "git status\ngit push"}},
+			want:    "git status\ngit push",
+		},
+		{
+			name:    "or-or chain",
+			payload: map[string]any{"tool_input": map[string]any{"command": "git push || git status"}},
+			want:    "git push\ngit status",
+		},
+		{
+			name: "quoted separators",
+			payload: map[string]any{
+				"tool_input": map[string]any{
+					"command": `git commit -S -m 'Clarify cause; remove jargon; simplify prose && preserve || operators'`,
+				},
+			},
+			want: `git commit -S -m 'Clarify cause; remove jargon; simplify prose && preserve || operators'`,
+		},
+		{
+			name: "double quoted separators",
+			payload: map[string]any{
+				"tool_input": map[string]any{
+					"command": `git commit -m "Clarify cause; preserve && and || text"`,
+				},
+			},
+			want: `git commit -m "Clarify cause; preserve && and || text"`,
+		},
+		{
+			name:    "escaped separators",
+			payload: map[string]any{"tool_input": map[string]any{"command": `printf one\;two\&\&three\|\|four`}},
+			want:    `printf one\;two\&\&three\|\|four`,
+		},
+		{
+			name:    "pipeline remains one segment",
+			payload: map[string]any{"tool_input": map[string]any{"command": "git log | head"}},
+			want:    "git log | head",
+		},
+		{
+			name: "heredoc body remains one segment",
+			payload: map[string]any{
+				"tool_input": map[string]any{
+					"command": "cat <<'EOF'\nOne sentence; another sentence.\nEOF",
+				},
+			},
+			want: "cat " + "<" + "<'EOF'",
+		},
+		{
+			name: "command after heredoc becomes another segment",
+			payload: map[string]any{
+				"tool_input": map[string]any{
+					"command": "cat <<'EOF'\nOne sentence; another sentence.\nEOF\ngit status",
+				},
+			},
+			want: "cat " + "<" + "<'EOF'\ngit status",
+		},
+		{
+			name: "quoted newline remains one segment",
+			payload: map[string]any{
+				"tool_input": map[string]any{"command": "printf '%s' 'first\nsecond'"},
+			},
+			want: "printf '%s' 'first second'",
+		},
+		{
+			name:    "comment separators are ignored",
+			payload: map[string]any{"tool_input": map[string]any{"command": "git status # note; not a command"}},
+			want:    "git status",
+		},
+		{
+			name:    "empty segments omitted",
+			payload: map[string]any{"tool_input": map[string]any{"command": "; git status ;; git push ;"}},
+			want:    "git status\ngit push",
+		},
+		{
 			name:    "argument with keyword inside does not split",
 			payload: map[string]any{"tool_input": map[string]any{"command": `git log --grep="git commit"`}},
 			want:    `git log --grep="git commit"`,

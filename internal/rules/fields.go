@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"goodkind.io/agent-gate/internal/config"
+	"goodkind.io/agent-gate/internal/rules/concerns/shellparse"
 )
 
 // FieldSet is the closed collection of values rule selectors can inspect.
@@ -278,12 +279,10 @@ func (fields FieldSet) CmdSegments() string {
 	if command == "" {
 		return ""
 	}
-	var segments []string
-	for _, segment := range cmdChainRe.Split(command, -1) {
-		segment = strings.TrimSpace(segment)
-		if segment != "" {
-			segments = append(segments, segment)
-		}
+	command = stripShellComments(stripHeredocBodies(command))
+	segments := shellparse.SplitCommandChain(command)
+	for index, segment := range segments {
+		segments[index] = strings.NewReplacer("\r\n", " ", "\n", " ", "\r", " ").Replace(segment)
 	}
 	return strings.Join(segments, "\n")
 }
