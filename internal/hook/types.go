@@ -11,12 +11,13 @@ type System int
 type hookSystemName string
 
 const (
-	hookSystemNameClaude  hookSystemName = "claude"
-	hookSystemNameCodex   hookSystemName = "codex"
-	hookSystemNameCopilot hookSystemName = "copilot"
-	hookSystemNameCursor  hookSystemName = "cursor"
-	hookSystemNameGemini  hookSystemName = "gemini"
-	hookSystemNameVSCode  hookSystemName = "vscode"
+	hookSystemNameClaude   hookSystemName = "claude"
+	hookSystemNameCodex    hookSystemName = "codex"
+	hookSystemNameCopilot  hookSystemName = "copilot"
+	hookSystemNameCursor   hookSystemName = "cursor"
+	hookSystemNameGemini   hookSystemName = "gemini"
+	hookSystemNameResponse hookSystemName = "response"
+	hookSystemNameVSCode   hookSystemName = "vscode"
 )
 
 // System variants. Each constant tags a single detected agent host.
@@ -35,6 +36,8 @@ const (
 	SystemVSCode
 	// SystemCopilot identifies the GitHub Copilot host.
 	SystemCopilot
+	// SystemResponse identifies response events without provider wire fields.
+	SystemResponse
 )
 
 // String returns a lowercase label suitable for audit output.
@@ -54,6 +57,8 @@ func (s System) String() string {
 		return "vscode"
 	case SystemCopilot:
 		return "copilot"
+	case SystemResponse:
+		return "response"
 	default:
 		return "unknown"
 	}
@@ -75,6 +80,8 @@ func SystemFromString(s string) System {
 		return SystemVSCode
 	case hookSystemNameCopilot:
 		return SystemCopilot
+	case hookSystemNameResponse:
+		return SystemResponse
 	default:
 		return SystemUnknown
 	}

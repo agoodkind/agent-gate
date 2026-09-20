@@ -126,6 +126,10 @@ func ParseHookPayload(system System, rawBytes []byte) (Payload, error) {
 		var event CopilotPayload
 		err := decodePayload(rawBytes, &event)
 		return Payload{System: system, Event: enrichCopilotPayload(event)}, err
+	case SystemResponse:
+		var event ResponsePayload
+		err := decodePayload(rawBytes, &event)
+		return Payload{System: system, Event: event}, err
 	case SystemUnknown:
 		fallthrough
 	default:

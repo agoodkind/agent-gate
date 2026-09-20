@@ -117,6 +117,8 @@ func renderForSystem(request ResponseRequest) Response {
 		return renderClaudeResponse(request)
 	case SystemCopilot:
 		return renderCopilotResponse(request)
+	case SystemResponse:
+		return renderUnknownResponse(request)
 	case SystemUnknown:
 		return renderUnknownResponse(request)
 	default:

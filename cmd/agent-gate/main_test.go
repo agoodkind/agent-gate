@@ -270,6 +270,29 @@ func TestRunCLIManagedHookRecordsRegistrationWithoutExplicitHint(t *testing.T) {
 	}
 }
 
+func TestRunCLIResponseHookUsesNeutralResponseSystem(t *testing.T) {
+	var received hookRoute
+	exitCode := runCLIWithHook(
+		[]string{"response-hook"},
+		io.Discard,
+		io.Discard,
+		func(route hookRoute) int {
+			received = route
+			return 0
+		},
+	)
+
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d, want 0", exitCode)
+	}
+	if received.ProviderHint != hook.SystemResponse {
+		t.Fatalf("provider hint = %q, want response", received.ProviderHint)
+	}
+	if received.ManagedRegistration != "" {
+		t.Fatalf("managed registration = %q, want empty", received.ManagedRegistration)
+	}
+}
+
 func TestRunHookFailOpenOnStdinReadFailure(t *testing.T) {
 	runtime, stdout, stderr := testHookRuntime(readError{}, nil)
 

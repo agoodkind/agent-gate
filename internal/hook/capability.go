@@ -62,6 +62,8 @@ type capabilityKey struct {
 // Provider Capability Matrix in HOOKS.md. The capability_test.go test asserts
 // every event listed in the per-provider sections of HOOKS.md has an entry.
 var capabilityTable = map[capabilityKey]Capability{
+	{SystemResponse, ResponseEvent}: CapabilityBlock,
+
 	// Claude: PreToolUse blocks; PostToolUse only adds context.
 	{SystemClaude, "PreToolUse"}:         CapabilityBlock,
 	{SystemClaude, "PostToolUse"}:        CapabilityObserve,

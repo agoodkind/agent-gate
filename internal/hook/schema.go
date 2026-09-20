@@ -56,11 +56,12 @@ var virtualFields = []string{
 type schemaSystem string
 
 const (
-	schemaSystemClaude  schemaSystem = "claude"
-	schemaSystemCodex   schemaSystem = "codex"
-	schemaSystemCopilot schemaSystem = "copilot"
-	schemaSystemCursor  schemaSystem = "cursor"
-	schemaSystemGemini  schemaSystem = "gemini"
+	schemaSystemClaude   schemaSystem = "claude"
+	schemaSystemCodex    schemaSystem = "codex"
+	schemaSystemCopilot  schemaSystem = "copilot"
+	schemaSystemCursor   schemaSystem = "cursor"
+	schemaSystemGemini   schemaSystem = "gemini"
+	schemaSystemResponse schemaSystem = "response"
 )
 
 // ── Cursor ──────────────────────────────────────────────────────────────────
@@ -98,6 +99,9 @@ func init() {
 	codexSchema = buildCodexSchema()
 	copilotSchema = buildCopilotSchema()
 	geminiSchema = buildGeminiSchema()
+	responseSchema = map[string]EventSchema{
+		ResponseEvent: makeSchema([]string{"hook_event_name", "session_id", "assistant_message"}),
+	}
 }
 
 func buildCursorSchema() map[CursorEvent]EventSchema {
@@ -176,10 +180,11 @@ var claudeToolInputPaths = []string{
 }
 
 var (
-	claudeSchema  map[ClaudeEvent]EventSchema
-	codexSchema   map[CodexEvent]EventSchema
-	copilotSchema map[string]EventSchema
-	geminiSchema  map[GeminiEvent]EventSchema
+	claudeSchema   map[ClaudeEvent]EventSchema
+	codexSchema    map[CodexEvent]EventSchema
+	copilotSchema  map[string]EventSchema
+	geminiSchema   map[GeminiEvent]EventSchema
+	responseSchema map[string]EventSchema
 )
 
 func buildCopilotSchema() map[string]EventSchema {
@@ -393,6 +398,8 @@ func ValidPaths(system, eventName string) EventSchema {
 		return copilotSchema[eventName]
 	case schemaSystemGemini:
 		return geminiSchema[GeminiEvent(eventName)]
+	case schemaSystemResponse:
+		return responseSchema[eventName]
 	default:
 		return nil
 	}
@@ -624,10 +631,10 @@ func applicableEventPairs(r *config.Rule) []schemaEventPair {
 		return filterDisabledProviders(allEventPairs(), r)
 	}
 
-	applicable := make([]schemaEventPair, 0, len(r.Events)*5+
+	applicable := make([]schemaEventPair, 0, len(r.Events)*6+
 		len(r.ClaudeEvents)+len(r.CursorEvents)+len(r.CodexEvents)+len(r.CopilotEvents)+len(r.GeminiEvents))
 	for _, ev := range r.Events {
-		for _, system := range []string{"claude", "cursor", "codex", "copilot", "gemini"} {
+		for _, system := range []string{"claude", "cursor", "codex", "copilot", "gemini", "response"} {
 			if r.ProviderDisabled(system) {
 				continue
 			}
@@ -668,12 +675,13 @@ func filterDisabledProviders(pairs []schemaEventPair, r *config.Rule) []schemaEv
 
 func allEventPairs() []schemaEventPair {
 	applicable := make([]schemaEventPair, 0,
-		len(cursorSchema)+len(claudeSchema)+len(codexSchema)+len(copilotSchema)+len(geminiSchema))
+		len(cursorSchema)+len(claudeSchema)+len(codexSchema)+len(copilotSchema)+len(geminiSchema)+len(responseSchema))
 	applicable = appendSchemaEvents(applicable, "cursor", cursorSchema)
 	applicable = appendSchemaEvents(applicable, "claude", claudeSchema)
 	applicable = appendSchemaEvents(applicable, "codex", codexSchema)
 	applicable = appendSchemaEvents(applicable, "copilot", copilotSchema)
 	applicable = appendSchemaEvents(applicable, "gemini", geminiSchema)
+	applicable = appendSchemaEvents(applicable, "response", responseSchema)
 	return applicable
 }
 
