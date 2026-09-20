@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
@@ -28,7 +29,17 @@ import (
 	"goodkind.io/agent-gate/internal/version"
 	"goodkind.io/gklog"
 	gkversion "goodkind.io/gklog/version"
+	"goodkind.io/gksyntax/shelldecomp"
 	"goodkind.io/go-makefile/selfupdate"
+)
+
+const (
+	recoveryTokenEnvironment = "AGENT_GATE_RECOVERY_TOKEN"
+	recoveryTokenFileName    = "agent_gate_recovery_token"
+)
+
+var recoveryTokenAssignmentPattern = regexp.MustCompile(
+	`^\s*AGENT_GATE_RECOVERY_TOKEN=(?:"\$(?:AGENT_GATE_RECOVERY_TOKEN|\{AGENT_GATE_RECOVERY_TOKEN\})"|\$(?:AGENT_GATE_RECOVERY_TOKEN|\{AGENT_GATE_RECOVERY_TOKEN\}))\s+`,
 )
 
 func writeUserLine(writer io.Writer, line string) {
@@ -208,7 +219,7 @@ func writeUsage(writer io.Writer) {
 
 Commands:
   audit          Inspect and maintain audit storage
-  config         Check configuration
+  config         Check or recover configuration
   copilot-hook   Handle a GitHub Copilot hook event
   codex-hook     Handle a Codex hook event
   daemon         Run the daemon
@@ -388,8 +399,35 @@ func runConfig(args []string) int {
 	if len(args) > 0 && args[0] == "ensure-defaults" {
 		return runConfigEnsureDefaults(args[1:])
 	}
-	fmt.Fprintln(os.Stderr, "usage: agent-gate config check | ensure-defaults [--auto-update check|apply|off]")
+	if len(args) == 2 && args[0] == "recover" {
+		return runConfigRecover(args[1])
+	}
+	fmt.Fprintln(os.Stderr, "usage: agent-gate config check | ensure-defaults [--auto-update check|apply|off] | recover <candidate-path>")
 	return 2
+}
+
+func runConfigRecover(candidatePath string) int {
+	if !recoveryTokenAvailable(os.Getenv) {
+		fmt.Fprintf(os.Stderr, "agent-gate: config recover requires %s\n", recoveryTokenEnvironment)
+		return 1
+	}
+	plan, err := config.PrepareReplacement(candidatePath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-gate: config recover validation failed: %v\n", err)
+		return 1
+	}
+	if validationErrors := hook.ValidateConfig(plan.Config); len(validationErrors) > 0 {
+		_ = plan.Close()
+		fmt.Fprintf(os.Stderr, "agent-gate: config recover validation failed: %v\n", validationErrors[0])
+		return 1
+	}
+	configPath, err := config.ApplyDefaults(plan)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-gate: config recover failed: %v\n", err)
+		return 1
+	}
+	writeUserLine(os.Stdout, "agent-gate: configuration recovered at "+configPath)
+	return 0
 }
 
 func writeAuditStoragePolicy(out io.Writer, policy config.AuditStoragePolicy) {
@@ -1621,6 +1659,17 @@ func runHookWithRuntime(systemHint hook.System, runtime hookRuntime) (exitCode i
 		baseEnvironment,
 		runtime.processes,
 	)
+	if response, ok := recoveryHookResponse(
+		data,
+		systemHint,
+		runtime.args,
+		baseEnvironment,
+		invocationContext,
+		runtime.getenv,
+	); ok {
+		writeResponse(runtime.stdout, runtime.stderr, response)
+		return response.ExitCode
+	}
 	ctx := context.Background()
 	client, err := runtime.connect(ctx)
 	if err != nil {
@@ -1669,6 +1718,112 @@ func runHookWithRuntime(systemHint hook.System, runtime hookRuntime) (exitCode i
 	}
 
 	return int(resp.ExitCode)
+}
+
+func recoveryHookResponse(
+	rawJSON []byte,
+	systemHint hook.System,
+	argv []string,
+	environment map[string]string,
+	invocationContext hook.InvocationContext,
+	getenv func(string) string,
+) (hook.Response, bool) {
+	if !recoveryTokenAvailable(getenv) {
+		return hook.Response{}, false
+	}
+	classification := hook.ClassifyWithContext(
+		rawJSON,
+		systemHint.String(),
+		argv,
+		environment,
+		invocationContext,
+	)
+	system := classification.ResolvedSystem()
+	normalizedJSON := rawJSON
+	if system == hook.SystemCopilot {
+		var err error
+		normalizedJSON, err = hook.NormalizeCopilotPayload(rawJSON, recoveryCopilotEventHint(argv))
+		if err != nil {
+			return hook.Response{}, false
+		}
+	}
+	payload, err := hook.ParseHookPayload(system, normalizedJSON)
+	if err != nil || !isConfigRecoveryCommand(payload.Fields().CommandValue(), payload.CWD()) {
+		return hook.Response{}, false
+	}
+	return hook.RenderResponse(hook.ResponseRequest{
+		System:    system,
+		EventName: payload.EventName(),
+		Decision:  hook.ResponseDecisionAllow,
+	}), true
+}
+
+func recoveryTokenAvailable(getenv func(string) string) bool {
+	if getenv != nil && getenv(recoveryTokenEnvironment) != "" {
+		return true
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return false
+	}
+	tokenPath := filepath.Join(home, ".secrets", recoveryTokenFileName)
+	info, err := os.Lstat(tokenPath)
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 {
+		return false
+	}
+	token, err := os.ReadFile(tokenPath)
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(string(token)) != ""
+}
+
+func recoveryCopilotEventHint(argv []string) string {
+	for index := range argv {
+		if argv[index] == "copilot-hook" {
+			if index+1 < len(argv) {
+				return argv[index+1]
+			}
+			return ""
+		}
+		if argv[index] == "managed-hook" &&
+			index+2 < len(argv) && argv[index+1] == "copilot" {
+			return argv[index+2]
+		}
+	}
+	return ""
+}
+
+func isConfigRecoveryCommand(command string, cwd string) bool {
+	assignment := recoveryTokenAssignmentPattern.FindStringIndex(command)
+	if assignment == nil {
+		return false
+	}
+	recoveryCommand := strings.TrimSpace(command[assignment[1]:])
+	if !strings.HasPrefix(recoveryCommand, "agent-gate ") {
+		return false
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		home = cwd
+	}
+	decomposition := shelldecomp.Parse(command, cwd, home)
+	if decomposition.IsOpaque() || len(decomposition.Commands()) != 1 ||
+		len(decomposition.WriteTargets()) != 0 {
+		return false
+	}
+	parsed := decomposition.Commands()[0]
+	if parsed.Argv0 != "agent-gate" || len(parsed.Args) != 3 {
+		return false
+	}
+	values := make([]string, 0, len(parsed.Args))
+	for _, argument := range parsed.Args {
+		if !argument.Resolvable {
+			return false
+		}
+		values = append(values, argument.Value)
+	}
+	return values[0] == "config" && values[1] == "recover" && values[2] != ""
 }
 
 func writeResponse(stdout io.Writer, stderr io.Writer, response hook.Response) {
