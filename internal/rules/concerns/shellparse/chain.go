@@ -3,8 +3,7 @@ package shellparse
 import "strings"
 
 // SplitCommandChain splits a shell command at unquoted sequence operators.
-// A single pipeline operator remains inside a segment because cmd_segments
-// treats a pipeline as one submitted operation.
+// A single pipeline operator remains inside one segment.
 func SplitCommandChain(command string) []string {
 	var segments []string
 	var current strings.Builder
