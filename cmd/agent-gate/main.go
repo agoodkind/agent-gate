@@ -33,7 +33,10 @@ import (
 	"goodkind.io/go-makefile/selfupdate"
 )
 
-const recoveryTokenEnvironment = "AGENT_GATE_RECOVERY_TOKEN"
+const (
+	recoveryTokenEnvironment = "AGENT_GATE_RECOVERY_TOKEN"
+	recoveryTokenFileName    = "agent_gate_recovery_token"
+)
 
 var recoveryTokenAssignmentPattern = regexp.MustCompile(
 	`^\s*AGENT_GATE_RECOVERY_TOKEN=(?:"\$(?:AGENT_GATE_RECOVERY_TOKEN|\{AGENT_GATE_RECOVERY_TOKEN\})"|\$(?:AGENT_GATE_RECOVERY_TOKEN|\{AGENT_GATE_RECOVERY_TOKEN\}))\s+`,
@@ -404,7 +407,7 @@ func runConfig(args []string) int {
 }
 
 func runConfigRecover(candidatePath string) int {
-	if os.Getenv(recoveryTokenEnvironment) == "" {
+	if !recoveryTokenAvailable(os.Getenv) {
 		fmt.Fprintf(os.Stderr, "agent-gate: config recover requires %s\n", recoveryTokenEnvironment)
 		return 1
 	}
@@ -1725,7 +1728,7 @@ func recoveryHookResponse(
 	invocationContext hook.InvocationContext,
 	getenv func(string) string,
 ) (hook.Response, bool) {
-	if getenv == nil || getenv(recoveryTokenEnvironment) == "" {
+	if !recoveryTokenAvailable(getenv) {
 		return hook.Response{}, false
 	}
 	classification := hook.ClassifyWithContext(
@@ -1753,6 +1756,26 @@ func recoveryHookResponse(
 		EventName: payload.EventName(),
 		Decision:  hook.ResponseDecisionAllow,
 	}), true
+}
+
+func recoveryTokenAvailable(getenv func(string) string) bool {
+	if getenv != nil && getenv(recoveryTokenEnvironment) != "" {
+		return true
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return false
+	}
+	tokenPath := filepath.Join(home, ".secrets", recoveryTokenFileName)
+	info, err := os.Lstat(tokenPath)
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 {
+		return false
+	}
+	token, err := os.ReadFile(tokenPath)
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(string(token)) != ""
 }
 
 func recoveryCopilotEventHint(argv []string) string {

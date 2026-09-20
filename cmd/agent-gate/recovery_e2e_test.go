@@ -55,6 +55,46 @@ func TestConfigRecoveryThroughCLI(t *testing.T) {
 		}
 	})
 
+	t.Run("hook reads recovery token file", func(t *testing.T) {
+		home := newRecoveryTestHome(t)
+		writeRecoveryTestTokenFile(t, home)
+		commandText := recoveryShellCommand(filepath.Join(home, "candidate.toml"))
+
+		exitCode, stdout, stderr := runRecoveryHook(t, binaryPath, home, "", commandText)
+
+		if exitCode != 0 {
+			t.Fatalf("exit code = %d, want 0; stderr = %q", exitCode, stderr)
+		}
+		if stdout == "" {
+			t.Fatal("stdout is empty, want a provider allow response")
+		}
+		if strings.Contains(stdout+stderr, "no rule was enforced") {
+			t.Fatalf(
+				"output contains fail-open warning: stdout = %q stderr = %q",
+				stdout,
+				stderr,
+			)
+		}
+	})
+
+	t.Run("hook rejects readable recovery token file", func(t *testing.T) {
+		home := newRecoveryTestHome(t)
+		tokenPath := writeRecoveryTestTokenFile(t, home)
+		if err := os.Chmod(tokenPath, 0o644); err != nil {
+			t.Fatalf("change token file mode: %v", err)
+		}
+		commandText := recoveryShellCommand(filepath.Join(home, "candidate.toml"))
+
+		exitCode, _, stderr := runRecoveryHook(t, binaryPath, home, "", commandText)
+
+		if exitCode != 0 {
+			t.Fatalf("exit code = %d, want fail-open exit 0", exitCode)
+		}
+		if !strings.Contains(stderr, "no rule was enforced") {
+			t.Fatalf("stderr = %q, want daemon-unavailable warning", stderr)
+		}
+	})
+
 	t.Run("hook rejects chained command", func(t *testing.T) {
 		home := newRecoveryTestHome(t)
 		commandText := recoveryShellCommand(filepath.Join(home, "candidate.toml")) +
@@ -242,6 +282,22 @@ func TestConfigRecoveryThroughCLI(t *testing.T) {
 		assertRecoveryTestFile(t, configPath, original)
 	})
 
+	t.Run("command reads recovery token file", func(t *testing.T) {
+		home := newRecoveryTestHome(t)
+		writeRecoveryTestTokenFile(t, home)
+		configPath := writeRecoveryTestConfig(t, home, "[log]\nlevel = \"info\"\n")
+		candidatePath := filepath.Join(home, "candidate.toml")
+		want := "[log]\nlevel = \"debug\"\n"
+		writeRecoveryTestFile(t, candidatePath, want)
+
+		exitCode, _, stderr := runRecoveryCLI(t, binaryPath, home, "", candidatePath)
+
+		if exitCode != 0 {
+			t.Fatalf("exit code = %d, want 0; stderr = %q", exitCode, stderr)
+		}
+		assertRecoveryTestFile(t, configPath, want)
+	})
+
 	t.Run("command preserves configuration after validation failure", func(t *testing.T) {
 		home := newRecoveryTestHome(t)
 		original := "[log]\nlevel = \"info\"\n"
@@ -413,6 +469,13 @@ func writeRecoveryTestConfig(t *testing.T, home string, content string) string {
 	t.Helper()
 	path := filepath.Join(home, "config", "agent-gate", "config.toml")
 	writeRecoveryTestFile(t, path, content)
+	return path
+}
+
+func writeRecoveryTestTokenFile(t *testing.T, home string) string {
+	t.Helper()
+	path := filepath.Join(home, ".secrets", recoveryTokenFileName)
+	writeRecoveryTestFile(t, path, recoveryTestToken)
 	return path
 }
 
