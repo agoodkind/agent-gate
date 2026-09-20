@@ -137,7 +137,7 @@ func ruleSubscriptions(rule *config.Rule) []ruleSubscription {
 		// Events without a provider prefix: the daemon routes the same event
 		// name to whichever provider sent the hook payload. To warn
 		// accurately, look the event up under every system that has it.
-		for _, sys := range []System{SystemClaude, SystemCodex, SystemCopilot, SystemCursor, SystemGemini} {
+		for _, sys := range []System{SystemClaude, SystemCodex, SystemCopilot, SystemCursor, SystemGemini, SystemResponse} {
 			if rule.ProviderDisabled(sys.String()) {
 				continue
 			}

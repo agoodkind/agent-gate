@@ -49,21 +49,22 @@ func writeUserLine(writer io.Writer, line string) {
 type commandName string
 
 const (
-	commandAudit       commandName = "audit"
-	commandConfig      commandName = "config"
-	commandCopilotHook commandName = "copilot-hook"
-	commandCodexHook   commandName = "codex-hook"
-	commandDaemon      commandName = "daemon"
-	commandExport      commandName = "export"
-	commandGeminiHook  commandName = "gemini-hook"
-	commandInstall     commandName = "install"
-	commandKV          commandName = "kv"
-	commandManagedHook commandName = "managed-hook"
-	commandQuery       commandName = "query"
-	commandReset       commandName = "reset"
-	commandSetup       commandName = "setup"
-	commandUpdate      commandName = "update"
-	commandVersion     commandName = "version"
+	commandAudit        commandName = "audit"
+	commandConfig       commandName = "config"
+	commandCopilotHook  commandName = "copilot-hook"
+	commandCodexHook    commandName = "codex-hook"
+	commandDaemon       commandName = "daemon"
+	commandExport       commandName = "export"
+	commandGeminiHook   commandName = "gemini-hook"
+	commandInstall      commandName = "install"
+	commandKV           commandName = "kv"
+	commandManagedHook  commandName = "managed-hook"
+	commandQuery        commandName = "query"
+	commandResponseHook commandName = "response-hook"
+	commandReset        commandName = "reset"
+	commandSetup        commandName = "setup"
+	commandUpdate       commandName = "update"
+	commandVersion      commandName = "version"
 )
 
 type daemonCommandName string
@@ -189,6 +190,8 @@ func runCLIWithHook(
 		return hookRunner(hookRoute{
 			ProviderHint: hook.SystemUnknown, ManagedRegistration: args[1],
 		})
+	case commandResponseHook:
+		return hookRunner(hookRoute{ProviderHint: hook.SystemResponse})
 	case commandKV:
 		return runKV(args[1:])
 	case commandQuery:
@@ -230,6 +233,7 @@ Commands:
   kv             Access durable key-value data
   managed-hook   Handle an installed provider hook
   query          Query audit and intake data
+  response-hook  Apply response rules to plain assistant text
   reset          Remove installation state and reinstall the service
   setup          Install and verify managed integrations
   update         Manage updates

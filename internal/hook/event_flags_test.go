@@ -95,6 +95,17 @@ func TestRuleSubscriptions_DisableProvidersFiltersListedEvents(t *testing.T) {
 	}
 }
 
+func TestRuleSubscriptionsIncludesNeutralResponseEvent(t *testing.T) {
+	t.Parallel()
+	rule := &config.Rule{Events: []string{ResponseEvent}}
+	subs := ruleSubscriptions(rule)
+	if !slices.ContainsFunc(subs, func(subscription ruleSubscription) bool {
+		return subscription.system == SystemResponse && subscription.event == ResponseEvent
+	}) {
+		t.Fatalf("response subscription missing from %#v", subs)
+	}
+}
+
 func TestWarnCapabilityDowngrades_AllEventsRespectsDisableProviders(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	cfg := &config.Config{Rules: []config.Rule{{

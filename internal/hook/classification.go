@@ -633,6 +633,8 @@ func providerFromSignal(value string) System {
 		return SystemVSCode
 	case "copilot", "github-copilot":
 		return SystemCopilot
+	case "response":
+		return SystemResponse
 	default:
 		return SystemUnknown
 	}
