@@ -100,6 +100,7 @@ func evaluatePayloadHot(
 	systemStr := payload.System.String()
 	eventName := payload.EventName()
 	fields := payload.Fields()
+	fields = recoverCodexExecWorkdir(payload.System, fields)
 	ruleSet := rulesForConfig(cfg)
 	ctx = rules.WithExecResponseTargetResolver(ctx, func(action string) string {
 		return responseTargetForAction(payload.System, eventName, action)
