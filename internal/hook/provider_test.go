@@ -557,6 +557,33 @@ func TestParseHookPayload_UsesToolInputWorkdir(t *testing.T) {
 	}
 }
 
+func TestEvaluateHot_RecoversCodexExecWorkdirFromTranscript(t *testing.T) {
+	dir := t.TempDir()
+	transcript := filepath.Join(dir, "rollout.jsonl")
+	line := `{"type":"response_item","payload":{"type":"custom_tool_call","name":"exec","input":"const r = await tools.exec_command({cmd:\"git switch -c feature\",workdir:\"/repo/worktree\"}); text(r.output)","internal_chat_message_metadata_passthrough":{"turn_id":"turn-1"}}}` + "\n"
+	if err := os.WriteFile(transcript, []byte(line), 0o600); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
+	rawJSON := []byte(`{"hook_event_name":"PreToolUse","session_id":"s1","turn_id":"turn-1","transcript_path":"` + transcript + `","cwd":"/repo/main","tool_name":"Bash","tool_input":{"command":"git switch -c feature"}}`)
+
+	evaluation := evaluateHot(
+		context.Background(),
+		rawJSON,
+		&config.Config{},
+		hook.SystemCodex,
+		func(string) string { return "" },
+	)
+	if evaluation.Deferred.Fields.ToolInputWorkdir != "/repo/worktree" {
+		t.Fatalf(
+			"tool_input.workdir = %q, want /repo/worktree",
+			evaluation.Deferred.Fields.ToolInputWorkdir,
+		)
+	}
+	if got := evaluation.Deferred.Fields.String(config.FieldEffectiveCWD); got != "/repo/worktree" {
+		t.Fatalf("effective_cwd = %q, want /repo/worktree", got)
+	}
+}
+
 func TestCodexSubagentStop_PopulatesAgentIdentity(t *testing.T) {
 	// Field shape captured from a live codex-native SubagentStop payload.
 	rawJSON := []byte(`{"hook_event_name":"SubagentStop","session_id":"s1","turn_id":"t1","transcript_path":"/Users/x/.codex/sessions/a.jsonl","agent_transcript_path":"/Users/x/.codex/sessions/b.jsonl","cwd":"/repo","model":"gpt-5.5","permission_mode":"bypassPermissions","stop_hook_active":false,"agent_id":"019e8fe6","agent_type":"worker","last_assistant_message":"done"}`)
