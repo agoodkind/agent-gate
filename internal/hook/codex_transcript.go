@@ -38,8 +38,8 @@ func recoverCodexExecWorkdir(system System, fields rules.FieldSet) rules.FieldSe
 	return fields
 }
 
-// Codex does not expose an exec workdir in the hook schema. The transcript is
-// an unstable interface, so every parsing failure must preserve existing hook behavior.
+// Codex omits the exec workdir from the hook schema. This function returns an
+// empty string on any parsing failure. The caller then uses the session cwd.
 func codexExecWorkdirFromTranscript(path string, turnID string, command string) string {
 	tail := readCodexTranscriptTail(path)
 	lines := strings.Split(string(tail), "\n")
