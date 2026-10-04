@@ -16,11 +16,8 @@ const (
 	configCheckShortNameSuffix = "short"
 )
 
-func writeConfigCheckRules(t *testing.T, nameSuffix string) {
+func writeConfigCheckRules(t *testing.T, configHome string, nameSuffix string) {
 	t.Helper()
-	configHome := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", configHome)
-	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	var body strings.Builder
 	for index := range configCheckRuleCount {
 		fmt.Fprintf(&body, `[[rules]]
@@ -43,8 +40,17 @@ violation_message = "blocked"
 	}
 }
 
+func setConfigCheckHome(t *testing.T) string {
+	t.Helper()
+	configHome := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", configHome)
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	return configHome
+}
+
 func TestConfigCheckRejectsRuleSetTheStoreRefuses(t *testing.T) {
-	writeConfigCheckRules(t, strings.Repeat("x", configCheckLongNameBytes))
+	configHome := setConfigCheckHome(t)
+	writeConfigCheckRules(t, configHome, strings.Repeat("x", configCheckLongNameBytes))
 
 	if exitCode := runConfig([]string{"check"}); exitCode != configCheckExitFailed {
 		t.Fatalf("config check exit = %d, want %d", exitCode, configCheckExitFailed)
@@ -52,7 +58,8 @@ func TestConfigCheckRejectsRuleSetTheStoreRefuses(t *testing.T) {
 }
 
 func TestConfigCheckAcceptsRecordableRuleSet(t *testing.T) {
-	writeConfigCheckRules(t, configCheckShortNameSuffix)
+	configHome := setConfigCheckHome(t)
+	writeConfigCheckRules(t, configHome, configCheckShortNameSuffix)
 
 	if exitCode := runConfig([]string{"check"}); exitCode != configCheckExitOK {
 		t.Fatalf("config check exit = %d, want %d", exitCode, configCheckExitOK)
