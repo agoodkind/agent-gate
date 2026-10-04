@@ -15,8 +15,14 @@ import (
 )
 
 const (
-	maxLayerMetadataJSONBytes   = 16 * 1024
-	maxLayerMetadataStringBytes = 1024
+	// maxUpstreamLayerMetadataJSONBytes bounds schema version 2 metadata, which
+	// stores untrusted content from an inference reply.
+	maxUpstreamLayerMetadataJSONBytes = 16 * 1024
+	// maxLocalLayerMetadataJSONBytes bounds metadata that the daemon produces.
+	// Rule-engine metadata has one entry per configured rule, and a record over
+	// the bound makes the daemon discard the verdict and allow the call.
+	maxLocalLayerMetadataJSONBytes = 8 * 1024 * 1024
+	maxLayerMetadataStringBytes    = 1024
 )
 
 type reportedHashStatus string
@@ -158,7 +164,7 @@ func projectRuleFilters(raw json.RawMessage) (string, json.RawMessage, error) {
 
 // UnmarshalLayerMetadata validates metadata and returns its safe export encoding.
 func UnmarshalLayerMetadata(raw json.RawMessage) (json.RawMessage, error) {
-	if len(raw) == 0 || len(raw) > maxLayerMetadataJSONBytes || !json.Valid(raw) {
+	if len(raw) == 0 || len(raw) > maxLocalLayerMetadataJSONBytes || !json.Valid(raw) {
 		return nil, errors.New("layer metadata is invalid or exceeds byte limit")
 	}
 	var version layerMetadataVersion
@@ -167,6 +173,9 @@ func UnmarshalLayerMetadata(raw json.RawMessage) (json.RawMessage, error) {
 	}
 	if version.SchemaVersion != 2 {
 		return append(json.RawMessage(nil), raw...), nil
+	}
+	if len(raw) > maxUpstreamLayerMetadataJSONBytes {
+		return nil, errors.New("v2 layer metadata exceeds byte limit")
 	}
 	metadata, err := UnmarshalLayerMetadataV2(raw)
 	if err != nil {
@@ -209,7 +218,7 @@ func UnmarshalLayerMetadata(raw json.RawMessage) (json.RawMessage, error) {
 	if err != nil {
 		return nil, fmt.Errorf("encode normalized v2 layer metadata: %s", err.Error())
 	}
-	if len(encoded) > maxLayerMetadataJSONBytes {
+	if len(encoded) > maxUpstreamLayerMetadataJSONBytes {
 		return nil, errors.New("normalized v2 layer metadata exceeds byte limit")
 	}
 	return encoded, nil
