@@ -1,0 +1,87 @@
+# The first condition of each rule excludes a patch body. Codex sends the text
+# of an apply_patch call in the command field.
+#
+# A command condition does not inspect a script inside docker exec, ssh, or a
+# shell -c call. The wrapper rules match those forms in cmd_segments.
+
+[[rules]]
+name = "no-database-client-ysqlsh"
+description = "Block ysqlsh, the YugabyteDB SQL shell."
+events = ["PreToolUse", "preToolUse", "beforeShellExecution", "BeforeTool"]
+action = "block"
+violation_message = "ysqlsh opens a direct database session with no audit record. Write a migration, or run a reviewed Go command: ./server ops <command>."
+[[rules.conditions]]
+kind = "regex"
+field_paths = ["tool_input.command", "command"]
+pattern = '(?s)\A(?!\*\*\* Begin Patch).'
+[[rules.conditions]]
+kind = "command"
+argv0 = "ysqlsh"
+strip_env = true
+strip_args = ["env", "time", "command", "sudo"]
+pattern = '(?s).*'
+
+[[rules]]
+name = "no-database-client-psql"
+description = "Block psql, the PostgreSQL SQL shell."
+events = ["PreToolUse", "preToolUse", "beforeShellExecution", "BeforeTool"]
+action = "block"
+violation_message = "psql opens a direct database session with no audit record. Write a migration, or run a reviewed Go command: ./server ops <command>."
+[[rules.conditions]]
+kind = "regex"
+field_paths = ["tool_input.command", "command"]
+pattern = '(?s)\A(?!\*\*\* Begin Patch).'
+[[rules.conditions]]
+kind = "command"
+argv0 = "psql"
+strip_env = true
+strip_args = ["env", "time", "command", "sudo"]
+pattern = '(?s).*'
+
+[[rules]]
+name = "no-database-client-wrapper"
+description = "Block docker, ssh, sudo, and shell -c commands that run ysqlsh or psql."
+events = ["PreToolUse", "preToolUse", "beforeShellExecution", "BeforeTool"]
+action = "block"
+violation_message = "This command runs ysqlsh or psql inside docker, ssh, sudo, or a shell -c script. A direct database session has no audit record. Write a migration, or run a reviewed Go command: ./server ops <command>."
+[[rules.conditions]]
+kind = "regex"
+field_paths = ["tool_input.command", "command"]
+pattern = '(?s)\A(?!\*\*\* Begin Patch).'
+# A pipe does not end a segment. The wrapper can follow a pipe.
+[[rules.conditions]]
+kind = "regex"
+field_paths = ["cmd_segments"]
+pattern = '(?m)(?:^|\|)\s*(?:\S*/)?(?:docker|ssh|sudo|bash|sh|zsh)\s[^\n]*(?<![\w.-])(?:ysqlsh|psql)(?![\w.-])'
+
+[[rules]]
+name = "no-database-break-glass-execute"
+description = "Block ops db sql --execute, the break-glass SQL command of Tack."
+events = ["PreToolUse", "preToolUse", "beforeShellExecution", "BeforeTool"]
+action = "block"
+violation_message = "ops db sql --execute runs a hand-written statement on a Tack database. Write a migration, or run a reviewed Go command: ./server ops <command>. The operator runs break-glass statements."
+[[rules.conditions]]
+kind = "regex"
+field_paths = ["tool_input.command", "command"]
+pattern = '(?s)\A(?!\*\*\* Begin Patch).'
+# A segment that starts with git, gh, echo, printf, rg, or grep quotes the
+# command and does not run it.
+[[rules.conditions]]
+kind = "regex"
+field_paths = ["cmd_segments"]
+pattern = '(?m)^(?!\s*(?:git|gh|echo|printf|rg|grep)\s)[^\n]*\bops\s+db\s+sql\s[^\n]*--execute\b'
+
+[[rules]]
+name = "no-remote-sql-statement"
+description = "Block ssh commands with a SQL schema or data statement in the remote command."
+events = ["PreToolUse", "preToolUse", "beforeShellExecution", "BeforeTool"]
+action = "block"
+violation_message = "This ssh command sends a SQL schema or data statement to a server. Write a migration, or run a reviewed Go command: ./server ops <command>."
+[[rules.conditions]]
+kind = "regex"
+field_paths = ["tool_input.command", "command"]
+pattern = '(?s)\A(?!\*\*\* Begin Patch).'
+[[rules.conditions]]
+kind = "regex"
+field_paths = ["cmd_segments"]
+pattern = '(?mi)^\s*(?:\S*/)?ssh\s[^\n]*\b(?:(?:CREATE|ALTER|DROP)\s+(?:TABLE|INDEX|SCHEMA|ROLE|USER|DATABASE|EXTENSION|FUNCTION|PROCEDURE|TRIGGER|EVENT\s+TRIGGER|POLICY|VIEW|SEQUENCE|TYPE)\b|TRUNCATE\s+(?:TABLE\s+)?[\w."]+|INSERT\s+INTO\s|UPDATE\s+[\w."]+\s+SET\s|DELETE\s+FROM\s|GRANT\s[^\n]*\sTO\s|REVOKE\s[^\n]*\sFROM\s)'
