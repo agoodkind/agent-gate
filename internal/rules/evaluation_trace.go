@@ -89,6 +89,15 @@ type RuleDecision struct {
 	PartialError bool `json:"partial_error,omitempty"`
 }
 
+// LargestRuleDecision returns the decision with the longest JSON encoding that
+// the rule engine records for ruleName.
+func LargestRuleDecision(ruleName string) RuleDecision {
+	return RuleDecision{
+		RuleName: ruleName, Status: traceStatusSkipped, SkipReason: skipEventNotApplicable,
+		Matched: false, PartialError: true,
+	}
+}
+
 // LayerTrace records one rich context or inference boundary for ledger persistence.
 type LayerTrace struct {
 	RuleName           string

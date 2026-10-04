@@ -396,6 +396,10 @@ func runConfig(args []string) int {
 			)
 			return 1
 		}
+		if err := daemon.ValidateRecordableRuleSet(cfg.Rules); err != nil {
+			fmt.Fprintf(os.Stderr, "agent-gate: config check failed: %v\n", err)
+			return 1
+		}
 		writeUserLine(os.Stdout, "agent-gate: config ok")
 		writeAuditStoragePolicy(os.Stdout, cfg.AuditStoragePolicy())
 		return 0
