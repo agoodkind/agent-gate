@@ -75,6 +75,13 @@ func TestSecretDumpRulesBlockCredentialPrinting(t *testing.T) {
 		{"typeset listing piped with stderr", "typeset -x 2>&1 | sort"},
 		{"declare listing after another command", "cd /tmp && declare -p"},
 		{"declare listing on a later line", "true\ndeclare -x"},
+		{"readonly list flag", "readonly -p"},
+		{"readonly without names", "readonly"},
+		{"bash script runs env", "bash -c 'env'"},
+		{"sh script runs printenv", `sh -c "printenv"`},
+		{"login shell script runs env after cd", "bash -lc 'cd /tmp && env | sort'"},
+		{"zsh script runs export listing", "zsh -c 'export -p'"},
+		{"cat reads proc cmdline", "cat /proc/1/cmdline"},
 		{"set without arguments", "set"},
 		{"ps BSD environment modifier", "ps eww"},
 		{"ps BSD user listing with environment", "ps auxe"},
@@ -107,6 +114,39 @@ func TestSecretDumpRulesBlockCredentialPrinting(t *testing.T) {
 	}
 }
 
+func TestSecretDumpRulesSeparateProcessEnvironmentFromArguments(t *testing.T) {
+	cfg := loadSecretDumpConfig(t)
+	const environmentRule = "no-secret-dump-ps-environment"
+	const argumentsRule = "no-secret-dump-ps-arguments"
+	cases := []struct {
+		command         string
+		wantEnvironment bool
+		wantArguments   bool
+	}{
+		{"ps eww", true, true},
+		{"ps -E", true, false},
+		{"ps -o pid,environment", true, false},
+		{"ps aux", false, true},
+		{"ps -ef", false, true},
+		{"ps -p 4242 -o pid,etime,command", false, true},
+		{"ps -o pid,args -p 4242", false, true},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.command, func(t *testing.T) {
+			matched := map[string]bool{}
+			for _, violation := range secretDumpViolations(t, cfg, testCase.command) {
+				matched[violation.RuleName] = true
+			}
+			if matched[environmentRule] != testCase.wantEnvironment {
+				t.Errorf("%s matched = %t, want %t", environmentRule, matched[environmentRule], testCase.wantEnvironment)
+			}
+			if matched[argumentsRule] != testCase.wantArguments {
+				t.Errorf("%s matched = %t, want %t", argumentsRule, matched[argumentsRule], testCase.wantArguments)
+			}
+		})
+	}
+}
+
 func TestSecretDumpRulesAllowOrdinaryCommands(t *testing.T) {
 	cfg := loadSecretDumpConfig(t)
 	allowed := []secretDumpCase{
@@ -125,6 +165,8 @@ func TestSecretDumpRulesAllowOrdinaryCommands(t *testing.T) {
 		{"make parallel flag", "make -j8 build"},
 		{"make file flag", "make -f Makefile build"},
 		{"make with canary environment prefix", "CANARY_TOKEN=canary-0000-not-a-secret make build"},
+		{"make variable quotes a test skip flag", `make test "TEST_ARGS=-count=1 -v -skip 'TestCanary'"`},
+		{"patch body lists dump commands", "*** Begin Patch\n*** Add File: canary.sh\n+env\n+set\n+ps aux\n+export -p\n*** End Patch"},
 		{"export assigns a value", "export CANARY_TOKEN=canary-0000-not-a-secret"},
 		{"declare prints one variable", "declare -p CANARY_TOKEN"},
 		{"declare exports an assignment", "declare -x CANARY_TOKEN=canary-0000-not-a-secret"},
@@ -135,6 +177,13 @@ func TestSecretDumpRulesAllowOrdinaryCommands(t *testing.T) {
 		{"echo quotes export", `echo "export -p"`},
 		{"heredoc body mentions declarations", "cat <<'EOF'\nexport -p\ndeclare -x\ntypeset\nEOF"},
 		{"comment mentions export", "true # export -p"},
+		{"readonly marks one variable", "readonly CANARY_LIMIT=1"},
+		{"bash script sets errexit", "bash -c 'set -e; make build'"},
+		{"bash script runs env with a command", "bash -c 'env CANARY_TOKEN=canary-0000-not-a-secret true'"},
+		{"bash script prints one variable", "bash -c 'printenv CANARY_TOKEN'"},
+		{"bash script echoes the word env", "bash -c 'echo env'"},
+		{"bash runs a script file", "bash scripts/build.sh"},
+		{"echo mentions proc cmdline", "echo /proc/1/cmdline"},
 		{"set errexit flags", "set -euo pipefail"},
 		{"ps selects metadata columns", "ps -o pid,comm"},
 		{"ps selects one process by id", "ps -p 4242 -o pid=,etime="},
