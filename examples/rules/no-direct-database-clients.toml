@@ -40,18 +40,19 @@ pattern = '(?s).*'
 
 [[rules]]
 name = "no-database-client-wrapper"
-description = "Block docker, ssh, and shell -c commands that run ysqlsh or psql."
+description = "Block docker, ssh, sudo, and shell -c commands that run ysqlsh or psql."
 events = ["PreToolUse", "preToolUse", "beforeShellExecution", "BeforeTool"]
 action = "block"
-violation_message = "This command runs ysqlsh or psql inside docker, ssh, or a shell -c script. A direct database session has no audit record. Write a migration, or run a reviewed Go command: ./server ops <command>."
+violation_message = "This command runs ysqlsh or psql inside docker, ssh, sudo, or a shell -c script. A direct database session has no audit record. Write a migration, or run a reviewed Go command: ./server ops <command>."
 [[rules.conditions]]
 kind = "regex"
 field_paths = ["tool_input.command", "command"]
 pattern = '(?s)\A(?!\*\*\* Begin Patch).'
+# A pipe does not end a segment. The wrapper can follow a pipe.
 [[rules.conditions]]
 kind = "regex"
 field_paths = ["cmd_segments"]
-pattern = '(?m)^\s*(?:sudo\s+)?(?:\S*/)?(?:docker|ssh|bash|sh|zsh)\s[^\n]*(?<![\w.-])(?:ysqlsh|psql)(?![\w.-])'
+pattern = '(?m)(?:^|\|)\s*(?:\S*/)?(?:docker|ssh|sudo|bash|sh|zsh)\s[^\n]*(?<![\w.-])(?:ysqlsh|psql)(?![\w.-])'
 
 [[rules]]
 name = "no-database-break-glass-execute"
