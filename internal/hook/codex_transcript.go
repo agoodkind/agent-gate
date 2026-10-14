@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
-	"regexp"
 	"slices"
 	"strings"
 
@@ -12,11 +11,6 @@ import (
 )
 
 const codexTranscriptTailBytes int64 = 2 * 1024 * 1024
-
-var (
-	codexExecCommandPattern = regexp.MustCompile(`\bcmd\s*:\s*("(?:\\.|[^"\\])*")`)
-	codexExecWorkdirPattern = regexp.MustCompile(`\bworkdir\s*:\s*("(?:\\.|[^"\\])*")`)
-)
 
 func recoverCodexExecWorkdir(system System, fields rules.FieldSet) rules.FieldSet {
 	if system != SystemCodex || fields.ToolInputWorkdir != "" {
@@ -44,7 +38,7 @@ func codexExecWorkdirFromTranscript(path string, turnID string, command string) 
 	tail := readCodexTranscriptTail(path)
 	lines := strings.Split(string(tail), "\n")
 	for _, line := range slices.Backward(lines) {
-		if workdir := codexExecWorkdirFromLine(line, turnID, command); workdir != "" {
+		if workdir, matched := codexExecWorkdirFromLine(line, turnID, command); matched {
 			return workdir
 		}
 	}
@@ -77,7 +71,7 @@ func readCodexTranscriptTail(path string) []byte {
 	return content
 }
 
-func codexExecWorkdirFromLine(line string, turnID string, command string) string {
+func codexExecWorkdirFromLine(line string, turnID string, command string) (string, bool) {
 	var entry struct {
 		Type    string `json:"type"`
 		Payload struct {
@@ -90,28 +84,13 @@ func codexExecWorkdirFromLine(line string, turnID string, command string) string
 		} `json:"payload"`
 	}
 	if err := json.Unmarshal([]byte(line), &entry); err != nil {
-		return ""
+		return "", false
 	}
 	if entry.Type != "response_item" || entry.Payload.Type != "custom_tool_call" {
-		return ""
+		return "", false
 	}
 	if entry.Payload.Name != "exec" || entry.Payload.Meta.TurnID != turnID {
-		return ""
+		return "", false
 	}
-	if unquoteCodexExecField(entry.Payload.Input, codexExecCommandPattern) != command {
-		return ""
-	}
-	return unquoteCodexExecField(entry.Payload.Input, codexExecWorkdirPattern)
-}
-
-func unquoteCodexExecField(input string, pattern *regexp.Regexp) string {
-	match := pattern.FindStringSubmatch(input)
-	if len(match) != 2 {
-		return ""
-	}
-	var value string
-	if err := json.Unmarshal([]byte(match[1]), &value); err != nil {
-		return ""
-	}
-	return value
+	return codexExecWorkdirFromInput(entry.Payload.Input, command)
 }
