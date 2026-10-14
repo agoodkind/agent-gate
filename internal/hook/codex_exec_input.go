@@ -2,6 +2,9 @@ package hook
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
 	"strings"
 
 	treesitter "github.com/tree-sitter/go-tree-sitter"
@@ -26,32 +29,37 @@ const (
 	codexObjectPair      codexObjectEntryKind = "pair"
 )
 
-func codexExecWorkdirFromInput(input, command string) (string, bool) {
+func codexExecWorkdirFromInput(input, command string) (string, bool, error) {
 	language, found := grammars.GrammarForLanguage("javascript")
 	if !found {
-		return "", true
+		err := errors.New("JavaScript grammar is unavailable")
+		slog.Error("load Codex exec JavaScript grammar failed", "err", err)
+		return "", true, err
 	}
 	parser := treesitter.NewParser()
 	defer parser.Close()
 	if err := parser.SetLanguage(language); err != nil {
-		return "", true
+		slog.Error("set Codex exec JavaScript parser language failed", "err", err)
+		return "", true, fmt.Errorf("set JavaScript parser language: %w", err)
 	}
 	source := []byte(input)
 	tree := parser.Parse(source, nil)
 	if tree == nil {
-		return "", true
+		err := errors.New("JavaScript parser returned no tree")
+		slog.Error("parse Codex exec JavaScript input returned no tree", "err", err)
+		return "", true, err
 	}
 	defer tree.Close()
 	root := tree.RootNode()
 	if root.HasError() {
-		return "", true
+		return "", true, nil
 	}
 	scan := codexExecInput{source: source, root: root, command: command, workdir: "", matches: 0, unknown: false}
 	scan.walk(root)
 	if scan.unknown || scan.matches > 1 {
-		return "", true
+		return "", true, nil
 	}
-	return scan.workdir, scan.matches == 1
+	return scan.workdir, scan.matches == 1, nil
 }
 
 func (scan *codexExecInput) walk(node *treesitter.Node) {
