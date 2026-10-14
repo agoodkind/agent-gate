@@ -3,8 +3,9 @@ package hook
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
+	"log/slog"
 	"os"
-	"regexp"
 	"slices"
 	"strings"
 
@@ -12,11 +13,6 @@ import (
 )
 
 const codexTranscriptTailBytes int64 = 2 * 1024 * 1024
-
-var (
-	codexExecCommandPattern = regexp.MustCompile(`\bcmd\s*:\s*("(?:\\.|[^"\\])*")`)
-	codexExecWorkdirPattern = regexp.MustCompile(`\bworkdir\s*:\s*("(?:\\.|[^"\\])*")`)
-)
 
 func recoverCodexExecWorkdir(system System, fields rules.FieldSet) rules.FieldSet {
 	if system != SystemCodex || fields.ToolInputWorkdir != "" {
@@ -28,27 +24,34 @@ func recoverCodexExecWorkdir(system System, fields rules.FieldSet) rules.FieldSe
 	if fields.TranscriptPath == "" || fields.TurnID == "" {
 		return fields
 	}
-	if workdir := codexExecWorkdirFromTranscript(
+	workdir, err := codexExecWorkdirFromTranscript(
 		fields.TranscriptPath,
 		fields.TurnID,
 		fields.ToolInputCommand,
-	); workdir != "" {
+	)
+	if err != nil {
+		return fields
+	}
+	if workdir != "" {
 		fields.ToolInputWorkdir = workdir
 	}
 	return fields
 }
 
-// Codex omits the exec workdir from the hook schema. This function returns an
-// empty string on any parsing failure. The caller then uses the session cwd.
-func codexExecWorkdirFromTranscript(path string, turnID string, command string) string {
+// Codex omits the exec workdir from the hook schema.
+func codexExecWorkdirFromTranscript(path string, turnID string, command string) (string, error) {
 	tail := readCodexTranscriptTail(path)
 	lines := strings.Split(string(tail), "\n")
 	for _, line := range slices.Backward(lines) {
-		if workdir := codexExecWorkdirFromLine(line, turnID, command); workdir != "" {
-			return workdir
+		workdir, matched, err := codexExecWorkdirFromLine(line, turnID, command)
+		if err != nil {
+			return "", err
+		}
+		if matched {
+			return workdir, nil
 		}
 	}
-	return ""
+	return "", nil
 }
 
 func readCodexTranscriptTail(path string) []byte {
@@ -77,7 +80,10 @@ func readCodexTranscriptTail(path string) []byte {
 	return content
 }
 
-func codexExecWorkdirFromLine(line string, turnID string, command string) string {
+func codexExecWorkdirFromLine(line string, turnID string, command string) (string, bool, error) {
+	if strings.TrimSpace(line) == "" {
+		return "", false, nil
+	}
 	var entry struct {
 		Type    string `json:"type"`
 		Payload struct {
@@ -90,28 +96,14 @@ func codexExecWorkdirFromLine(line string, turnID string, command string) string
 		} `json:"payload"`
 	}
 	if err := json.Unmarshal([]byte(line), &entry); err != nil {
-		return ""
+		slog.Warn("decode Codex exec transcript line failed", "err", err)
+		return "", false, fmt.Errorf("decode Codex exec transcript line: %w", err)
 	}
 	if entry.Type != "response_item" || entry.Payload.Type != "custom_tool_call" {
-		return ""
+		return "", false, nil
 	}
 	if entry.Payload.Name != "exec" || entry.Payload.Meta.TurnID != turnID {
-		return ""
+		return "", false, nil
 	}
-	if unquoteCodexExecField(entry.Payload.Input, codexExecCommandPattern) != command {
-		return ""
-	}
-	return unquoteCodexExecField(entry.Payload.Input, codexExecWorkdirPattern)
-}
-
-func unquoteCodexExecField(input string, pattern *regexp.Regexp) string {
-	match := pattern.FindStringSubmatch(input)
-	if len(match) != 2 {
-		return ""
-	}
-	var value string
-	if err := json.Unmarshal([]byte(match[1]), &value); err != nil {
-		return ""
-	}
-	return value
+	return codexExecWorkdirFromInput(entry.Payload.Input, command)
 }

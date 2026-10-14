@@ -10,6 +10,7 @@ require (
 	github.com/hashicorp/golang-lru/v2 v2.0.7
 	github.com/mattn/go-sqlite3 v1.14.52
 	github.com/pelletier/go-toml/v2 v2.4.3
+	github.com/tree-sitter/go-tree-sitter v0.25.0
 	go.opentelemetry.io/otel v1.47.0
 	go.opentelemetry.io/otel/metric v1.47.0
 	go.opentelemetry.io/otel/sdk v1.44.0
@@ -96,7 +97,6 @@ require (
 	github.com/transparency-dev/merkle v0.0.2 // indirect
 	github.com/tree-sitter-grammars/tree-sitter-kotlin v1.1.0 // indirect
 	github.com/tree-sitter-grammars/tree-sitter-objc v1.2.1-0.20250131075517-181a81b8f23a // indirect
-	github.com/tree-sitter/go-tree-sitter v0.25.0 // indirect
 	github.com/tree-sitter/tree-sitter-bash v0.25.1 // indirect
 	github.com/tree-sitter/tree-sitter-c v0.24.2 // indirect
 	github.com/tree-sitter/tree-sitter-c-sharp v0.23.5 // indirect

@@ -1,0 +1,25 @@
+[[rules]]
+name = "primary-checkout"
+codex_events = ["PreToolUse"]
+action = "block"
+violation_message = "The command modifies the primary checkout."
+[[rules.conditions]]
+kind = "command"
+argv0 = "git"
+subcommands = ["switch"]
+cwd_flags = ["-C"]
+[[rules.conditions]]
+kind = "git_primary_checkout"
+
+[[rules]]
+name = "default-branch"
+codex_events = ["PreToolUse"]
+action = "block"
+violation_message = "The command modifies a default-branch checkout."
+[[rules.conditions]]
+kind = "command"
+argv0 = "git"
+subcommands = ["switch"]
+cwd_flags = ["-C"]
+[[rules.conditions]]
+kind = "git_default_branch"
