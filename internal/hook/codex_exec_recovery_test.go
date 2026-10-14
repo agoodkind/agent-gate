@@ -33,6 +33,7 @@ func TestCodexExecRecoveryEnforcesCommandCheckout(t *testing.T) {
 		{name: "primary checkout", script: "primary.js", wantWorkdir: primary, wantBlock: true},
 		{name: "newest call omits directory", script: "missing.js", olderScript: "primary.js"},
 		{name: "newest call cannot resolve directory", script: "unresolved.js", olderScript: "primary.js"},
+		{name: "unsupported escape stops recovery", script: "escaped.js", olderScript: "primary.js"},
 		{name: "duplicate command is ambiguous", script: "duplicate.js", olderScript: "primary.js"},
 	}
 	for _, testCase := range cases {
@@ -51,9 +52,15 @@ func TestCodexExecRecoveryEnforcesCommandCheckout(t *testing.T) {
 			if got := evaluation.Deferred.Fields.ToolInputWorkdir; got != testCase.wantWorkdir {
 				t.Fatalf("recovered workdir = %q, want %q", got, testCase.wantWorkdir)
 			}
-			blocked := evaluation.Deferred.Decision == hook.ResponseDecisionBlock
-			if blocked != testCase.wantBlock {
-				t.Fatalf("blocked = %v, want %v; response = %s", blocked, testCase.wantBlock, evaluation.Stdout)
+			if evaluation.ExitCode != 0 || !evaluation.Deferred.Valid {
+				t.Fatalf("hook evaluation failed: exit=%d valid=%v stderr=%s", evaluation.ExitCode, evaluation.Deferred.Valid, evaluation.Stderr)
+			}
+			wantDecision := hook.ResponseDecisionAllow
+			if testCase.wantBlock {
+				wantDecision = hook.ResponseDecisionBlock
+			}
+			if evaluation.Deferred.Decision != wantDecision {
+				t.Fatalf("decision = %v, want %v; response = %s", evaluation.Deferred.Decision, wantDecision, evaluation.Stdout)
 			}
 		})
 	}
