@@ -131,7 +131,11 @@ func markFailOpenTruncated() {
 type FailOpenSummary struct {
 	// Count is the number of records present, which is fewer than the number of
 	// unevaluated calls when Truncated is true.
-	Count int
+	Count       int
+	LastHour    int
+	Last24Hours int
+	Last7Days   int
+	Last90Days  int
 	// Earliest and Latest bound the recorded window. Latest is not the time of
 	// the last unevaluated call once Truncated is true.
 	Earliest string
@@ -146,7 +150,8 @@ type FailOpenSummary struct {
 // an operator asking whether enforcement was ever absent. A missing file is the
 // healthy case and yields a zero summary.
 func FailOpenRecordSummary() (FailOpenSummary, error) {
-	summary := FailOpenSummary{Count: 0, Earliest: "", Latest: "", Truncated: false}
+	var summary FailOpenSummary
+	now := failOpenNow()
 
 	marker := filepath.Join(config.DefaultStateDir(), failOpenTruncatedName)
 	if _, err := os.Stat(marker); err == nil {
@@ -167,6 +172,25 @@ func FailOpenRecordSummary() (FailOpenSummary, error) {
 		var record FailOpenRecord
 		if json.Unmarshal(line, &record) != nil {
 			continue
+		}
+		recordedAt, err := time.Parse(time.RFC3339Nano, record.At)
+		if err != nil {
+			return summary, fmt.Errorf("parse fail-open record timestamp: %w", err)
+		}
+		age := now.Sub(recordedAt)
+		if age >= 0 {
+			if age <= time.Hour {
+				summary.LastHour++
+			}
+			if age <= 24*time.Hour {
+				summary.Last24Hours++
+			}
+			if age <= 7*24*time.Hour {
+				summary.Last7Days++
+			}
+			if age <= 90*24*time.Hour {
+				summary.Last90Days++
+			}
 		}
 		summary.Count++
 		if summary.Earliest == "" || record.At < summary.Earliest {
