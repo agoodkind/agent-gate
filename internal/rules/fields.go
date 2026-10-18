@@ -143,6 +143,7 @@ var fieldStringAccessors = map[config.FieldSelector]func(FieldSet) string{
 	// context) yields nothing. The exec gate computes it with the condition's
 	// declared tools.
 	config.FieldCmdReadTargets:            func(f FieldSet) string { return f.CmdReadTargets(nil, nil, nil) },
+	config.FieldCredentialReadTargets:     func(f FieldSet) string { return f.CredentialReadTargets() },
 	config.FieldCmdWriteTargets:           func(f FieldSet) string { return f.CmdWriteTargets() },
 	config.FieldPatchWriteTargets:         func(f FieldSet) string { return f.PatchWriteTargets() },
 	config.FieldExecTargets:               func(f FieldSet) string { return f.ExecTargets(nil, nil, nil) },

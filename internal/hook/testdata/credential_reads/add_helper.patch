@@ -1,0 +1,7 @@
+*** Begin Patch
+*** Add File: {{ROOT}}/uploaded.sh
++#!/usr/bin/env bash
++while IFS= read -r line; do
++  printf '%s\n' "${line}"
++done <"${TACK_DIR}/.env"
+*** End Patch

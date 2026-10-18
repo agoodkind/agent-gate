@@ -353,6 +353,27 @@ The typed payload fields above can be combined with daemon-computed selectors:
 - `cmd_comments` and `cmd_double_hyphen_prose` isolate prose-like command text.
 - `cmd_redirections` exposes direct output redirections.
 - `cmd_write_targets` exposes parsed local write targets.
+- `credential_read_targets` exposes native read paths, shell and interpreter
+  read targets, explicit Git diff and show sources, copy and archive sources,
+  container commands, and reads in supplied script content. It also inspects
+  bounded local helper source and reports markers for unresolved file reads
+  and remote or unreadable helpers.
+
+The [credential read rule](../examples/rules/no-credential-file-reads.toml)
+rejects environment files, runtime secret paths, credential stores, and
+uninspected script execution before a tool runs. The selector checks source
+paths and symlinks before opening helper code. It does not read credential
+contents to determine a verdict. Template reads and ordinary variable references
+remain available. Rule diagnostics omit source text.
+
+This check covers the reads the parser identifies. Dynamically constructed
+paths, recursive archives without explicit credential operands, unsupported
+interpreters, imported modules, compiled executables, and changes after helper inspection can
+conceal other reads. Interactive input after an allowed process starts also
+requires a provider hook that exposes that input. Hooks depend on provider
+enforcement and daemon availability. This rule does not establish
+operating-system isolation or constrain a privileged process outside the hook
+boundary.
 
 The annotated [../config.toml.example](../config.toml.example) shows how these
 selectors participate in deterministic, external-validator, and inference
