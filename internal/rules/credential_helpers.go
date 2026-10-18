@@ -145,7 +145,7 @@ func (collector *credentialReadCollector) helper(path, cwd string, remote bool, 
 }
 
 func credentialInlineShellFlag(value string) bool {
-	return strings.HasPrefix(value, "-") && strings.HasSuffix(value, "c")
+	return strings.HasPrefix(value, "-") && !strings.HasPrefix(value, "--") && strings.Contains(value, "c")
 }
 
 func (collector *credentialReadCollector) remoteCommand(command shelldecomp.Command, cwd string, depth int) {
