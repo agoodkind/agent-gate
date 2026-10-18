@@ -89,8 +89,14 @@ func (scan *codexExecInput) inspectCall(node *treesitter.Node) {
 	input := arguments.NamedChild(0)
 	commandNode, unambiguous := scan.objectField(input, "cmd")
 	command, resolved := scan.stringValue(commandNode)
-	if !unambiguous || !resolved {
+	if !unambiguous {
 		scan.unknown = true
+		return
+	}
+	if !resolved {
+		if scan.commandCouldMatch(commandNode) {
+			scan.unknown = true
+		}
 		return
 	}
 	if command != scan.command {
@@ -101,6 +107,25 @@ func (scan *codexExecInput) inspectCall(node *treesitter.Node) {
 	if unambiguous {
 		scan.workdir, _ = scan.stringValue(workdirNode)
 	}
+}
+
+func (scan *codexExecInput) commandCouldMatch(node *treesitter.Node) bool {
+	if node == nil || node.Kind() != "binary_expression" {
+		return true
+	}
+	operator := node.ChildByFieldName("operator")
+	if operator == nil || operator.Utf8Text(scan.source) != "+" {
+		return true
+	}
+	// Literal string operands constrain concatenation even when the other
+	// operand cannot be resolved. Other expressions remain ambiguous.
+	if prefix, resolved := scan.stringValue(node.ChildByFieldName("left")); resolved && !strings.HasPrefix(scan.command, prefix) {
+		return false
+	}
+	if suffix, resolved := scan.stringValue(node.ChildByFieldName("right")); resolved && !strings.HasSuffix(scan.command, suffix) {
+		return false
+	}
+	return true
 }
 
 func (scan *codexExecInput) objectField(object *treesitter.Node, name string) (*treesitter.Node, bool) {
