@@ -35,6 +35,10 @@ func TestCodexExecRecoveryEnforcesCommandCheckout(t *testing.T) {
 		{name: "newest call cannot resolve directory", script: "unresolved.js", olderScript: "primary.js"},
 		{name: "unsupported escape stops recovery", script: "escaped.js", olderScript: "primary.js"},
 		{name: "duplicate command is ambiguous", script: "duplicate.js", olderScript: "primary.js"},
+		{name: "unrelated concatenated command", script: "disjoint.js", wantWorkdir: worktree},
+		{name: "unrelated concatenated suffix", script: "disjoint_suffix.js", wantWorkdir: worktree},
+		{name: "possibly matching concatenated command", script: "possible.js", olderScript: "primary.js"},
+		{name: "possibly matching concatenated suffix", script: "possible_suffix.js", olderScript: "primary.js"},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
