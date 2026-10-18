@@ -114,6 +114,10 @@ func (collector *credentialReadCollector) decomposition(parsed *shelldecomp.Deco
 }
 
 func (collector *credentialReadCollector) source(body, path, cwd string, depth int) {
+	if credentialInterpreter(path) == "ruby" {
+		collector.rubySource(body, cwd, depth)
+		return
+	}
 	if !credentialShellPath(path) {
 		flag := "-e"
 		if credentialInterpreter(path) == "python3" {
