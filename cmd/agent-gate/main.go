@@ -361,10 +361,6 @@ func reportFailOpenHistory(out io.Writer) {
 		_, _ = fmt.Fprintf(out, "unevaluated:      unknown (%v)\n", err)
 		return
 	}
-	if summary.Count == 0 && !summary.Truncated {
-		_, _ = fmt.Fprintf(out, "unevaluated:      0\n")
-		return
-	}
 	// A capped history understates the outage, so the count is labelled as a
 	// floor rather than presented as the whole story.
 	qualifier := ""
@@ -372,13 +368,16 @@ func reportFailOpenHistory(out io.Writer) {
 		qualifier = "at least "
 	}
 	_, _ = fmt.Fprintf(out,
-		"unevaluated:      %s%d calls allowed without enforcement, %s to %s\n",
-		qualifier, summary.Count, summary.Earliest, summary.Latest)
+		"unevaluated:      1hr: %s%d, 24hr: %s%d, 7day: %s%d, 90day: %s%d calls allowed without enforcement\n",
+		qualifier, summary.LastHour, qualifier, summary.Last24Hours,
+		qualifier, summary.Last7Days, qualifier, summary.Last90Days)
 	if summary.Truncated {
 		_, _ = fmt.Fprintf(out,
 			"                  the record hit its size cap, so later calls went unrecorded\n")
 	}
-	_, _ = fmt.Fprintf(out, "                  see %s\n", daemon.FailOpenRecordPath())
+	if summary.Count > 0 || summary.Truncated {
+		_, _ = fmt.Fprintf(out, "                  see %s\n", daemon.FailOpenRecordPath())
+	}
 }
 
 func runConfig(args []string) int {
