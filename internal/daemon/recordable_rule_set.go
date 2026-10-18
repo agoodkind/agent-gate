@@ -8,9 +8,8 @@ import (
 	"goodkind.io/agent-gate/internal/rules"
 )
 
-// ValidateRecordableRuleSet rejects a rule set when the evaluation store would
-// refuse the rule-engine metadata for one event. The daemon allows a call when
-// the store refuses the evaluation record.
+// ValidateRecordableRuleSet checks the largest metadata record for all rules.
+// The daemon allows a call if the evaluation store rejects its record.
 func ValidateRecordableRuleSet(configRules []config.Rule) error {
 	decisions := make([]rules.RuleDecision, len(configRules))
 	for index := range configRules {
