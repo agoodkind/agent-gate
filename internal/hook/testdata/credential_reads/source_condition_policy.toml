@@ -1,0 +1,26 @@
+[[rules]]
+name = "configured-source-boundary"
+claude_events = ["PreToolUse"]
+gemini_events = ["BeforeTool"]
+codex_events = ["PreToolUse"]
+disable_providers = ["codex"]
+disable_if_env = ["SOURCE_POLICY_DISABLED"]
+action = "block"
+redact_diagnostics = true
+diagnostic_format = "message_only"
+violation_message = "The configured source path cannot be read."
+
+[[rules.conditions]]
+field_paths = ["credential_read_targets"]
+pattern = '(?m)(?:^|/)controlled-source(?:\.template)?\.sh$'
+not_pattern = '\.template\.sh$'
+
+[[rules]]
+name = "observe-helper-inspection"
+all_events = true
+field_paths = ["credential_read_targets"]
+pattern = '(?m)(?:^|/)inspection-marker$'
+action = "block"
+redact_diagnostics = true
+diagnostic_format = "message_only"
+violation_message = "Helper inspection observed the nested read."

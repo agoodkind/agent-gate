@@ -20,6 +20,7 @@ var syntheticSelectors = []string{
 	"cmd_redirections",
 	"cmd_write_targets",
 	"patch_write_targets",
+	"credential_read_targets",
 }
 
 // TestEverySyntheticSelectorValidatesInARule is the regression for a selector
