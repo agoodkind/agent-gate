@@ -1,0 +1,5 @@
+label = <<'LABEL'
+AGENT_GATE_RUBY_SOURCE
+AGENT_GATE_RUBY_SOURCE_
+LABEL
+puts File.read('{{PATH}}')
