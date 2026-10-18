@@ -1,2 +1,2 @@
 #!/usr/bin/env bash
-cat "{{ROOT}}/tack.env.j2"
+cat "{{ROOT}}/service.env.j2"

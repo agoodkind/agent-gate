@@ -19,12 +19,21 @@ func (collector *credentialReadCollector) addSymlink(path string) {
 }
 
 func (collector *credentialReadCollector) readSource(path string) ([]byte, bool) {
+	collector.add(path, "", false)
+	if collector.protectedSource == nil || collector.protectedSource(path) {
+		collector.add(uninspectedScriptMarker, "", false)
+		return nil, false
+	}
 	resolved, err := filepath.EvalSymlinks(path)
-	if err != nil || !credentialScriptPath(resolved) || protectedCredentialSource(resolved) {
+	if err != nil || !credentialScriptPath(resolved) {
 		collector.add(uninspectedScriptMarker, "", false)
 		return nil, false
 	}
 	collector.add(resolved, "", false)
+	if collector.protectedSource(resolved) {
+		collector.add(uninspectedScriptMarker, "", false)
+		return nil, false
+	}
 	file, err := os.OpenFile(resolved, os.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
 	if err != nil {
 		collector.add(uninspectedScriptMarker, "", false)
@@ -137,17 +146,6 @@ func (collector *credentialReadCollector) helper(path, cwd string, remote bool, 
 
 func credentialInlineShellFlag(value string) bool {
 	return strings.HasPrefix(value, "-") && strings.HasSuffix(value, "c")
-}
-
-// protectedCredentialSource prevents helper analysis from reading credential
-// contents. The collector reports the path for policy evaluation instead.
-func protectedCredentialSource(path string) bool {
-	for component := range strings.SplitSeq(filepath.ToSlash(strings.ToLower(path)), "/") {
-		if component == ".env" || strings.HasPrefix(component, ".env.") || component == "credentials" || component == "secrets" {
-			return true
-		}
-	}
-	return false
 }
 
 func (collector *credentialReadCollector) remoteCommand(command shelldecomp.Command, cwd string, depth int) {

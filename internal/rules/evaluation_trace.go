@@ -177,6 +177,7 @@ func EvaluateAllDetailed(
 	inputJSON json.RawMessage,
 	serviceVersion string,
 ) DetailedEvaluation {
+	fields.protectedSource = sourceReadPolicy(rulesSlice, system, eventName, getenv)
 	startedAt := decisionTraceNow().UTC()
 	collector := &richTraceCollector{
 		mu: sync.Mutex{}, layers: make([]LayerTrace, 0),

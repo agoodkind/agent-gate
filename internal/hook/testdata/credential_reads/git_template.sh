@@ -1,2 +1,2 @@
 #!/usr/bin/env bash
-git diff --no-index /dev/null "{{ROOT}}/tack.env.j2"
+git diff --no-index /dev/null "{{ROOT}}/service.env.j2"

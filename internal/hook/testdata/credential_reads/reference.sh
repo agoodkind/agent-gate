@@ -1,2 +1,2 @@
 #!/usr/bin/env bash
-curl --user "${OPENSEARCH_USERNAME}:${OPENSEARCH_PASSWORD}" "${OPENSEARCH_ENDPOINT}/_cluster/health"
+curl --user "${SERVICE_USERNAME}:${SERVICE_PASSWORD}" "${SERVICE_ENDPOINT}/_cluster/health"

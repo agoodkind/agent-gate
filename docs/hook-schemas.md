@@ -362,9 +362,14 @@ The typed payload fields above can be combined with daemon-computed selectors:
 The [credential read rule](../examples/rules/no-credential-file-reads.toml)
 rejects environment files, runtime secret paths, credential stores, and
 uninspected script execution before a tool runs. The selector checks source
-paths and symlinks before opening helper code. It does not read credential
-contents to determine a verdict. Template reads and ordinary variable references
-remain available. Rule diagnostics omit source text.
+paths and symlinks before opening helper code. Applicable, enabled rules that
+select `credential_read_targets` provide the protected path patterns. The
+selector checks their compiled `pattern` and `not_pattern` against each helper
+path without evaluating virtual selectors again. Regex conditions supply these
+patterns too; other conditions still govern the final rule verdict. The engine
+does not define protected path categories. Without evaluation policy, the
+selector reports helper source as uninspected. Template reads and ordinary
+variable references remain available. Rule diagnostics omit source text.
 
 This check covers the reads the parser identifies. Dynamically constructed
 paths, recursive archives without explicit credential operands, unsupported

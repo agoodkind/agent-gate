@@ -1,2 +1,2 @@
 #!/usr/bin/env bash
-cat "${OPENSEARCH_PASSWORD_FILE}"
+cat "${SERVICE_PASSWORD_FILE}"

@@ -104,6 +104,7 @@ type FieldSet struct {
 	EditsNewLine         []string
 	AttachmentsFilePath  []string
 	AttachmentsType      []string
+	protectedSource      func(string) bool `exhaustruct:"optional"`
 }
 
 // FirstString returns the user-facing path and value of the first selector

@@ -38,7 +38,7 @@ func TestCredentialReadRuleBlocksBeforeToolExecution(t *testing.T) {
 	}
 	root := t.TempDir()
 	const canary = "synthetic-credential-canary-not-a-real-password"
-	environmentContent := []byte(strings.Join([]string{"OPENSEARCH_PASSWORD", canary}, "=") + "\n")
+	environmentContent := []byte(strings.Join([]string{"SERVICE_PASSWORD", canary}, "=") + "\n")
 	if err := os.WriteFile(filepath.Join(root, ".env"), environmentContent, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +52,7 @@ func TestCredentialReadRuleBlocksBeforeToolExecution(t *testing.T) {
 	if err := os.Symlink(filepath.Join(root, ".env"), filepath.Join(root, "linked.sh")); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, "tack.env.j2"), []byte("OPENSEARCH_PASSWORD={{ secret_reference }}\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "service.env.j2"), []byte("SERVICE_PASSWORD={{ secret_reference }}\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	tests := []struct {
@@ -77,12 +77,12 @@ func TestCredentialReadRuleBlocksBeforeToolExecution(t *testing.T) {
 		{"local helper", "Bash", credentialReadInput{Command: readCredentialFixture(t, "local_helper.sh", root)}, true},
 		{"local python helper", "Bash", credentialReadInput{Command: readCredentialFixture(t, "python_helper.sh", root)}, true},
 		{"remote helper", "Bash", credentialReadInput{Command: readCredentialFixture(t, "remote_helper.sh", root)}, true},
-		{"historical helper write", "Write", credentialReadInput{FilePath: filepath.Join(root, "new-helper.sh"), Content: helper}, true},
-		{"historical helper patch", "apply_patch", credentialReadInput{Command: readCredentialFixture(t, "add_helper.patch", root)}, true},
+		{"loop helper write", "Write", credentialReadInput{FilePath: filepath.Join(root, "new-helper.sh"), Content: helper}, true},
+		{"loop helper patch", "apply_patch", credentialReadInput{Command: readCredentialFixture(t, "add_helper.patch", root)}, true},
 		{"python helper write", "Write", credentialReadInput{FilePath: filepath.Join(root, "new-helper.py"), Content: readCredentialFixture(t, "read_env.py", root)}, true},
 		{"python edit replaces safe source", "Edit", credentialReadInput{FilePath: filepath.Join(root, "safe.py"), NewString: readCredentialFixture(t, "read_env.py", root)}, true},
-		{"template native", "Read", credentialReadInput{FilePath: filepath.Join(root, "tack.env.j2")}, false},
-		{"template under secret source directory", "Read", credentialReadInput{FilePath: filepath.Join(root, "secrets", "tack.env.j2")}, false},
+		{"template native", "Read", credentialReadInput{FilePath: filepath.Join(root, "service.env.j2")}, false},
+		{"template under secret source directory", "Read", credentialReadInput{FilePath: filepath.Join(root, "secrets", "service.env.j2")}, false},
 		{"template shell", "Bash", credentialReadInput{Command: readCredentialFixture(t, "template.sh", root)}, false},
 		{"git source template", "Bash", credentialReadInput{Command: readCredentialFixture(t, "git_template.sh", root)}, false},
 		{"variable references", "Bash", credentialReadInput{Command: readCredentialFixture(t, "reference.sh", root)}, false},

@@ -17,19 +17,20 @@ const (
 )
 
 type credentialReadCollector struct {
-	paths     []string
-	seen      map[string]bool
-	scripts   map[string]bool
-	remaining int
+	paths           []string
+	seen            map[string]bool
+	scripts         map[string]bool
+	remaining       int
+	protectedSource func(string) bool
 }
 
-// CredentialReadTargets returns paths without reading their credential contents.
-// Local helper inspection reads bounded source files. An uninspected script
-// produces a marker that the credential rule can reject before execution.
+// CredentialReadTargets collects read paths and inspects bounded local helper
+// source under active policy. Protected helpers and helpers without evaluation
+// policy remain uninspected and produce a marker for the configured rule.
 func (fields FieldSet) CredentialReadTargets() string {
 	collector := credentialReadCollector{
 		paths: nil, seen: make(map[string]bool), scripts: make(map[string]bool),
-		remaining: credentialSourceLimit,
+		remaining: credentialSourceLimit, protectedSource: fields.protectedSource,
 	}
 	for _, path := range []string{fields.ToolInputFilePath, fields.ToolInputPath, fields.FilePath, fields.Path} {
 		collector.add(path, fields.BaseCWD(), true)

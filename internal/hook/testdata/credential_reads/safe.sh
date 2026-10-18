@@ -1,2 +1,2 @@
 #!/usr/bin/env bash
-printf '%s\n' "The service accepts OPENSEARCH_PASSWORD_FILE."
+printf '%s\n' "The service accepts SERVICE_PASSWORD_FILE."

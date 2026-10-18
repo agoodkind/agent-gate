@@ -49,7 +49,7 @@ func TestCredentialReadDenialPreventsHelperExecution(t *testing.T) {
 		t.Fatal(err)
 	}
 	const canary = "synthetic-daemon-canary-not-a-real-password"
-	environmentContent := []byte(strings.Join([]string{"OPENSEARCH_PASSWORD", canary}, "=") + "\n")
+	environmentContent := []byte(strings.Join([]string{"SERVICE_PASSWORD", canary}, "=") + "\n")
 	if err := os.WriteFile(filepath.Join(root, ".env"), environmentContent, 0o600); err != nil {
 		t.Fatal(err)
 	}

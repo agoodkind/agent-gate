@@ -1,2 +1,2 @@
 #!/usr/bin/env bash
-ssh -p 2222 fixture-host 'cat /root/tack/.env'
+ssh -p 2222 fixture-host 'cat /srv/service/.env'
