@@ -38,22 +38,6 @@ RELEASE_ENTITLEMENTS  := $(CODESIGN_ENTITLEMENTS)
 # Pipeline modules
 GO_MK_MODULES := go-build.mk go-release.mk go-service.mk
 
-# go.mk runs these as order-only prerequisites of every build, lint, vet, test,
-# and govulncheck target (and install/release via the modules). GO_MK_GENERATE
-# generates the tree-sitter parsers; GO_MK_WORKSPACE_USE materializes a
-# gitignored go.work that routes the gksyntax submodule into the build, so both
-# exist before any target compiles the grammar packages.
-GO_MK_GENERATE := gksyntax-grammars
-GO_MK_GENERATE_INPUTS := third_party/gksyntax
-GO_MK_GENERATE_OUTPUTS := \
-	third_party/gksyntax/treesitter/grammars/swift/upstream/src/parser.c \
-	third_party/gksyntax/treesitter/grammars/swift/upstream/src/tree_sitter/parser.h \
-	third_party/gksyntax/treesitter/grammars/swift/upstream/src/tree_sitter/array.h \
-	third_party/gksyntax/treesitter/grammars/swift/upstream/src/tree_sitter/alloc.h \
-	third_party/gksyntax/treesitter/grammars/perl/upstream/src/parser.c \
-	third_party/gksyntax/treesitter/grammars/perl/upstream/src/node-types.json \
-	third_party/gksyntax/treesitter/grammars/perl/upstream/src/tree_sitter/parser.h \
-	third_party/gksyntax/treesitter/grammars/perl/upstream/src/tree_sitter/array.h
 GO_MK_WORKSPACE_USE := . third_party/gksyntax
 
 # pcre2 is linked through cgo (#cgo pkg-config: libpcre2-8). On a linux target the
@@ -64,6 +48,12 @@ GO_MK_CGO_DEPS := pcre2
 
 include bootstrap.mk
 
+.PHONY: gksyntax-submodule
+gksyntax-submodule:
+	@git submodule update --init third_party/gksyntax
+
+go-mk-workspace: | gksyntax-submodule
+
 .DEFAULT_GOAL := check
 
 # go-makefile's release command runs this per build target with CC/CXX,
@@ -72,74 +62,6 @@ include bootstrap.mk
 .PHONY: go-mk-cgo-dep-pcre2
 go-mk-cgo-dep-pcre2:
 	@bash scripts/setup-cgo-pcre2.sh
-
-# ---------------------------------------------------------------------------
-# gksyntax submodule grammars
-# ---------------------------------------------------------------------------
-# The exec gate's shell decomposition lives in goodkind.io/gksyntax, a git
-# submodule under third_party/ routed through a generated, gitignored go.work
-# (GO_MK_WORKSPACE_USE above). A plain module require is not possible because
-# gksyntax vendors the dart and swift grammars as its own submodules, whose C
-# sources are absent from a Go module zip, and a go.mod replace is rejected by
-# gomoddirectives. gksyntax commits only the swift grammar definition, not the
-# generated parser, so the parser is produced from the pinned submodule by the
-# tree-sitter CLI. The generated parser stays inside the submodule working tree
-# (gitignored there) and is never committed.
-GKS_DIR := third_party/gksyntax
-SWIFT_GRAMMAR_DIR := $(GKS_DIR)/treesitter/grammars/swift/upstream
-SWIFT_GRAMMAR_DEF := $(SWIFT_GRAMMAR_DIR)/src/grammar.json
-SWIFT_GRAMMAR_PARSER := $(SWIFT_GRAMMAR_DIR)/src/parser.c
-PERL_GRAMMAR_DIR := $(GKS_DIR)/treesitter/grammars/perl/upstream
-PERL_GRAMMAR_DEF := $(PERL_GRAMMAR_DIR)/src/grammar.json
-PERL_GRAMMAR_PARSER := $(PERL_GRAMMAR_DIR)/src/parser.c
-TREE_SITTER_ABI ?= 14
-# tree-sitter CLI lands here when the host has none on PATH. Gitignored.
-TREE_SITTER_LOCAL_DIR := $(CURDIR)/.bin
-
-# gksyntax commits the swift and perl grammar definitions (and their external
-# scanners) but not the generated parsers, so each parser is produced from the
-# pinned submodule by the tree-sitter CLI. Swift commits its own parser.c in
-# upstream and is restored with `git checkout -- .` after generation; perl
-# commits no parser.c, so its generated parser.c and tree_sitter/ headers are
-# kept in place and the perl submodule tree is not reset.
-.PHONY: gksyntax-grammars
-gksyntax-grammars:
-	@git submodule update --init $(GKS_DIR)
-	@git -C $(GKS_DIR) submodule update --init \
-		treesitter/grammars/swift/upstream \
-		treesitter/grammars/perl/upstream \
-		treesitter/grammars/awk/upstream \
-		treesitter/grammars/dart/upstream
-	@if [ ! -f "$(SWIFT_GRAMMAR_DEF)" ]; then \
-		echo "gksyntax-grammars: $(SWIFT_GRAMMAR_DIR) is empty; run 'git submodule update --init --recursive'"; \
-		exit 1; \
-	fi
-	@if [ ! -f "$(PERL_GRAMMAR_DEF)" ]; then \
-		echo "gksyntax-grammars: $(PERL_GRAMMAR_DIR) is empty; run 'git submodule update --init --recursive'"; \
-		exit 1; \
-	fi
-	@ts_bin="$$(command -v tree-sitter 2>/dev/null || true)"; \
-	if [ -z "$$ts_bin" ]; then \
-		"$(GKS_DIR)/scripts/install-tree-sitter.sh" "$(TREE_SITTER_LOCAL_DIR)"; \
-		ts_bin="$(TREE_SITTER_LOCAL_DIR)/tree-sitter"; \
-	fi; \
-	if [ ! -f "$(SWIFT_GRAMMAR_PARSER)" ] || [ "$(SWIFT_GRAMMAR_DEF)" -nt "$(SWIFT_GRAMMAR_PARSER)" ]; then \
-		echo "gksyntax-grammars: generating Swift parser (abi $(TREE_SITTER_ABI))"; \
-		( cd "$(SWIFT_GRAMMAR_DIR)" && "$$ts_bin" generate src/grammar.json --abi $(TREE_SITTER_ABI) ); \
-		git -C "$(SWIFT_GRAMMAR_DIR)" checkout -- . >/dev/null 2>&1 || true; \
-	else \
-		echo "gksyntax-grammars: Swift parser already generated"; \
-	fi; \
-	if [ ! -f "$(PERL_GRAMMAR_PARSER)" ] || [ "$(PERL_GRAMMAR_DEF)" -nt "$(PERL_GRAMMAR_PARSER)" ]; then \
-		echo "gksyntax-grammars: generating Perl parser (abi $(TREE_SITTER_ABI))"; \
-		( cd "$(PERL_GRAMMAR_DIR)" && "$$ts_bin" generate src/grammar.json --abi $(TREE_SITTER_ABI) ); \
-	else \
-		echo "gksyntax-grammars: Perl parser already generated"; \
-	fi
-
-# The order-only prerequisite that runs gksyntax-grammars before every compile,
-# vet, lint, test, install, and release target is wired centrally in go.mk via
-# GO_MK_GENERATE (set above), so no per-target list is maintained here.
 
 # ---------------------------------------------------------------------------
 # Project-local
