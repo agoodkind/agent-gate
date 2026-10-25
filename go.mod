@@ -2,6 +2,8 @@ module goodkind.io/agent-gate
 
 go 1.27.1
 
+toolchain go1.27.3
+
 require (
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/go-git/go-billy/v5 v5.9.2
