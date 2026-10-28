@@ -402,20 +402,21 @@ var editors = map[string]bool{
 // treated as a write, so routine build and test scripts are not blocked.
 var inPlaceInterpreters = map[string]bool{"perl": true, "ruby": true}
 
-// editorWriteTargets returns the resolved file operands of every editor and
-// in-place interpreter edit in the decomposition. Flag tokens (a leading - or +)
-// and unresolvable operands are skipped, and paths resolve against the command's
-// cd-aware cwd. Over-inclusion of a non-file operand is safe because a
-// protected-checkout rule only matches targets that resolve inside the checkout,
-// so a stray value outside it never blocks and a real edit inside it always does.
+// editorWriteTargets resolves editor and in-place interpreter file operands.
+// Interpreter programs and option values do not identify files to edit.
 func editorWriteTargets(decomposition *shelldecomp.Decomposition) []WriteTarget {
 	var out []WriteTarget
 	for _, command := range decomposition.Commands() {
 		base := filepath.Base(command.Argv0)
-		if !editors[base] && !isInterpreterInPlace(command) {
+		inPlace := isInterpreterInPlace(command)
+		if !editors[base] && !inPlace {
 			continue
 		}
-		for _, argument := range command.Args {
+		arguments := command.Args
+		if inPlace {
+			arguments = inPlaceFileOperands(command.Args)
+		}
+		for _, argument := range arguments {
 			if !argument.Resolvable {
 				continue
 			}
@@ -436,6 +437,44 @@ func editorWriteTargets(decomposition *shelldecomp.Decomposition) []WriteTarget 
 		}
 	}
 	return out
+}
+
+func inPlaceFileOperands(arguments []shelldecomp.Word) []shelldecomp.Word {
+	var operands []shelldecomp.Word
+	optionsEnded := false
+	for index := 0; index < len(arguments); index++ {
+		argument := arguments[index]
+		if !optionsEnded && argument.Resolvable && argument.Value == "--" {
+			optionsEnded = true
+			continue
+		}
+		if !optionsEnded && argument.Resolvable && strings.HasPrefix(argument.Value, "-") {
+			if interpreterOptionConsumesNext(argument.Value) {
+				index++
+			}
+			continue
+		}
+		operands = append(operands, argument)
+	}
+	return operands
+}
+
+// interpreterOptionConsumesNext checks whether a short option needs a separate
+// value. An in-place option consumes its suffix as the backup extension.
+func interpreterOptionConsumesNext(token string) bool {
+	if len(token) < 2 || token[0] != '-' || token[1] == '-' {
+		return false
+	}
+	for index := 1; index < len(token); index++ {
+		character := token[index]
+		if character == 'i' {
+			return false
+		}
+		if valueConsumingFlags[character] {
+			return index == len(token)-1
+		}
+	}
+	return false
 }
 
 // isInterpreterInPlace reports whether a command runs an in-place interpreter
