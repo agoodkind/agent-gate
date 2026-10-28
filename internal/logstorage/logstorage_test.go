@@ -3,10 +3,13 @@ package logstorage_test
 import (
 	"bytes"
 	"compress/gzip"
+	"errors"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"goodkind.io/agent-gate/internal/logstorage"
@@ -163,6 +166,33 @@ func TestLogStorageRejectsSymlinks(t *testing.T) {
 				t.Fatal("maintenance changed the symbolic link target")
 			}
 		})
+	}
+}
+
+func TestMaintainReturnsFileErrorWithoutWritingStderr(t *testing.T) {
+	const childEnvironment = "AGENT_GATE_LOG_ERROR_CHILD"
+	if os.Getenv(childEnvironment) == "1" {
+		path := filepath.Join(t.TempDir(), "file")
+		writeFile(t, path, []byte("not a directory"))
+		err := logstorage.Maintain(path)
+		if !errors.Is(err, syscall.ENOTDIR) {
+			t.Fatalf("maintenance error = %v, want a directory error", err)
+		}
+		if !strings.Contains(err.Error(), "open log directory") {
+			t.Fatalf("maintenance error lacks operation context: %v", err)
+		}
+		return
+	}
+	command := exec.Command(os.Args[0], "-test.run=^TestMaintainReturnsFileErrorWithoutWritingStderr$")
+	command.Env = append(os.Environ(), childEnvironment+"=1")
+	var stderr bytes.Buffer
+	command.Stderr = &stderr
+	stdout, err := command.Output()
+	if err != nil {
+		t.Fatalf("maintenance error check failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("maintenance wrote an error to stderr: %s", stderr.String())
 	}
 }
 

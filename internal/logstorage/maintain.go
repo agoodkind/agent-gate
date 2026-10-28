@@ -28,7 +28,7 @@ func Maintain(stateDir string) (result error) {
 	} {
 		err := withLockedFile(directory, entry.name, unix.O_RDWR, entry.prune)
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
-			result = errors.Join(result, logError("maintain "+entry.name, err))
+			result = errors.Join(result, wrapError("maintain "+entry.name, err))
 		}
 	}
 	return result
@@ -37,13 +37,13 @@ func Maintain(stateDir string) (result error) {
 func readTail(file *os.File, limit int64) ([]byte, error) {
 	info, err := file.Stat()
 	if err != nil {
-		return nil, logError("stat log tail", err)
+		return nil, wrapError("stat log tail", err)
 	}
 	start := max(int64(0), info.Size()-limit)
 	data := make([]byte, info.Size()-start)
 	count, err := file.ReadAt(data, start)
 	if err != nil && !errors.Is(err, io.EOF) {
-		return nil, logError("read log tail", err)
+		return nil, wrapError("read log tail", err)
 	}
 	data = data[:count]
 	if start > 0 {
@@ -57,7 +57,7 @@ func readTail(file *os.File, limit int64) ([]byte, error) {
 func keepTail(file *os.File, limit int64) error {
 	info, err := file.Stat()
 	if err != nil {
-		return logError("stat supervisor log", err)
+		return wrapError("stat supervisor log", err)
 	}
 	if info.Size() <= limit {
 		return nil
@@ -67,9 +67,9 @@ func keepTail(file *os.File, limit int64) error {
 		return err
 	}
 	if _, err := file.WriteAt(data, 0); err != nil {
-		return logError("write retained supervisor output", err)
+		return wrapError("write retained supervisor output", err)
 	}
-	return logError("truncate supervisor output", file.Truncate(int64(len(data))))
+	return wrapError("truncate supervisor output", file.Truncate(int64(len(data))))
 }
 
 func markFailOpenTruncated(directory *os.File) error {
@@ -83,7 +83,7 @@ func markFailOpenTruncated(directory *os.File) error {
 func pruneFailOpen(directory *os.File, file *os.File) error {
 	info, err := file.Stat()
 	if err != nil {
-		return logError("stat fail-open evidence", err)
+		return wrapError("stat fail-open evidence", err)
 	}
 	if info.Size() <= FailOpenMaxBytes {
 		return nil
@@ -94,16 +94,16 @@ func pruneFailOpen(directory *os.File, file *os.File) error {
 	data := make([]byte, FailOpenMaxBytes)
 	count, err := file.ReadAt(data, 0)
 	if err != nil && !errors.Is(err, io.EOF) {
-		return logError("read earliest fail-open evidence", err)
+		return wrapError("read earliest fail-open evidence", err)
 	}
 	end := bytes.LastIndexByte(data[:count], '\n') + 1
-	return logError("truncate fail-open evidence", file.Truncate(int64(end)))
+	return wrapError("truncate fail-open evidence", file.Truncate(int64(end)))
 }
 
 // AppendFailOpen writes one record under the same file lock that Maintain uses.
 func AppendFailOpen(stateDir string, line []byte) (result error) {
 	if err := os.MkdirAll(stateDir, 0o700); err != nil {
-		return logError("create fail-open directory", err)
+		return wrapError("create fail-open directory", err)
 	}
 	directory, err := openDirectory(stateDir)
 	if err != nil {
@@ -116,13 +116,13 @@ func AppendFailOpen(stateDir string, line []byte) (result error) {
 		}
 		info, err := file.Stat()
 		if err != nil {
-			return logError("stat fail-open evidence before append", err)
+			return wrapError("stat fail-open evidence before append", err)
 		}
 		if info.Size()+int64(len(line)) > FailOpenMaxBytes {
 			return markFailOpenTruncated(directory)
 		}
 		_, err = file.WriteAt(line, info.Size())
-		return logError("append fail-open evidence", err)
+		return wrapError("append fail-open evidence", err)
 	})
 }
 
@@ -139,7 +139,7 @@ func ReadFailOpen(stateDir string) (data []byte, result error) {
 		}
 		var err error
 		data, err = io.ReadAll(io.LimitReader(file, FailOpenMaxBytes))
-		return logError("read retained fail-open evidence", err)
+		return wrapError("read retained fail-open evidence", err)
 	})
 	return data, result
 }

@@ -2,7 +2,6 @@ package daemon_test
 
 import (
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -18,6 +17,7 @@ import (
 	"goodkind.io/agent-gate/internal/auditstorage"
 	"goodkind.io/agent-gate/internal/config"
 	"goodkind.io/agent-gate/internal/daemon"
+	"goodkind.io/agent-gate/internal/evaluation"
 	"goodkind.io/agent-gate/internal/intake"
 )
 
@@ -147,7 +147,7 @@ func TestAuditStartupRotatesBeforeReadinessAndPrunesAfterReadiness(t *testing.T)
 }
 
 func TestAuditRetentionReloadPreservesHistory(t *testing.T) {
-	cfg := sizeRetentionConfig(t, "16MiB", 7)
+	cfg := sizeRetentionConfig(t, "1GiB", 7)
 	server, err := daemon.New(t.Context(), sizeRetentionLogger(), cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -157,6 +157,11 @@ func TestAuditRetentionReloadPreservesHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 	old := sizeRetentionStatus(t, cfg)
+	initial, err := intake.Query(t.Context(), cfg, intake.QueryFilter{})
+	if err != nil || len(initial.Records) != 1 {
+		t.Fatalf("events before retention reload = %d, want 1: %v", len(initial.Records), err)
+	}
+	originalEventID := initial.Records[0].EventID
 	body, err := os.ReadFile(config.Path())
 	if err != nil {
 		t.Fatal(err)
@@ -165,24 +170,32 @@ func TestAuditRetentionReloadPreservesHistory(t *testing.T) {
 	if err := os.WriteFile(config.Path(), body, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	statePath := cfg.AuditCatalogOptions().StatePath
+	expectedConfig, err := config.LoadExisting(config.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectedConfigHash, err := expectedConfig.Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
 	waitSizeRetention(t, func() bool {
-		data, err := os.ReadFile(statePath)
+		if _, err := server.EvaluateHook(t.Context(), sizeRetentionRequest(0)); err != nil {
+			t.Fatal(err)
+		}
+		result, err := evaluation.Query(t.Context(), cfg, evaluation.QueryFilter{
+			Mode: "hot", DetailMode: evaluation.QueryDetailSummary, Limit: 1,
+		})
 		if err != nil {
 			t.Fatal(err)
 		}
-		var state auditstorage.CatalogState
-		if err := json.Unmarshal(data, &state); err != nil {
-			t.Fatal(err)
-		}
-		return state.Retained == 0
+		return len(result.Records) == 1 && result.Records[0].ConfigHash == expectedConfigHash
 	})
 	if current := sizeRetentionStatus(t, cfg); current.CurrentBucketID != old.CurrentBucketID {
 		t.Fatalf("retention change replaced bucket: %s", current.CurrentBucketID)
 	}
-	result, err := intake.Query(t.Context(), cfg, intake.QueryFilter{})
+	result, err := intake.Query(t.Context(), cfg, intake.QueryFilter{EventID: originalEventID})
 	if err != nil || len(result.Records) != 1 {
-		t.Fatalf("receipts after retention reload = %d, want 1: %v", len(result.Records), err)
+		t.Fatalf("original events after retention reload = %d, want 1: %v", len(result.Records), err)
 	}
 }
 

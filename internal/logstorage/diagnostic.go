@@ -24,7 +24,7 @@ type DiagnosticWriter struct {
 // OpenDiagnostic prunes existing diagnostic archives before accepting records.
 func OpenDiagnostic(stateDir string) (*DiagnosticWriter, error) {
 	if err := os.MkdirAll(stateDir, 0o700); err != nil {
-		return nil, logError("create diagnostic log directory", err)
+		return nil, wrapError("create diagnostic log directory", err)
 	}
 	directory, err := openDirectory(stateDir)
 	if err != nil {
@@ -38,7 +38,7 @@ func OpenDiagnostic(stateDir string) (*DiagnosticWriter, error) {
 		return withLockedFile(directory, DiagnosticName, unix.O_RDWR|unix.O_CREAT, func(file *os.File) error {
 			info, err := file.Stat()
 			if err != nil {
-				return logError("stat existing diagnostic log", err)
+				return wrapError("stat existing diagnostic log", err)
 			}
 			if info.Size() <= DiagnosticMaxBytes {
 				return nil
@@ -47,14 +47,14 @@ func OpenDiagnostic(stateDir string) (*DiagnosticWriter, error) {
 		})
 	})
 	if err != nil {
-		return nil, logError("prepare diagnostic logs", errors.Join(err, closeFile(directory)))
+		return nil, wrapError("prepare diagnostic logs", errors.Join(err, closeFile(directory)))
 	}
 	return writer, nil
 }
 
 func (writer *DiagnosticWriter) locked(action func() error) error {
 	if writer.directory == nil {
-		return logError("lock diagnostic log", os.ErrClosed)
+		return wrapError("lock diagnostic log", os.ErrClosed)
 	}
 	return withLockedFile(writer.directory, DiagnosticName+".lock", unix.O_RDWR|unix.O_CREAT, func(_ *os.File) error {
 		return action()
@@ -66,13 +66,13 @@ func (writer *DiagnosticWriter) Write(data []byte) (count int, result error) {
 	writer.mu.Lock()
 	defer writer.mu.Unlock()
 	if len(data) > DiagnosticMaxBytes {
-		return 0, logError("write diagnostic record", errors.New("record exceeds diagnostic size limit"))
+		return 0, wrapError("write diagnostic record", errors.New("record exceeds diagnostic size limit"))
 	}
 	result = writer.locked(func() error {
 		return withLockedFile(writer.directory, DiagnosticName, unix.O_RDWR|unix.O_CREAT, func(file *os.File) error {
 			info, err := file.Stat()
 			if err != nil {
-				return logError("stat diagnostic log before append", err)
+				return wrapError("stat diagnostic log before append", err)
 			}
 			if info.Size()+int64(len(data)) > DiagnosticMaxBytes {
 				if err := writer.rotate(file); err != nil {
@@ -80,10 +80,10 @@ func (writer *DiagnosticWriter) Write(data []byte) (count int, result error) {
 				}
 			}
 			if _, err := file.Seek(0, io.SeekEnd); err != nil {
-				return logError("seek diagnostic append position", err)
+				return wrapError("seek diagnostic append position", err)
 			}
 			count, err = file.Write(data)
-			return logError("append diagnostic record", err)
+			return wrapError("append diagnostic record", err)
 		})
 	})
 	return count, result
@@ -98,7 +98,7 @@ func (writer *DiagnosticWriter) Close() error {
 	}
 	err := writer.directory.Close()
 	writer.directory = nil
-	return logError("close diagnostic directory", err)
+	return wrapError("close diagnostic directory", err)
 }
 
 func (writer *DiagnosticWriter) rotate(file *os.File) error {
@@ -109,7 +109,7 @@ func (writer *DiagnosticWriter) rotate(file *os.File) error {
 	if err := writer.compress(bytes.NewReader(data)); err != nil {
 		return err
 	}
-	return logError("truncate rotated diagnostic log", file.Truncate(0))
+	return wrapError("truncate rotated diagnostic log", file.Truncate(0))
 }
 
 func (writer *DiagnosticWriter) compress(source io.Reader) (result error) {
@@ -128,14 +128,14 @@ func (writer *DiagnosticWriter) compress(source io.Reader) (result error) {
 	defer func() {
 		removeErr := unix.Unlinkat(int(writer.directory.Fd()), name, 0)
 		if !errors.Is(removeErr, unix.ENOENT) {
-			result = errors.Join(result, logError("remove temporary diagnostic archive", removeErr))
+			result = errors.Join(result, wrapError("remove temporary diagnostic archive", removeErr))
 		}
 	}()
 	compressed := gzip.NewWriter(file)
 	_, copyErr := io.Copy(compressed, io.LimitReader(source, DiagnosticMaxBytes))
-	result = logError("compress diagnostic archive", errors.Join(copyErr, compressed.Close(), closeFile(file)))
+	result = wrapError("compress diagnostic archive", errors.Join(copyErr, compressed.Close(), closeFile(file)))
 	if result != nil {
 		return result
 	}
-	return logError("replace diagnostic archive", unix.Renameat(int(writer.directory.Fd()), name, int(writer.directory.Fd()), DiagnosticArchiveName))
+	return wrapError("replace diagnostic archive", unix.Renameat(int(writer.directory.Fd()), name, int(writer.directory.Fd()), DiagnosticArchiveName))
 }

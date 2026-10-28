@@ -25,7 +25,7 @@ func diagnosticArchiveDate(entry os.DirEntry) (time.Time, bool, error) {
 	if name == DiagnosticArchiveName {
 		info, err := entry.Info()
 		if err != nil {
-			return time.Time{}, false, logError("stat diagnostic backup", err)
+			return time.Time{}, false, wrapError("stat diagnostic backup", err)
 		}
 		return info.ModTime(), true, nil
 	}
@@ -42,7 +42,7 @@ func diagnosticArchiveDate(entry os.DirEntry) (time.Time, bool, error) {
 func (writer *DiagnosticWriter) findArchives() ([]diagnosticArchive, error) {
 	entries, err := writer.directory.ReadDir(-1)
 	if err != nil {
-		return nil, logError("read diagnostic archives", err)
+		return nil, wrapError("read diagnostic archives", err)
 	}
 	archives := make([]diagnosticArchive, 0)
 	for _, entry := range entries {
@@ -69,10 +69,10 @@ func (writer *DiagnosticWriter) validateArchive(name string) error {
 func (writer *DiagnosticWriter) importCompressedArchive(file *os.File) (result error) {
 	compressed, err := gzip.NewReader(io.LimitReader(file, DiagnosticMaxBytes))
 	if err != nil {
-		return logError("read compressed diagnostic archive", err)
+		return wrapError("read compressed diagnostic archive", err)
 	}
 	defer func() {
-		result = errors.Join(result, logError("close compressed diagnostic archive", compressed.Close()))
+		result = errors.Join(result, wrapError("close compressed diagnostic archive", compressed.Close()))
 	}()
 	return writer.compress(compressed)
 }
@@ -117,7 +117,7 @@ func (writer *DiagnosticWriter) pruneArchives() error {
 			continue
 		}
 		if err := unix.Unlinkat(int(writer.directory.Fd()), archive.name, 0); err != nil {
-			return logError("remove diagnostic archive "+archive.name, err)
+			return wrapError("remove diagnostic archive "+archive.name, err)
 		}
 	}
 	return nil
