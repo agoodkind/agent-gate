@@ -36,6 +36,7 @@ Migration scope:
 | Recursive discovery | Any nonempty `search_tools` also enables fixed recursive enumeration behavior for `ls`, `find`, `git ls-files`, and recursive globs. | Select recursive enumeration independently from content readers. Declare command selection and the existing shallow-depth exemption explicitly. |
 | Prose extraction | Fixed extensions and `git`/`gh` option lists determine which text the prose selector exposes. | Configure prose path patterns and command arguments that contain prose. |
 | Redirection exemptions | Fixed output paths and descriptor numbers disappear before the redirection rule evaluates them. | Configure ignored target paths and descriptor numbers explicitly. |
+| Validator working directory | Git validators select the chat's `cwd` even when the tool specifies a linked worktree. | Expose the existing `BaseCWD()` result as `base_cwd` and select it when a validator interprets the shell command itself. |
 
 Fix the existing contract mismatch for `shell_write`: its configuration example
 advertises `write_specs`, but validation rejects it and evaluation does not pass
@@ -143,6 +144,32 @@ Required interpretations:
 | `perl -- -i file.txt` | Do not interpret the operand `-i` as an option. |
 
 ## Configure the other selectors
+
+Expose `base_cwd` as a generic field selector. Use the existing `BaseCWD()`
+precedence, including a recovered Codex tool workdir, before interpreting any
+shell `cd` command. Keep `cwd` as the literal hook directory and `effective_cwd`
+as the directory after command analysis. Configuration must choose the value
+that its validator requires.
+
+The installed Git command validators parse shell directory changes themselves.
+Migrate their `for_each = "cwd"` declarations to `for_each = "base_cwd"`.
+Selecting `effective_cwd` for these validators can interpret a relative `cd`
+twice. Do not change the meaning of `cwd`, special-case Git in the selector,
+or exempt commands with a workdir from checkout checks.
+
+The staging incident supplies direct evidence for this migration. The tool call
+specified a linked `.dotfiles` worktree, while the three blocking rules selected
+the primary chat directory. A hook replay still blocked after recovering the
+correct tool workdir. Calling the existing primary-checkout validator with the
+primary directory returned `pr_protected: true`; supplying an existing linked
+worktree returned `pr_protected: false` for the same described command. These
+checks evaluated the command without staging files.
+
+Verify the new selector through hook payloads with distinct chat and tool
+directories. Include explicit and transcript-recovered workdirs, a payload
+without a separate tool directory, and a relative `cd` command. Confirm that a
+linked-worktree staging command passes and a primary-checkout staging command
+still blocks. Use existing checkouts without executing the described mutations.
 
 Recursive discovery receives explicit enumeration descriptors and an independent
 recursive-glob selection. The migrated configuration preserves the current
