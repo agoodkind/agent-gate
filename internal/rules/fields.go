@@ -420,6 +420,9 @@ func extractUnsafeShellRedirectionsWithPolicy(command string, policy *config.Red
 	if policy == nil {
 		policy = config.DefaultRedirectionPolicy()
 	}
+	if policy == nil {
+		return nil
+	}
 	if hasUnquotedHereDoc(command) {
 		return nil
 	}

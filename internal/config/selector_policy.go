@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/pelletier/go-toml/v2"
 )
@@ -20,11 +21,13 @@ type ProsePolicy struct {
 
 // ProseCommandSpec selects parsed option values or operands.
 type ProseCommandSpec struct {
-	Argv0             []string      `toml:"argv0"`
-	ValueOptions      []string      `toml:"value_options"`
-	Operands          bool          `toml:"operands"`
-	RequireOutputPath bool          `toml:"require_output_path"`
-	Arguments         *ArgumentSpec `toml:"arguments"`
+	Argv0             []string `toml:"argv0"`
+	ValueOptions      []string `toml:"value_options"`
+	Operands          bool     `toml:"operands"`
+	RequireOutputPath bool     `toml:"require_output_path"`
+	// Arguments is required. The pointer distinguishes an omitted table from an
+	// explicitly empty argument description during validation.
+	Arguments *ArgumentSpec `toml:"arguments"`
 }
 
 // RedirectionPolicy selects output paths and descriptor duplications to ignore.
@@ -41,7 +44,7 @@ type selectorPolicyDefaults struct {
 	Redirection RedirectionPolicy `toml:"redirection_policy"`
 }
 
-var selectorDefaults, selectorDefaultsErr = loadSelectorPolicyDefaults()
+var selectorDefaults = sync.OnceValues(loadSelectorPolicyDefaults)
 
 func loadSelectorPolicyDefaults() (selectorPolicyDefaults, error) {
 	var defaults selectorPolicyDefaults
@@ -62,23 +65,34 @@ func loadSelectorPolicyDefaults() (selectorPolicyDefaults, error) {
 
 // ValidateSelectorPolicyDefaults reports invalid shipped selector configuration.
 func ValidateSelectorPolicyDefaults() error {
-	return selectorDefaultsErr
+	_, err := selectorDefaults()
+	return err
 }
 
 // DefaultProsePolicy returns the shipped configuration for prose extraction.
 func DefaultProsePolicy() *ProsePolicy {
-	return &selectorDefaults.Prose
+	defaults, err := selectorDefaults()
+	if err != nil {
+		slog.Error("read shipped prose policy failed", "err", err)
+		return nil
+	}
+	return &defaults.Prose
 }
 
 // DefaultRedirectionPolicy returns the shipped configuration for redirections.
 func DefaultRedirectionPolicy() *RedirectionPolicy {
-	return &selectorDefaults.Redirection
+	defaults, err := selectorDefaults()
+	if err != nil {
+		slog.Error("read shipped redirection policy failed", "err", err)
+		return nil
+	}
+	return &defaults.Redirection
 }
 
 // ValidateSelectorPolicies validates condition-owned prose and redirection policy.
 func ValidateSelectorPolicies(ruleName string, index int, prose *ProsePolicy, redirects *RedirectionPolicy) error {
-	if selectorDefaultsErr != nil {
-		return selectorDefaultsErr
+	if err := ValidateSelectorPolicyDefaults(); err != nil {
+		return err
 	}
 	if prose != nil {
 		if err := validateProsePolicy(prose); err != nil {

@@ -14,6 +14,9 @@ func extractCommandDoubleHyphenProseWithPolicy(command, cwd string, policy *conf
 	if policy == nil {
 		policy = config.DefaultProsePolicy()
 	}
+	if policy == nil {
+		return nil
+	}
 	if patchEnvelopeRe.MatchString(command) {
 		return nil
 	}
@@ -117,17 +120,17 @@ func configuredHeredocProse(command, cwd string, policy *config.ProsePolicy) []s
 	lines := strings.Split(command, "\n")
 	var out []string
 	for index, line := range lines {
-		delimiters := heredocDelimiters(line)
+		delimiters := heredocDeclarations(line)
 		if len(delimiters) == 0 {
 			continue
 		}
-		decomposition := shelldecomp.Parse(line+"\n"+delimiters[0], cwd, "")
+		decomposition := shelldecomp.Parse(line+"\n"+delimiters[0].value, cwd, "")
 		if !decompositionWritesProse(decomposition, policy.PathPatterns) {
 			continue
 		}
 		var body []string
 		for next := index + 1; next < len(lines); next++ {
-			if strings.TrimSpace(lines[next]) == delimiters[0] {
+			if delimiters[0].matches(lines[next]) {
 				break
 			}
 			body = append(body, lines[next])

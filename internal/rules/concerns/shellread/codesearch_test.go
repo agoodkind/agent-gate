@@ -1,6 +1,7 @@
 package shellread
 
 import (
+	"path/filepath"
 	"slices"
 	"testing"
 
@@ -11,40 +12,29 @@ import (
 // lives in each rule's search_tools config.
 var testSearchTools = []string{"grep", "egrep", "fgrep", "rg", "ag", "ack", "git grep", "sed"}
 
-var testEnumerationSpecs = []config.EnumerationSpec{
-	{
-		Argv0: []string{"ls"}, TargetMode: config.EnumerationTargetAllOperands, DefaultCWD: true,
-		Arguments: config.ArgumentSpec{
-			ShortClusters: true, EndOfOptions: true, UnknownOptions: "skip", RequireOptions: []string{"-R"},
-			Options: []config.ArgumentOptionSpec{{Names: []string{"-R", "--recursive"}, Value: "none"}},
-		},
-	},
-	{
-		Argv0: []string{"find"}, TargetMode: config.EnumerationTargetAllOperands, DefaultCWD: true,
-		Arguments: config.ArgumentSpec{
-			OperandsBeforeOptions: true, OperandStopTokens: []string{"(", ")", "!"}, UnknownOptions: "skip",
-			Options:             []config.ArgumentOptionSpec{{Names: []string{"-maxdepth"}, Value: "required", Forms: []string{"separate"}}},
-			ExcludeOptionValues: []config.ArgumentOptionPredicate{{Option: "-maxdepth", Values: []string{"0", "1"}}},
-		},
-	},
-	{
-		Argv0: []string{"git"}, TargetMode: config.EnumerationTargetCWD,
-		Arguments: config.ArgumentSpec{Subcommands: []string{"ls-files"}, UnknownOptions: "skip"},
-	},
-	{
-		Argv0: []string{"find"}, TargetMode: config.EnumerationTargetAllOperands, DefaultCWD: true,
-		RequireContentConsumer: true, ConsumerFlags: []string{"-exec", "-execdir"},
-		Arguments: config.ArgumentSpec{
-			OperandsBeforeOptions: true, OperandStopTokens: []string{"(", ")", "!"}, UnknownOptions: "skip",
-			Options: []config.ArgumentOptionSpec{{Names: []string{"-exec", "-execdir"}, Value: "required", Forms: []string{"separate"}}},
-		},
-		ConsumerWrappers: []config.EnumerationConsumerSpec{{Argv0: []string{"xargs"}, Arguments: config.ArgumentSpec{StopAtFirstPositional: true, UnknownOptions: "skip"}}},
-	},
-	{
-		Argv0: []string{"fd", "fdfind"}, TargetMode: config.EnumerationTargetCWD, RequireContentConsumer: true,
-		Arguments:        config.ArgumentSpec{UnknownOptions: "skip"},
-		ConsumerWrappers: []config.EnumerationConsumerSpec{{Argv0: []string{"xargs"}, Arguments: config.ArgumentSpec{StopAtFirstPositional: true, UnknownOptions: "skip"}}},
-	},
+func testEnumerationPolicy(t *testing.T) config.Condition {
+	t.Helper()
+	path := filepath.Join("..", "..", "testdata", "guard_config.toml")
+	cfg, err := config.LoadExisting(path)
+	if err != nil {
+		t.Fatalf("load configured enumeration policy: %v", err)
+	}
+	for _, rule := range cfg.Rules {
+		if rule.Name != "guard-search-indexed-target" {
+			continue
+		}
+		for _, condition := range rule.Conditions {
+			if condition.Kind != "exec" || condition.ForEach != "cmd_read_targets" {
+				continue
+			}
+			if len(condition.EnumerationSpecs) == 0 {
+				t.Fatal("guard-search-indexed-target requires enumeration_specs")
+			}
+			return condition
+		}
+	}
+	t.Fatal("guard-search-indexed-target requires an exec condition over cmd_read_targets")
+	return config.Condition{}
 }
 
 func targetPaths(targets []ReadTarget) []string {
@@ -64,6 +54,7 @@ func targetPaths(targets []ReadTarget) []string {
 // grep target is dropped rather than fabricated.
 func TestExtractCodeSearchTargetsShelldecompSanity(t *testing.T) {
 	const cwd = "/repo"
+	policy := testEnumerationPolicy(t)
 	cases := []struct {
 		name    string
 		command string
@@ -77,7 +68,7 @@ func TestExtractCodeSearchTargetsShelldecompSanity(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := targetPaths(ExtractCodeSearchTargetsWithPolicy(tc.command, cwd, testSearchTools, testEnumerationSpecs, true, nil))
+			got := targetPaths(ExtractCodeSearchTargetsWithPolicy(tc.command, cwd, testSearchTools, policy.EnumerationSpecs, policy.RecursiveGlobs, nil))
 			if !slices.Equal(got, tc.want) {
 				t.Fatalf("ExtractCodeSearchTargets(%q) = %v, want %v", tc.command, got, tc.want)
 			}
@@ -87,6 +78,7 @@ func TestExtractCodeSearchTargetsShelldecompSanity(t *testing.T) {
 
 func TestExtractCodeSearchTargets(t *testing.T) {
 	const cwd = "/repo"
+	policy := testEnumerationPolicy(t)
 
 	cases := []struct {
 		name    string
@@ -119,7 +111,7 @@ func TestExtractCodeSearchTargets(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := targetPaths(ExtractCodeSearchTargetsWithPolicy(tc.command, cwd, testSearchTools, testEnumerationSpecs, true, nil))
+			got := targetPaths(ExtractCodeSearchTargetsWithPolicy(tc.command, cwd, testSearchTools, policy.EnumerationSpecs, policy.RecursiveGlobs, nil))
 			if !slices.Equal(got, tc.want) {
 				t.Fatalf("ExtractCodeSearchTargets(%q) = %v, want %v", tc.command, got, tc.want)
 			}
@@ -132,6 +124,7 @@ func TestExtractCodeSearchTargets(t *testing.T) {
 // it, so the write guard drops it.
 func TestExtractCodeSearchTargetsAwk(t *testing.T) {
 	const cwd = "/repo"
+	policy := testEnumerationPolicy(t)
 
 	cases := []struct {
 		name    string
@@ -145,7 +138,7 @@ func TestExtractCodeSearchTargetsAwk(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := targetPaths(ExtractCodeSearchTargetsWithPolicy(tc.command, cwd, []string{"awk", "gawk"}, testEnumerationSpecs, true, nil))
+			got := targetPaths(ExtractCodeSearchTargetsWithPolicy(tc.command, cwd, []string{"awk", "gawk"}, policy.EnumerationSpecs, policy.RecursiveGlobs, nil))
 			if !slices.Equal(got, tc.want) {
 				t.Fatalf("ExtractCodeSearchTargets(%q) = %v, want %v", tc.command, got, tc.want)
 			}
@@ -159,6 +152,7 @@ func TestExtractCodeSearchTargetsAwk(t *testing.T) {
 // remote paths, so its embedded search names no local target.
 func TestExtractCodeSearchTargetsEmbedded(t *testing.T) {
 	const cwd = "/repo"
+	policy := testEnumerationPolicy(t)
 
 	cases := []struct {
 		name    string
@@ -179,7 +173,7 @@ func TestExtractCodeSearchTargetsEmbedded(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := targetPaths(ExtractCodeSearchTargetsWithPolicy(tc.command, cwd, testSearchTools, testEnumerationSpecs, true, nil))
+			got := targetPaths(ExtractCodeSearchTargetsWithPolicy(tc.command, cwd, testSearchTools, policy.EnumerationSpecs, policy.RecursiveGlobs, nil))
 			if !slices.Equal(got, tc.want) {
 				t.Fatalf("ExtractCodeSearchTargets(%q) = %v, want %v", tc.command, got, tc.want)
 			}
@@ -192,6 +186,7 @@ func TestExtractCodeSearchTargetsEmbedded(t *testing.T) {
 // edits the file in place and is not a search, so its operands are dropped.
 func TestExtractCodeSearchTargetsSed(t *testing.T) {
 	const cwd = "/repo"
+	policy := testEnumerationPolicy(t)
 
 	cases := []struct {
 		name    string
@@ -208,7 +203,7 @@ func TestExtractCodeSearchTargetsSed(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := targetPaths(ExtractCodeSearchTargetsWithPolicy(tc.command, cwd, testSearchTools, testEnumerationSpecs, true, nil))
+			got := targetPaths(ExtractCodeSearchTargetsWithPolicy(tc.command, cwd, testSearchTools, policy.EnumerationSpecs, policy.RecursiveGlobs, nil))
 			if !slices.Equal(got, tc.want) {
 				t.Fatalf("ExtractCodeSearchTargets(%q) = %v, want %v", tc.command, got, tc.want)
 			}
@@ -223,6 +218,7 @@ func TestExtractCodeSearchTargetsSed(t *testing.T) {
 // a resolved non-code or non-repo directory here is correct, not a leak.
 func TestExtractCodeSearchTargetsEnumerator(t *testing.T) {
 	const cwd = "/repo"
+	policy := testEnumerationPolicy(t)
 
 	cases := []struct {
 		name    string
@@ -264,7 +260,7 @@ func TestExtractCodeSearchTargetsEnumerator(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := targetPaths(ExtractCodeSearchTargetsWithPolicy(tc.command, cwd, testSearchTools, testEnumerationSpecs, true, nil))
+			got := targetPaths(ExtractCodeSearchTargetsWithPolicy(tc.command, cwd, testSearchTools, policy.EnumerationSpecs, policy.RecursiveGlobs, nil))
 			if !slices.Equal(got, tc.want) {
 				t.Fatalf("ExtractCodeSearchTargets(%q) = %v, want %v", tc.command, got, tc.want)
 			}

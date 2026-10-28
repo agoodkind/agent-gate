@@ -108,6 +108,9 @@ Each command entry declares `argv0`, `arguments`, and either `value_options`,
 `operands`, or both. The `require_output_path` setting requires an output path
 that matches a configured prose pattern.
 
+Each prose command entry requires an `arguments` table. An empty table supplies
+an explicit argument description; an omitted table fails configuration validation.
+
 A condition's `redirection_policy` contains `ignore_paths` and `ignore_fds`.
 These arrays select exempt output paths and descriptor duplications.
 

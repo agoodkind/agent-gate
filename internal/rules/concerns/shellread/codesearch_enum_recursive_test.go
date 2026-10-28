@@ -13,6 +13,7 @@ var enumTestTools []string
 // the enumerated directory, while a shallow one stays allowed.
 func TestExtractCodeSearchTargetsRecursiveEnumeration(t *testing.T) {
 	const cwd = "/repo"
+	policy := testEnumerationPolicy(t)
 
 	cases := []struct {
 		name    string
@@ -35,7 +36,7 @@ func TestExtractCodeSearchTargetsRecursiveEnumeration(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := targetPaths(ExtractCodeSearchTargetsWithPolicy(tc.command, cwd, enumTestTools, testEnumerationSpecs, true, nil))
+			got := targetPaths(ExtractCodeSearchTargetsWithPolicy(tc.command, cwd, enumTestTools, policy.EnumerationSpecs, policy.RecursiveGlobs, nil))
 			if !slices.Equal(got, tc.want) {
 				t.Fatalf("ExtractCodeSearchTargets(%q) = %v, want %v", tc.command, got, tc.want)
 			}

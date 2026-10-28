@@ -40,12 +40,12 @@ Interfaces:
 - `shellargs.Parse(command shelldecomp.Command, spec config.ArgumentSpec) Result` reports operands, option values, directory, selection, and unresolved state.
 - `ExtractWriteTargetsWithSpecs` preserves its public signature and uses explicit descriptors for configurable command arguments.
 
-- [ ] Implement and validate the shared schema and parser.
-- [ ] Replace the temporary Perl/Ruby patch and independent editor table with configured descriptions.
-- [ ] Preserve structural and analyzed target provenance when descriptors replace argument interpretation.
-- [ ] Pass descriptors into local embedded extraction and `shell_write` evaluation.
-- [ ] Verify quoted, attached, clustered, optional, unresolved, and `--` cases through direct hook inputs.
-- [ ] Commit this coherent implementation after integration checks.
+- [x] Implement and validate the shared schema and parser.
+- [x] Replace the temporary Perl/Ruby patch and independent editor table with configured descriptions.
+- [x] Preserve structural and analyzed target provenance when descriptors replace argument interpretation.
+- [x] Pass descriptors into local embedded extraction and `shell_write` evaluation.
+- [x] Verify quoted, attached, clustered, optional, unresolved, and `--` cases through direct hook inputs.
+- [x] Commit this coherent implementation after integration checks.
 
 ## Task 2: Other selector configuration
 
@@ -59,37 +59,37 @@ Interfaces:
 - Condition-specific selector evaluation uses only that condition's policy.
 - Shared argument descriptions support configured reads, prose values, and enumeration activation.
 
-- [ ] Extract recursive discovery policy into descriptors, including shallow-depth exemptions.
-- [ ] Extract prose extensions and command options into explicit configuration data.
-- [ ] Extract redirection exemptions into explicit configuration data.
-- [ ] Migrate matching installed and shipped declarations without weakening unrelated rules.
-- [ ] Verify independent selection and preserved outcomes through direct hook evaluation.
-- [ ] Commit the integrated selector changes.
+- [x] Extract recursive discovery policy into descriptors, including shallow-depth exemptions.
+- [x] Extract prose extensions and command options into explicit configuration data.
+- [x] Extract redirection exemptions into explicit configuration data.
+- [x] Migrate matching installed and shipped declarations without weakening unrelated rules.
+- [x] Verify independent selection and preserved outcomes through direct hook evaluation.
+- [x] Commit the integrated selector changes.
 
 ## Task 3: Validator directory selection
 
 Modify [field selectors](../../../internal/config/selector.go), [field access](../../../internal/rules/fields.go), and the configuration reference. Add `base_cwd` using `FieldSet.BaseCWD()` with its existing precedence. Migrate the installed Git command validator declarations from `cwd` to `base_cwd`.
 
-- [ ] Expose the selector without changing `cwd` or `effective_cwd` semantics.
-- [ ] Verify explicit workdirs, transcript recovery, missing separate workdirs, and relative `cd` commands.
-- [ ] Confirm linked staging passes and primary staging still blocks without staging any files.
-- [ ] Commit source and reference changes.
+- [x] Expose the selector without changing `cwd` or `effective_cwd` semantics.
+- [x] Verify explicit workdirs, transcript recovery, missing separate workdirs, and relative `cd` commands.
+- [x] Confirm linked staging passes and primary staging still blocks without staging any files.
+- [x] Commit source and reference changes.
 
 ## Task 4: Integration and deployment
 
-- [ ] Inspect every migrated policy against the installed baseline and preserve a private recovery copy.
-- [ ] Run `make build` and `make test`. The current build system rejects `make check` and directs use of `make build`.
-- [ ] Evaluate the original Perl input and the linked-worktree staging input with candidate code and configuration.
-- [ ] Verify representative protected targets still block and temporary targets pass.
-- [ ] Review the complete diff independently and fix scoped findings.
-- [ ] Capture the final before-deployment audit window and executable/configuration identities.
-- [ ] Deploy through `make deploy`, select validated configuration, and verify reload and daemon identity.
+- [x] Inspect every migrated policy against the installed baseline and preserve a private recovery copy.
+- [x] Run `make build` and `make test`. The current build system rejects `make check` and directs use of `make build`.
+- [x] Evaluate the original Perl input and the linked-worktree staging input with candidate code and configuration.
+- [x] Verify representative protected targets still block and temporary targets pass.
+- [x] Review the complete diff independently and fix scoped findings.
+- [x] Capture the final before-deployment audit window and executable/configuration identities.
+- [x] Deploy through `make deploy`, select validated configuration, and verify reload and daemon identity.
 - [ ] Capture the after-deployment audit window. Inspect observed blocks, normalize block counts by evaluated activity, and investigate increases, new false blockers, and errors.
 - [ ] Preserve a written comparison with exact time windows and evidence.
 
 ## Task 5: Pull request, merge, and cleanup
 
-- [ ] Create and attach a ready PR with the full change and validation results.
+- [x] Create and attach a ready PR with the full change and validation results.
 - [ ] Read the active ruleset, satisfy checks and review requirements, and resolve verified findings.
 - [ ] Merge without admin bypass and verify the merged commit.
 - [ ] Verify the installed executable matches the accepted implementation.
