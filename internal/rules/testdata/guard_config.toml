@@ -26,6 +26,78 @@ on_error = "open"
 stdout_json_field = "searchable"
 stdout_json_equals = "true"
 
+recursive_globs = true
+
+[[rules.conditions.enumeration_specs]]
+argv0 = ["ls"]
+target_mode = "all_operands"
+default_cwd = true
+[rules.conditions.enumeration_specs.arguments]
+short_clusters = true
+end_of_options = true
+unknown_options = "skip"
+require_options = ["-R"]
+options = [{ names = ["-R", "--recursive"], value = "none" }]
+
+[[rules.conditions.enumeration_specs]]
+argv0 = ["find"]
+target_mode = "all_operands"
+default_cwd = true
+[rules.conditions.enumeration_specs.arguments]
+operands_before_options = true
+operand_stop_tokens = ["(", ")", "!"]
+unknown_options = "skip"
+options = [{ names = ["-maxdepth"], value = "required", forms = ["separate"] }]
+exclude_option_values = [{ option = "-maxdepth", values = ["0", "1"] }]
+
+[[rules.conditions.enumeration_specs]]
+argv0 = ["git"]
+target_mode = "cwd"
+[rules.conditions.enumeration_specs.arguments]
+subcommands = ["ls-files"]
+unknown_options = "skip"
+options = [
+  { names = ["-C"], value = "required", forms = ["separate", "attached"], cwd = true },
+  { names = ["-c", "--config-env", "--git-dir", "--work-tree", "--namespace", "--super-prefix", "--exec-path", "--attr-source"], value = "required", forms = ["separate", "equals"] },
+]
+
+[[rules.conditions.enumeration_specs]]
+argv0 = ["find"]
+target_mode = "all_operands"
+default_cwd = true
+require_content_consumer = true
+consumer_flags = ["-exec", "-execdir"]
+[rules.conditions.enumeration_specs.arguments]
+operands_before_options = true
+operand_stop_tokens = ["(", ")", "!"]
+unknown_options = "skip"
+options = [
+  { names = ["-exec", "-execdir"], value = "required", forms = ["separate"] },
+]
+[[rules.conditions.enumeration_specs.consumer_wrappers]]
+argv0 = ["xargs"]
+[rules.conditions.enumeration_specs.consumer_wrappers.arguments]
+stop_at_first_positional = true
+unknown_options = "skip"
+options = [
+  { names = ["-I", "-J", "-L", "-n", "-P", "-s", "-E", "--replace", "--max-lines", "--max-args", "--max-procs", "--max-chars", "--eof"], value = "required", forms = ["separate", "attached", "equals"] },
+]
+
+[[rules.conditions.enumeration_specs]]
+argv0 = ["fd", "fdfind"]
+target_mode = "cwd"
+require_content_consumer = true
+[rules.conditions.enumeration_specs.arguments]
+unknown_options = "skip"
+[[rules.conditions.enumeration_specs.consumer_wrappers]]
+argv0 = ["xargs"]
+[rules.conditions.enumeration_specs.consumer_wrappers.arguments]
+stop_at_first_positional = true
+unknown_options = "skip"
+options = [
+  { names = ["-I", "-J", "-L", "-n", "-P", "-s", "-E", "--replace", "--max-lines", "--max-args", "--max-procs", "--max-chars", "--eof"], value = "required", forms = ["separate", "attached", "equals"] },
+]
+
 [[rules]]
 name = "guard-worktree-primary-write"
 events = ["PreToolUse"]

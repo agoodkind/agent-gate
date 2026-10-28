@@ -1,5 +1,13 @@
 # Agent Instructions
 
+## Configuration architecture
+
+- Make enforcement policy 100% configuration driven. Configuration defines rule conditions, command descriptions, argument roles, protected targets, exemptions, and enforcement actions.
+- Use Go for generic parsing, fact extraction, configuration validation, and rule evaluation. Do not encode policy in command-specific branches, fixed executable or extension lists, implicit exemptions, or hidden defaults.
+- When configuration cannot express a required rule, expose, extend, or fix a reusable primitive. Express the rule through that primitive in configuration. Do not add a special case for the command or incident.
+- Store shipped policy defaults as explicit configuration data under the same schema as user rules. After the required primitives exist, add and change rules only through configuration.
+- Fix false positives in the responsible primitive or configuration rule. Preserve independent facts and checks, and reject invalid or unsupported configuration with a clear error instead of guessing policy.
+
 ## Development
 
 - Use `make test`, `make lint`, and `make check` instead of direct broad Go commands.

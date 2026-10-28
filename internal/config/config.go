@@ -116,11 +116,16 @@ type Condition struct {
 	// Shell-read-secret condition fields. Pattern matches file contents,
 	// PathPattern matches risky paths when content probing is not possible,
 	// and ReadSpecs describes how command argv shapes expose paths.
-	PathPattern  string           `toml:"path_pattern"`
-	MaxBytes     int              `toml:"max_bytes"`
-	RemotePolicy string           `toml:"remote_policy"`
-	ReadSpecs    []ShellReadSpec  `toml:"read_specs"`
-	WriteSpecs   []ShellWriteSpec `toml:"write_specs"`
+	PathPattern       string             `toml:"path_pattern"`
+	MaxBytes          int                `toml:"max_bytes"`
+	RemotePolicy      string             `toml:"remote_policy"`
+	ReadSpecs         []ShellReadSpec    `toml:"read_specs"`
+	WriteSpecs        []ShellWriteSpec   `toml:"write_specs"`
+	ProsePolicy       *ProsePolicy       `toml:"prose_policy"`
+	RedirectionPolicy *RedirectionPolicy `toml:"redirection_policy"`
+	EnumerationSpecs  []EnumerationSpec  `toml:"enumeration_specs"`
+	RecursiveGlobs    bool               `toml:"recursive_globs"`
+	MatchUnresolved   *bool              `toml:"match_unresolved"`
 
 	// Exec condition fields. Command is the argv executed synchronously as an
 	// external validator (no shell). TimeoutMs bounds the run. RetryCount is the
@@ -187,18 +192,19 @@ type Condition struct {
 // ShellReadSpec describes one configurable shell command shape for the
 // shell_read_secret condition kind.
 type ShellReadSpec struct {
-	Name                        string   `toml:"name"`
-	Argv0                       []string `toml:"argv0"`
-	PathArgStart                int      `toml:"path_arg_start"`
-	PathArgStartIfFlags         []string `toml:"path_arg_start_if_flags"`
-	PathArgStartIfFlagsValue    int      `toml:"path_arg_start_if_flags_value"`
-	SkipPositionals             int      `toml:"skip_positionals"`
-	SkipFlagsWithValues         []string `toml:"skip_flags_with_values"`
-	SkipFlagValuesAsPositionals []string `toml:"skip_flag_values_as_positionals"`
-	NestedCommand               bool     `toml:"nested_command"`
-	NestedCommandFlag           string   `toml:"nested_command_flag"`
-	NestedRemote                bool     `toml:"nested_remote"`
-	RemoteSources               bool     `toml:"remote_sources"`
+	Arguments                   *ArgumentSpec `toml:"arguments"`
+	Name                        string        `toml:"name"`
+	Argv0                       []string      `toml:"argv0"`
+	PathArgStart                int           `toml:"path_arg_start"`
+	PathArgStartIfFlags         []string      `toml:"path_arg_start_if_flags"`
+	PathArgStartIfFlagsValue    int           `toml:"path_arg_start_if_flags_value"`
+	SkipPositionals             int           `toml:"skip_positionals"`
+	SkipFlagsWithValues         []string      `toml:"skip_flags_with_values"`
+	SkipFlagValuesAsPositionals []string      `toml:"skip_flag_values_as_positionals"`
+	NestedCommand               bool          `toml:"nested_command"`
+	NestedCommandFlag           string        `toml:"nested_command_flag"`
+	NestedRemote                bool          `toml:"nested_remote"`
+	RemoteSources               bool          `toml:"remote_sources"`
 	// RefPathOperands declares that a positional operand may join a revision
 	// and a path with a colon, as git does in `git show HEAD:go.mod`. Without
 	// it the whole operand resolves as one filename, giving a path that does
@@ -728,6 +734,12 @@ func compileCondition(log *slog.Logger, ruleName string, index int, c *Condition
 	if err := validateShellWriteSpecConfig(ruleName, index, c); err != nil {
 		return err
 	}
+	if err := ValidateSelectorPolicies(ruleName, index, c.ProsePolicy, c.RedirectionPolicy); err != nil {
+		return err
+	}
+	if err := ValidateEnumerationSpecs(ruleName, index, c.EnumerationSpecs); err != nil {
+		return err
+	}
 	if ConditionKind(c.Kind) == ConditionKindGitRefMove && len(c.FieldPaths) > 0 {
 		return fmt.Errorf("rule %q condition %d: git_ref_move does not accept field_paths", ruleName, index)
 	}
@@ -944,6 +956,14 @@ func validateShellReadSpecConfig(ruleName string, index int, c *Condition) error
 func validateReadSpecs(ruleName string, index int, specs []ShellReadSpec) error {
 	for specIndex := range specs {
 		spec := specs[specIndex]
+		if err := validateReadArgumentMode(spec); err != nil {
+			slog.Error("validate read argument mode", "rule", ruleName, "condition", index, "spec", specIndex, "err", err)
+			return fmt.Errorf("rule %q condition %d read_specs %d: %w", ruleName, index, specIndex, err)
+		}
+		if err := ValidateArgumentSpec(spec.Arguments); err != nil {
+			slog.Error("validate read argument specification", "rule", ruleName, "condition", index, "spec", specIndex, "err", err)
+			return fmt.Errorf("rule %q condition %d read_specs %d arguments: %w", ruleName, index, specIndex, err)
+		}
 		if len(spec.Argv0) == 0 {
 			return fmt.Errorf("rule %q condition %d read_specs %d: argv0 is required", ruleName, index, specIndex)
 		}

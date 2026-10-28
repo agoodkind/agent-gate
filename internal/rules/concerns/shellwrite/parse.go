@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"goodkind.io/agent-gate/internal/config"
+	"goodkind.io/agent-gate/internal/rules/concerns/shellargs"
 	"goodkind.io/agent-gate/internal/rules/concerns/shellparse"
 	"goodkind.io/gksyntax/shelldecomp"
 )
@@ -96,6 +97,9 @@ func ExtractWriteTargetsWithSpecs(cmd, cwd string, specs []config.ShellWriteSpec
 		out = append(out, sentinel)
 	}
 	for _, target := range decomposition.WriteTargets() {
+		if replacedArgumentTarget(decomposition, target, specs) {
+			continue
+		}
 		if !target.Resolvable || target.Path == shelldecomp.Unresolvable {
 			out = append(out, WriteTarget{
 				Path:   "",
@@ -113,7 +117,7 @@ func ExtractWriteTargetsWithSpecs(cmd, cwd string, specs []config.ShellWriteSpec
 		})
 	}
 	out = append(out, declaredWriteTargets(decomposition, specs)...)
-	out = append(out, editorWriteTargets(decomposition)...)
+	out = append(out, commonWriteTargets(decomposition, specs)...)
 	// Only recurse into embedded bodies for the local opaque shapes the sentinel
 	// already covers (eval/exec, interpreter -c, command substitution). This
 	// surfaces a real local write hidden inside `bash -c 'echo x > f'` (f,
@@ -121,7 +125,7 @@ func ExtractWriteTargetsWithSpecs(cmd, cwd string, specs []config.ShellWriteSpec
 	// whose writes are remote, not local files, and which never triggers the
 	// sentinel. An unresolved embedded write is still covered by the sentinel.
 	if opaque {
-		out = append(out, embeddedWriteTargets(decomposition, 0)...)
+		out = append(out, embeddedWriteTargets(decomposition, specs, 0)...)
 	}
 	return dedupeWriteTargets(out)
 }
@@ -143,135 +147,40 @@ func declaredWriteTargets(decomposition *shelldecomp.Decomposition, specs []conf
 }
 
 func declaredCommandTargets(command shelldecomp.Command, spec config.ShellWriteSpec) []WriteTarget {
-	operands, effectiveCWD := declaredOperands(command, spec)
+	result := shellargs.Parse(command, spec.ArgumentDescription())
+	if !result.Selected {
+		return nil
+	}
+	operands := result.Operands
 	if spec.TargetMode == config.WriteTargetLastOperand && len(operands) > 1 {
 		operands = operands[len(operands)-1:]
 	}
+	if !result.ActivationUnresolved {
+		for _, name := range spec.TargetOptions {
+			operands = append(operands, result.Options[name]...)
+		}
+	}
 	targets := make([]WriteTarget, 0, len(operands))
+	if result.Unresolved && spec.Unresolved != "ignore" {
+		targets = append(targets, sentinelFor(command.Argv0))
+	}
 	for _, operand := range operands {
 		if !operand.Resolvable {
-			targets = append(targets, WriteTarget{
-				Path:   "",
-				Tool:   ToolUnparseable,
-				Reason: ReasonUnparsedCommandShape,
-				Raw:    operand.Text,
-			})
+			if spec.Unresolved != "ignore" {
+				targets = append(targets, sentinelFor(command.Argv0))
+			}
 			continue
 		}
-		path := resolveDeclaredPath(operand.Value, effectiveCWD)
+		path := resolveDeclaredPath(operand.Value, result.CWD)
 		if path == "" {
-			targets = append(targets, WriteTarget{
-				Path:   "",
-				Tool:   ToolUnparseable,
-				Reason: ReasonUnparsedCommandShape,
-				Raw:    operand.Text,
-			})
+			if spec.Unresolved != "ignore" {
+				targets = append(targets, sentinelFor(command.Argv0))
+			}
 			continue
 		}
-		targets = append(targets, WriteTarget{
-			Path:   path,
-			Tool:   command.Argv0,
-			Reason: ReasonOK,
-			Raw:    operand.Text,
-		})
+		targets = append(targets, WriteTarget{Path: path, Tool: command.Argv0, Reason: ReasonOK, Raw: operand.Text})
 	}
 	return targets
-}
-
-func declaredOperands(command shelldecomp.Command, spec config.ShellWriteSpec) ([]shelldecomp.Word, string) {
-	operands := make([]shelldecomp.Word, 0, len(command.Args))
-	effectiveCWD := command.Cwd
-	optionsEnded := false
-	for index := 0; index < len(command.Args); index++ {
-		argument := command.Args[index]
-		argumentValue, argumentResolved := declaredControlValue(argument)
-		if !optionsEnded && argumentResolved && argumentValue == "--" {
-			optionsEnded = spec.EndOfOptions
-			continue
-		}
-		if optionsEnded {
-			operands = append(operands, argument)
-			continue
-		}
-		if cwd, consumed, matched := consumeDeclaredCWD(command.Args, index, effectiveCWD, spec.CwdFlags); matched {
-			effectiveCWD = cwd
-			index += consumed
-			continue
-		}
-		if consumed, matched := consumeDeclaredFlagValue(argument, spec.SkipFlagsWithValues); matched {
-			index += consumed
-			continue
-		}
-		if argumentResolved && strings.HasPrefix(argumentValue, "-") {
-			continue
-		}
-		operands = append(operands, argument)
-	}
-	return operands, effectiveCWD
-}
-
-func consumeDeclaredCWD(
-	arguments []shelldecomp.Word,
-	index int,
-	current string,
-	flags []string,
-) (string, int, bool) {
-	value, matched, consumeNext := declaredFlagValue(arguments[index], flags)
-	if !matched {
-		return current, 0, false
-	}
-	if consumeNext {
-		if index+1 >= len(arguments) {
-			return current, 1, true
-		}
-		return declaredCWD(arguments[index+1], current), 1, true
-	}
-	if !arguments[index].Resolvable {
-		return shelldecomp.Unresolvable, 0, true
-	}
-	return resolveDeclaredPath(value, current), 0, true
-}
-
-func consumeDeclaredFlagValue(argument shelldecomp.Word, flags []string) (int, bool) {
-	_, matched, consumeNext := declaredFlagValue(argument, flags)
-	if !matched {
-		return 0, false
-	}
-	if consumeNext {
-		return 1, true
-	}
-	return 0, true
-}
-
-func declaredFlagValue(argument shelldecomp.Word, flags []string) (string, bool, bool) {
-	argumentValue, resolved := declaredControlValue(argument)
-	if !resolved {
-		return "", false, false
-	}
-	for _, flag := range flags {
-		if argumentValue == flag {
-			return "", true, true
-		}
-		prefix := flag + "="
-		if value, found := strings.CutPrefix(argumentValue, prefix); found {
-			return value, true, false
-		}
-	}
-	return "", false, false
-}
-
-func declaredControlValue(argument shelldecomp.Word) (string, bool) {
-	if !argument.Resolvable {
-		return "", false
-	}
-	return argument.Value, true
-}
-
-func declaredCWD(argument shelldecomp.Word, current string) string {
-	if !argument.Resolvable {
-		return shelldecomp.Unresolvable
-	}
-	return resolveDeclaredPath(argument.Value, current)
 }
 
 func resolveDeclaredPath(value string, cwd string) string {
@@ -312,7 +221,7 @@ const maxEmbeddedDepth = 5
 // so wrapping an edit in a subshell does not evade the checkout guard.
 // Unresolvable embedded writes are dropped; the outer sentinel already covers the
 // default-deny case for those.
-func embeddedWriteTargets(decomposition *shelldecomp.Decomposition, depth int) []WriteTarget {
+func embeddedWriteTargets(decomposition *shelldecomp.Decomposition, specs []config.ShellWriteSpec, depth int) []WriteTarget {
 	if decomposition == nil || depth >= maxEmbeddedDepth {
 		return nil
 	}
@@ -322,6 +231,9 @@ func embeddedWriteTargets(decomposition *shelldecomp.Decomposition, depth int) [
 			continue
 		}
 		for _, target := range region.Parsed.WriteTargets() {
+			if replacedArgumentTarget(region.Parsed, target, specs) {
+				continue
+			}
 			if !target.Resolvable || target.Path == shelldecomp.Unresolvable {
 				continue
 			}
@@ -332,8 +244,9 @@ func embeddedWriteTargets(decomposition *shelldecomp.Decomposition, depth int) [
 				Raw:    target.Raw,
 			})
 		}
-		out = append(out, editorWriteTargets(region.Parsed)...)
-		out = append(out, embeddedWriteTargets(region.Parsed, depth+1)...)
+		out = append(out, declaredWriteTargets(region.Parsed, specs)...)
+		out = append(out, commonWriteTargets(region.Parsed, specs)...)
+		out = append(out, embeddedWriteTargets(region.Parsed, specs, depth+1)...)
 	}
 	return out
 }
@@ -385,101 +298,51 @@ func isInterpreterWithScript(command shelldecomp.Command) bool {
 	return false
 }
 
-// editors are text editors invoked to write a file. The static gate cannot read
-// an editor's own write commands, so it treats each path-shaped operand as a
-// write target; a rule that checks cmd_write_targets against a protected checkout
-// then blocks an edit into it. Pure viewers that cannot write (view, less, more)
-// are deliberately excluded.
-var editors = map[string]bool{
-	"vim": true, "vi": true, "nvim": true, "ex": true,
-	"ed": true, "emacs": true, "nano": true,
-}
-
-// inPlaceInterpreters are interpreters whose -i flag rewrites the file operands
-// in place, the way sed -i and awk -i inplace already do (those two shelldecomp
-// models directly). python -i and node -i are interactive REPLs, not in-place
-// edits, so they are excluded. A bare script-file run (python script.py) is not
-// treated as a write, so routine build and test scripts are not blocked.
-var inPlaceInterpreters = map[string]bool{"perl": true, "ruby": true}
-
-// editorWriteTargets returns the resolved file operands of every editor and
-// in-place interpreter edit in the decomposition. Flag tokens (a leading - or +)
-// and unresolvable operands are skipped, and paths resolve against the command's
-// cd-aware cwd. Over-inclusion of a non-file operand is safe because a
-// protected-checkout rule only matches targets that resolve inside the checkout,
-// so a stray value outside it never blocks and a real edit inside it always does.
-func editorWriteTargets(decomposition *shelldecomp.Decomposition) []WriteTarget {
-	var out []WriteTarget
+// commonWriteTargets applies shipped descriptions unless a condition replaces them.
+func commonWriteTargets(decomposition *shelldecomp.Decomposition, specs []config.ShellWriteSpec) []WriteTarget {
+	commonSpecs, err := config.CommonWriteSpecs()
+	if err != nil {
+		return []WriteTarget{sentinelFor(err.Error())}
+	}
+	var targets []WriteTarget
 	for _, command := range decomposition.Commands() {
-		base := filepath.Base(command.Argv0)
-		if !editors[base] && !isInterpreterInPlace(command) {
+		overridden := false
+		for _, spec := range specs {
+			if !slices.Contains(spec.Argv0, filepath.Base(command.Argv0)) {
+				continue
+			}
+			if shellargs.Parse(command, spec.ArgumentDescription()).Matched {
+				overridden = true
+				break
+			}
+		}
+		if overridden {
 			continue
 		}
-		for _, argument := range command.Args {
-			if !argument.Resolvable {
-				continue
+		for _, spec := range commonSpecs {
+			if slices.Contains(spec.Argv0, filepath.Base(command.Argv0)) {
+				targets = append(targets, declaredCommandTargets(command, spec)...)
 			}
-			value := argument.Value
-			if value == "" || strings.HasPrefix(value, "-") || strings.HasPrefix(value, "+") {
-				continue
-			}
-			path := resolveDeclaredPath(value, command.Cwd)
-			if path == "" {
-				continue
-			}
-			out = append(out, WriteTarget{
-				Path:   path,
-				Tool:   base,
-				Reason: ReasonOK,
-				Raw:    argument.Text,
-			})
 		}
 	}
-	return out
+	return targets
 }
 
-// isInterpreterInPlace reports whether a command runs an in-place interpreter
-// edit (perl -i, ruby -i), whose written files the outer gate cannot enumerate.
-// The argv0 is matched by base name so a path-qualified /usr/bin/perl still
-// counts.
-func isInterpreterInPlace(command shelldecomp.Command) bool {
-	if !inPlaceInterpreters[filepath.Base(command.Argv0)] {
+func replacedArgumentTarget(decomposition *shelldecomp.Decomposition, target shelldecomp.WriteTarget, specs []config.ShellWriteSpec) bool {
+	if target.Origin != shelldecomp.WriteOriginArgument {
 		return false
 	}
-	for _, arg := range command.Args {
-		if isInPlaceFlagToken(arg.Text) {
-			return true
+	for _, command := range decomposition.Commands() {
+		if command.Node == nil || command.Node.StartByte != target.CommandStartByte {
+			continue
 		}
-	}
-	return false
-}
-
-// valueConsumingFlags are single-letter perl and ruby options whose remaining
-// token characters are that option's attached value, not further clustered
-// flags. Scanning a flag cluster stops at the first of these so that -Ilib,
-// -Mstrict, and -rdigest are not misread as containing an in-place i.
-var valueConsumingFlags = map[byte]bool{
-	'e': true, 'E': true, 'I': true, 'M': true,
-	'm': true, 'r': true, 'F': true, 'C': true, 'K': true,
-}
-
-// isInPlaceFlagToken reports whether a single-dash perl or ruby flag token
-// requests in-place editing. It scans the flag cluster left to right and returns
-// true at the first bare i (so -i, -i.bak, and clusters like -pi and -wpi.bak
-// all match). It stops at the first value-consuming flag, whose trailing
-// characters are that flag's value rather than more flags, so -Ilib, -Mstrict,
-// and -rdigest do not match.
-func isInPlaceFlagToken(token string) bool {
-	if len(token) < 2 || token[0] != '-' || token[1] == '-' {
-		return false
-	}
-	for index := 1; index < len(token); index++ {
-		character := token[index]
-		if character == 'i' {
-			return true
-		}
-		if valueConsumingFlags[character] {
-			return false
+		for _, spec := range specs {
+			if !slices.Contains(spec.Argv0, filepath.Base(command.Argv0)) {
+				continue
+			}
+			if shellargs.Parse(command, spec.ArgumentDescription()).Matched {
+				return true
+			}
 		}
 	}
 	return false

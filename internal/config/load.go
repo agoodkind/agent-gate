@@ -65,6 +65,14 @@ func loadExisting(path string, strict bool) (*Config, error) {
 
 func loadSource(path string, sourceBytes []byte, strict bool) (*Config, error) {
 	log := slog.Default()
+	if _, err := CommonWriteSpecs(); err != nil {
+		log.Error("load shipped command descriptions", "err", err)
+		return nil, fmt.Errorf("load shipped command descriptions: %w", err)
+	}
+	if err := ValidateSelectorPolicyDefaults(); err != nil {
+		log.Error("load shipped selector policies", "err", err)
+		return nil, fmt.Errorf("load shipped selector policies: %w", err)
+	}
 	var cfg Config
 
 	// recordOrFail returns a non-nil error only in strict mode. In degraded mode

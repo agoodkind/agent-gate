@@ -277,38 +277,50 @@ func projectConditionMatchCwd(cwd string, c *config.Condition) bool {
 func stripHeredocBodies(command string) string {
 	lines := strings.Split(command, "\n")
 	var out []string
-	var pending []string
+	var pending []heredocDelimiter
 
 	for _, line := range lines {
 		if len(pending) > 0 {
-			if strings.TrimSpace(line) == pending[0] {
+			if pending[0].matches(line) {
 				pending = pending[1:]
 			}
 			continue
 		}
 
 		out = append(out, line)
-		pending = append(pending, heredocDelimiters(line)...)
+		pending = append(pending, heredocDeclarations(line)...)
 	}
 
 	return strings.Join(out, "\n")
 }
 
-func heredocDelimiters(line string) []string {
+type heredocDelimiter struct {
+	value     string
+	stripTabs bool
+}
+
+func (delimiter heredocDelimiter) matches(line string) bool {
+	if delimiter.stripTabs {
+		line = strings.TrimLeft(line, "\t")
+	}
+	return line == delimiter.value
+}
+
+func heredocDeclarations(line string) []heredocDelimiter {
 	fields := shellFields(line)
-	var out []string
+	var out []heredocDelimiter
 	for i := 0; i < len(fields); i++ {
 		field := fields[i]
 		switch {
 		case field == "<<" || field == "<<-":
 			if i+1 < len(fields) {
-				out = append(out, fields[i+1])
+				out = append(out, heredocDelimiter{value: fields[i+1], stripTabs: strings.HasSuffix(field, "-")})
 				i++
 			}
 		case strings.HasPrefix(field, "<<-") && len(field) > len("<<-"):
-			out = append(out, strings.TrimPrefix(field, "<<-"))
+			out = append(out, heredocDelimiter{value: field[3:], stripTabs: true})
 		case strings.HasPrefix(field, "<<") && len(field) > len("<<"):
-			out = append(out, strings.TrimPrefix(field, "<<"))
+			out = append(out, heredocDelimiter{value: field[2:], stripTabs: false})
 		}
 	}
 	return out
@@ -350,32 +362,6 @@ func allPathsExist(root string, paths []string) bool {
 func pathExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
-}
-
-func trimEnvAssignments(fields []string) []string {
-	for len(fields) > 0 && isEnvAssignment(fields[0]) {
-		fields = fields[1:]
-	}
-	return fields
-}
-
-func isEnvAssignment(s string) bool {
-	i := strings.IndexByte(s, '=')
-	if i <= 0 {
-		return false
-	}
-	for j, r := range s[:i] {
-		if j == 0 {
-			if r != '_' && !unicode.IsLetter(r) {
-				return false
-			}
-			continue
-		}
-		if r != '_' && !unicode.IsLetter(r) && !unicode.IsDigit(r) {
-			return false
-		}
-	}
-	return true
 }
 
 func shellFields(s string) []string {

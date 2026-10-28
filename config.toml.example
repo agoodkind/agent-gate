@@ -139,11 +139,14 @@ disable_if_env = ["AGENT_GATE_MAINTENANCE"]
 # shell_read_secret
 #   field_paths, pattern, path_pattern, max_bytes, remote_policy, read_specs
 # shell_write
-#   field_paths, globs, write_specs
+#   field_paths, globs, write_specs, match_unresolved
 # exec
 #   command, field_paths, timeout_ms, cache_key, cache_ttl_ms, block_on,
 #   on_error, search_tools, for_each, match_mode, stdout_json_field,
 #   stdout_json_equals
+# Condition-owned command descriptions and selector policies use the schema in
+# docs/command-specifications.md. Validators that interpret shell directory
+# changes select base_cwd instead of the hook's literal cwd.
 # infer
 #   endpoint, layer_name, prompt or prompt_file, input_field, output_schema or
 #   output_schema_file, model, generation options, response predicate, timeout,

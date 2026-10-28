@@ -306,10 +306,10 @@ func execCacheKeyValue(fields FieldSet, c *config.Condition) string {
 
 func execSelectorValue(fields FieldSet, selector config.FieldSelector, c *config.Condition) string {
 	if selector == config.FieldCmdReadTargets {
-		return fields.CmdReadTargets(c.SearchTools, c.ReadSpecs, diskFileResolver())
+		return fields.CmdReadTargetsWithPolicy(c.SearchTools, c.ReadSpecs, c.EnumerationSpecs, c.RecursiveGlobs, diskFileResolver())
 	}
 	if selector == config.FieldExecTargets {
-		return fields.ExecTargets(c.SearchTools, c.ReadSpecs, diskFileResolver())
+		return fields.ExecTargetsWithPolicy(c.SearchTools, c.ReadSpecs, c.EnumerationSpecs, c.RecursiveGlobs, diskFileResolver())
 	}
 	return fields.StringForCondition(selector, c)
 }

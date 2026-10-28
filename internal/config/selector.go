@@ -30,6 +30,8 @@ const (
 	FieldTranscriptPath
 	// FieldCWD selects the literal current working directory.
 	FieldCWD
+	// FieldBaseCWD selects the tool directory before shell directory changes.
+	FieldBaseCWD
 	// FieldEffectiveCWD selects the cd-chain-aware working directory.
 	FieldEffectiveCWD
 	// FieldCmdSegments selects the chained command segments.
@@ -249,6 +251,7 @@ var fieldSelectorByPath = map[string]FieldSelector{
 	"user_email":                   FieldUserEmail,
 	"transcript_path":              FieldTranscriptPath,
 	"cwd":                          FieldCWD,
+	"base_cwd":                     FieldBaseCWD,
 	"effective_cwd":                FieldEffectiveCWD,
 	"cmd_segments":                 FieldCmdSegments,
 	"cmd_comments":                 FieldCmdComments,

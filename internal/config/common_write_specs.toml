@@ -1,0 +1,140 @@
+[[write_specs]]
+argv0 = ["vim", "vi", "nvim", "ex"]
+target_mode = "all_operands"
+target_options = ["-w", "-W"]
+end_of_options = true
+unresolved = "match"
+[write_specs.arguments]
+short_clusters = true
+unknown_options = "skip"
+ignore_operand_prefixes = ["+"]
+[[write_specs.arguments.options]]
+names = ["-u", "-c", "-S", "--cmd", "--listen", "--servername", "--socketid"]
+value = "required"
+forms = ["separate", "equals", "attached"]
+[[write_specs.arguments.options]]
+names = ["-w", "-W"]
+value = "required"
+forms = ["separate", "attached"]
+
+[[write_specs]]
+argv0 = ["ed"]
+target_mode = "all_operands"
+end_of_options = true
+unresolved = "match"
+[write_specs.arguments]
+unknown_options = "skip"
+[[write_specs.arguments.options]]
+names = ["-p", "--prompt"]
+value = "required"
+forms = ["separate", "equals", "attached"]
+
+[[write_specs]]
+argv0 = ["emacs"]
+target_mode = "all_operands"
+target_options = ["--file", "--visit"]
+end_of_options = true
+unresolved = "match"
+[write_specs.arguments]
+unknown_options = "skip"
+ignore_operand_prefixes = ["+"]
+[[write_specs.arguments.options]]
+names = ["--file", "--visit"]
+value = "required"
+forms = ["separate", "equals"]
+[[write_specs.arguments.options]]
+names = ["--eval", "--execute", "--load", "-l", "--directory", "-L", "--user", "-u", "--terminal", "-t"]
+value = "required"
+forms = ["separate", "equals"]
+
+[[write_specs]]
+argv0 = ["nano"]
+target_mode = "all_operands"
+target_options = ["-C", "--backupdir", "-o", "--operatingdir"]
+end_of_options = true
+unresolved = "match"
+[write_specs.arguments]
+short_clusters = true
+unknown_options = "skip"
+ignore_operand_prefixes = ["+"]
+[[write_specs.arguments.options]]
+names = ["-w", "--nowrap", "-l", "--linenumbers"]
+value = "none"
+[[write_specs.arguments.options]]
+names = ["-r", "--fill", "-T", "--tabsize", "-s", "--speller", "--rcfile"]
+value = "required"
+forms = ["separate", "equals", "attached"]
+[[write_specs.arguments.options]]
+names = ["-C", "--backupdir", "-o", "--operatingdir"]
+value = "required"
+forms = ["separate", "equals", "attached"]
+
+[[write_specs]]
+argv0 = ["perl"]
+target_mode = "all_operands"
+end_of_options = true
+unresolved = "match"
+[write_specs.arguments]
+short_clusters = true
+stop_at_first_positional = true
+skip_positionals = 1
+program_options = ["-e", "-E"]
+require_options = ["-i"]
+unknown_options = "skip"
+[[write_specs.arguments.options]]
+names = ["-i"]
+value = "optional"
+forms = ["attached"]
+[[write_specs.arguments.options]]
+names = ["-e", "-E"]
+value = "required"
+forms = ["separate", "attached"]
+[[write_specs.arguments.options]]
+names = ["-I", "-M", "-m", "-F"]
+value = "required"
+forms = ["separate", "attached"]
+[[write_specs.arguments.options]]
+names = ["-C", "-d", "-D"]
+value = "optional"
+forms = ["attached"]
+[[write_specs.arguments.options]]
+names = ["-0", "-l"]
+value = "optional"
+forms = ["attached"]
+attached_value_pattern = "^[0-7]*"
+[[write_specs.arguments.options]]
+names = ["-p", "-n", "-a", "-w", "-W", "-X", "-T", "-t", "-U", "-s", "-S", "-x", "-c"]
+value = "none"
+
+[[write_specs]]
+argv0 = ["ruby"]
+target_mode = "all_operands"
+end_of_options = true
+unresolved = "match"
+[write_specs.arguments]
+short_clusters = true
+stop_at_first_positional = true
+skip_positionals = 1
+program_options = ["-e"]
+require_options = ["-i"]
+unknown_options = "skip"
+[[write_specs.arguments.options]]
+names = ["-i"]
+value = "optional"
+forms = ["attached"]
+[[write_specs.arguments.options]]
+names = ["-e"]
+value = "required"
+forms = ["separate", "attached"]
+[[write_specs.arguments.options]]
+names = ["-r", "-I", "-F", "-E", "-K"]
+value = "required"
+forms = ["separate", "attached"]
+[[write_specs.arguments.options]]
+names = ["-C"]
+value = "required"
+forms = ["separate", "attached"]
+cwd = true
+[[write_specs.arguments.options]]
+names = ["-p", "-n", "-a", "-l", "-w", "-W", "-d", "-s", "-S", "-v", "-c"]
+value = "none"

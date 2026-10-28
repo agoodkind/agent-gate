@@ -17,6 +17,20 @@ func (fields FieldSet) FirstStringForCondition(selectors []config.FieldSelectorS
 // StringForCondition returns a selector value using declarations carried by
 // condition when the field requires rule context.
 func (fields FieldSet) StringForCondition(selector config.FieldSelector, condition *config.Condition) string {
+	if condition != nil {
+		if selector == config.FieldCmdReadTargets {
+			return fields.CmdReadTargetsWithPolicy(condition.SearchTools, condition.ReadSpecs, condition.EnumerationSpecs, condition.RecursiveGlobs, diskFileResolver())
+		}
+		if selector == config.FieldExecTargets {
+			return fields.ExecTargetsWithPolicy(condition.SearchTools, condition.ReadSpecs, condition.EnumerationSpecs, condition.RecursiveGlobs, diskFileResolver())
+		}
+		if selector == config.FieldCmdDoubleHyphenProse {
+			return fields.CmdDoubleHyphenProseWithPolicy(condition.ProsePolicy)
+		}
+		if selector == config.FieldCmdRedirections {
+			return fields.CmdRedirectionsWithPolicy(condition.RedirectionPolicy)
+		}
+	}
 	if selector == config.FieldCmdWriteTargets && condition != nil {
 		return fields.CmdWriteTargetsWithSpecs(condition.WriteSpecs)
 	}
