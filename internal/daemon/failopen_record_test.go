@@ -102,7 +102,7 @@ func TestFailOpenRecordReportsItsOwnTruncation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat record: %v", err)
 	}
-	if info.Size() > 8<<20 {
-		t.Fatalf("record is %d bytes, above its 8 MiB cap", info.Size())
+	if info.Size() > maxFailOpenRecordBytes {
+		t.Fatalf("record is %d bytes, above its 2 MiB cap", info.Size())
 	}
 }

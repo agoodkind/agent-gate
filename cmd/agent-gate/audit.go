@@ -60,10 +60,16 @@ func runAuditStatus(args []string, stdout io.Writer, stderr io.Writer, cfg *conf
 			return 1
 		}
 	} else {
-		fmt.Fprintf(stdout, "bucket interval: %s\nretention buckets: %d\ncurrent bucket: %s\ncurrent path: %s\ntotal bytes: %d\nnext boundary: %s\nreset pending: %t\n",
-			status.BucketInterval, status.RetentionBuckets, status.CurrentBucketID, status.CurrentBucketPath, status.TotalBytes, status.NextBoundary.Format(time.RFC3339), status.ResetPending)
+		fmt.Fprintf(stdout, "bucket interval: %s\nretention buckets: %d\ncurrent bucket: %s\ncurrent path: %s\ntotal bytes: %d\nmaximum bytes: %d\nexcess bytes: %d\nnext boundary: %s\nreset pending: %t\n",
+			status.BucketInterval, status.RetentionBuckets, status.CurrentBucketID, status.CurrentBucketPath, status.TotalBytes, status.MaxBytes, status.ExcessBytes, status.NextBoundary.Format(time.RFC3339), status.ResetPending)
 		for _, file := range status.RetainedFiles {
-			fmt.Fprintf(stdout, "%s database=%d wal=%d shm=%d\n", file.ID, file.DatabaseBytes, file.WALBytes, file.SHMBytes)
+			fmt.Fprintf(stdout, "%s database=%d wal=%d shm=%d journal=%d\n", file.ID, file.DatabaseBytes, file.WALBytes, file.SHMBytes, file.JournalBytes)
+		}
+		for _, file := range status.PendingFiles {
+			fmt.Fprintf(stdout, "pending cleanup: %s database=%d wal=%d shm=%d journal=%d\n", file.Path, file.DatabaseBytes, file.WALBytes, file.SHMBytes, file.JournalBytes)
+		}
+		for _, path := range status.DeferredFiles {
+			fmt.Fprintf(stdout, "deferred cleanup: %s\n", path)
 		}
 		if status.CleanupError != "" {
 			fmt.Fprintf(stdout, "cleanup error: %s\n", status.CleanupError)

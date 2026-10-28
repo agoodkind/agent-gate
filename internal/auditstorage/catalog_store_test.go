@@ -20,7 +20,7 @@ func TestPolicyResetDiscardsCurrentFilenameHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 	policy := auditstorage.RotationPolicy{Interval: 24 * time.Hour, Retained: 7}
-	now := time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC)
+	now := time.Date(2026, 9, 8, 0, 0, 0, 0, time.UTC)
 	old, err := catalog.EnsureCurrent(t.Context(), policy, now.Add(-24*time.Hour))
 	if err != nil {
 		t.Fatal(err)
@@ -40,7 +40,7 @@ func TestPolicyResetDiscardsCurrentFilenameHistory(t *testing.T) {
 	if err := store.Handle().Close(); err != nil {
 		t.Fatal(err)
 	}
-	policy.Retained = 3
+	policy.Interval = 12 * time.Hour
 	if _, err := catalog.EnsureCurrent(t.Context(), policy, now); !errors.Is(err, auditstorage.ErrPolicyChanged) {
 		t.Fatalf("policy change = %v", err)
 	}

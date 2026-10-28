@@ -18,7 +18,10 @@ level = "info"
 profile = "full" # full | minimal
 bucket_interval = "24h"
 retention_buckets = 7
-# Changing the path, interval, or retained count discards all audit history.
+max_size = "5GB"
+# Zero retention_buckets disables age pruning; max_size = "0B" disables size pruning.
+# Keep at least one limit enabled. Positive sizes must be at least 4MiB.
+# Retention edits prune history. Path or interval edits discard all audit history.
 
 [audit.storage.detail]
 # Optional profile overrides. Disabled detail remains until terminal completion.

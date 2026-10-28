@@ -41,7 +41,7 @@ type deferredProcessor struct {
 	now                func() time.Time
 	notify             func()
 	queueMu            sync.Mutex
-	queued             map[ReplayKey]int
+	queued             map[ReplayKey]queuedReplay
 	queuedBytes        int
 }
 
@@ -50,6 +50,11 @@ var deferredProcessorSequence atomic.Uint64
 type deferredWork struct {
 	bucket    auditstorage.Bucket
 	receiptID int64
+}
+
+type queuedReplay struct {
+	path string
+	size int
 }
 
 func newDeferredProcessor(
@@ -88,7 +93,7 @@ func newDeferredProcessor(
 		claimRenewInterval: cfg.DeferredClaimRenewInterval(),
 		cancel:             cancel,
 		catalog:            nil, bucket: auditstorage.Bucket{ID: "", Path: "", Start: time.Time{}}, now: time.Now, notify: nil,
-		queueMu: sync.Mutex{}, queued: make(map[ReplayKey]int), queuedBytes: 0,
+		queueMu: sync.Mutex{}, queued: make(map[ReplayKey]queuedReplay), queuedBytes: 0,
 	}
 
 	for range workers {
@@ -266,8 +271,8 @@ func (p *deferredProcessor) processRecord(
 func (p *deferredProcessor) releaseClaim(ctx context.Context, claim intake.DeferredClaim) {
 	now := p.now()
 	nextAttempt := now.Add(auditRetryDelay(claim.Attempt))
-	if !p.bucket.Start.IsZero() {
-		policy := p.cfg.AuditStoragePolicy()
+	policy := p.cfg.AuditStoragePolicy()
+	if !p.bucket.Start.IsZero() && policy.RetentionBuckets > 0 {
 		expires := p.bucket.Start.Add(time.Duration(policy.RetentionBuckets) * policy.BucketInterval)
 		if nextAttempt.After(expires) {
 			nextAttempt = expires
