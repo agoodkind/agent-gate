@@ -517,10 +517,6 @@ func (r *ExecRuntime) runValidator(
 			}
 		}()
 		verdict := r.runExpandedCommands(bgCtx, rule.Name, c, commands, stdin, env)
-		if verdict.Errored {
-			r.log.WarnContext(bgCtx, "exec validator errored",
-				"rule", rule.Name, "on_error", c.OnError, "block", verdict.Block)
-		}
 		done <- verdict
 	}()
 
