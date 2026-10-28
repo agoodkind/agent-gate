@@ -7,11 +7,7 @@ import (
 	"goodkind.io/agent-gate/internal/config"
 )
 
-// CapabilityDowngrade describes a (rule, provider, event) tuple where the
-// rule's declared Action exceeds what the protocol can deliver on that
-// (provider, event) pair. The daemon emits one WARN per downgrade at
-// config-load time so the operator sees which rules silently degrade to
-// audit.
+// CapabilityDowngrade records a rule action that its provider event cannot apply.
 type CapabilityDowngrade struct {
 	Rule     string
 	System   System
@@ -20,18 +16,14 @@ type CapabilityDowngrade struct {
 	Effect   string
 }
 
-// WarnCapabilityDowngrades walks each rule with action="block" and logs a
-// WARN for any (provider, event) subscription that LookupCapability reports
-// as CapabilityObserve. A rule whose subscriptions mix blockable and
-// non-blockable events keeps block behavior where the protocol allows it;
-// only the non-blockable pairs are logged.
-//
-// The returned slice is the set of downgrades emitted, mainly for tests.
+// WarnCapabilityDowngrades logs one warning summary and debug details for unsupported actions.
+// It returns every affected rule subscription.
 func WarnCapabilityDowngrades(ctx context.Context, log *slog.Logger, cfg *config.Config) []CapabilityDowngrade {
 	if cfg == nil || log == nil {
 		return nil
 	}
 	var downgrades []CapabilityDowngrade
+	affectedRules := make(map[string]struct{})
 	for i := range cfg.Rules {
 		rule := &cfg.Rules[i]
 		for _, pair := range ruleSubscriptions(rule) {
@@ -46,7 +38,7 @@ func WarnCapabilityDowngrades(ctx context.Context, log *slog.Logger, cfg *config
 				Declared: rule.Action,
 				Effect:   effect,
 			}
-			log.WarnContext(
+			log.DebugContext(
 				ctx, "rule subscribes to an unsupported hook response capability",
 				slog.String("rule", d.Rule),
 				slog.String("provider", d.System.String()),
@@ -56,7 +48,12 @@ func WarnCapabilityDowngrades(ctx context.Context, log *slog.Logger, cfg *config
 				slog.String("capability", capability),
 			)
 			downgrades = append(downgrades, d)
+			affectedRules[d.Rule] = struct{}{}
 		}
+	}
+	if len(downgrades) > 0 {
+		log.WarnContext(ctx, "rules have unsupported hook response capabilities",
+			"rules", len(affectedRules), "subscriptions", len(downgrades))
 	}
 	return downgrades
 }
@@ -93,7 +90,7 @@ type ruleSubscription struct {
 
 // ruleSubscriptions expands a rule's Events / ClaudeEvents / CursorEvents /
 // CodexEvents / GeminiEvents into (system, event) pairs. Events without a
-// system prefix apply to every supported system that recognises the event
+// system prefix apply to every supported system that recognizes the event
 // name in its canonical form.
 func ruleSubscriptions(rule *config.Rule) []ruleSubscription {
 	if rule.AllEvents {
