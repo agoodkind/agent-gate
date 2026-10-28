@@ -39,7 +39,18 @@ func (fields FieldSet) CmdReadTargets(
 	readSpecs []config.ShellReadSpec,
 	resolver shelldecomp.FileResolver,
 ) string {
-	if len(searchTools) == 0 && len(readSpecs) == 0 {
+	return fields.CmdReadTargetsWithPolicy(searchTools, readSpecs, nil, false, resolver)
+}
+
+// CmdReadTargetsWithPolicy selects content reads and explicit enumeration targets.
+func (fields FieldSet) CmdReadTargetsWithPolicy(
+	searchTools []string,
+	readSpecs []config.ShellReadSpec,
+	enumerationSpecs []config.EnumerationSpec,
+	recursiveGlobs bool,
+	resolver shelldecomp.FileResolver,
+) string {
+	if len(searchTools) == 0 && len(readSpecs) == 0 && len(enumerationSpecs) == 0 && !recursiveGlobs {
 		return ""
 	}
 	if !fields.hasShellCommandContext() {
@@ -66,8 +77,8 @@ func (fields FieldSet) CmdReadTargets(
 		}
 	}
 
-	if len(searchTools) > 0 {
-		collect(shellread.ExtractCodeSearchTargets(command, baseCWD, searchTools, resolver))
+	if len(searchTools) > 0 || len(enumerationSpecs) > 0 || recursiveGlobs {
+		collect(shellread.ExtractCodeSearchTargetsWithPolicy(command, baseCWD, searchTools, enumerationSpecs, recursiveGlobs, resolver))
 	}
 	if len(readSpecs) > 0 {
 		collect(shellread.ExtractReadTargets(command, baseCWD, readSpecs))
@@ -84,7 +95,18 @@ func (fields FieldSet) ExecTargets(
 	readSpecs []config.ShellReadSpec,
 	resolver shelldecomp.FileResolver,
 ) string {
-	if targets := fields.CmdReadTargets(searchTools, readSpecs, resolver); targets != "" {
+	return fields.ExecTargetsWithPolicy(searchTools, readSpecs, nil, false, resolver)
+}
+
+// ExecTargetsWithPolicy resolves a validator key with condition-owned discovery policy.
+func (fields FieldSet) ExecTargetsWithPolicy(
+	searchTools []string,
+	readSpecs []config.ShellReadSpec,
+	enumerationSpecs []config.EnumerationSpec,
+	recursiveGlobs bool,
+	resolver shelldecomp.FileResolver,
+) string {
+	if targets := fields.CmdReadTargetsWithPolicy(searchTools, readSpecs, enumerationSpecs, recursiveGlobs, resolver); targets != "" {
 		return targets
 	}
 	if path := fields.FilePathValue(); path != "" {

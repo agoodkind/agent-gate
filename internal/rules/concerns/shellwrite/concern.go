@@ -38,6 +38,11 @@ type MatchResult struct {
 // value is passed; this matches the canonical Claude/Cursor PreToolUse
 // payload shape.
 func EvalShellWriteMatches(fields FieldAccessor, commandSelector config.FieldSelector, globs []string) []MatchResult {
+	return EvalShellWriteMatchesWithSpecs(fields, commandSelector, globs, nil, true)
+}
+
+// EvalShellWriteMatchesWithSpecs applies condition-owned command descriptions.
+func EvalShellWriteMatchesWithSpecs(fields FieldAccessor, commandSelector config.FieldSelector, globs []string, specs []config.ShellWriteSpec, matchUnresolved bool) []MatchResult {
 	if commandSelector == config.FieldSelectorInvalid {
 		commandSelector = config.FieldToolInputCommand
 	}
@@ -49,7 +54,7 @@ func EvalShellWriteMatches(fields FieldAccessor, commandSelector config.FieldSel
 		return nil
 	}
 	cwd := fields.BaseCWD()
-	targets := ExtractWriteTargets(command, cwd)
+	targets := ExtractWriteTargetsWithSpecs(command, cwd, specs)
 	if len(targets) == 0 {
 		return nil
 	}
@@ -57,6 +62,9 @@ func EvalShellWriteMatches(fields FieldAccessor, commandSelector config.FieldSel
 	var out []MatchResult
 	for _, target := range targets {
 		if target.Reason == ReasonUnparsedCommandShape {
+			if !matchUnresolved {
+				continue
+			}
 			out = append(out, MatchResult{
 				FieldPath: "tool_input.command",
 				FilePath:  filePath,

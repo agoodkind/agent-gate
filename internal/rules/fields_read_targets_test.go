@@ -10,6 +10,13 @@ import (
 // policy lives in each rule's search_tools config.
 var readTargetsTestTools = []string{"grep", "rg"}
 
+var readTargetsTestEnumerationSpecs = []config.EnumerationSpec{
+	{
+		Argv0: []string{"find"}, TargetMode: config.EnumerationTargetAllOperands, DefaultCWD: true,
+		Arguments: config.ArgumentSpec{OperandsBeforeOptions: true, UnknownOptions: "skip"},
+	},
+}
+
 func TestCmdReadTargetsField(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -30,7 +37,7 @@ func TestCmdReadTargetsField(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			fields := FieldSet{ToolInputCommand: tc.command, CWD: "/repo"}
-			got := fields.CmdReadTargets(readTargetsTestTools, nil, nil)
+			got := fields.CmdReadTargetsWithPolicy(readTargetsTestTools, nil, readTargetsTestEnumerationSpecs, false, nil)
 			if got != tc.want {
 				t.Fatalf("cmd_read_targets for %q = %q, want %q", tc.command, got, tc.want)
 			}

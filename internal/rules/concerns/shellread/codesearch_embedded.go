@@ -38,7 +38,7 @@ var dashCFlagRe = regexp.MustCompile(`^-[a-zA-Z]*c$`)
 // yields no declared-tool commands and therefore no targets, and a relative
 // path inside the body resolves against the outer cwd because the body's
 // execution-time cwd is unknowable statically.
-func extractEmbeddedCodeSearchInto(decomposition *shelldecomp.Decomposition, cwd, home string, tools map[string]bool, add func(string), depth int, resolver shelldecomp.FileResolver) {
+func extractEmbeddedCodeSearchInto(decomposition *shelldecomp.Decomposition, cwd, home string, policy codeSearchPolicy, add func(string), depth int, resolver shelldecomp.FileResolver) {
 	for _, cmd := range decomposition.Commands() {
 		if !localWrapperShells[cmd.Argv0] {
 			continue
@@ -51,18 +51,18 @@ func extractEmbeddedCodeSearchInto(decomposition *shelldecomp.Decomposition, cwd
 		if innerCwd == "" || innerCwd == shelldecomp.Unresolvable {
 			innerCwd = cwd
 		}
-		extractCodeSearchInto(script, innerCwd, home, tools, add, depth-1, resolver)
+		extractCodeSearchInto(script, innerCwd, home, policy, add, depth-1, resolver)
 	}
 
 	for _, region := range decomposition.EmbeddedRegions() {
 		if region.Parsed != nil {
-			foldRegionReads(region, tools, add)
+			foldRegionReads(region, policy.tools, add)
 			continue
 		}
 		if region.Lang != shelldecomp.LangOpaque {
 			continue
 		}
-		extractCodeSearchInto(region.Text, cwd, home, tools, add, depth-1, resolver)
+		extractCodeSearchInto(region.Text, cwd, home, policy, add, depth-1, resolver)
 	}
 }
 

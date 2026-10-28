@@ -20,7 +20,7 @@ require (
 	golang.org/x/sys v0.49.0
 	goodkind.io/clyde v0.0.0-20260715020851-23020238ae53
 	goodkind.io/gklog v0.4.5
-	goodkind.io/gksyntax v0.1.0
+	goodkind.io/gksyntax v0.1.1-0.20261028153718-690515cb5cb0
 	goodkind.io/go-makefile v0.1.0
 	google.golang.org/grpc v1.84.0
 	google.golang.org/protobuf v1.36.12

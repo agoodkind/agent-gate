@@ -200,6 +200,14 @@ func ExtractReadTargets(command, cwd string, specs []config.ShellReadSpec) []Rea
 	}
 
 	var out []ReadTarget
+	var legacySpecs []config.ShellReadSpec
+	for _, spec := range specs {
+		if spec.Arguments != nil {
+			out = append(out, argumentReadTargets(command, cwd, spec)...)
+			continue
+		}
+		legacySpecs = append(legacySpecs, spec)
+	}
 	for _, segment := range splitChain(command) {
 		segment = strings.TrimSpace(segment)
 		if segment == "" {
@@ -209,7 +217,7 @@ func ExtractReadTargets(command, cwd string, specs []config.ShellReadSpec) []Rea
 		if len(fields) == 0 {
 			continue
 		}
-		out = append(out, specTargets(fields, segment, cwd, specs)...)
+		out = append(out, specTargets(fields, segment, cwd, legacySpecs)...)
 	}
 	return out
 }

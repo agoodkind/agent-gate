@@ -544,7 +544,7 @@ func evalShellWriteCondition(fields *FieldSet, c *config.Condition, rule *config
 			break
 		}
 	}
-	matches := shellwriteconcern.EvalShellWriteMatches(fields, commandSelector, c.Globs)
+	matches := shellwriteconcern.EvalShellWriteMatchesWithSpecs(fields, commandSelector, c.Globs, c.WriteSpecs, c.MatchUnresolved == nil || *c.MatchUnresolved)
 	if len(matches) == 0 {
 		return nil
 	}
@@ -846,7 +846,7 @@ func shellWriteConditionGateMatch(fields FieldSet, c *config.Condition) bool {
 			break
 		}
 	}
-	return len(shellwriteconcern.EvalShellWriteMatches(&fields, commandSelector, c.Globs)) > 0
+	return len(shellwriteconcern.EvalShellWriteMatchesWithSpecs(&fields, commandSelector, c.Globs, c.WriteSpecs, c.MatchUnresolved == nil || *c.MatchUnresolved)) > 0
 }
 
 // shellReadConditionGateMatch reports whether the shell-read condition would

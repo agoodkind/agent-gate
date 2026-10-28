@@ -92,12 +92,12 @@ are unavailable. Preserve independent redirection and analyzed-program targets.
 Configuration can support the option by declaring it; the engine must not assume
 that an unknown option is a boolean flag or guess which argument it consumes.
 
-Configuration chooses the action for unresolved command writes through the existing
-strict `shell_write` mechanism and typed checkout conditions. The proposed shipped
-default rejects unresolved writes in protected checkouts and requires an explicit
-descriptor update. An alternative default records an audit result without blocking.
-The user must choose this default before the configuration migration. Both actions
-remain configurable; Go must not hardcode either policy.
+Each rule chooses how unresolved facts affect its conditions and enforcement action.
+Expose descriptor-level `unresolved` selection and condition-level `match_unresolved`
+selection for `shell_write`. Preserve existing behavior when those settings are
+omitted. Do not introduce a global policy that blocks or allows every unknown option.
+Common file-operation detection may remain shared functionality, with explicit
+configuration descriptions that rules can extend or override.
 
 ## Make configured command interpretation authoritative
 

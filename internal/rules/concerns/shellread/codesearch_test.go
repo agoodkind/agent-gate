@@ -3,11 +3,49 @@ package shellread
 import (
 	"slices"
 	"testing"
+
+	"goodkind.io/agent-gate/internal/config"
 )
 
 // testSearchTools is the tool policy these tests exercise; production policy
 // lives in each rule's search_tools config.
 var testSearchTools = []string{"grep", "egrep", "fgrep", "rg", "ag", "ack", "git grep", "sed"}
+
+var testEnumerationSpecs = []config.EnumerationSpec{
+	{
+		Argv0: []string{"ls"}, TargetMode: config.EnumerationTargetAllOperands, DefaultCWD: true,
+		Arguments: config.ArgumentSpec{
+			ShortClusters: true, EndOfOptions: true, UnknownOptions: "skip", RequireOptions: []string{"-R"},
+			Options: []config.ArgumentOptionSpec{{Names: []string{"-R", "--recursive"}, Value: "none"}},
+		},
+	},
+	{
+		Argv0: []string{"find"}, TargetMode: config.EnumerationTargetAllOperands, DefaultCWD: true,
+		Arguments: config.ArgumentSpec{
+			OperandsBeforeOptions: true, OperandStopTokens: []string{"(", ")", "!"}, UnknownOptions: "skip",
+			Options:             []config.ArgumentOptionSpec{{Names: []string{"-maxdepth"}, Value: "required", Forms: []string{"separate"}}},
+			ExcludeOptionValues: []config.ArgumentOptionPredicate{{Option: "-maxdepth", Values: []string{"0", "1"}}},
+		},
+	},
+	{
+		Argv0: []string{"git"}, TargetMode: config.EnumerationTargetCWD,
+		Arguments: config.ArgumentSpec{Subcommands: []string{"ls-files"}, UnknownOptions: "skip"},
+	},
+	{
+		Argv0: []string{"find"}, TargetMode: config.EnumerationTargetAllOperands, DefaultCWD: true,
+		RequireContentConsumer: true, ConsumerFlags: []string{"-exec", "-execdir"},
+		Arguments: config.ArgumentSpec{
+			OperandsBeforeOptions: true, OperandStopTokens: []string{"(", ")", "!"}, UnknownOptions: "skip",
+			Options: []config.ArgumentOptionSpec{{Names: []string{"-exec", "-execdir"}, Value: "required", Forms: []string{"separate"}}},
+		},
+		ConsumerWrappers: []config.EnumerationConsumerSpec{{Argv0: []string{"xargs"}, Arguments: config.ArgumentSpec{StopAtFirstPositional: true, UnknownOptions: "skip"}}},
+	},
+	{
+		Argv0: []string{"fd", "fdfind"}, TargetMode: config.EnumerationTargetCWD, RequireContentConsumer: true,
+		Arguments:        config.ArgumentSpec{UnknownOptions: "skip"},
+		ConsumerWrappers: []config.EnumerationConsumerSpec{{Argv0: []string{"xargs"}, Arguments: config.ArgumentSpec{StopAtFirstPositional: true, UnknownOptions: "skip"}}},
+	},
+}
 
 func targetPaths(targets []ReadTarget) []string {
 	paths := make([]string, 0, len(targets))
@@ -39,7 +77,7 @@ func TestExtractCodeSearchTargetsShelldecompSanity(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := targetPaths(ExtractCodeSearchTargets(tc.command, cwd, testSearchTools, nil))
+			got := targetPaths(ExtractCodeSearchTargetsWithPolicy(tc.command, cwd, testSearchTools, testEnumerationSpecs, true, nil))
 			if !slices.Equal(got, tc.want) {
 				t.Fatalf("ExtractCodeSearchTargets(%q) = %v, want %v", tc.command, got, tc.want)
 			}
@@ -81,7 +119,7 @@ func TestExtractCodeSearchTargets(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := targetPaths(ExtractCodeSearchTargets(tc.command, cwd, testSearchTools, nil))
+			got := targetPaths(ExtractCodeSearchTargetsWithPolicy(tc.command, cwd, testSearchTools, testEnumerationSpecs, true, nil))
 			if !slices.Equal(got, tc.want) {
 				t.Fatalf("ExtractCodeSearchTargets(%q) = %v, want %v", tc.command, got, tc.want)
 			}
@@ -107,7 +145,7 @@ func TestExtractCodeSearchTargetsAwk(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := targetPaths(ExtractCodeSearchTargets(tc.command, cwd, []string{"awk", "gawk"}, nil))
+			got := targetPaths(ExtractCodeSearchTargetsWithPolicy(tc.command, cwd, []string{"awk", "gawk"}, testEnumerationSpecs, true, nil))
 			if !slices.Equal(got, tc.want) {
 				t.Fatalf("ExtractCodeSearchTargets(%q) = %v, want %v", tc.command, got, tc.want)
 			}
@@ -141,7 +179,7 @@ func TestExtractCodeSearchTargetsEmbedded(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := targetPaths(ExtractCodeSearchTargets(tc.command, cwd, testSearchTools, nil))
+			got := targetPaths(ExtractCodeSearchTargetsWithPolicy(tc.command, cwd, testSearchTools, testEnumerationSpecs, true, nil))
 			if !slices.Equal(got, tc.want) {
 				t.Fatalf("ExtractCodeSearchTargets(%q) = %v, want %v", tc.command, got, tc.want)
 			}
@@ -170,7 +208,7 @@ func TestExtractCodeSearchTargetsSed(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := targetPaths(ExtractCodeSearchTargets(tc.command, cwd, testSearchTools, nil))
+			got := targetPaths(ExtractCodeSearchTargetsWithPolicy(tc.command, cwd, testSearchTools, testEnumerationSpecs, true, nil))
 			if !slices.Equal(got, tc.want) {
 				t.Fatalf("ExtractCodeSearchTargets(%q) = %v, want %v", tc.command, got, tc.want)
 			}
@@ -226,7 +264,7 @@ func TestExtractCodeSearchTargetsEnumerator(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := targetPaths(ExtractCodeSearchTargets(tc.command, cwd, testSearchTools, nil))
+			got := targetPaths(ExtractCodeSearchTargetsWithPolicy(tc.command, cwd, testSearchTools, testEnumerationSpecs, true, nil))
 			if !slices.Equal(got, tc.want) {
 				t.Fatalf("ExtractCodeSearchTargets(%q) = %v, want %v", tc.command, got, tc.want)
 			}

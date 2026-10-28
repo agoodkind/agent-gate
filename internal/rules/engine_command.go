@@ -352,32 +352,6 @@ func pathExists(path string) bool {
 	return err == nil
 }
 
-func trimEnvAssignments(fields []string) []string {
-	for len(fields) > 0 && isEnvAssignment(fields[0]) {
-		fields = fields[1:]
-	}
-	return fields
-}
-
-func isEnvAssignment(s string) bool {
-	i := strings.IndexByte(s, '=')
-	if i <= 0 {
-		return false
-	}
-	for j, r := range s[:i] {
-		if j == 0 {
-			if r != '_' && !unicode.IsLetter(r) {
-				return false
-			}
-			continue
-		}
-		if r != '_' && !unicode.IsLetter(r) && !unicode.IsDigit(r) {
-			return false
-		}
-	}
-	return true
-}
-
 func shellFields(s string) []string {
 	var fields []string
 	var b strings.Builder

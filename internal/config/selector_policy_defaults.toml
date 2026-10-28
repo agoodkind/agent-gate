@@ -1,0 +1,81 @@
+[prose_policy]
+path_patterns = ["*.md", "*.markdown", "*.mdx", "*.txt", "*.text", "*.rst", "*.adoc", "*.asciidoc", "*.org"]
+heredocs = true
+
+[[prose_policy.commands]]
+argv0 = ["git"]
+value_options = ["--message", "-m"]
+[prose_policy.commands.arguments]
+subcommands = ["commit"]
+short_clusters = true
+end_of_options = true
+unknown_options = "skip"
+[[prose_policy.commands.arguments.options]]
+names = ["--message"]
+value = "required"
+forms = ["separate", "equals"]
+[[prose_policy.commands.arguments.options]]
+names = ["-m"]
+value = "required"
+forms = ["separate", "attached"]
+[[prose_policy.commands.arguments.options]]
+names = ["-C"]
+value = "required"
+forms = ["separate", "attached"]
+cwd = true
+[[prose_policy.commands.arguments.options]]
+names = ["-c"]
+value = "required"
+forms = ["separate", "equals"]
+
+[[prose_policy.commands]]
+argv0 = ["gh"]
+value_options = ["--title", "-t", "--body", "-b", "--notes", "--subject", "--message", "-m"]
+[prose_policy.commands.arguments]
+short_clusters = true
+end_of_options = true
+unknown_options = "skip"
+[[prose_policy.commands.arguments.options]]
+names = ["--title"]
+value = "required"
+forms = ["separate", "equals"]
+[[prose_policy.commands.arguments.options]]
+names = ["-t"]
+value = "required"
+forms = ["separate", "attached"]
+[[prose_policy.commands.arguments.options]]
+names = ["--body"]
+value = "required"
+forms = ["separate", "equals"]
+[[prose_policy.commands.arguments.options]]
+names = ["-b"]
+value = "required"
+forms = ["separate", "attached"]
+[[prose_policy.commands.arguments.options]]
+names = ["--notes"]
+value = "required"
+forms = ["separate", "equals"]
+[[prose_policy.commands.arguments.options]]
+names = ["--subject"]
+value = "required"
+forms = ["separate", "equals"]
+[[prose_policy.commands.arguments.options]]
+names = ["--message"]
+value = "required"
+forms = ["separate", "equals"]
+[[prose_policy.commands.arguments.options]]
+names = ["-m"]
+value = "required"
+forms = ["separate", "attached"]
+
+[[prose_policy.commands]]
+argv0 = ["echo", "printf"]
+operands = true
+require_output_path = true
+[prose_policy.commands.arguments]
+end_of_options = true
+unknown_options = "skip"
+
+[redirection_policy]
+ignore_paths = ["/dev/stdout", "/dev/stderr", "/dev/fd/1", "/dev/fd/2", "/proc/self/fd/1", "/proc/self/fd/2"]
+ignore_fds = ["1", "2"]
