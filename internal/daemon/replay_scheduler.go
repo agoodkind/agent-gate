@@ -3,11 +3,14 @@ package daemon
 import (
 	"context"
 	"fmt"
+	"slices"
 	"time"
 
 	"goodkind.io/agent-gate/internal/audit"
 	"goodkind.io/agent-gate/internal/auditstorage"
+	"goodkind.io/agent-gate/internal/config"
 	"goodkind.io/agent-gate/internal/intake"
+	"goodkind.io/agent-gate/internal/logstorage"
 )
 
 const (
@@ -71,6 +74,11 @@ func (s *Server) auditScheduler(ctx context.Context) {
 	for {
 		if ctx.Err() != nil {
 			return
+		}
+		if reconcile {
+			if err := logstorage.Maintain(config.DefaultStateDir()); err != nil {
+				s.log.WarnContext(ctx, "maintain local logs failed", "err", err)
+			}
 		}
 		if reconcile && !now.Before(retryAt) {
 			if err := s.reconcileAuditStorage(ctx, now); err != nil {
@@ -168,7 +176,7 @@ func (p *deferredProcessor) dispatch(bucket auditstorage.Bucket, receiptID int64
 	}
 	select {
 	case p.events <- deferredWork{receiptID: receiptID, bucket: bucket}:
-		p.queued[key] = size
+		p.queued[key] = queuedReplay{path: bucket.Path, size: size}
 		p.queuedBytes += size
 		return true
 	default:
@@ -179,7 +187,7 @@ func (p *deferredProcessor) dispatch(bucket auditstorage.Bucket, receiptID int64
 func (p *deferredProcessor) finishDispatch(work deferredWork) {
 	key := ReplayKey{BucketID: work.bucket.ID, ReceiptID: work.receiptID}
 	p.queueMu.Lock()
-	p.queuedBytes -= p.queued[key]
+	p.queuedBytes -= p.queued[key].size
 	delete(p.queued, key)
 	p.queueMu.Unlock()
 	if p.notify != nil {
@@ -189,13 +197,20 @@ func (p *deferredProcessor) finishDispatch(work deferredWork) {
 
 func (p *deferredProcessor) processDispatch(ctx context.Context, work deferredWork) {
 	defer p.finishDispatch(work)
-	expires := work.bucket.Start.Add(time.Duration(p.cfg.AuditStoragePolicy().RetentionBuckets) * p.cfg.AuditStoragePolicy().BucketInterval)
-	remaining := expires.Sub(p.now())
-	if remaining <= 0 || ctx.Err() != nil {
+	if ctx.Err() != nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(ctx, remaining)
-	defer cancel()
+	policy := p.cfg.AuditStoragePolicy()
+	if policy.RetentionBuckets > 0 {
+		expires := work.bucket.Start.Add(time.Duration(policy.RetentionBuckets) * policy.BucketInterval)
+		remaining := expires.Sub(p.now())
+		if remaining <= 0 {
+			return
+		}
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, remaining)
+		defer cancel()
+	}
 	if work.bucket.ID == p.bucket.ID {
 		p.processEvent(ctx, work)
 		return
@@ -203,6 +218,17 @@ func (p *deferredProcessor) processDispatch(ctx context.Context, work deferredWo
 	if err := p.processRetained(ctx, work); err != nil && ctx.Err() == nil {
 		p.log.WarnContext(ctx, "process retained audit receipt failed", "bucket", work.bucket.ID, "receipt_id", work.receiptID, "err", err)
 	}
+}
+
+func (p *deferredProcessor) referencesFiles(paths []string) bool {
+	p.queueMu.Lock()
+	defer p.queueMu.Unlock()
+	for _, work := range p.queued {
+		if slices.Contains(paths, work.path) {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *deferredProcessor) processRetained(ctx context.Context, work deferredWork) error {

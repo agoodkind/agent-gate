@@ -230,6 +230,8 @@ func TestAuditReloadCanonicalIdentityAndPolicyCut(t *testing.T) {
 	reloadAuditTestConfig(t, server, base, "86400s", 7)
 	assertRuntimeReceipts(t, server, 1)
 	reloadAuditTestConfig(t, server, base, "24h", 3)
+	assertRuntimeReceipts(t, server, 1)
+	reloadAuditTestConfig(t, server, base, "12h", 3)
 	assertRuntimeReceipts(t, server, 0)
 	if _, err := server.EvaluateHook(t.Context(), blockingLedgerRequest(t)); err != nil {
 		t.Fatal(err)
@@ -267,7 +269,7 @@ func TestAuditPolicyCutRetriesHeldReaderWithoutRestoringHistory(t *testing.T) {
 		}
 	}
 	server.configPath = filepath.Join(t.TempDir(), "candidate.toml")
-	writeAuditTestConfig(t, server.configPath, old.cfg.AuditSQLitePath(), "24h", 3)
+	writeAuditTestConfig(t, server.configPath, old.cfg.AuditSQLitePath(), "12h", 3)
 	finished := make(chan error, 1)
 	go func() { finished <- server.reloadConfig(t.Context()) }()
 	select {
@@ -396,7 +398,7 @@ func TestAuditCloseCancelsInterruptedPolicyCut(t *testing.T) {
 	waited := make(chan struct{}, 1)
 	server.retryWait = func(ctx context.Context, _ time.Duration) error { waited <- struct{}{}; <-ctx.Done(); return ctx.Err() }
 	server.configPath = filepath.Join(t.TempDir(), "candidate.toml")
-	writeAuditTestConfig(t, server.configPath, old.cfg.AuditSQLitePath(), "24h", 2)
+	writeAuditTestConfig(t, server.configPath, old.cfg.AuditSQLitePath(), "12h", 2)
 	reloaded := make(chan error, 1)
 	go func() { reloaded <- server.reloadConfig(t.Context()) }()
 	select {

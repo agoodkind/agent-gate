@@ -57,7 +57,7 @@ func (catalog *Catalog) coordinate(ctx context.Context) (*flock.Flock, error) {
 		return nil, storageError("create coordination directory", err)
 	}
 	lock := flock.New(catalog.options.CoordinationPath)
-	locked, err := lock.TryLockContext(ctx, time.Second)
+	locked, err := lock.TryLockContext(ctx, 10*time.Millisecond)
 	if err != nil || !locked {
 		_ = lock.Close()
 		if err == nil {

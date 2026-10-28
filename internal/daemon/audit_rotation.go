@@ -107,7 +107,11 @@ func (s *Server) reconcileAuditStorage(ctx context.Context, now time.Time) error
 		return nil
 	}
 	policy := current.cfg.AuditStoragePolicy().Rotation()
-	if !now.Before(current.bucket.Start.Add(policy.Interval)) || now.Before(current.bucket.Start) {
+	rotate, err := s.catalog.NeedsRotation(current.bucket, policy, now)
+	if err != nil {
+		return wrapServerError("inspect audit storage", err)
+	}
+	if rotate {
 		bucket, err := s.catalog.EnsureCurrent(ctx, policy, now)
 		if err != nil {
 			return wrapServerError("reconcile audit storage", err)
@@ -121,7 +125,23 @@ func (s *Server) reconcileAuditStorage(ctx context.Context, now time.Time) error
 		s.runtimeMu.Unlock()
 		old.close(ctx, s.log)
 	}
-	_, err := s.catalog.Prune(ctx, policy, now)
+	candidates, err := s.catalog.PruneCandidates(ctx, policy, now)
+	if err != nil {
+		return wrapServerError("reconcile audit storage", err)
+	}
+	current = s.runtime.Load()
+	if current.deferredProcessor.referencesFiles(candidates) {
+		replacement, err := s.snapshotForBucket(ctx, current.cfg, s.catalog, current.bucket)
+		if err != nil {
+			return wrapServerError("replace retained audit workers", err)
+		}
+		s.runtimeMu.Lock()
+		old := s.runtime.Swap(replacement)
+		s.runtimeMu.Unlock()
+		// PruneCandidates releases the catalog lock before workers stop.
+		old.close(ctx, s.log)
+	}
+	_, err = s.catalog.PruneSelected(ctx, policy, now, candidates)
 	return wrapServerError("reconcile audit storage", err)
 }
 
@@ -137,8 +157,12 @@ func (s *Server) replaceAuditSnapshot(ctx context.Context, candidate *config.Con
 	}
 	if old != nil && !old.cfg.Unusable() &&
 		s.catalog.SameStorage(catalog) &&
-		old.cfg.AuditStoragePolicy().Rotation() == candidate.AuditStoragePolicy().Rotation() {
-		return s.snapshotForBucket(ctx, candidate, s.catalog, old.bucket)
+		old.cfg.AuditStoragePolicy().BucketInterval == candidate.AuditStoragePolicy().BucketInterval {
+		bucket, err := s.catalog.EnsureCurrent(ctx, candidate.AuditStoragePolicy().Rotation(), s.now())
+		if err != nil {
+			return nil, wrapServerError("update audit retention", err)
+		}
+		return s.snapshotForBucket(ctx, candidate, s.catalog, bucket)
 	}
 	// Admission stops before old borrowers close. Failed cuts keep history hidden.
 	if old != nil && old.deferredProcessor != nil {

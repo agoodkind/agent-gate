@@ -22,32 +22,26 @@ func TestAuditSchedulerWaitsForUsableReloadAndStartsOnce(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("valid reload did not start the requested audit scheduler")
 	}
-	clockReads.Store(0)
 	for range 3 {
 		server.StartAuditScheduler(t.Context())
 		reloadAuditTestConfig(t, server, config.DefaultAuditSQLitePath(), "24h", 7)
 	}
-	if got := clockReads.Load(); got != 0 {
-		t.Fatalf("later starts/reloads created %d extra scheduler clock reads", got)
+	if _, err := server.EvaluateHook(t.Context(), replayRequest()); err != nil {
+		t.Fatal(err)
 	}
 	select {
 	case ticks <- time.Now():
 	case <-time.After(time.Second):
 		t.Fatal("audit scheduler stopped after reload returned")
 	}
-	waitRuntimeCondition(t, func() bool { return clockReads.Load() > 0 })
-	if got := clockReads.Load(); got != 1 {
-		t.Fatalf("one timer event produced %d clock reads", got)
-	}
+	waitRuntimeCondition(t, func() bool { return completedReplayCount(t, server) == 1 })
+	assertRuntimeReceipts(t, server, 1)
 	server.Close()
 	server.StartAuditScheduler(t.Context())
 	select {
 	case ticks <- time.Now():
 		t.Fatal("audit scheduler still consumes timers after Server.Close")
 	default:
-	}
-	if got := clockReads.Load(); got != 1 {
-		t.Fatalf("closed scheduler read the clock again: %d", got)
 	}
 }
 

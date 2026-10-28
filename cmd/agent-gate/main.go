@@ -27,7 +27,6 @@ import (
 	"goodkind.io/agent-gate/internal/telemetry"
 	"goodkind.io/agent-gate/internal/updateopts"
 	"goodkind.io/agent-gate/internal/version"
-	"goodkind.io/gklog"
 	gkversion "goodkind.io/gklog/version"
 	"goodkind.io/gksyntax/shelldecomp"
 	"goodkind.io/go-makefile/selfupdate"
@@ -1013,23 +1012,7 @@ func parseKVInt64(value string, name string) (int64, error) {
 // The component field distinguishes daemon and hook-related log entries.
 // The returned function closes the rotating log writer; call it before exit.
 func openLog(component string) (*slog.Logger, func()) {
-	logPath := filepath.Join(config.DefaultStateDir(), "agent-gate.jsonl")
-	noClose := func() {}
-	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
-		return slog.New(slog.NewJSONHandler(io.Discard, nil)), noClose
-	}
-	inner, closer := gklog.New(gklog.Config{
-		Handlers: []slog.Handler{
-			gklog.FileJSON(logPath, slog.LevelDebug, gklog.RotationConfig{
-				MaxSizeMB: 5, MaxBackups: 0, MaxAgeDays: 0,
-			}),
-		},
-	})
-	return inner.With("component", component), func() {
-		if closer != nil {
-			_ = closer.Close()
-		}
-	}
+	return openBoundedLog(component)
 }
 
 func runQuery(args []string) int {

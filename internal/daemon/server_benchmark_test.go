@@ -13,7 +13,9 @@ import (
 
 	"goodkind.io/agent-gate/api/daemonpb"
 	"goodkind.io/agent-gate/api/inferencepb"
+	"goodkind.io/agent-gate/internal/auditstorage"
 	"goodkind.io/agent-gate/internal/config"
+	"goodkind.io/agent-gate/internal/intake"
 )
 
 func BenchmarkAuditTrace(b *testing.B) {
@@ -22,7 +24,6 @@ func BenchmarkAuditTrace(b *testing.B) {
 		endpoint := startAuditTraceInferenceServer(b, fake)
 		cfg := auditTraceConfig(b, endpoint)
 		srv := newAuditTraceServer(b, cfg)
-		databasePath := srv.runtime.Load().bucket.Path
 		requests := auditPerformanceTrace()
 
 		b.ResetTimer()
@@ -39,7 +40,7 @@ func BenchmarkAuditTrace(b *testing.B) {
 		if got := fake.callCount(); got != auditTraceDeferredRequests {
 			b.Fatalf("inference calls = %d, want %d", got, auditTraceDeferredRequests)
 		}
-		b.ReportMetric(float64(auditTraceStoredBytes(b, databasePath)), "stored-bytes")
+		b.ReportMetric(float64(auditTraceStoredBytes(b, cfg)), "stored-bytes")
 	}
 }
 
@@ -78,17 +79,15 @@ func newAuditTraceServer(b *testing.B, cfg *config.Config) *Server {
 
 func flushAuditTrace(b *testing.B, srv *Server) {
 	b.Helper()
-	snapshot := srv.runtime.Load()
-	if snapshot == nil || snapshot.deferredProcessor == nil {
-		b.Fatal("runtime snapshot has no deferred processor")
-	}
 	deadline := time.Now().Add(2 * time.Minute)
 	for time.Now().Before(deadline) {
-		pending, err := snapshot.intakeStore.ListPending(context.Background())
+		pending, err := intake.Query(context.Background(), srv.runtime.Load().cfg, intake.QueryFilter{
+			DeferredState: string(intake.DeferredStatePending), Limit: 1,
+		})
 		if err != nil {
 			b.Fatalf("ListPending: %v", err)
 		}
-		if len(pending) == 0 {
+		if len(pending.Records) == 0 {
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
@@ -167,20 +166,17 @@ cache_ttl_ms = 0
 	return cfg
 }
 
-func auditTraceStoredBytes(b *testing.B, databasePath string) int64 {
+func auditTraceStoredBytes(b *testing.B, cfg *config.Config) int64 {
 	b.Helper()
-	var total int64
-	for _, suffix := range []string{"", "-wal", "-shm"} {
-		info, err := os.Stat(databasePath + suffix)
-		if err == nil {
-			total += info.Size()
-			continue
-		}
-		if !os.IsNotExist(err) {
-			b.Fatalf("Stat %s: %v", databasePath+suffix, err)
-		}
+	catalog, err := auditstorage.NewCatalog(cfg.AuditCatalogOptions())
+	if err != nil {
+		b.Fatal(err)
 	}
-	return total
+	status, err := catalog.Status(cfg.AuditStoragePolicy().Rotation(), time.Now())
+	if err != nil {
+		b.Fatal(err)
+	}
+	return status.TotalBytes
 }
 
 func BenchmarkEvaluateHookAllowParallel(b *testing.B) {
