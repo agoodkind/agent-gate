@@ -9,6 +9,7 @@ level = "info"
 profile = "full"
 bucket_interval = "24h"
 retention_buckets = 7
+max_size = "5GB"
 
 [audit.outputs.sqlite]
 path = ""

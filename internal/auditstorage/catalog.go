@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -28,6 +29,7 @@ var ErrResetPending = errors.New("audit storage reset pending")
 type RotationPolicy struct {
 	Interval time.Duration
 	Retained int
+	MaxBytes int64
 }
 
 // Bucket identifies one physical UTC window.
@@ -94,8 +96,14 @@ func (policy RotationPolicy) Validate() error {
 	if policy.Interval <= 0 || policy.Interval%time.Second != 0 {
 		return errors.New("bucket interval must be positive whole seconds")
 	}
-	if policy.Retained <= 0 {
-		return errors.New("retention buckets must be positive")
+	if policy.Retained < 0 {
+		return errors.New("retention buckets must be positive or zero")
+	}
+	if policy.MaxBytes < 0 || policy.MaxBytes > 0 && policy.MaxBytes < 4<<20 {
+		return errors.New("maximum storage size must be zero or at least 4 MiB")
+	}
+	if policy.Retained == 0 && policy.MaxBytes == 0 {
+		return errors.New("enable an age or size retention limit")
 	}
 	if int64(policy.Retained) > math.MaxInt64/int64(policy.Interval) {
 		return errors.New("retained bucket interval overflows duration")
@@ -104,7 +112,11 @@ func (policy RotationPolicy) Validate() error {
 }
 
 func (catalog *Catalog) desiredState(policy RotationPolicy) CatalogState {
-	return CatalogState{BasePath: catalog.options.BasePath, IntervalSeconds: int64(policy.Interval / time.Second), Retained: policy.Retained, ResetPending: false, PendingBasePaths: nil, CleanupError: ""}
+	return CatalogState{
+		BasePath: catalog.options.BasePath, IntervalSeconds: int64(policy.Interval / time.Second),
+		Retained: policy.Retained, ResetPending: false, PendingBasePaths: nil, CleanupError: "",
+		CurrentBucketID: "", SegmentSequence: 0, DeferredFiles: nil,
+	}
 }
 
 func (catalog *Catalog) checkState(policy RotationPolicy) (CatalogState, error) {
@@ -125,7 +137,7 @@ func (catalog *Catalog) checkState(policy RotationPolicy) (CatalogState, error) 
 }
 
 func sameIdentity(left CatalogState, right CatalogState) bool {
-	return left.BasePath == right.BasePath && left.IntervalSeconds == right.IntervalSeconds && left.Retained == right.Retained
+	return left.BasePath == right.BasePath && left.IntervalSeconds == right.IntervalSeconds
 }
 
 func (catalog *Catalog) current(policy RotationPolicy, now time.Time) Bucket {
@@ -150,12 +162,20 @@ func (catalog *Catalog) EnsureCurrent(ctx context.Context, policy RotationPolicy
 	if err := catalog.cleanStaging(ctx); err != nil {
 		return Bucket{}, err
 	}
-	bucket := catalog.current(policy, now)
+	bucket, sequence, err := catalog.selectCurrent(policy, now, state)
+	if err != nil {
+		return Bucket{}, err
+	}
 	if err := catalog.initialize(ctx, bucket); err != nil {
 		return Bucket{}, err
 	}
-	if state.BasePath == "" {
-		if err := catalog.saveState(catalog.desiredState(policy)); err != nil {
+	if state.BasePath == "" || state.CurrentBucketID != bucket.ID || state.Retained != policy.Retained {
+		state.BasePath = catalog.options.BasePath
+		state.IntervalSeconds = int64(policy.Interval / time.Second)
+		state.Retained = policy.Retained
+		state.CurrentBucketID = bucket.ID
+		state.SegmentSequence = sequence
+		if err := catalog.saveState(state); err != nil {
 			return Bucket{}, err
 		}
 	}
@@ -256,7 +276,9 @@ func (catalog *Catalog) Reset(ctx context.Context, policy RotationPolicy, now ti
 	if err := catalog.initialize(ctx, bucket); err != nil {
 		return Bucket{}, err
 	}
-	if err := catalog.saveState(catalog.desiredState(policy)); err != nil {
+	ready := catalog.desiredState(policy)
+	ready.CurrentBucketID = bucket.ID
+	if err := catalog.saveState(ready); err != nil {
 		return Bucket{}, err
 	}
 	return bucket, nil
@@ -386,12 +408,24 @@ func (catalog *Catalog) open(ctx context.Context, bucket Bucket, readonly bool) 
 
 func retained(bucket Bucket, policy RotationPolicy, now time.Time) bool {
 	current := bucketStart(now, policy.Interval)
+	if policy.Retained == 0 {
+		return bucket.Start.Unix()%int64(policy.Interval/time.Second) == 0 && !bucket.Start.After(current)
+	}
 	oldest := current.Add(-time.Duration(policy.Retained-1) * policy.Interval)
 	return bucket.Start.Unix()%int64(policy.Interval/time.Second) == 0 && !bucket.Start.Before(oldest) && !bucket.Start.After(current)
 }
 
 // Prune deletes expired windows, deferring any that still have a reader or writer.
 func (catalog *Catalog) Prune(ctx context.Context, policy RotationPolicy, now time.Time) (result PruneResult, resultErr error) {
+	return catalog.prune(ctx, policy, now, nil, false)
+}
+
+// PruneSelected limits deletion to files after the caller stops their replay work.
+func (catalog *Catalog) PruneSelected(ctx context.Context, policy RotationPolicy, now time.Time, paths []string) (PruneResult, error) {
+	return catalog.prune(ctx, policy, now, paths, true)
+}
+
+func (catalog *Catalog) prune(ctx context.Context, policy RotationPolicy, now time.Time, paths []string, selected bool) (result PruneResult, resultErr error) {
 	lock, err := catalog.coordinate(ctx)
 	if err != nil {
 		return result, err
@@ -410,38 +444,16 @@ func (catalog *Catalog) Prune(ctx context.Context, policy RotationPolicy, now ti
 		if resultErr != nil {
 			message = resultErr.Error()
 		}
-		if state.CleanupError != message {
+		if state.CleanupError != message || !slices.Equal(state.DeferredFiles, result.Deferred) {
 			state.CleanupError = message
+			state.DeferredFiles = result.Deferred
 			resultErr = errors.Join(resultErr, catalog.saveState(state))
 		}
 	}()
 	if err := catalog.cleanStaging(ctx); err != nil {
 		return result, err
 	}
-	paths, err := familyPaths(catalog.options.BasePath)
-	if err != nil {
-		return result, err
-	}
-	slices.Sort(paths)
-	for _, path := range slices.Compact(paths) {
-		bucket, ok := parseBucket(catalog.options.BasePath, filepath.Base(path))
-		if !ok {
-			continue
-		}
-		if retained(bucket, policy, now) {
-			continue
-		}
-		removed, err := catalog.removeBucket(ctx, bucket.Path)
-		if err != nil {
-			return result, err
-		}
-		if removed {
-			result.Removed = append(result.Removed, bucket.Path)
-		} else {
-			result.Deferred = append(result.Deferred, bucket.Path)
-		}
-	}
-	return result, nil
+	return catalog.pruneFiles(ctx, policy, now, paths, selected)
 }
 
 func (catalog *Catalog) cleanStaging(ctx context.Context) error {
@@ -486,7 +498,7 @@ func discover(base string) ([]Bucket, error) {
 			buckets = append(buckets, bucket)
 		}
 	}
-	slices.SortFunc(buckets, func(a Bucket, b Bucket) int { return strings.Compare(a.Path, b.Path) })
+	slices.SortFunc(buckets, func(a Bucket, b Bucket) int { return strings.Compare(a.ID, b.ID) })
 	return buckets, nil
 }
 
@@ -497,8 +509,15 @@ func parseBucket(base string, name string) (Bucket, bool) {
 		return Bucket{ID: "", Path: "", Start: time.Time{}}, false
 	}
 	id := strings.TrimSuffix(strings.TrimPrefix(name, prefix), extension)
-	start, err := time.Parse(bucketTimeFormat, id)
-	if err != nil || start.Format(bucketTimeFormat) != id {
+	window, segment, segmented := strings.Cut(id, "-")
+	if segmented {
+		sequence, err := strconv.ParseUint(segment, 10, 64)
+		if err != nil || sequence == 0 || fmt.Sprintf("%020d", sequence) != segment {
+			return Bucket{ID: "", Path: "", Start: time.Time{}}, false
+		}
+	}
+	start, err := time.Parse(bucketTimeFormat, window)
+	if err != nil || start.Format(bucketTimeFormat) != window {
 		return Bucket{ID: "", Path: "", Start: time.Time{}}, false
 	}
 	return Bucket{ID: id, Path: filepath.Join(filepath.Dir(base), name), Start: start}, true

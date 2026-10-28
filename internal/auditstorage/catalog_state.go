@@ -15,6 +15,9 @@ type CatalogState struct {
 	BasePath         string   `json:"base_path"`
 	IntervalSeconds  int64    `json:"interval_seconds"`
 	Retained         int      `json:"retention_buckets"`
+	CurrentBucketID  string   `json:"current_bucket_id,omitempty"`
+	SegmentSequence  uint64   `json:"segment_sequence,omitempty"`
+	DeferredFiles    []string `json:"deferred_files,omitempty"`
 	ResetPending     bool     `json:"reset_pending"`
 	PendingBasePaths []string `json:"pending_base_paths,omitempty"`
 }

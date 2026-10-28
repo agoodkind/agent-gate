@@ -46,7 +46,7 @@ func TestRunAuditStatusReportsFileSizes(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &status); err != nil {
 		t.Fatal(err)
 	}
-	if len(status.RetainedFiles) != 1 || status.RetainedFiles[0].DatabaseBytes != info.Size() || status.RetainedFiles[0].WALBytes != 0 {
+	if len(status.RetainedFiles) != 1 || status.RetainedFiles[0].DatabaseBytes != info.Size() || status.RetainedFiles[0].WALBytes != 0 || status.MaxBytes != 5_000_000_000 || status.ExcessBytes != 0 {
 		t.Fatalf("status=%+v file=%d", status, info.Size())
 	}
 }

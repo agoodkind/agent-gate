@@ -30,6 +30,7 @@ func NewStore(ctx context.Context, databasePath string, database *sql.DB) (*Stor
 		Profile:          config.AuditStorageProfileFull,
 		BucketInterval:   24 * time.Hour,
 		RetentionBuckets: 7,
+		MaxBytes:         0,
 		Detail: config.AuditStorageDetailPolicy{
 			WireInput: true, NormalizedInput: true, ProviderEvidence: true,
 			EnvironmentEvidence: true, EvaluationContent: true,
