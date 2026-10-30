@@ -469,8 +469,6 @@ goodkind.io/clyde v0.0.0-20260715020851-23020238ae53 h1:d+UUIvNDN+ZOm2PcOJj5qvR9
 goodkind.io/clyde v0.0.0-20260715020851-23020238ae53/go.mod h1:FHh8Dn/N8vVNsSW6vOboovQJpy/x1EeEf3fMSexr0i8=
 goodkind.io/gklog v0.4.5 h1:BaXpXb4nXv6Z9MaTk6hDN3a5R+t8NKLkZbdY4pE9X78=
 goodkind.io/gklog v0.4.5/go.mod h1:lKYbUgVM1nDagqIv4XiylQ5+CeLQwx45mlz23jtTSRQ=
-goodkind.io/gksyntax v0.1.0 h1:EV9AfgdAZ7jdBT64EZ0h8Th2sl152hn2h2h15pO4MAc=
-goodkind.io/gksyntax v0.1.0/go.mod h1:E0Gcb/xRmPCD/Azh/0b+hZakVxsqcu2XswAs164cRGA=
 goodkind.io/gksyntax v0.1.1-0.20261028153718-690515cb5cb0 h1:6nFmF3FLY8pwghjSiENX2uikNXpOeLWvl8P+HYEj92g=
 goodkind.io/gksyntax v0.1.1-0.20261028153718-690515cb5cb0/go.mod h1:a/azYzJ+ZBL41YGKhdE9iMKYhNME1upacGJBW/MyLXU=
 goodkind.io/go-makefile v0.1.0 h1:lS+yrejnh6rIvL9O54VO85tZAJoC6+I8+kUApusdRPU=
@@ -483,8 +481,8 @@ google.golang.org/genproto/googleapis/api v0.0.0-20261019180522-ce908d29299b h1:
 google.golang.org/genproto/googleapis/api v0.0.0-20261019180522-ce908d29299b/go.mod h1:9N4vtjEwvgQKEdlFVQO0M44ErhecQ9DCSQfGoZ51M6w=
 google.golang.org/genproto/googleapis/rpc v0.0.0-20261019180522-ce908d29299b h1:6WNWHZk91dp4gZ25642OALkuG1UVNZbwENJD19DnB8k=
 google.golang.org/genproto/googleapis/rpc v0.0.0-20261019180522-ce908d29299b/go.mod h1:OaIUM3+LpYcK2GXM4FTmhWoIq371Owdr+Cc7/BsYHHc=
-google.golang.org/grpc v1.84.0 h1:soMyaPJ8pAak5PIQ0DGBUir0XRo2fRoMqhNWMLlLxO0=
-google.golang.org/grpc v1.84.0/go.mod h1:ljCht0DrxQrXBDRTZp52Qxh3Ffk8CdYm2sj4O2QN2C0=
+google.golang.org/grpc v1.85.0 h1:BPBCfuVRQ1qvBhKDOq9uvQllMvO59rKsYhXpp7Dd8vw=
+google.golang.org/grpc v1.85.0/go.mod h1:0rQrOD58yjal/0EaVbGBANindixsCZNQPDV3VKtaKuQ=
 google.golang.org/protobuf v1.36.12 h1:pJOKDDOyeXErUroCihFAd5LQuwXBSpVnKGrj5o/fwxc=
 google.golang.org/protobuf v1.36.12/go.mod h1:HTf+CrKn2C3g5S8VImy6tdcUvCska2kB7j23XfzDpco=
 gopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405/go.mod h1:Co6ibVJAznAaIkqp8huTwlJQCZ016jof/cbN4VW5Yz0=
