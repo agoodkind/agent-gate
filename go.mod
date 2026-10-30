@@ -22,7 +22,7 @@ require (
 	goodkind.io/gklog v0.4.5
 	goodkind.io/gksyntax v0.1.1-0.20261028153718-690515cb5cb0
 	goodkind.io/go-makefile v0.1.0
-	google.golang.org/grpc v1.84.0
+	google.golang.org/grpc v1.85.0
 	google.golang.org/protobuf v1.36.12
 )
 
