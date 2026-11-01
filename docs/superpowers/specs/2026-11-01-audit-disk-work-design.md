@@ -1,8 +1,8 @@
 # Bound audit disk work across the storage lifecycle
 
-Agent Gate must stop reopening completed history during ordinary processing. Idle operation must stop writing after admitted work and due maintenance finish. Active processing must retain the existing audit guarantees without making its cost depend on the amount of completed history.
+Agent Gate must stop reopening completed history during ordinary processing. Idle operation must stop writing after admitted work and due maintenance finish. Active processing must retain the existing audit guarantees without making its cost depend on the amount of completed history. Memory use must remain within explicit budgets as retained history and pending backlog grow.
 
-The user selected an approach that keeps SQLite, corrects replay scheduling, history readers, and log trimming, and makes performance regressions fail validation. This project includes storage ownership, scheduling, queries, logging, and qualification. It does not authorize deployment or a reset of the live installation.
+The user selected an approach that keeps SQLite, corrects replay scheduling, history readers, and log trimming, and makes performance regressions fail validation. The user also requires preventing excessive memory use. This project includes storage ownership, scheduling, queries, logging, and qualification. It does not authorize deployment or a reset of the live installation.
 
 ## Preserve the existing contract
 
@@ -62,6 +62,24 @@ Completion updates only the affected segment. Retry and lease deadlines determin
 
 Bound scheduling metadata, dispatch bytes, workers, and open writers. Discover large backlogs incrementally and process them fairly. Do not replace repeated disk reads with an unbounded in-memory receipt list. If a process stops after committing work but before notification, startup discovery must recover that work.
 
+## Bound memory independently of history
+
+Keep receipt payloads and undispatched backlog in SQLite. Scheduling entries contain only identifiers, cursors, deadlines, and accounting information. Load payloads only for active workers and release references after processing. Do not preload pending records or maintain an in-memory entry for every retained file or receipt.
+
+Apply both byte and entry limits to scheduling metadata, notifications, dispatch queues, cached query summaries, and application caches. Include variable-length paths, keys, input buffers, and serialized content in byte accounting. Existing item counts or per-value limits alone do not establish an aggregate memory bound. Preserve useful existing controls and expose any additional budgets through validated performance configuration.
+
+Reserve capacity before allocating or reading a batch. When capacity fills, keep accepted work durable in SQLite and stop dispatching additional work until capacity becomes available. Do not discard accepted receipts, create another overflow queue, or allocate a goroutine for each waiting receipt.
+
+A bounded scheduler may retain a cursor and one flag indicating that undispatched durable work remains. Capacity release resumes bounded discovery. Preserve notification correctness and retry deadlines when more segments contain pending work than the scheduler can retain in memory. Overflow must not restore an all-history scan after every hook event or repeatedly open completed databases.
+
+Stream directory discovery and SQL pages. Limit aggregate query buffering across files; one bounded page per file still grows with file count. Stream unlimited query output while preserving ordering and result semantics. Explicit queries may perform the reads necessary for their results, but routine hook processing must not pay for those history reads.
+
+Limit open reader and writer connections across the process, including retiring snapshots and concurrent queries. Account for the SQLite page cache and prepared statements associated with each connection. Close idle retained connections and release query resources on cancellation. Do not keep every historical database mapped or open to avoid disk writes.
+
+Before implementation, record concrete default budgets, their aggregate upper-bound calculation, and the behavior at each limit in the implementation plan. Select those values from existing limits and measured workloads. Do not claim a fixed whole-process memory ceiling from queue limits or Go heap settings alone.
+
+Qualification measures peak and settled Go heap, process resident memory, and macOS physical footprint, including SQLite's native allocations and mapped pages. With fixed request sizes, concurrency, and configured budgets, memory must plateau when those budgets fill. Further backlog or completed history must not create continuing memory growth. Repeated bursts, recovery, queries, rotation, and reload must release resources without an artificial garbage collection step that hides normal retention.
+
 ## Own each segment until its writes finish
 
 The current segment accepts new receipts. A retired segment accepts only work already assigned to it. A completed retired segment cannot receive another ordinary write. An expired segment stops accepting work and awaits deletion after its users finish.
@@ -120,6 +138,8 @@ Required outcomes:
 |---|---|
 | Idle operation after startup and pending work finish | The daemon stops reopening completed databases and rewriting audit or log files. Due rotation, expiration, and actual error handling remain explicit work. |
 | Identical traffic with increasing completed history | Completed history does not multiply database opens, transactions, or replay discovery per event. |
+| Backlog larger than scheduling and dispatch budgets | Accepted receipts remain in SQLite, memory stays within the accounted budgets, and processing resumes fairly after capacity becomes available. |
+| Repeated bursts, queries, rotation, and reload | Peak memory stays within the qualified bound and settled memory does not keep growing after equivalent cycles. |
 | Exact-segment and bounded history queries | Queries open only necessary files and do not recreate sidecars for completed files. |
 | Startup backlog and expired claims | Recovery processes retained eligible receipts with the existing ownership and atomic completion guarantees. |
 | Rotation, size pruning, reload, sleep, cancellation, and shutdown | Work uses its original file until completion or permitted expiration. Users release access before deletion. |
@@ -130,14 +150,14 @@ Keep deterministic tests in normal `make test` and `make check` execution. Add a
 
 Use independent processes and identical input traces for baseline and candidate. Record baseline variation before evaluating the candidate. Include idle periods after bursts, retained backlog, many size-created segments, exact queries, rotation, and both supported detail profiles. Keep fixture creation, reports, and measurement helpers outside the measured daemon process.
 
-Measure accepted and completed receipts, hook responses, failures, CPU per event, physical writes per event, transaction counts, queue bounds, and hook and completion latency. Include shutdown and final checkpoints in the accounting. Let startup and admitted work settle before measuring continuing idle writes.
+Measure accepted and completed receipts, hook responses, failures, CPU per event, physical writes per event, transaction counts, aggregate buffered bytes, open connections, peak and settled memory, and hook and completion latency. Include shutdown and final checkpoints in the accounting. Let startup and admitted work settle before measuring continuing idle writes.
 
-For active workloads, CPU and physical writes per event must improve beyond baseline variation. Hook latency, error rates, and completed-work throughput must not regress beyond that variation. Additional completed segments must not add per-event replay work. Preserve the existing four persistence stages for normal deferred receipts and verify rollback through observable records.
+For active workloads, CPU and physical writes per event must improve beyond baseline variation. Hook latency, error rates, completed-work throughput, and peak and settled process memory must not regress beyond that variation. Additional completed segments must not add per-event replay work or unbounded retained memory. Preserve the existing four persistence stages for normal deferred receipts and verify rollback through observable records.
 
 Both physical measurements and deterministic ownership tests must pass. Run full repository checks and an independent concurrency review before implementation can qualify for merge. Live deployment requires separate authorization and verification.
 
 ## Delegate implementation details
 
-The builder may choose internal types, fair scheduling structures, batch sizes within configured limits, and the smallest meaningful fixtures. The builder must preserve public behavior and prove connection ordering with the bundled SQLite version.
+The builder may choose internal types, fair scheduling structures, measured default memory budgets, batch sizes within configured limits, and the smallest meaningful fixtures. The builder must record aggregate memory accounting in the implementation plan, preserve public behavior, and prove connection ordering with the bundled SQLite version.
 
 Changes to audit detail, persistence stages, durability, history preservation, file limits, or retention beyond the supervisor headroom proposal require an explicit decision. A failed qualification requires a correction or revised design. Do not relax thresholds, skip cases, lengthen timeouts, or reset storage to hide a failure.
