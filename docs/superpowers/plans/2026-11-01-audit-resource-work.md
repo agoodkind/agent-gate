@@ -101,12 +101,12 @@ Consume the current Catalog.OpenWriter, newRuntimeSnapshotForBucket, runtimeSnap
 
 Consume the Task 2 owner and worker interfaces. Preserve the existing claim fencing and atomic completion methods. Add a metadata pager alongside ListDueDeferred rather than loading pending payloads.
 
-- [ ] Dispatch known identifiers after pending commit, independently of request cancellation. Preserve overflow in SQLite and use generation acknowledgment rather than a clearable Boolean.
-- [ ] Implement finite indexed metadata passes with a frozen eligibility time, cursor reset for due-time revisits, and the existing pending index. Bound returned raw entries and avoid an unbounded SQL sort or eligibility scan.
-- [ ] Preserve progress after errors and reserve worker turns for discovery and historical work under continuous current traffic. Prevent queued or locally active work from creating due-now rescan loops.
-- [ ] Coordinate retirement, pruning, and completed-file conversion. Persist completion through successful journal conversion after a durable pending check and exclusive access.
-- [ ] Test queue capacity one, late pending commits, future retries, claims, cancellation after commit, failing-file fairness, restart, and interrupted conversion through real public operations.
-- [ ] Run targeted daemon, intake, and storage verification. Commit and record any interface changes for later tasks.
+- [x] Dispatch known identifiers after pending commit, independently of request cancellation. Preserve overflow in SQLite and use generation acknowledgment rather than a clearable Boolean.
+- [x] Implement finite indexed metadata passes with a frozen eligibility time, cursor reset for due-time revisits, and the existing pending index. Bound returned raw entries and avoid an unbounded SQL sort or eligibility scan.
+- [x] Preserve progress after errors and reserve worker turns for discovery and historical work under continuous current traffic. Prevent queued or locally active work from creating due-now rescan loops.
+- [x] Coordinate retirement, pruning, and completed-file conversion. Persist completion through successful journal conversion after a durable pending check and exclusive access.
+- [x] Test queue capacity one, late pending commits, future retries, claims, cancellation after commit, failing-file fairness, restart, and interrupted conversion through real public operations.
+- [x] Run targeted daemon, intake, and storage verification. Commit and record any interface changes for later tasks.
 
 ## Task 4: Bound cache state without stale temporal facts
 
