@@ -251,7 +251,7 @@ func TestReadExcludesMissingMisalignedAndFutureWindows(t *testing.T) {
 	if len(set.Handles) != 2 {
 		t.Fatalf("read count = %d, want only current and two days ago", len(set.Handles))
 	}
-	if set.Handles[0].Bucket.ID != "20260906T000000Z" || set.Handles[1].Bucket.ID != "20260908T000000Z" {
+	if set.Handles[0].Bucket.Start.Format(bucketTimeFormat) != "20260906T000000Z" || set.Handles[1].Bucket.Start.Format(bucketTimeFormat) != "20260908T000000Z" {
 		t.Fatalf("read windows = %+v", set.Handles)
 	}
 }

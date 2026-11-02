@@ -2101,8 +2101,10 @@ func replaceDeferredProcessorForTest(t testing.TB, srv *Server, queueLimit int, 
 		newDiscardLogger(),
 	)
 	srv.deferredProcessor = snapshot.deferredProcessor
+	snapshot.deferredProcessor.service.mu.Lock()
 	snapshot.deferredProcessor.service.server = srv
 	snapshot.deferredProcessor.notify = srv.wakeAuditScheduler
+	snapshot.deferredProcessor.service.mu.Unlock()
 }
 
 func fillDeferredProcessorQueue(t testing.TB, srv *Server) {

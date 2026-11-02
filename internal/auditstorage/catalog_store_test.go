@@ -48,8 +48,9 @@ func TestPolicyResetDiscardsCurrentFilenameHistory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if replacement.Path != current.Path {
-		t.Fatalf("replacement path = %s, want %s", replacement.Path, current.Path)
+	wantPath := filepath.Join(filepath.Dir(current.Path), "audit-"+now.Format("20060102T150405Z")+".db")
+	if replacement.Path != wantPath {
+		t.Fatalf("replacement path = %s, want %s", replacement.Path, wantPath)
 	}
 	if _, err := os.Stat(old.Path); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("old bucket remains: %v", err)
@@ -69,5 +70,42 @@ func TestPolicyResetDiscardsCurrentFilenameHistory(t *testing.T) {
 	}
 	if count != 0 {
 		t.Fatalf("old event remains: %d", count)
+	}
+}
+
+func TestResetSelectsUnsuffixedBucketAfterSameWindowSegment(t *testing.T) {
+	catalog, policy, now := sizeCatalog(t)
+	first, err := catalog.EnsureCurrent(t.Context(), policy, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeSizedIntake(t, catalog, first, "first")
+	segmented, err := catalog.EnsureCurrent(t.Context(), policy, now)
+	if err != nil || segmented.ID == first.ID {
+		t.Fatalf("size segment = %+v: %v", segmented, err)
+	}
+	writeSizedIntake(t, catalog, segmented, "discard")
+	replacement, err := catalog.Reset(t.Context(), policy, now)
+	if err != nil || replacement != first {
+		t.Fatalf("reset selection = %+v, expected %+v: %v", replacement, first, err)
+	}
+	status, err := catalog.Status(policy, now)
+	if err != nil || status.CurrentBucketID != first.ID || len(status.RetainedFiles) != 1 {
+		t.Fatalf("reset status = %+v: %v", status, err)
+	}
+	store, err := openFixtureIntake(t, t.Context(), replacement.Path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Get(t.Context(), "discard"); !errors.Is(err, intake.ErrEventNotFound) {
+		t.Fatalf("pre-reset receipt survived: %v", err)
+	}
+	if err := store.Handle().Close(); err != nil {
+		t.Fatal(err)
+	}
+	writeSizedIntake(t, catalog, replacement, "after-reset")
+	next, err := catalog.EnsureCurrent(t.Context(), policy, now)
+	if err != nil || next.ID != segmented.ID {
+		t.Fatalf("reset segment sequence = %+v, expected %s: %v", next, segmented.ID, err)
 	}
 }

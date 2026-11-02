@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -421,6 +423,18 @@ func TestAuditCloseCancelsInterruptedPolicyCut(t *testing.T) {
 	}
 }
 
+type recoveryFailureLog chan string
+
+func (messages recoveryFailureLog) Write(body []byte) (int, error) {
+	if strings.Contains(string(body), "recover audit file failed") {
+		select {
+		case messages <- string(body):
+		default:
+		}
+	}
+	return len(body), nil
+}
+
 func TestAuditCorruptRetainedHistoryDoesNotAbortStartup(t *testing.T) {
 	setDaemonTestDirs(t)
 	cfg := daemonTestConfig(t)
@@ -434,12 +448,19 @@ func TestAuditCorruptRetainedHistoryDoesNotAbortStartup(t *testing.T) {
 	if err := os.WriteFile(old.Path, []byte("corrupt retained history"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	server, err = New(t.Context(), newDiscardLogger(), cfg)
+	messages := make(recoveryFailureLog, 1)
+	server, err = New(t.Context(), slog.New(slog.NewTextHandler(messages, nil)), cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer server.Close()
-	if err := server.dispatchRetainedReplay(t.Context(), time.Now()); err == nil {
+	server.StartAuditScheduler(t.Context())
+	select {
+	case message := <-messages:
+		if !strings.Contains(message, old.ID) {
+			t.Fatalf("diagnostic omitted the failed file: %s", message)
+		}
+	case <-time.After(time.Second):
 		t.Fatal("corrupt retained history was hidden")
 	}
 	if _, err := server.EvaluateHook(t.Context(), replayRequest()); err != nil {

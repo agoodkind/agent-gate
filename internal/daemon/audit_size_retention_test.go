@@ -272,11 +272,11 @@ func TestReplayProcessesSameDayReceiptIdentifiersFromSeparateSegments(t *testing
 	}
 	server.StartAuditScheduler(t.Context())
 	waitSizeRetention(t, func() bool {
-		result, err := intake.Query(t.Context(), cfg, intake.QueryFilter{BucketID: second.CurrentBucketID, DeferredState: string(intake.DeferredStateComplete)})
+		result, err := intake.Query(t.Context(), cfg, intake.QueryFilter{DeferredState: string(intake.DeferredStateComplete)})
 		if err != nil {
 			t.Fatal(err)
 		}
-		return len(result.Records) == 1
+		return len(result.Records) == 2
 	})
 	result, err := intake.Query(t.Context(), cfg, intake.QueryFilter{DeferredState: string(intake.DeferredStateComplete)})
 	if err != nil || len(result.Records) != 2 || result.Records[0].BucketID == result.Records[1].BucketID {

@@ -4,6 +4,7 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
@@ -212,9 +213,12 @@ func newServerWithStorageWait(ctx context.Context, log *slog.Logger, cfg *config
 		auditRequested: false,
 	}
 	s.deferredProcessor = newDeferredProcessor(lifetime, nil, nil, cfg, nil, cfg.HookDeferredQueueLimit(), 0, log)
+	s.deferredProcessor.service.mu.Lock()
 	s.deferredProcessor.cfg = nil
 	s.deferredProcessor.service.server = s
 	s.deferredProcessor.notify = s.wakeAuditScheduler
+	s.deferredProcessor.now = s.now
+	s.deferredProcessor.service.mu.Unlock()
 	snapshot, err := s.initializeAuditStorage(lifetime, cfg)
 	if err != nil {
 		cancel()
@@ -780,7 +784,9 @@ func wrapServerError(message string, err error) error {
 	if err == nil {
 		return nil
 	}
-	slog.Warn(message+" failed", "err", err)
+	if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+		slog.Warn(message+" failed", "err", err)
+	}
 	return fmt.Errorf("%s: %w", message, err)
 }
 

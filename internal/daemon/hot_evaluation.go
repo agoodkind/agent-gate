@@ -100,8 +100,8 @@ func (s *Server) commitHotEvaluation(
 			)
 		}
 	}
-	if systemError == "" {
-		s.wakeAuditScheduler()
+	if deferredPending {
+		input.Snapshot.deferredProcessor.submit(input.Snapshot.bucket, input.AppendResult.ReceiptID)
 	}
 	return &daemonpb.EvaluateHookResponse{
 		ExitCode: clampExitCode(result.ExitCode), StdoutData: append([]byte(nil), result.Stdout...),

@@ -81,3 +81,10 @@ func (owner *fileOwner) release() error {
 	owners.mu.Unlock()
 	return wrapServerError("release audit file", err)
 }
+
+func (owner *fileOwner) retain() *fileOwner {
+	owner.registry.mu.Lock()
+	owner.references++
+	owner.registry.mu.Unlock()
+	return owner
+}

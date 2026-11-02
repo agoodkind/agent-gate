@@ -136,6 +136,23 @@ func (catalog *Catalog) checkState(policy RotationPolicy) (CatalogState, error) 
 	return state, nil
 }
 
+func (catalog *Catalog) checkStateSummary(ctx context.Context, policy RotationPolicy) (CatalogState, error) {
+	if err := policy.Validate(); err != nil {
+		return CatalogState{}, err
+	}
+	state, err := catalog.loadStateSummary(ctx)
+	if err != nil {
+		return state, err
+	}
+	if state.ResetPending {
+		return state, ErrResetPending
+	}
+	if state.BasePath != "" && !sameIdentity(state, catalog.desiredState(policy)) {
+		return state, ErrPolicyChanged
+	}
+	return state, nil
+}
+
 func sameIdentity(left CatalogState, right CatalogState) bool {
 	return left.BasePath == right.BasePath && left.IntervalSeconds == right.IntervalSeconds
 }
@@ -155,14 +172,17 @@ func (catalog *Catalog) EnsureCurrent(ctx context.Context, policy RotationPolicy
 		return Bucket{}, err
 	}
 	defer func() { _ = lock.Close() }()
-	state, err := catalog.checkState(policy)
+	if err := catalog.cleanSortFiles(ctx); err != nil {
+		return Bucket{}, err
+	}
+	state, err := catalog.checkStateSummary(ctx, policy)
 	if err != nil {
 		return Bucket{}, err
 	}
 	if err := catalog.cleanStaging(ctx); err != nil {
 		return Bucket{}, err
 	}
-	bucket, sequence, err := catalog.selectCurrent(policy, now, state)
+	bucket, sequence, err := catalog.selectCurrent(ctx, policy, now, state)
 	if err != nil {
 		return Bucket{}, err
 	}
@@ -175,7 +195,7 @@ func (catalog *Catalog) EnsureCurrent(ctx context.Context, policy RotationPolicy
 		state.Retained = policy.Retained
 		state.CurrentBucketID = bucket.ID
 		state.SegmentSequence = sequence
-		if err := catalog.saveState(state); err != nil {
+		if err := catalog.saveStatePreserving(ctx, state, "deferred_files"); err != nil {
 			return Bucket{}, err
 		}
 	}
@@ -259,17 +279,20 @@ func (catalog *Catalog) Reset(ctx context.Context, policy RotationPolicy, now ti
 		return Bucket{}, err
 	}
 	defer func() { _ = lock.Close() }()
-	state, err := catalog.loadState()
+	if err := catalog.cleanSortFiles(ctx); err != nil {
+		return Bucket{}, err
+	}
+	state, err := catalog.loadStateSummary(ctx)
 	if err != nil {
 		return Bucket{}, err
 	}
 	pending := catalog.desiredState(policy)
 	pending.ResetPending = true
 	pending.PendingBasePaths = pendingFamilies(state, catalog.options.BasePath)
-	if err := catalog.saveState(pending); err != nil {
+	if err := catalog.saveStatePreserving(ctx, pending, "pending_base_paths"); err != nil {
 		return Bucket{}, err
 	}
-	if err := catalog.deleteFamilies(ctx, pending.PendingBasePaths); err != nil {
+	if err := catalog.visitStatePaths(ctx, "pending_base_paths", func(base string) error { return catalog.deleteFamilies(ctx, []string{base}) }); err != nil {
 		return Bucket{}, err
 	}
 	bucket := catalog.current(policy, now)
@@ -323,7 +346,7 @@ func (catalog *Catalog) OpenWriter(ctx context.Context, bucket Bucket) (*BucketH
 		return nil, err
 	}
 	defer func() { _ = lock.Close() }()
-	state, err := catalog.loadState()
+	state, err := catalog.loadStateSummary(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -336,6 +359,15 @@ func (catalog *Catalog) OpenWriter(ctx context.Context, bucket Bucket) (*BucketH
 	matched, ok := parseBucket(catalog.options.BasePath, filepath.Base(bucket.Path))
 	if !ok || matched.Path != bucket.Path || matched.ID != bucket.ID || !matched.Start.Equal(bucket.Start) || state.IntervalSeconds <= 0 || matched.Start.Unix()%state.IntervalSeconds != 0 {
 		return nil, errors.New("bucket does not match catalog")
+	}
+	if bucket.ID != state.CurrentBucketID {
+		complete, err := Completed(bucket.Path)
+		if err != nil {
+			return nil, err
+		}
+		if complete {
+			return nil, ErrFileComplete
+		}
 	}
 	return catalog.open(ctx, bucket, false)
 }
@@ -415,34 +447,43 @@ func retained(bucket Bucket, policy RotationPolicy, now time.Time) bool {
 	return bucket.Start.Unix()%int64(policy.Interval/time.Second) == 0 && !bucket.Start.Before(oldest) && !bucket.Start.After(current)
 }
 
+// Retains checks a file against the current rotation window and age policy.
+func (policy RotationPolicy) Retains(bucket Bucket, now time.Time) bool {
+	return retained(bucket, policy, now)
+}
+
 // Prune deletes expired windows, deferring any that still have a reader or writer.
 func (catalog *Catalog) Prune(ctx context.Context, policy RotationPolicy, now time.Time) (result PruneResult, resultErr error) {
-	return catalog.prune(ctx, policy, now, nil, false)
+	return catalog.prune(ctx, policy, now, nil, false, nil)
 }
 
 // PruneSelected limits deletion to files after the caller stops their replay work.
 func (catalog *Catalog) PruneSelected(ctx context.Context, policy RotationPolicy, now time.Time, paths []string) (PruneResult, error) {
-	return catalog.prune(ctx, policy, now, paths, true)
+	return catalog.prune(ctx, policy, now, paths, true, nil)
 }
 
-func (catalog *Catalog) prune(ctx context.Context, policy RotationPolicy, now time.Time, paths []string, selected bool) (result PruneResult, resultErr error) {
+func (catalog *Catalog) prune(ctx context.Context, policy RotationPolicy, now time.Time, paths []string, selected bool, batch []PruneTarget) (result PruneResult, resultErr error) {
 	lock, err := catalog.coordinate(ctx)
 	if err != nil {
 		return result, err
 	}
 	defer func() { _ = lock.Close() }()
-	if _, err := catalog.checkState(policy); err != nil {
+	if _, err := catalog.checkStateSummary(ctx, policy); err != nil {
 		return result, err
 	}
 	defer func() {
+		message := ""
+		if resultErr != nil {
+			message = resultErr.Error()
+		}
+		if batch != nil {
+			resultErr = errors.Join(resultErr, catalog.saveBatchCleanup(ctx, policy, now, message, result.Deferred))
+			return
+		}
 		state, err := catalog.loadState()
 		if err != nil {
 			resultErr = errors.Join(resultErr, err)
 			return
-		}
-		message := ""
-		if resultErr != nil {
-			message = resultErr.Error()
 		}
 		if state.CleanupError != message || !slices.Equal(state.DeferredFiles, result.Deferred) {
 			state.CleanupError = message
@@ -453,21 +494,19 @@ func (catalog *Catalog) prune(ctx context.Context, policy RotationPolicy, now ti
 	if err := catalog.cleanStaging(ctx); err != nil {
 		return result, err
 	}
+	if batch != nil {
+		return catalog.pruneBatchFiles(ctx, policy, now, batch)
+	}
 	return catalog.pruneFiles(ctx, policy, now, paths, selected)
 }
 
 func (catalog *Catalog) cleanStaging(ctx context.Context) error {
-	paths, err := familyPaths(catalog.options.BasePath)
-	if err != nil {
-		return err
-	}
-	slices.Sort(paths)
-	for _, path := range slices.Compact(paths) {
+	return visitFamily(ctx, catalog.options.BasePath, func(path string) error {
 		if path == catalog.options.BasePath || !strings.HasSuffix(path, ".creating") {
-			continue
+			return nil
 		}
 		if _, primary := parseBucket(catalog.options.BasePath, filepath.Base(path)); primary {
-			continue
+			return nil
 		}
 		removed, err := catalog.removeBucket(ctx, path)
 		if err != nil {
@@ -476,8 +515,8 @@ func (catalog *Catalog) cleanStaging(ctx context.Context) error {
 		if !removed {
 			return errors.New("staging bucket is in use")
 		}
-	}
-	return nil
+		return nil
+	})
 }
 
 func discover(base string) ([]Bucket, error) {
@@ -524,22 +563,26 @@ func parseBucket(base string, name string) (Bucket, bool) {
 }
 
 func (catalog *Catalog) deleteFamilies(ctx context.Context, bases []string) error {
-	var paths []string
 	for _, base := range bases {
-		members, err := familyPaths(base)
-		if err != nil {
-			return err
-		}
-		paths = append(paths, members...)
-	}
-	slices.Sort(paths)
-	for _, path := range slices.Compact(paths) {
-		removed, err := catalog.removeBucket(ctx, path)
-		if err != nil {
-			return err
-		}
-		if !removed {
-			return storageError(fmt.Sprintf("delete bucket %s: still in use", path), ErrResetPending)
+		for {
+			count := 0
+			err := visitFamily(ctx, base, func(path string) error {
+				removed, err := catalog.removeBucket(ctx, path)
+				if err != nil {
+					return err
+				}
+				if !removed {
+					return storageError(fmt.Sprintf("delete bucket %s: still in use", path), ErrResetPending)
+				}
+				count++
+				return nil
+			})
+			if err != nil {
+				return err
+			}
+			if count == 0 {
+				break
+			}
 		}
 	}
 	return nil

@@ -1,12 +1,12 @@
 package auditstorage
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -39,29 +39,33 @@ func (catalog *Catalog) NeedsRotation(bucket Bucket, policy RotationPolicy, now 
 	return size >= policy.SegmentBytes(), nil
 }
 
-func (catalog *Catalog) selectCurrent(policy RotationPolicy, now time.Time, state CatalogState) (Bucket, uint64, error) {
+func (catalog *Catalog) selectCurrent(ctx context.Context, policy RotationPolicy, now time.Time, state CatalogState) (Bucket, uint64, error) {
 	current := catalog.current(policy, now)
-	buckets, err := discover(catalog.options.BasePath)
-	if err != nil {
-		return Bucket{}, 0, err
-	}
 	sequence := state.SegmentSequence
-	for _, bucket := range buckets {
-		_, suffix, segmented := strings.Cut(bucket.ID, "-")
-		if segmented {
-			value, err := strconv.ParseUint(suffix, 10, 64)
-			if err != nil {
-				return Bucket{}, 0, storageError("read segment sequence", err)
-			}
-			sequence = max(sequence, value)
-		}
-		if bucket.Start.Equal(current.Start) {
+	err := visitBuckets(ctx, catalog.options.BasePath, func(bucket Bucket) error {
+		sequence = max(sequence, recoverySequence(bucket))
+		if bucket.Start.Equal(current.Start) && bucket.ID > current.ID {
 			current = bucket
 		}
+		return nil
+	})
+	if err != nil {
+		return Bucket{}, 0, err
 	}
 	rotate, err := catalog.NeedsRotation(current, policy, now)
 	if err != nil {
 		return Bucket{}, 0, err
+	}
+	if _, err := os.Stat(current.Path); err == nil {
+		complete, err := Completed(current.Path)
+		if err != nil {
+			return Bucket{}, 0, err
+		}
+		rotate = rotate || complete || state.CurrentBucketID != "" && current.ID != state.CurrentBucketID
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return Bucket{}, 0, storageError("stat selected audit file", err)
+	} else if state.CurrentBucketID != "" {
+		rotate = true
 	}
 	if !rotate {
 		return current, sequence, nil

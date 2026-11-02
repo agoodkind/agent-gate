@@ -133,7 +133,7 @@ func TestStorageOwnershipQueueGrowthDuringConcurrentDispatch(t *testing.T) {
 	producerDone := make(chan error, 1)
 	var accepted atomic.Int64
 	go func() {
-		for identifier := 0; ; identifier++ {
+		for identifier := range 128 {
 			select {
 			case <-stopProducer:
 				producerDone <- nil
@@ -151,6 +151,8 @@ func TestStorageOwnershipQueueGrowthDuringConcurrentDispatch(t *testing.T) {
 			}
 			accepted.Add(1)
 		}
+		<-stopProducer
+		producerDone <- nil
 	}()
 	for _, limit := range []int{16, 32, 64, 128} {
 		harness.queueLimit = limit
@@ -161,6 +163,32 @@ func TestStorageOwnershipQueueGrowthDuringConcurrentDispatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	total := int(accepted.Load())
+	defer func() {
+		t.Logf("accepted_receipts=%d durable_outcomes=%v", total, ownershipOutcomes(t, harness.cfg))
+		if !t.Failed() {
+			return
+		}
+		readers, err := ownershipCatalog(t, harness.cfg).Read(t.Context(), harness.cfg.AuditStoragePolicy().Rotation(), time.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = readers.Close() }()
+		for _, handle := range readers.Handles {
+			rows, err := handle.Database.QueryContext(t.Context(), ownershipFixture(t, "recovery_pending_diagnostic.sql"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			for rows.Next() {
+				var receipt, attempt int
+				var owner, expires, retry string
+				if err := rows.Scan(&receipt, &attempt, &owner, &expires, &retry); err != nil {
+					t.Fatal(err)
+				}
+				t.Logf("pending receipt=%d attempt=%d owner=%s expires=%s retry=%s", receipt, attempt, owner, expires, retry)
+			}
+			_ = rows.Close()
+		}
+	}()
 	if total == 0 {
 		t.Fatal("concurrent producer did not submit any receipts")
 	}
@@ -207,7 +235,7 @@ func TestStorageOwnershipCurrentJobsContinueDuringHistoricalOpenContention(t *te
 	for identifier := range 4 {
 		harness.accept(t, fmt.Sprintf("unrelated-current-%d", identifier))
 	}
-	// The public scheduler scans once per second while both workers remain occupied.
+	// Both workers remain occupied while the current queue fills.
 	time.Sleep(1200 * time.Millisecond)
 	coordination := flock.New(harness.cfg.AuditCatalogOptions().CoordinationPath)
 	if err := coordination.Lock(); err != nil {

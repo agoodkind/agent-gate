@@ -114,6 +114,8 @@ func (s *Server) reconcileAuditStorage(ctx context.Context, now time.Time) error
 		return wrapServerError("inspect audit storage", err)
 	}
 	if rotate {
+		s.deferredProcessor.beginRecoveryTransition(ctx)
+		defer s.deferredProcessor.endRecoveryTransition()
 		bucket, err := s.catalog.EnsureCurrent(ctx, policy, now)
 		if err != nil {
 			return wrapServerError("reconcile audit storage", err)
@@ -126,13 +128,22 @@ func (s *Server) reconcileAuditStorage(ctx context.Context, now time.Time) error
 		old := s.runtime.Swap(replacement)
 		s.runtimeMu.Unlock()
 		old.close(ctx, s.log)
+		s.deferredProcessor.service.mu.Lock()
+		s.deferredProcessor.storageChangedLocked()
+		s.deferredProcessor.service.mu.Unlock()
+		s.deferredProcessor.wakeWorkers()
 	}
-	candidates, err := s.catalog.PruneCandidates(ctx, policy, now)
+	s.deferredProcessor.cancelExpired(ctx, policy, now)
+	candidates, err := s.catalog.PruneBatchCandidates(ctx, policy, now)
 	if err != nil {
 		return wrapServerError("reconcile audit storage", err)
 	}
-	s.deferredProcessor.cancelFiles(candidates)
-	_, err = s.catalog.PruneSelected(ctx, policy, now, candidates)
+	paths := make([]string, 0, len(candidates))
+	for _, target := range candidates {
+		paths = append(paths, target.Path)
+	}
+	s.deferredProcessor.cancelFiles(paths)
+	_, err = s.catalog.PruneBatchSelected(ctx, policy, now, candidates)
 	return wrapServerError("reconcile audit storage", err)
 }
 
@@ -153,8 +164,12 @@ func (s *Server) replaceAuditSnapshot(ctx context.Context, candidate *config.Con
 		if err != nil {
 			return nil, wrapServerError("update audit retention", err)
 		}
+		if old.bucket.Path != bucket.Path {
+			s.deferredProcessor.beginRecoveryTransition(ctx)
+		}
 		replacement, err := s.snapshotForBucket(ctx, candidate, s.catalog, bucket)
 		if err != nil {
+			s.deferredProcessor.endRecoveryTransition()
 			return nil, err
 		}
 		if old.cfg.AuditStoragePolicy().Detail != candidate.AuditStoragePolicy().Detail {

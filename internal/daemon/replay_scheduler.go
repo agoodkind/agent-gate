@@ -2,11 +2,11 @@ package daemon
 
 import (
 	"context"
+	"slices"
 	"time"
 
 	"goodkind.io/agent-gate/internal/auditstorage"
 	"goodkind.io/agent-gate/internal/config"
-	"goodkind.io/agent-gate/internal/intake"
 	"goodkind.io/agent-gate/internal/logstorage"
 )
 
@@ -68,6 +68,7 @@ func (s *Server) auditScheduler(ctx context.Context) {
 	started := false
 	now := s.now()
 	reconcile := true
+	var maintenance auditMaintenance
 	for {
 		if ctx.Err() != nil {
 			return
@@ -78,7 +79,8 @@ func (s *Server) auditScheduler(ctx context.Context) {
 			}
 		}
 		if reconcile && !now.Before(retryAt) {
-			if err := s.reconcileAuditStorage(ctx, now); err != nil {
+			err := maintenance.run(ctx, s, now)
+			if err != nil && ctx.Err() == nil {
 				attempt++
 				retryAt = now.Add(auditRetryDelay(attempt))
 				s.log.WarnContext(ctx, "audit reconciliation failed; retrying", "err", err, "retry_at", retryAt)
@@ -88,13 +90,12 @@ func (s *Server) auditScheduler(ctx context.Context) {
 			}
 		}
 		reconcile = false
-		if err := s.dispatchRetainedReplay(ctx, now); err != nil && ctx.Err() == nil {
-			s.log.WarnContext(ctx, "retained audit replay scan failed", "err", err)
-		}
 		if !started {
+			_ = s.dispatchRetainedReplay(ctx, now)
 			close(s.auditStarted)
 			started = true
 		}
+		s.deferredProcessor.recoveryTick(now)
 		select {
 		case <-ctx.Done():
 			return
@@ -107,54 +108,25 @@ func (s *Server) auditScheduler(ctx context.Context) {
 }
 
 func (s *Server) dispatchRetainedReplay(ctx context.Context, now time.Time) error {
-	s.lockLifecycle()
-	defer s.lifecycleMu.Unlock()
-	snapshot := s.runtime.Load()
-	if snapshot == nil || snapshot.cfg.Unusable() || s.closing {
-		return nil
+	if err := ctx.Err(); err != nil {
+		return wrapServerError("request retained recovery", err)
 	}
-	policy := snapshot.cfg.AuditStoragePolicy()
-	readers, err := s.catalog.Read(ctx, policy.Rotation(), now)
-	if err != nil {
-		return wrapServerError("access retained audit storage", err)
-	}
-	defer func() { _ = readers.Close() }()
-	for _, handle := range readers.Handles {
-		store, err := intake.NewStore(ctx, handle.Database, policy, s.log)
-		if err != nil {
-			return wrapServerError("access retained audit storage", err)
-		}
-		full, err := dispatchDueBucket(ctx, store, s.deferredProcessor, handle.Bucket, now)
-		if err != nil {
-			return wrapServerError("access retained audit storage", err)
-		}
-		if full {
-			return nil
-		}
-	}
+	p := s.deferredProcessor
+	p.service.mu.Lock()
+	p.service.recovery.ready = true
+	p.service.recovery.historyGeneration++
+	p.service.mu.Unlock()
+	p.recoveryTick(now)
 	return nil
 }
 
-func dispatchDueBucket(ctx context.Context, store *intake.Store, processor *deferredProcessor, bucket auditstorage.Bucket, now time.Time) (bool, error) {
-	var after int64
-	for {
-		if err := ctx.Err(); err != nil {
-			return false, wrapServerError("dispatch deferred receipts", err)
-		}
-		identifiers, err := store.ListDueDeferred(ctx, now, after, replayPageLimit)
-		if err != nil {
-			return false, wrapServerError("dispatch deferred receipts", err)
-		}
-		for _, identifier := range identifiers {
-			if !processor.dispatch(bucket, identifier) {
-				return true, nil
-			}
-			after = identifier
-		}
-		if len(identifiers) < replayPageLimit {
-			return false, nil
-		}
+func (p *deferredProcessor) submit(bucket auditstorage.Bucket, receiptID int64) {
+	if !p.dispatch(bucket, receiptID) {
+		p.service.mu.Lock()
+		p.markDiscoveryLocked(bucket)
+		p.service.mu.Unlock()
 	}
+	p.wakeWorkers()
 }
 
 func (p *deferredProcessor) dispatch(bucket auditstorage.Bucket, receiptID int64) bool {
@@ -170,15 +142,15 @@ func (p *deferredProcessor) dispatch(bucket auditstorage.Bucket, receiptID int64
 	if _, exists := p.queued[key]; exists {
 		return true
 	}
-	if p.service.paused || len(p.events) >= p.service.queueLimit {
+	if p.service.paused || p.service.recovery.creditReserved || slices.Contains(p.service.excluded, bucket.Path) || len(p.events) >= p.service.queueLimit {
 		return false
 	}
 	if p.queuedBytes+size > replayDispatchBytes {
 		return false
 	}
 	select {
-	case p.events <- deferredWork{receiptID: receiptID, bucket: bucket, epoch: p.service.epoch}:
-		p.queued[key] = queuedReplay{size: size, epoch: p.service.epoch}
+	case p.events <- deferredWork{receiptID: receiptID, bucket: bucket, epoch: p.service.epoch, probe: false}:
+		p.queued[key] = queuedReplay{size: size, epoch: p.service.epoch, revisit: false, complete: false}
 		p.queuedBytes += size
 		return true
 	default:
@@ -188,31 +160,37 @@ func (p *deferredProcessor) dispatch(bucket auditstorage.Bucket, receiptID int64
 
 func (p *deferredProcessor) finishDispatch(work deferredWork) {
 	key := ReplayKey{BucketID: work.bucket.ID, ReceiptID: work.receiptID}
+	p.service.mu.Lock()
 	p.queueMu.Lock()
 	if queued, exists := p.queued[key]; exists && queued.epoch == work.epoch {
+		if queued.revisit && !queued.complete {
+			p.markDiscoveryLocked(work.bucket)
+		}
 		p.queuedBytes -= queued.size
 		delete(p.queued, key)
+		p.service.recovery.capacityBlocked = false
 	}
 	p.queueMu.Unlock()
+	p.service.mu.Unlock()
 	if p.notify != nil {
 		p.notify()
 	}
 }
 
-func (p *deferredProcessor) processDispatch(ctx context.Context, work deferredWork) {
+func (p *deferredProcessor) processDispatch(ctx context.Context, work deferredWork) bool {
 	if ctx.Err() != nil {
-		return
+		return false
 	}
 	policy := p.cfg.AuditStoragePolicy()
 	if policy.RetentionBuckets > 0 {
 		expires := work.bucket.Start.Add(time.Duration(policy.RetentionBuckets) * policy.BucketInterval)
 		remaining := expires.Sub(p.now())
 		if remaining <= 0 {
-			return
+			return false
 		}
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, remaining)
 		defer cancel()
 	}
-	p.processEvent(ctx, work)
+	return p.processEvent(ctx, work)
 }
