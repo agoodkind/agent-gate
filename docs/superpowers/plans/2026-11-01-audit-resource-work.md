@@ -90,12 +90,12 @@ Consume the existing processusage.Read and qualification fixtures. Preserve Read
 
 Consume the current Catalog.OpenWriter, newRuntimeSnapshotForBucket, runtimeSnapshot.close, and deferred processing interfaces. Keep New, Run, EvaluateHook, and StartAuditScheduler callable through their current public boundaries. New private types may change when the existing code makes another interface clearer.
 
-- [ ] Make a file owner independent of configuration snapshots and preserve its SQLite handle until all borrowed references release.
-- [ ] Maintain one W-worker service across snapshots. A job captures its file, configuration, recorder, and claim. Do not rebind a running job to another file. Task 4 adds assignment order beside its temporal consumer.
-- [ ] Preserve unchanged-storage reload and captured configuration for admitted jobs. Cancel and drain before changed effective audit detail selection accepts replacement writes. Record the exact internal interfaces produced before Task 3 begins.
-- [ ] Add real-SQLite regression coverage for shared-owner reload, two historical jobs, rotation during renewal, and cancellation cleanup. Verify default W=1 and configured W greater than 1.
-- [ ] Correct the shared analyzer prerequisite that rejects compiler-required external callback and interface method signatures. Review the narrow tooling change separately. Keep local helpers typed and preserve the rule against arbitrary empty interfaces. Validate the complete build with the supported development checkout override until that dependency merges.
-- [ ] Run the relevant daemon and storage tests, review connection accounting, and commit.
+- [x] Make a file owner independent of configuration snapshots and preserve its SQLite handle until all borrowed references release.
+- [x] Maintain one W-worker service across snapshots. A job captures its file, configuration, recorder, and claim. Do not rebind a running job to another file. Task 4 adds assignment order beside its temporal consumer.
+- [x] Preserve unchanged-storage reload and captured configuration for admitted jobs. Cancel and drain before changed effective audit detail selection accepts replacement writes. Record the exact internal interfaces produced before Task 3 begins.
+- [x] Add real-SQLite regression coverage for shared-owner reload, two historical jobs, rotation during renewal, and cancellation cleanup. Verify default W=1 and configured W greater than 1.
+- [x] Correct the shared analyzer prerequisite that rejects compiler-required external callback and interface method signatures. Review the narrow tooling change separately. Keep local helpers typed and preserve the rule against arbitrary empty interfaces. Validate the complete build with the supported development checkout override until that dependency merges.
+- [x] Run the relevant daemon and storage tests, review connection accounting, and commit.
 
 ## Task 3: Replace rediscovery with direct dispatch and finite recovery
 
