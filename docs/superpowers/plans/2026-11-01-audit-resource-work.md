@@ -74,11 +74,11 @@ Implementation responsibilities:
 
 Consume the existing processusage.Read and qualification fixtures. Preserve Read while adding ReadPID(pid int) and resident/physical-footprint fields to Snapshot when external measurement requires them. Read native units from the actual SDK and validate them before comparing results.
 
-- [ ] Add an idle case and retained-file cardinalities including 80 and 160. Fixture creation and result serialization must not count as daemon work. Do not poll history through SQLite during idle measurement.
-- [ ] Use actual storage and daemon behavior. Sparse fixtures may reduce physical fixture writes only if SQLite validity, logical file accounting, and the limitation of the fixture are verified. Do not substitute filename-only files or fabricate resource counters.
-- [ ] Capture an immutable baseline executable and results outside the repository before later runtime changes. Record the source commit, workload digest, fixture properties, metric scope, and limitations.
-- [ ] Run targeted qualification tests and inspect the artifact. It must reproduce retained-history write amplification or report the actual observation without claiming the cause disappeared.
-- [ ] Commit measurement and fixture changes. Report exact public entry points and commands for Task 9 to reuse.
+- [x] Add an idle case and retained-file cardinalities including 80 and 160. Fixture creation and result serialization must not count as daemon work. Do not poll history through SQLite during idle measurement.
+- [x] Use actual storage and daemon behavior. Sparse fixtures may reduce physical fixture writes only if SQLite validity, logical file accounting, and the limitation of the fixture are verified. Do not substitute filename-only files or fabricate resource counters.
+- [x] Capture an immutable baseline executable and results outside the repository before later runtime changes. Record the source commit, workload digest, fixture properties, metric scope, and limitations.
+- [x] Run targeted qualification tests and inspect the artifact. It must reproduce retained-history write amplification or report the actual observation without claiming the cause disappeared.
+- [x] Commit measurement and fixture changes. Report exact public entry points and commands for Task 9 to reuse.
 
 ## Task 2: Separate storage and job ownership
 
@@ -157,8 +157,8 @@ Consume Task 3 completed-file and catalog coordination behavior. Preserve offlin
 - [ ] Reuse the immutable Task 1 baseline and identical workload/fixture inputs. Extend the harness for the actual RPC entry points and resource lifetimes implemented above where initial evidence was narrower.
 - [ ] Run independent paired repetitions for idle, steady, bursts, recovery, status/history queries, cancellation, rotation, reload, and both detail profiles. Include 0, 7, 80, and 160 retained files and backlog beyond dispatch capacity.
 - [ ] Require CPU and disk improvement beyond baseline variation without latency, error-rate, throughput, or peak/settled-memory regression. Count final checkpoints and shutdown, and state connection/payload scope.
-- [ ] Make failed or missing acceptance evidence return a failing status and fail the appropriate CI job. Do not print a successful command around a failed report.
-- [ ] Run make test, make lint, and make check. Complete a fresh whole-branch review of correctness, cancellation, resource ownership, and destructive paths.
+- [ ] Make failed or missing acceptance evidence return a failing status and fail the appropriate CI job. Replace or adapt the two legacy private-package qualification files through exported boundaries while preserving their active scenarios; do not suppress their tagged staticcheck findings. Do not print a successful command around a failed report.
+- [ ] Run make test and the supported make build pipeline. The shared pipeline rejects the old make check and make lint aliases; Task 1 records those diagnostics. Complete a fresh whole-branch review of correctness, cancellation, resource ownership, and destructive paths.
 - [ ] Publish the reviewed stack as ready for review, report qualification evidence and material limits, and preserve the verified candidate for any later authorized deployment.
 
 ## Coverage and adaptation
