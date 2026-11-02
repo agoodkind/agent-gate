@@ -39,6 +39,8 @@ const configReloadDebounce = 200 * time.Millisecond
 const intakeParseFailed = "intake_parse_failed"
 
 type runtimeSnapshot struct {
+	owner              *fileOwner
+	catalog            *auditstorage.Catalog
 	bucket             auditstorage.Bucket
 	bucketHandle       *auditstorage.BucketHandle
 	cfg                *config.Config
@@ -51,37 +53,40 @@ type runtimeSnapshot struct {
 	hotEvaluate        func(context.Context, hook.EvaluationInput, *config.Config, func(string) string, string) hook.HotEvaluation
 	execRuntime        *rules.ExecRuntime
 	inferRuntime       *rules.InferRuntime
+	inference          *inferenceOwner
 }
 
 // Server implements the AgentGateD gRPC service.
 type Server struct {
 	daemonpb.UnimplementedAgentGateDServer
 
-	log            *slog.Logger
-	cfgMu          sync.RWMutex
-	runtimeMu      sync.RWMutex
-	runtime        atomic.Pointer[runtimeSnapshot]
-	configWatcher  *fsnotify.Watcher
-	configPath     string
-	hotKV          *hotkv.Store
-	inferRuntime   *rules.InferRuntime
-	lifecycleMu    sync.Mutex
-	closing        bool
-	updateCancel   context.CancelFunc
-	stopDaemon     func()
-	catalog        *auditstorage.Catalog
-	shutdown       <-chan struct{}
-	auditCancel    context.CancelFunc
-	cancel         context.CancelFunc
-	now            func() time.Time
-	auditTicks     <-chan time.Time
-	auditWake      chan struct{}
-	auditRequested bool
-	auditOnce      sync.Once
-	auditWG        sync.WaitGroup
-	auditStarted   chan struct{}
-	closeOnce      sync.Once
-	retryWait      func(context.Context, time.Duration) error
+	log               *slog.Logger
+	cfgMu             sync.RWMutex
+	runtimeMu         sync.RWMutex
+	runtime           atomic.Pointer[runtimeSnapshot]
+	configWatcher     *fsnotify.Watcher
+	configPath        string
+	hotKV             *hotkv.Store
+	deferredProcessor *deferredProcessor
+	owners            fileOwners
+	lifecycleMu       sync.Mutex
+	storageTransition chan struct{}
+	closing           bool
+	updateCancel      context.CancelFunc
+	stopDaemon        func()
+	catalog           *auditstorage.Catalog
+	shutdown          <-chan struct{}
+	auditCancel       context.CancelFunc
+	cancel            context.CancelFunc
+	now               func() time.Time
+	auditTicks        <-chan time.Time
+	auditWake         chan struct{}
+	auditRequested    bool
+	auditOnce         sync.Once
+	auditWG           sync.WaitGroup
+	auditStarted      chan struct{}
+	closeOnce         sync.Once
+	retryWait         func(context.Context, time.Duration) error
 
 	overloadLogMu       sync.Mutex
 	lastOverloadLogTime time.Time
@@ -179,7 +184,6 @@ func newServerWithStorageWait(ctx context.Context, log *slog.Logger, cfg *config
 	hook.WarnCapabilityDowngrades(ctx, log, cfg)
 
 	hotStore := hotkv.New(hotKVOptions(cfg))
-	inferRuntime := rules.NewInferRuntimeWithCache(log, hotStore)
 	lifetime, cancel := context.WithCancel(ctx)
 
 	s := &Server{
@@ -191,9 +195,11 @@ func newServerWithStorageWait(ctx context.Context, log *slog.Logger, cfg *config
 		configWatcher:                 nil,
 		configPath:                    config.Path(),
 		hotKV:                         hotStore,
-		inferRuntime:                  inferRuntime,
+		deferredProcessor:             nil,
+		owners:                        fileOwners{mu: sync.Mutex{}, files: nil},
 		closing:                       false,
 		lifecycleMu:                   sync.Mutex{},
+		storageTransition:             nil,
 		updateCancel:                  nil,
 		stopDaemon:                    nil,
 		overloadLogMu:                 sync.Mutex{},
@@ -205,18 +211,23 @@ func newServerWithStorageWait(ctx context.Context, log *slog.Logger, cfg *config
 		auditStarted:   make(chan struct{}),
 		auditRequested: false,
 	}
+	s.deferredProcessor = newDeferredProcessor(lifetime, nil, nil, cfg, nil, cfg.HookDeferredQueueLimit(), 0, log)
+	s.deferredProcessor.cfg = nil
+	s.deferredProcessor.service.server = s
+	s.deferredProcessor.notify = s.wakeAuditScheduler
 	snapshot, err := s.initializeAuditStorage(lifetime, cfg)
 	if err != nil {
 		cancel()
-		inferRuntime.Close()
+		s.deferredProcessor.Close()
 		hotStore.Close()
 		return nil, err
 	}
 	s.runtime.Store(snapshot)
+	s.deferredProcessor.configure(cfg)
 	if err := s.startConfigWatcher(lifetime); err != nil {
 		cancel()
 		snapshot.close(ctx, log)
-		inferRuntime.Close()
+		s.deferredProcessor.Close()
 		hotStore.Close()
 		return nil, err
 	}
@@ -231,23 +242,23 @@ func hotKVOptions(cfg *config.Config) hotkv.Options {
 	}
 }
 
-func newRuntimeSnapshotForBucket(ctx context.Context, cfg *config.Config, log *slog.Logger, hotStore *hotkv.Store, inferRuntime *rules.InferRuntime, handle *auditstorage.BucketHandle) (*runtimeSnapshot, error) {
+func newRuntimeSnapshotForBucket(ctx context.Context, cfg *config.Config, log *slog.Logger, hotStore *hotkv.Store, owner *fileOwner, inference *inferenceOwner) (*runtimeSnapshot, error) {
+	handle := owner.handle
 	store, err := intake.NewStore(ctx, handle.Database, cfg.AuditStoragePolicy(), log)
 	if err != nil {
 		return nil, fmt.Errorf("create intake store: %w", err)
 	}
 	intakeStore := &sqliteIntakeStore{store: store, log: log}
 
-	// Refresh the judge-level transcript settings on the daemon-owned runtime, so a
-	// config reload (which rebuilds the snapshot but reuses the runtime) picks up
-	// the new [judge] table.
-	inferRuntime.SetJudgeTranscript(
-		cfg.JudgeTranscriptEndpoint(),
-		cfg.JudgeTranscriptMaxTokens(),
-		cfg.JudgeTranscriptTokenModel(),
-		cfg.JudgeTranscriptTimeout(),
-		cfg.JudgeTranscriptOnError(),
-	)
+	if inference == nil {
+		inference = &inferenceOwner{runtime: rules.NewInferRuntimeWithCache(log, hotStore), references: atomic.Int64{}}
+		inference.runtime.SetJudgeTranscript(
+			cfg.JudgeTranscriptEndpoint(), cfg.JudgeTranscriptMaxTokens(),
+			cfg.JudgeTranscriptTokenModel(), cfg.JudgeTranscriptTimeout(),
+			cfg.JudgeTranscriptOnError(),
+		)
+	}
+	inference.references.Add(1)
 
 	eventLogger, err := audit.NewEventLoggerWithOptions(ctx, cfg, log, audit.LoggerOptions{
 		QueueLimit:    0,
@@ -257,27 +268,13 @@ func newRuntimeSnapshotForBucket(ctx context.Context, cfg *config.Config, log *s
 		SharedDB:      intakeStore.Handle(),
 	})
 	if err != nil {
+		inference.release()
 		if log != nil {
 			log.WarnContext(ctx, "create event logger failed", "err", err)
 		}
 		return nil, fmt.Errorf("create event logger: %w", err)
 	}
 
-	var sink audit.Sink
-	if eventLogger.Enabled() {
-		sink = audit.NewLocalSink(eventLogger)
-	}
-	deferredProcessor := newDeferredProcessor(
-		ctx,
-		intakeStore,
-		sink,
-		cfg,
-		inferRuntime,
-		cfg.HookDeferredQueueLimit(),
-		cfg.HookDeferredWorkers(),
-		log,
-	)
-	deferredProcessor.evaluationRecorder = intakeStore.Evaluations()
 	// The detached-validator deadline is pushed onto the runtime here rather
 	// than read from config at the call site, because that call site is a retry
 	// loop and would otherwise reload and recompile the config once per attempt.
@@ -285,19 +282,23 @@ func newRuntimeSnapshotForBucket(ctx context.Context, cfg *config.Config, log *s
 	execRuntime := rules.NewExecRuntimeWithCache(nil, log, hotStore)
 	execRuntime.SetBackgroundTimeout(cfg.ExecBackgroundTimeout())
 
-	return &runtimeSnapshot{
-		bucket: handle.Bucket, bucketHandle: handle,
+	snapshot := &runtimeSnapshot{
+		owner:   owner,
+		catalog: nil,
+		bucket:  handle.Bucket, bucketHandle: handle,
 		cfg:                cfg,
 		eventLogger:        eventLogger,
 		intakeStore:        intakeStore,
 		evaluationRecorder: intakeStore.Evaluations(),
-		deferredProcessor:  deferredProcessor,
+		deferredProcessor:  nil,
 		evaluateSlots:      make(chan struct{}, cfg.HookHotConcurrency()),
 		evaluateQueueWait:  cfg.HookHotQueueWait(),
 		hotEvaluate:        defaultHotEvaluate,
 		execRuntime:        execRuntime,
-		inferRuntime:       inferRuntime,
-	}, nil
+		inferRuntime:       inference.runtime,
+		inference:          inference,
+	}
+	return snapshot, nil
 }
 
 func defaultHotEvaluate(
@@ -314,9 +315,6 @@ func (s *runtimeSnapshot) close(ctx context.Context, log *slog.Logger) {
 	if s == nil {
 		return
 	}
-	if s.deferredProcessor != nil {
-		s.deferredProcessor.Close()
-	}
 	if s.eventLogger != nil {
 		drainContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
@@ -324,8 +322,11 @@ func (s *runtimeSnapshot) close(ctx context.Context, log *slog.Logger) {
 			log.WarnContext(ctx, "audit logger close failed", "err", err)
 		}
 	}
-	if s.bucketHandle != nil {
-		if err := s.bucketHandle.Close(); err != nil && log != nil {
+	if s.inference != nil {
+		s.inference.release()
+	}
+	if s.owner != nil {
+		if err := s.owner.release(); err != nil && log != nil {
 			log.WarnContext(ctx, "audit bucket close failed", "err", err)
 		}
 	}
@@ -420,7 +421,7 @@ func resetTimer(timer *time.Timer, duration time.Duration) {
 }
 
 func (s *Server) reloadConfig(ctx context.Context) error {
-	s.lifecycleMu.Lock()
+	s.lockLifecycle()
 	defer s.lifecycleMu.Unlock()
 	if s.closing {
 		return nil
@@ -488,6 +489,7 @@ func (s *Server) reloadConfig(ctx context.Context) error {
 	s.runtimeMu.Lock()
 	oldSnapshot := s.runtime.Swap(newSnapshot)
 	s.runtimeMu.Unlock()
+	s.deferredProcessor.configure(candidate)
 	updateCancel := s.updateCancel
 	stopDaemon := s.stopDaemon
 	auditRequested := s.auditRequested

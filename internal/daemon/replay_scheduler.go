@@ -2,11 +2,8 @@ package daemon
 
 import (
 	"context"
-	"fmt"
-	"slices"
 	"time"
 
-	"goodkind.io/agent-gate/internal/audit"
 	"goodkind.io/agent-gate/internal/auditstorage"
 	"goodkind.io/agent-gate/internal/config"
 	"goodkind.io/agent-gate/internal/intake"
@@ -110,7 +107,7 @@ func (s *Server) auditScheduler(ctx context.Context) {
 }
 
 func (s *Server) dispatchRetainedReplay(ctx context.Context, now time.Time) error {
-	s.lifecycleMu.Lock()
+	s.lockLifecycle()
 	defer s.lifecycleMu.Unlock()
 	snapshot := s.runtime.Load()
 	if snapshot == nil || snapshot.cfg.Unusable() || s.closing {
@@ -127,7 +124,7 @@ func (s *Server) dispatchRetainedReplay(ctx context.Context, now time.Time) erro
 		if err != nil {
 			return wrapServerError("access retained audit storage", err)
 		}
-		full, err := dispatchDueBucket(ctx, store, snapshot.deferredProcessor, handle.Bucket, now)
+		full, err := dispatchDueBucket(ctx, store, s.deferredProcessor, handle.Bucket, now)
 		if err != nil {
 			return wrapServerError("access retained audit storage", err)
 		}
@@ -163,6 +160,8 @@ func dispatchDueBucket(ctx context.Context, store *intake.Store, processor *defe
 func (p *deferredProcessor) dispatch(bucket auditstorage.Bucket, receiptID int64) bool {
 	key := ReplayKey{BucketID: bucket.ID, ReceiptID: receiptID}
 	size := replayMetadataBytes + len(bucket.ID) + len(bucket.Path)
+	p.service.mu.Lock()
+	defer p.service.mu.Unlock()
 	p.queueMu.Lock()
 	defer p.queueMu.Unlock()
 	if p.stopping.Load() {
@@ -171,12 +170,15 @@ func (p *deferredProcessor) dispatch(bucket auditstorage.Bucket, receiptID int64
 	if _, exists := p.queued[key]; exists {
 		return true
 	}
+	if p.service.paused || len(p.events) >= p.service.queueLimit {
+		return false
+	}
 	if p.queuedBytes+size > replayDispatchBytes {
 		return false
 	}
 	select {
-	case p.events <- deferredWork{receiptID: receiptID, bucket: bucket}:
-		p.queued[key] = queuedReplay{path: bucket.Path, size: size}
+	case p.events <- deferredWork{receiptID: receiptID, bucket: bucket, epoch: p.service.epoch}:
+		p.queued[key] = queuedReplay{size: size, epoch: p.service.epoch}
 		p.queuedBytes += size
 		return true
 	default:
@@ -187,8 +189,10 @@ func (p *deferredProcessor) dispatch(bucket auditstorage.Bucket, receiptID int64
 func (p *deferredProcessor) finishDispatch(work deferredWork) {
 	key := ReplayKey{BucketID: work.bucket.ID, ReceiptID: work.receiptID}
 	p.queueMu.Lock()
-	p.queuedBytes -= p.queued[key].size
-	delete(p.queued, key)
+	if queued, exists := p.queued[key]; exists && queued.epoch == work.epoch {
+		p.queuedBytes -= queued.size
+		delete(p.queued, key)
+	}
 	p.queueMu.Unlock()
 	if p.notify != nil {
 		p.notify()
@@ -196,7 +200,6 @@ func (p *deferredProcessor) finishDispatch(work deferredWork) {
 }
 
 func (p *deferredProcessor) processDispatch(ctx context.Context, work deferredWork) {
-	defer p.finishDispatch(work)
 	if ctx.Err() != nil {
 		return
 	}
@@ -211,54 +214,5 @@ func (p *deferredProcessor) processDispatch(ctx context.Context, work deferredWo
 		ctx, cancel = context.WithTimeout(ctx, remaining)
 		defer cancel()
 	}
-	if work.bucket.ID == p.bucket.ID {
-		p.processEvent(ctx, work)
-		return
-	}
-	if err := p.processRetained(ctx, work); err != nil && ctx.Err() == nil {
-		p.log.WarnContext(ctx, "process retained audit receipt failed", "bucket", work.bucket.ID, "receipt_id", work.receiptID, "err", err)
-	}
-}
-
-func (p *deferredProcessor) referencesFiles(paths []string) bool {
-	p.queueMu.Lock()
-	defer p.queueMu.Unlock()
-	for _, work := range p.queued {
-		if slices.Contains(paths, work.path) {
-			return true
-		}
-	}
-	return false
-}
-
-func (p *deferredProcessor) processRetained(ctx context.Context, work deferredWork) error {
-	handle, err := p.catalog.OpenWriter(ctx, work.bucket)
-	if err != nil {
-		return wrapServerError("access retained audit storage", err)
-	}
-	defer func() { _ = handle.Close() }()
-	store, err := intake.NewStore(ctx, handle.Database, p.cfg.AuditStoragePolicy(), p.log)
-	if err != nil {
-		return wrapServerError("access retained audit storage", err)
-	}
-	logger, err := audit.NewEventLoggerWithOptions(ctx, p.cfg, p.log, audit.LoggerOptions{QueueLimit: 0, BatchMaxItems: 0, BatchMaxBytes: 0, QueueMaxBytes: 0, SharedDB: handle.Database})
-	if err != nil {
-		p.log.WarnContext(ctx, "create retained audit logger failed", "err", err)
-		return fmt.Errorf("create retained audit logger: %w", err)
-	}
-	defer func() {
-		closeContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-		defer cancel()
-		if err := logger.CloseContext(closeContext); err != nil {
-			p.log.WarnContext(ctx, "close retained audit logger failed", "err", err)
-		}
-	}()
-	adapter := &sqliteIntakeStore{store: store, log: p.log}
-	processor := newDeferredProcessor(ctx, adapter, audit.NewLocalSink(logger), p.cfg, p.inferRuntime, 1, 0, p.log)
-	processor.evaluationRecorder = adapter.Evaluations()
-	processor.bucket = work.bucket
-	processor.now = p.now
-	defer processor.Close()
-	processor.processEvent(ctx, work)
-	return nil
+	p.processEvent(ctx, work)
 }

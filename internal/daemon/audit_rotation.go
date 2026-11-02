@@ -81,23 +81,25 @@ func (s *Server) initializeAuditStorage(ctx context.Context, cfg *config.Config)
 }
 
 func (s *Server) snapshotForBucket(ctx context.Context, cfg *config.Config, catalog *auditstorage.Catalog, bucket auditstorage.Bucket) (*runtimeSnapshot, error) {
-	handle, err := catalog.OpenWriter(ctx, bucket)
+	owner, err := s.owners.borrow(ctx, catalog, bucket)
 	if err != nil {
 		return nil, wrapServerError("prepare audit storage", err)
 	}
-	snapshot, err := newRuntimeSnapshotForBucket(context.WithoutCancel(ctx), cfg, s.log, s.hotKV, s.inferRuntime, handle)
-	if err != nil {
-		return nil, wrapServerError("create runtime for audit bucket", errors.Join(err, handle.Close()))
+	var inference *inferenceOwner
+	if current := s.runtime.Load(); current != nil && current.cfg == cfg {
+		inference = current.inference
 	}
-	snapshot.deferredProcessor.catalog = catalog
-	snapshot.deferredProcessor.bucket = bucket
-	snapshot.deferredProcessor.now = s.now
-	snapshot.deferredProcessor.notify = s.wakeAuditScheduler
+	snapshot, err := newRuntimeSnapshotForBucket(context.WithoutCancel(ctx), cfg, s.log, s.hotKV, owner, inference)
+	if err != nil {
+		return nil, wrapServerError("create runtime for audit bucket", errors.Join(err, owner.release()))
+	}
+	snapshot.catalog = catalog
+	snapshot.deferredProcessor = s.deferredProcessor
 	return snapshot, nil
 }
 
 func (s *Server) reconcileAuditStorage(ctx context.Context, now time.Time) error {
-	s.lifecycleMu.Lock()
+	s.lockLifecycle()
 	defer s.lifecycleMu.Unlock()
 	if err := ctx.Err(); err != nil {
 		return wrapServerError("reconcile audit storage", err)
@@ -129,18 +131,7 @@ func (s *Server) reconcileAuditStorage(ctx context.Context, now time.Time) error
 	if err != nil {
 		return wrapServerError("reconcile audit storage", err)
 	}
-	current = s.runtime.Load()
-	if current.deferredProcessor.referencesFiles(candidates) {
-		replacement, err := s.snapshotForBucket(ctx, current.cfg, s.catalog, current.bucket)
-		if err != nil {
-			return wrapServerError("replace retained audit workers", err)
-		}
-		s.runtimeMu.Lock()
-		old := s.runtime.Swap(replacement)
-		s.runtimeMu.Unlock()
-		// PruneCandidates releases the catalog lock before workers stop.
-		old.close(ctx, s.log)
-	}
+	s.deferredProcessor.cancelFiles(candidates)
 	_, err = s.catalog.PruneSelected(ctx, policy, now, candidates)
 	return wrapServerError("reconcile audit storage", err)
 }
@@ -162,12 +153,17 @@ func (s *Server) replaceAuditSnapshot(ctx context.Context, candidate *config.Con
 		if err != nil {
 			return nil, wrapServerError("update audit retention", err)
 		}
-		return s.snapshotForBucket(ctx, candidate, s.catalog, bucket)
+		replacement, err := s.snapshotForBucket(ctx, candidate, s.catalog, bucket)
+		if err != nil {
+			return nil, err
+		}
+		if old.cfg.AuditStoragePolicy().Detail != candidate.AuditStoragePolicy().Detail {
+			s.pauseDeferredWork()
+		}
+		return replacement, nil
 	}
 	// Admission stops before old borrowers close. Failed cuts keep history hidden.
-	if old != nil && old.deferredProcessor != nil {
-		old.deferredProcessor.Close()
-	}
+	s.pauseDeferredWork()
 	s.runtimeMu.Lock()
 	old = s.runtime.Swap(nil)
 	s.runtimeMu.Unlock()

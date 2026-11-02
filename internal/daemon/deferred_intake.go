@@ -22,6 +22,7 @@ import (
 )
 
 type deferredProcessor struct {
+	service            *deferredService
 	events             chan deferredWork
 	store              intakeStore
 	sink               audit.Sink
@@ -36,7 +37,6 @@ type deferredProcessor struct {
 	claimLease         time.Duration
 	claimRenewInterval time.Duration
 	cancel             context.CancelFunc
-	catalog            *auditstorage.Catalog
 	bucket             auditstorage.Bucket
 	now                func() time.Time
 	notify             func()
@@ -50,11 +50,12 @@ var deferredProcessorSequence atomic.Uint64
 type deferredWork struct {
 	bucket    auditstorage.Bucket
 	receiptID int64
+	epoch     uint64
 }
 
 type queuedReplay struct {
-	path string
-	size int
+	size  int
+	epoch uint64
 }
 
 func newDeferredProcessor(
@@ -76,6 +77,11 @@ func newDeferredProcessor(
 	ctx, cancel := context.WithCancel(ctx)
 
 	processor := &deferredProcessor{
+		service: &deferredService{
+			mu: sync.Mutex{}, wake: make(chan struct{}, 1), workers: workers,
+			queueLimit: queueLimit, paused: false, next: 0, epoch: 0,
+			active: make(map[uint64]activeDeferredWork), jobs: sync.WaitGroup{}, server: nil,
+		},
 		events:             make(chan deferredWork, queueLimit),
 		store:              store,
 		sink:               sink,
@@ -92,20 +98,11 @@ func newDeferredProcessor(
 		claimLease:         cfg.DeferredClaimLease(),
 		claimRenewInterval: cfg.DeferredClaimRenewInterval(),
 		cancel:             cancel,
-		catalog:            nil, bucket: auditstorage.Bucket{ID: "", Path: "", Start: time.Time{}}, now: time.Now, notify: nil,
+		bucket:             auditstorage.Bucket{ID: "", Path: "", Start: time.Time{}}, now: time.Now, notify: nil,
 		queueMu: sync.Mutex{}, queued: make(map[ReplayKey]queuedReplay), queuedBytes: 0,
 	}
 
-	for range workers {
-		processor.wg.Go(func() {
-			defer func() {
-				if recovered := recover(); recovered != nil && processor.log != nil {
-					processor.log.ErrorContext(ctx, "deferred intake worker panic recovered", "err", recovered)
-				}
-			}()
-			processor.worker(ctx)
-		})
-	}
+	processor.wg.Go(func() { processor.serve(ctx) })
 	return processor
 }
 
@@ -115,6 +112,7 @@ func (p *deferredProcessor) Close() {
 	}
 	if p.stopping.Swap(true) {
 		p.wg.Wait()
+		p.service.jobs.Wait()
 		return
 	}
 	close(p.done)
@@ -122,19 +120,7 @@ func (p *deferredProcessor) Close() {
 		p.cancel()
 	}
 	p.wg.Wait()
-}
-
-func (p *deferredProcessor) worker(ctx context.Context) {
-	for {
-		select {
-		case work := <-p.events:
-			p.processDispatch(ctx, work)
-		case <-p.done:
-			return
-		case <-ctx.Done():
-			return
-		}
-	}
+	p.service.jobs.Wait()
 }
 
 func (p *deferredProcessor) processEvent(ctx context.Context, work deferredWork) {

@@ -431,8 +431,8 @@ func TestRuntimeSnapshotsShareInferenceRuntime(t *testing.T) {
 	}
 	defer server.Close()
 	first := server.runtime.Load()
-	if first == nil || first.inferRuntime != server.inferRuntime {
-		t.Fatal("initial snapshot does not use the server inference runtime")
+	if first == nil || first.inferRuntime == nil {
+		t.Fatal("initial snapshot does not create an inference runtime")
 	}
 	second, err := server.snapshotForBucket(context.Background(), cfg, server.catalog, first.bucket)
 	if err != nil {
@@ -440,7 +440,7 @@ func TestRuntimeSnapshotsShareInferenceRuntime(t *testing.T) {
 	}
 	defer second.close(context.Background(), newDiscardLogger())
 	if second.inferRuntime != first.inferRuntime {
-		t.Fatal("replacement snapshot did not preserve inference channels")
+		t.Fatal("rotation did not preserve inference channels for unchanged configuration")
 	}
 }
 
@@ -2100,6 +2100,9 @@ func replaceDeferredProcessorForTest(t testing.TB, srv *Server, queueLimit int, 
 		workers,
 		newDiscardLogger(),
 	)
+	srv.deferredProcessor = snapshot.deferredProcessor
+	snapshot.deferredProcessor.service.server = srv
+	snapshot.deferredProcessor.notify = srv.wakeAuditScheduler
 }
 
 func fillDeferredProcessorQueue(t testing.TB, srv *Server) {

@@ -56,6 +56,7 @@ path = "` + databasePath + `"
 	)
 	controlledProcessor.evaluationRecorder = snapshot.evaluationRecorder
 	snapshot.deferredProcessor = controlledProcessor
+	server.deferredProcessor = controlledProcessor
 
 	request := blockingLedgerRequest(t)
 	if _, err := server.EvaluateHook(t.Context(), request); err != nil {
@@ -431,23 +432,9 @@ func TestEvaluateHookQueueSaturationAfterEvaluationDoesNotChangeVerdict(t *testi
 		mu: sync.Mutex{}, records: nil, err: nil, started: nil, release: nil,
 	}
 	snapshot.evaluationRecorder = recorder
-	originalProcessor := snapshot.deferredProcessor
-	saturatedProcessor := newDeferredProcessor(
-		context.Background(),
-		snapshot.intakeStore,
-		nil,
-		snapshot.cfg,
-		snapshot.inferRuntime,
-		1,
-		0,
-		newDiscardLogger(),
-	)
+	replaceDeferredProcessorForTest(t, server, 1, 0)
+	saturatedProcessor := server.deferredProcessor
 	saturatedProcessor.events <- deferredWork{}
-	snapshot.deferredProcessor = saturatedProcessor
-	defer func() {
-		saturatedProcessor.Close()
-		snapshot.deferredProcessor = originalProcessor
-	}()
 	response, err := server.EvaluateHook(context.Background(), blockingLedgerRequest(t))
 	if err != nil {
 		t.Fatalf("EvaluateHook: %v", err)
