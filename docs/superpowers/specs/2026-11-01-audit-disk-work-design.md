@@ -81,6 +81,8 @@ Keep the existing shared current-file connection for intake, evaluations, and au
 
 H is the existing configured hot-event concurrency, with default max(4, 4 times GOMAXPROCS). W is the configured deferred-worker count, currently 1 by default. Use one daemon-owned set of W workers across snapshots. Configuration changes must not temporarily create two active worker sets. Reducing W stops new dispatch until existing jobs finish or complete the cancellation required by the configuration change.
 
+During a worker reduction, existing admitted jobs retain their owners until completion. Use the greater of the replacement target and the remaining admitted job count as W for resource accounting during that interval.
+
 Jobs in the same file share one serialized owner. Distinct historical files used by active jobs need at most W owners. Recovery and finalization probes consume an existing worker slot. Queued identifiers do not open a database or retain its handle.
 
 Storage bounds:
@@ -141,7 +143,9 @@ Ordinary rotation stops assigning new receipts to the old file and publishes a p
 
 Use the existing monotonic segment sequence to allocate a fresh physical file when a time or size boundary requires a new current assignment. Do not reactivate a completed physical file after a clock adjustment. Preserve existing elapsed-time retention rules.
 
-An unchanged-storage reload reuses the current owner. Preparation must not change shared inference or validator settings that admitted old jobs still use. Capture configuration-dependent options per job or cancel and join the affected jobs before changing those settings. Retire old configuration work through explicit cancellation and cleanup, then reschedule its durable pending records under the replacement configuration. Scheduler generations survive this operation.
+An unchanged-storage reload reuses the current owner. Preparation must not change shared inference or validator settings that admitted old jobs still use. Jobs capture immutable configuration-dependent options. Admitted jobs finish with those options when the effective audit detail selection remains unchanged. A worker reduction stops new admission above the replacement target and lets admitted jobs finish.
+
+A change to the effective audit detail selection, including explicit overrides, cancels and joins affected jobs before replacement stores accept writes. Pending receipts resume under the replacement selection. Existing recorded detail remains unchanged. Scheduler generations survive this operation.
 
 Pruning, storage-family replacement, and shutdown prevent new jobs for affected owners before cancellation. Join renewal goroutines, complete bounded retry cleanup, drain or retire queued audit work, close SQLite, then release file claims. A failed cleanup remains visible and does not justify an unbounded retry loop.
 

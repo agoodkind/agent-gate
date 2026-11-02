@@ -91,9 +91,10 @@ Consume the existing processusage.Read and qualification fixtures. Preserve Read
 Consume the current Catalog.OpenWriter, newRuntimeSnapshotForBucket, runtimeSnapshot.close, and deferred processing interfaces. Keep New, Run, EvaluateHook, and StartAuditScheduler callable through their current public boundaries. New private types may change when the existing code makes another interface clearer.
 
 - [ ] Make a file owner independent of configuration snapshots and preserve its SQLite handle until all borrowed references release.
-- [ ] Maintain one W-worker service across snapshots. A job captures its file, configuration, recorder, claim, and assignment order. Do not rebind a running job to another file.
-- [ ] Preserve unchanged-storage reload and define current-file assignment generation for Task 4. Record the exact internal interfaces produced before Task 3 begins.
+- [ ] Maintain one W-worker service across snapshots. A job captures its file, configuration, recorder, and claim. Do not rebind a running job to another file. Task 4 adds assignment order beside its temporal consumer.
+- [ ] Preserve unchanged-storage reload and captured configuration for admitted jobs. Cancel and drain before changed effective audit detail selection accepts replacement writes. Record the exact internal interfaces produced before Task 3 begins.
 - [ ] Add real-SQLite regression coverage for shared-owner reload, two historical jobs, rotation during renewal, and cancellation cleanup. Verify default W=1 and configured W greater than 1.
+- [ ] Correct the shared analyzer prerequisite that rejects compiler-required external callback and interface method signatures. Review the narrow tooling change separately. Keep local helpers typed and preserve the rule against arbitrary empty interfaces. Validate the complete build with the supported development checkout override until that dependency merges.
 - [ ] Run the relevant daemon and storage tests, review connection accounting, and commit.
 
 ## Task 3: Replace rediscovery with direct dispatch and finite recovery
@@ -109,10 +110,10 @@ Consume the Task 2 owner and worker interfaces. Preserve the existing claim fenc
 
 ## Task 4: Bound cache state without stale temporal facts
 
-Consume the Task 2 assignment order. Keep database receipt identity separate from process-local temporal order.
+Add current-file assignment order to the Task 2 snapshot and job interfaces together with its temporal consumer. Keep database receipt identity separate from process-local temporal order.
 
 - [ ] Add a validated aggregate cache byte limit with proposed default 64 MiB, preserving the existing entry and per-value controls. Account for keys and retained values before allocation.
-- [ ] Compare temporal updates using assignment generation and receipt ID. Keep unchanged-file reload order and reject older updates from retired assignments.
+- [ ] Allocate assignment generation during current-file publication and capture it before jobs release runtime synchronization. Compare temporal updates using generation and receipt ID. Keep unchanged-file reload order and reject older updates from retired assignments. Invalidating resets allocate a new generation even when the path remains unchanged.
 - [ ] Implement atomic temporal publication and eviction fencing. Use bounded scalar state; expose unavailable context under pressure instead of restoring stale values or retaining misleading old values.
 - [ ] Add public-boundary regressions for actual size rotation within one chat, eviction followed by a delayed older update, oversized values, and unrelated existing temporal keys.
 - [ ] Preserve public KV semantics for successful requests. Expose a bounded list/read interface for Task 5 and record its exact signature and overflow error.
