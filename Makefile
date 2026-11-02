@@ -46,7 +46,7 @@ GO_MK_WORKSPACE_USE := . third_party/gksyntax
 # the release binary is self-contained. Set before include bootstrap.mk.
 GO_MK_CGO_DEPS := pcre2
 
-include bootstrap.mk
+include scripts/prepare-analyzer.mk
 
 .PHONY: gksyntax-submodule
 gksyntax-submodule:
