@@ -5,7 +5,6 @@ import (
 	"slices"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"goodkind.io/agent-gate/internal/audit"
 	"goodkind.io/agent-gate/internal/config"
@@ -33,10 +32,11 @@ type deferredService struct {
 func (p *deferredProcessor) configure(cfg *config.Config) {
 	p.service.mu.Lock()
 	p.queueMu.Lock()
-	if cfg.HookDeferredQueueLimit() > cap(p.events) {
-		events := make(chan deferredWork, cfg.HookDeferredQueueLimit())
-		for len(p.events) > 0 {
-			events <- <-p.events
+	capacity := deferredQueueCapacity(cfg.HookDeferredQueueLimit())
+	if capacity > cap(p.events) {
+		events := make(chan deferredWork, capacity)
+		for _, work := range drainDeferredWork(p.events) {
+			events <- work
 		}
 		p.events = events
 	}
@@ -46,6 +46,10 @@ func (p *deferredProcessor) configure(cfg *config.Config) {
 	p.service.paused = false
 	p.service.mu.Unlock()
 	p.wakeWorkers()
+}
+
+func deferredQueueCapacity(limit int) int {
+	return min(limit, replayDispatchBytes/replayMetadataBytes)
 }
 
 func (p *deferredProcessor) wakeWorkers() {
@@ -162,8 +166,7 @@ func (p *deferredProcessor) cancelFiles(paths []string) {
 	p.queueMu.Lock()
 	defer p.queueMu.Unlock()
 	remaining := make([]deferredWork, 0, len(p.events))
-	for len(p.events) > 0 {
-		work := <-p.events
+	for _, work := range drainDeferredWork(p.events) {
 		key := ReplayKey{BucketID: work.bucket.ID, ReceiptID: work.receiptID}
 		queued := p.queued[key]
 		if slices.Contains(paths, work.bucket.Path) {
@@ -178,6 +181,18 @@ func (p *deferredProcessor) cancelFiles(paths []string) {
 	}
 	for _, work := range remaining {
 		p.events <- work
+	}
+}
+
+func drainDeferredWork(events <-chan deferredWork) []deferredWork {
+	work := make([]deferredWork, 0, len(events))
+	for {
+		select {
+		case next := <-events:
+			work = append(work, next)
+		default:
+			return work
+		}
 	}
 }
 
@@ -229,34 +244,15 @@ func prepareDeferredJob(ctx context.Context, s *Server, work deferredWork) (*def
 		store = adapter
 		recorder = adapter.Evaluations()
 	}
-	var sink audit.Sink
-	logger, err := audit.NewEventLoggerWithOptions(ctx, cfg, s.log, audit.LoggerOptions{
-		QueueLimit: 0, BatchMaxItems: 0, BatchMaxBytes: 0, QueueMaxBytes: 0, SharedDB: owner.handle.Database,
-	})
-	if err != nil {
-		release()
-		return nil, nil, wrapServerError("prepare deferred audit logger", err)
-	}
-	if logger.Enabled() {
-		sink = audit.NewLocalSink(logger)
-	}
-	releaseJob := func() {
-		closeContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-		defer cancel()
-		if err := logger.CloseContext(closeContext); err != nil {
-			s.log.WarnContext(closeContext, "close deferred audit logger failed", "err", err)
-		}
-		release()
-	}
 	return &deferredProcessor{
 		service: nil, events: nil, done: nil, wg: sync.WaitGroup{},
 		stopping: atomic.Bool{}, cancel: nil,
 		notify: nil, queueMu: sync.Mutex{}, queued: nil, queuedBytes: 0,
-		store: store, evaluationRecorder: recorder, sink: sink,
+		store: store, evaluationRecorder: recorder, sink: audit.NewNormalizer(cfg),
 		cfg: cfg, inferRuntime: inference.runtime, log: s.log,
 		claimOwner:         s.deferredProcessor.claimOwner,
 		claimLease:         cfg.DeferredClaimLease(),
 		claimRenewInterval: cfg.DeferredClaimRenewInterval(),
 		bucket:             work.bucket, now: s.now,
-	}, releaseJob, nil
+	}, release, nil
 }

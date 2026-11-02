@@ -91,6 +91,8 @@ type ownershipHarness struct {
 	maxSize       string
 	profile       string
 	detail        string
+	auditEnabled  bool
+	queueLimit    int
 }
 
 func newOwnershipHarness(t *testing.T, workers int, seedHistory bool, unusable bool) *ownershipHarness {
@@ -108,7 +110,7 @@ func newOwnershipHarness(t *testing.T, workers int, seedHistory bool, unusable b
 	inferencepb.RegisterInferenceServer(protocol, service)
 	go func() { _ = protocol.Serve(listener) }()
 	t.Cleanup(protocol.Stop)
-	harness := &ownershipHarness{service: service, endpoint: listener.Addr().String(), base: filepath.Join(root, "audit.db"), reloaded: make(chan struct{}, 8), cleanupFailed: make(chan struct{}, 1), interval: "24h", maxSize: "64MiB", profile: "full"}
+	harness := &ownershipHarness{service: service, endpoint: listener.Addr().String(), base: filepath.Join(root, "audit.db"), reloaded: make(chan struct{}, 8), cleanupFailed: make(chan struct{}, 1), interval: "24h", maxSize: "64MiB", profile: "full", auditEnabled: true, queueLimit: 8}
 	harness.writeConfig(t, workers, "original")
 	harness.cfg, err = config.LoadExisting(config.Path())
 	if err != nil {
@@ -189,7 +191,7 @@ func (harness *ownershipHarness) writeConfig(t *testing.T, workers int, message 
 	if workers > 0 {
 		workersSetting = "deferred_workers = " + strconv.Itoa(workers)
 	}
-	body := strings.NewReplacer("{{PATH}}", strconv.Quote(harness.base), "{{ENDPOINT}}", strconv.Quote(harness.endpoint), "{{WORKERS}}", workersSetting, "{{MESSAGE}}", message, "{{INTERVAL}}", harness.interval, "{{MAX_SIZE}}", harness.maxSize, "{{PROFILE}}", harness.profile, "{{DETAIL}}", harness.detail).Replace(ownershipFixture(t, "ownership.toml"))
+	body := strings.NewReplacer("{{PATH}}", strconv.Quote(harness.base), "{{ENDPOINT}}", strconv.Quote(harness.endpoint), "{{WORKERS}}", workersSetting, "{{MESSAGE}}", message, "{{INTERVAL}}", harness.interval, "{{MAX_SIZE}}", harness.maxSize, "{{PROFILE}}", harness.profile, "{{DETAIL}}", harness.detail, "{{AUDIT_ENABLED}}", strconv.FormatBool(harness.auditEnabled), "{{QUEUE_LIMIT}}", strconv.Itoa(harness.queueLimit)).Replace(ownershipFixture(t, "ownership.toml"))
 	if err := os.MkdirAll(filepath.Dir(config.Path()), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -490,6 +492,10 @@ func TestStorageOwnershipRetentionCancelsOnlySelectedFile(t *testing.T) {
 	harness := newOwnershipHarness(t, 2, true, false)
 	first := harness.nextCall(t)
 	second := harness.nextCall(t)
+	const queuedCurrent = 6
+	for index := range queuedCurrent {
+		harness.accept(t, fmt.Sprintf("retained-current-%d", index))
+	}
 	oldestCall := first
 	retainedCall := second
 	if strings.Contains(second.input, "historical-2") {
@@ -532,6 +538,10 @@ func TestStorageOwnershipRetentionCancelsOnlySelectedFile(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("retention did not cancel the selected file")
 	}
+	for range queuedCurrent {
+		current := harness.nextCall(t)
+		close(current.release)
+	}
 	ownershipWait(t, func() bool {
 		_, err := os.Stat(oldest.Path)
 		return os.IsNotExist(err)
@@ -542,7 +552,10 @@ func TestStorageOwnershipRetentionCancelsOnlySelectedFile(t *testing.T) {
 	default:
 	}
 	close(retainedCall.release)
-	ownershipWait(t, func() bool { return ownershipOutcomes(t, harness.cfg) == [4]int{1, 1, 1, 1} })
+	const completed = queuedCurrent + 1
+	ownershipWait(t, func() bool {
+		return ownershipOutcomes(t, harness.cfg) == [4]int{completed, completed, completed, completed}
+	})
 }
 
 func TestStorageOwnershipContentSelectionReloadReplaysWithReplacementPolicy(t *testing.T) {
@@ -618,6 +631,7 @@ func TestStorageOwnershipReloadCloseReleasesTransitionAfterContendedCleanup(t *t
 	select {
 	case <-closed:
 	case <-time.After(10 * time.Second):
+		dumpOwnershipGoroutines(t)
 		t.Fatal("shutdown did not finish after the cleanup deadline")
 	}
 	select {

@@ -1,5 +1,5 @@
 [audit]
-enabled = true
+enabled = {{AUDIT_ENABLED}}
 [audit.outputs.sqlite]
 path = {{PATH}}
 [audit.storage]
@@ -9,7 +9,7 @@ bucket_interval = "{{INTERVAL}}"
 retention_buckets = 7
 {{DETAIL}}
 [performance.hook]
-deferred_queue_limit = 8
+deferred_queue_limit = {{QUEUE_LIMIT}}
 {{WORKERS}}
 [performance.intervals]
 deferred_claim_lease_ms = 200

@@ -33,8 +33,17 @@ func (s *Store) ListDueDeferred(ctx context.Context, now time.Time, afterReceipt
 }
 
 // ScheduleDeferredRetry releases only the live matching attempt at its next due time.
-func (s *Store) ScheduleDeferredRetry(ctx context.Context, claim DeferredClaim, nextAttempt time.Time) error {
-	result, err := s.db.ExecContext(ctx, scheduleDeferredRetrySQL, formatDeferredTime(nextAttempt), claim.ReceiptID, claim.EventID, claim.Owner, claim.Attempt, formatDeferredTime(intakeNow()))
+// It attempts the update without waiting for another writer.
+func (s *Store) ScheduleDeferredRetry(ctx context.Context, claim DeferredClaim, nextAttempt time.Time) (resultErr error) {
+	connection, release, err := s.retryConnection(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { resultErr = errors.Join(resultErr, release()) }()
+	if err := ctx.Err(); err != nil {
+		return wrapLoggedError(ctx, s.log, "schedule deferred retry", err)
+	}
+	result, err := connection.ExecContext(ctx, scheduleDeferredRetrySQL, formatDeferredTime(nextAttempt), claim.ReceiptID, claim.EventID, claim.Owner, claim.Attempt, formatDeferredTime(intakeNow()))
 	if err != nil {
 		return wrapLoggedError(ctx, s.log, "schedule deferred retry", err)
 	}
