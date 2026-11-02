@@ -4,7 +4,6 @@ package daemon
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
@@ -784,7 +783,7 @@ func wrapServerError(message string, err error) error {
 	if err == nil {
 		return nil
 	}
-	if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+	if !auditstorage.CancellationOnly(err) {
 		slog.Warn(message+" failed", "err", err)
 	}
 	return fmt.Errorf("%s: %w", message, err)

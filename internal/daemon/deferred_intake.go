@@ -139,7 +139,7 @@ func (p *deferredProcessor) processEvent(ctx context.Context, work deferredWork)
 		if errors.Is(err, intake.ErrDeferredClaimUnavailable) {
 			return false
 		}
-		if p.log != nil && ctx.Err() == nil {
+		if p.log != nil && !recoveryCancellation(ctx, err) {
 			p.log.WarnContext(ctx, "claim deferred intake failed", "receipt_id", work.receiptID, "err", err)
 		}
 		return false
@@ -186,7 +186,7 @@ func (p *deferredProcessor) renewClaim(
 		select {
 		case <-ticker.C:
 			if err := p.store.RenewDeferredClaim(ctx, claim, p.claimLease); err != nil {
-				if p.log != nil && ctx.Err() == nil {
+				if p.log != nil && !recoveryCancellation(ctx, err) {
 					p.log.WarnContext(
 						ctx, "renew deferred intake claim failed",
 						"receipt_id", claim.ReceiptID, "attempt", claim.Attempt, "err", err,
@@ -296,7 +296,7 @@ func (p *deferredProcessor) logDeferredFailure(
 	statusClass string,
 	err error,
 ) {
-	if p.log == nil || ctx.Err() != nil {
+	if p.log == nil || recoveryCancellation(ctx, err) {
 		return
 	}
 	p.log.WarnContext(

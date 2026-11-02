@@ -68,7 +68,7 @@ func OpenWriter(ctx context.Context, path string) (*sql.DB, error) {
 }
 
 func storageError(message string, err error) error {
-	if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+	if !CancellationOnly(err) {
 		slog.Warn(message, "err", err)
 	}
 	return fmt.Errorf("%s: %w", message, err)

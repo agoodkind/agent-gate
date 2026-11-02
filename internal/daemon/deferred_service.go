@@ -210,7 +210,7 @@ func (p *deferredProcessor) runSessionWork(ctx context.Context, work deferredWor
 	}
 	job, release, err := prepareDeferredJob(ctx, p.service.server, work, owner)
 	if err != nil {
-		if ctx.Err() == nil {
+		if !recoveryCancellation(ctx, err) {
 			p.log.WarnContext(ctx, "prepare deferred job failed", "bucket", work.bucket.ID, "err", err)
 		}
 		p.deferDiscovery(work.bucket, p.now().Add(time.Second))

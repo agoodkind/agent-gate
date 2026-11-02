@@ -265,7 +265,9 @@ func (p *deferredProcessor) finishRecoveredFile(ctx context.Context, store *inta
 	}
 	pending, err := store.HasPending(ctx)
 	if err != nil {
-		p.log.WarnContext(ctx, "check recovered file completion failed", "bucket", bucket.ID, "err", err)
+		if !recoveryCancellation(ctx, err) {
+			p.log.WarnContext(ctx, "check recovered file completion failed", "bucket", bucket.ID, "err", err)
+		}
 		p.deferDiscovery(bucket, p.now().Add(30*time.Second))
 		return false
 	}
@@ -326,11 +328,11 @@ func (p *deferredProcessor) selectRecoveryFile(ctx context.Context, pass *recove
 }
 
 func (p *deferredProcessor) recoveryError(ctx context.Context, pass *recoveryPass, bucket auditstorage.Bucket, err error) {
-	if errors.Is(err, os.ErrNotExist) {
+	if auditstorage.MatchesOnly(err, os.ErrNotExist) {
 		pass.clearFile()
 		return
 	}
-	if ctx.Err() == nil {
+	if !recoveryCancellation(ctx, err) {
 		p.log.WarnContext(ctx, "recover audit file failed", "bucket", bucket.ID, "err", err)
 	}
 	p.deferDiscovery(bucket, p.now().Add(30*time.Second))
@@ -430,11 +432,16 @@ func (p *deferredProcessor) finalizeFile(ctx context.Context, catalog *auditstor
 	p.releaseIdleFileOwners(ctx, bucket)
 	_, err := catalog.Finalize(ctx, bucket)
 	if err != nil {
-		if ctx.Err() == nil {
+		if !recoveryCancellation(ctx, err) {
 			p.log.WarnContext(ctx, "finalize retired audit file deferred", "bucket", bucket.ID, "err", err)
 		}
 		p.deferDiscovery(bucket, p.now().Add(30*time.Second))
 	}
+}
+
+func recoveryCancellation(ctx context.Context, err error) bool {
+	cause := ctx.Err()
+	return cause != nil && auditstorage.MatchesOnly(err, cause)
 }
 
 func (p *deferredProcessor) finishJob(ctx context.Context, job *deferredProcessor, work deferredWork, release func(), completed bool) {
