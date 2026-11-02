@@ -56,12 +56,7 @@ func (s *Store) PendingPage(ctx context.Context, cursor PendingCursor) ([]Pendin
 		if err := rows.Scan(&entry.ReceiptID, &entry.State, &retry, &owner, &expires); err != nil {
 			return nil, wrapError("scan pending metadata", err)
 		}
-		entry.ClaimOwner = owner.String
-		entry.NextAttemptAt, err = parseOptionalTime(retry)
-		if err != nil {
-			return nil, err
-		}
-		entry.ClaimExpiresAt, err = parseOptionalTime(expires)
+		_, err := decodePendingMetadata(&entry, retry, owner, expires)
 		if err != nil {
 			return nil, err
 		}
@@ -105,13 +100,18 @@ func readPendingRow(row *sql.Row) (*PendingMetadata, error) {
 	if err != nil {
 		return nil, wrapError("read pending receipt metadata", err)
 	}
+	return decodePendingMetadata(&entry, retry, owner, expires)
+}
+
+func decodePendingMetadata(entry *PendingMetadata, retry, owner, expires sql.NullString) (*PendingMetadata, error) {
+	var err error
 	entry.ClaimOwner = owner.String
 	entry.NextAttemptAt, err = parseOptionalTime(retry)
 	if err != nil {
 		return nil, err
 	}
 	entry.ClaimExpiresAt, err = parseOptionalTime(expires)
-	return &entry, err
+	return entry, err
 }
 
 func wrapPendingError(operation string, err error) error {

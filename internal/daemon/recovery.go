@@ -300,8 +300,7 @@ func (p *deferredProcessor) selectRecoveryFile(ctx context.Context, pass *recove
 	if pass.files == nil {
 		files, err := snapshot.catalog.Recovery(ctx, snapshot.cfg.AuditStoragePolicy().Rotation(), pass.at)
 		if err != nil {
-			p.recoveryError(ctx, pass, snapshot.bucket, err)
-			p.acknowledgePass(pass)
+			p.recoveryTraversalError(ctx, pass, err)
 			return false
 		}
 		pass.files = files
@@ -313,8 +312,7 @@ func (p *deferredProcessor) selectRecoveryFile(ctx context.Context, pass *recove
 			return false
 		}
 		if err != nil {
-			p.recoveryError(ctx, pass, snapshot.bucket, err)
-			p.acknowledgePass(pass)
+			p.recoveryTraversalError(ctx, pass, err)
 			return false
 		}
 		pass.buckets = buckets
@@ -325,6 +323,18 @@ func (p *deferredProcessor) selectRecoveryFile(ctx context.Context, pass *recove
 	pass.bucket = pass.buckets[0]
 	pass.buckets = pass.buckets[1:]
 	return true
+}
+
+func (p *deferredProcessor) recoveryTraversalError(ctx context.Context, pass *recoveryPass, err error) {
+	if !recoveryCancellation(ctx, err) {
+		p.log.WarnContext(ctx, "discover audit files failed", "err", err)
+	}
+	// An incomplete traversal requires another historical pass, including when
+	// its directory disappears. A removed individual bucket can be skipped.
+	p.service.mu.Lock()
+	earlierDeadline(&p.service.recovery.historyDeadline, p.now().Add(30*time.Second).Round(0))
+	p.service.mu.Unlock()
+	p.acknowledgePass(pass)
 }
 
 func (p *deferredProcessor) recoveryError(ctx context.Context, pass *recoveryPass, bucket auditstorage.Bucket, err error) {
