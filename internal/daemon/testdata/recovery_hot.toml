@@ -1,0 +1,15 @@
+[[rules]]
+name = "recovery-hot-barrier"
+events = ["PreToolUse"]
+action = "block"
+violation_message = "hot decision"
+[[rules.conditions]]
+kind = "infer"
+endpoint = {{ENDPOINT}}
+layer_name = "hot-recovery"
+prompt = "Classify"
+input_field = "tool_input.command"
+output_schema = '{"type":"object"}'
+response_json_field = "decision"
+response_json_equals = "block"
+cache_ttl_ms = 0

@@ -22,9 +22,10 @@ import (
 )
 
 type deferredProcessor struct {
+	service            *deferredService
 	events             chan deferredWork
 	store              intakeStore
-	sink               audit.Sink
+	sink               audit.EntryNormalizer
 	cfg                *config.Config
 	inferRuntime       *rules.InferRuntime
 	evaluationRecorder evaluationRecorder
@@ -36,8 +37,8 @@ type deferredProcessor struct {
 	claimLease         time.Duration
 	claimRenewInterval time.Duration
 	cancel             context.CancelFunc
-	catalog            *auditstorage.Catalog
 	bucket             auditstorage.Bucket
+	catalog            *auditstorage.Catalog
 	now                func() time.Time
 	notify             func()
 	queueMu            sync.Mutex
@@ -50,17 +51,21 @@ var deferredProcessorSequence atomic.Uint64
 type deferredWork struct {
 	bucket    auditstorage.Bucket
 	receiptID int64
+	epoch     uint64
+	probe     bool
 }
 
 type queuedReplay struct {
-	path string
-	size int
+	size     int
+	epoch    uint64
+	revisit  bool
+	complete bool
 }
 
 func newDeferredProcessor(
 	ctx context.Context,
 	store intakeStore,
-	sink audit.Sink,
+	sink audit.EntryNormalizer,
 	cfg *config.Config,
 	inferRuntime *rules.InferRuntime,
 	queueLimit int,
@@ -74,9 +79,16 @@ func newDeferredProcessor(
 		log = slog.Default()
 	}
 	ctx, cancel := context.WithCancel(ctx)
+	var recovery recoveryState
 
 	processor := &deferredProcessor{
-		events:             make(chan deferredWork, queueLimit),
+		service: &deferredService{
+			mu: sync.Mutex{}, wake: make(chan struct{}, 1), workers: workers,
+			queueLimit: queueLimit, paused: false, next: 0, epoch: 0,
+			active: make(map[uint64]activeDeferredWork), jobs: sync.WaitGroup{}, server: nil, recovery: recovery,
+			excluded: nil, transition: false, cacheVersion: 0,
+		},
+		events:             make(chan deferredWork, deferredQueueCapacity(queueLimit)),
 		store:              store,
 		sink:               sink,
 		cfg:                cfg,
@@ -92,20 +104,12 @@ func newDeferredProcessor(
 		claimLease:         cfg.DeferredClaimLease(),
 		claimRenewInterval: cfg.DeferredClaimRenewInterval(),
 		cancel:             cancel,
-		catalog:            nil, bucket: auditstorage.Bucket{ID: "", Path: "", Start: time.Time{}}, now: time.Now, notify: nil,
+		catalog:            nil,
+		bucket:             auditstorage.Bucket{ID: "", Path: "", Start: time.Time{}}, now: time.Now, notify: nil,
 		queueMu: sync.Mutex{}, queued: make(map[ReplayKey]queuedReplay), queuedBytes: 0,
 	}
 
-	for range workers {
-		processor.wg.Go(func() {
-			defer func() {
-				if recovered := recover(); recovered != nil && processor.log != nil {
-					processor.log.ErrorContext(ctx, "deferred intake worker panic recovered", "err", recovered)
-				}
-			}()
-			processor.worker(ctx)
-		})
-	}
+	processor.wg.Go(func() { processor.serve(ctx) })
 	return processor
 }
 
@@ -115,6 +119,7 @@ func (p *deferredProcessor) Close() {
 	}
 	if p.stopping.Swap(true) {
 		p.wg.Wait()
+		p.service.jobs.Wait()
 		return
 	}
 	close(p.done)
@@ -122,33 +127,22 @@ func (p *deferredProcessor) Close() {
 		p.cancel()
 	}
 	p.wg.Wait()
+	p.service.jobs.Wait()
+	p.service.recovery.reset()
 }
 
-func (p *deferredProcessor) worker(ctx context.Context) {
-	for {
-		select {
-		case work := <-p.events:
-			p.processDispatch(ctx, work)
-		case <-p.done:
-			return
-		case <-ctx.Done():
-			return
-		}
-	}
-}
-
-func (p *deferredProcessor) processEvent(ctx context.Context, work deferredWork) {
+func (p *deferredProcessor) processEvent(ctx context.Context, work deferredWork) bool {
 	record, claim, err := p.store.ClaimDeferred(
 		ctx, work.receiptID, p.claimOwner, p.claimLease,
 	)
 	if err != nil {
 		if errors.Is(err, intake.ErrDeferredClaimUnavailable) {
-			return
+			return false
 		}
-		if p.log != nil {
+		if p.log != nil && !recoveryCancellation(ctx, err) {
 			p.log.WarnContext(ctx, "claim deferred intake failed", "receipt_id", work.receiptID, "err", err)
 		}
-		return
+		return false
 	}
 	processingCtx, cancel := context.WithCancel(ctx)
 	stopRenewal := make(chan struct{})
@@ -158,6 +152,7 @@ func (p *deferredProcessor) processEvent(ctx context.Context, work deferredWork)
 		if renewalStopped {
 			return
 		}
+		cancel()
 		close(stopRenewal)
 		<-renewalDone
 		renewalStopped = true
@@ -174,7 +169,7 @@ func (p *deferredProcessor) processEvent(ctx context.Context, work deferredWork)
 	}()
 	defer stopRenewalAndWait()
 	defer cancel()
-	p.processRecord(processingCtx, record, claim, stopRenewalAndWait)
+	return p.processRecord(processingCtx, record, claim, stopRenewalAndWait)
 }
 
 func (p *deferredProcessor) renewClaim(
@@ -191,7 +186,7 @@ func (p *deferredProcessor) renewClaim(
 		select {
 		case <-ticker.C:
 			if err := p.store.RenewDeferredClaim(ctx, claim, p.claimLease); err != nil {
-				if p.log != nil {
+				if p.log != nil && !recoveryCancellation(ctx, err) {
 					p.log.WarnContext(
 						ctx, "renew deferred intake claim failed",
 						"receipt_id", claim.ReceiptID, "attempt", claim.Attempt, "err", err,
@@ -212,12 +207,20 @@ func (p *deferredProcessor) processRecord(
 	ctx context.Context,
 	record intake.Record,
 	claim intake.DeferredClaim,
-	afterCommit func(),
-) {
+	stopRenewal func(),
+) bool {
+	retry := func() {
+		cleanupContext, cancelCleanup := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancelCleanup()
+		if stopRenewal != nil {
+			stopRenewal()
+		}
+		p.releaseClaim(cleanupContext, claim)
+	}
 	deferredEvent, ok := p.rebuildDeferredAudit(ctx, record)
 	if !ok || ctx.Err() != nil {
-		p.releaseClaim(ctx, claim)
-		return
+		retry()
+		return false
 	}
 	mode := "deferred"
 	if claim.Attempt > 1 {
@@ -227,8 +230,8 @@ func (p *deferredProcessor) processRecord(
 	configHash, err := p.cfg.Identity()
 	if err != nil {
 		p.logDeferredFailure(ctx, record, "config_identity_failed", err)
-		p.releaseClaim(ctx, claim)
-		return
+		retry()
+		return false
 	}
 	completedAt := hotEvalNow()
 	startedAt := deferredEvent.Trace.Deterministic.StartedAt
@@ -244,28 +247,24 @@ func (p *deferredProcessor) processRecord(
 	})
 	if p.evaluationRecorder == nil {
 		p.logDeferredFailure(ctx, record, "evaluation_recorder_unavailable", nil)
-		p.releaseClaim(ctx, claim)
-		return
+		retry()
+		return false
 	}
-	auditEntries, err := captureDeferredAudit(ctx, deferredEvent, p.sink)
-	if err != nil {
-		p.logDeferredFailure(ctx, record, "audit_normalization_failed", err)
-		p.releaseClaim(ctx, claim)
-		return
-	}
+	auditEntries := captureDeferredAudit(ctx, deferredEvent, p.sink)
 	if err := p.evaluationRecorder.CommitDeferredEvaluation(
 		ctx, claim, evaluationRecord, auditEntries,
 	); err != nil {
 		if errors.Is(err, intake.ErrDeferredClaimLost) {
-			return
+			return false
 		}
 		p.logDeferredFailure(ctx, record, "evaluation_persistence_failed", err)
-		p.releaseClaim(ctx, claim)
-		return
+		retry()
+		return false
 	}
-	if afterCommit != nil {
-		afterCommit()
+	if stopRenewal != nil {
+		stopRenewal()
 	}
+	return true
 }
 
 func (p *deferredProcessor) releaseClaim(ctx context.Context, claim intake.DeferredClaim) {
@@ -278,9 +277,11 @@ func (p *deferredProcessor) releaseClaim(ctx context.Context, claim intake.Defer
 			nextAttempt = expires
 		}
 	}
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-	defer cancel()
-	if err := p.store.ScheduleDeferredRetry(ctx, claim, nextAttempt); err != nil &&
+	err := ctx.Err()
+	if err == nil {
+		err = p.store.ScheduleDeferredRetry(ctx, claim, nextAttempt)
+	}
+	if err != nil &&
 		!errors.Is(err, intake.ErrDeferredClaimLost) && p.log != nil {
 		p.log.WarnContext(
 			ctx, "schedule deferred intake retry failed",
@@ -295,7 +296,7 @@ func (p *deferredProcessor) logDeferredFailure(
 	statusClass string,
 	err error,
 ) {
-	if p.log == nil {
+	if p.log == nil || recoveryCancellation(ctx, err) {
 		return
 	}
 	p.log.WarnContext(
@@ -306,7 +307,7 @@ func (p *deferredProcessor) logDeferredFailure(
 }
 
 type normalizedAuditCollector struct {
-	sink    audit.ReplayableDurableSink
+	sink    audit.EntryNormalizer
 	entries []audit.NormalizedEntry
 }
 
@@ -334,20 +335,16 @@ func (collector *normalizedAuditCollector) Close() error {
 func captureDeferredAudit(
 	ctx context.Context,
 	event hook.DeferredAuditEvent,
-	sink audit.Sink,
-) ([]audit.NormalizedEntry, error) {
+	sink audit.EntryNormalizer,
+) []audit.NormalizedEntry {
 	if sink == nil || !event.Valid {
-		return nil, nil
-	}
-	replayableSink, ok := sink.(audit.ReplayableDurableSink)
-	if !ok {
-		return nil, fmt.Errorf("audit sink does not support normalized replay")
+		return nil
 	}
 	collector := &normalizedAuditCollector{
-		sink: replayableSink, entries: make([]audit.NormalizedEntry, 0, 3),
+		sink: sink, entries: make([]audit.NormalizedEntry, 0, 3),
 	}
 	hook.WriteDeferredFindings(ctx, event, collector)
-	return collector.entries, nil
+	return collector.entries
 }
 
 func (p *deferredProcessor) rebuildDeferredAudit(

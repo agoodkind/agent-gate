@@ -42,6 +42,20 @@ func (catalog *Catalog) loadState() (CatalogState, error) {
 
 func (catalog *Catalog) saveState(state CatalogState) error {
 	slog.Debug("save audit catalog state", "reset_pending", state.ResetPending)
+	return catalog.publishState(func(file *os.File) error {
+		data, err := json.Marshal(state)
+		if err != nil {
+			return storageError("encode catalog state", err)
+		}
+		if _, err := file.Write(data); err != nil {
+			return storageError("write catalog state", err)
+		}
+		return nil
+	})
+}
+
+func (catalog *Catalog) publishState(write func(*os.File) error) error {
+	slog.Debug("publish audit catalog state", "path", catalog.options.StatePath)
 	if err := catalog.checkpoint("state", catalog.options.StatePath); err != nil {
 		return err
 	}
@@ -49,16 +63,12 @@ func (catalog *Catalog) saveState(state CatalogState) error {
 	if err := os.MkdirAll(directory, 0o700); err != nil {
 		return storageError("create catalog state directory", err)
 	}
-	data, err := json.Marshal(state)
-	if err != nil {
-		return storageError("encode catalog state", err)
-	}
 	file, err := os.CreateTemp(directory, ".audit-storage-*")
 	if err != nil {
 		return storageError("create catalog state", err)
 	}
 	defer func() { _ = os.Remove(file.Name()) }()
-	if _, err := file.Write(data); err != nil {
+	if err := write(file); err != nil {
 		_ = file.Close()
 		return storageError("write catalog state", err)
 	}

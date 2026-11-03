@@ -153,7 +153,7 @@ func TestDeferredEvaluationRenewsClaimWhileProcessing(t *testing.T) {
 		releaseCommit: releaseCommit,
 	}
 	processor := deferredLedgerProcessor(
-		t, store, recorder, &orderedDurableAuditSink{order: &order},
+		t, store, recorder,
 	)
 	processor.claimLease = 60 * time.Millisecond
 	processor.claimRenewInterval = 10 * time.Millisecond
@@ -195,7 +195,7 @@ func TestDeferredPanicStopsClaimRenewal(t *testing.T) {
 		releaseCommit: releaseCommit, panicOnCommit: true,
 	}
 	processor := deferredLedgerProcessor(
-		t, store, recorder, &orderedDurableAuditSink{order: &order},
+		t, store, recorder,
 	)
 	processor.claimLease = 60 * time.Millisecond
 	processor.claimRenewInterval = 10 * time.Millisecond
@@ -235,88 +235,12 @@ func TestDeferredPanicStopsClaimRenewal(t *testing.T) {
 	}
 }
 
-type orderedDurableAuditSink struct {
-	order         *[]string
-	err           error
-	contextErrors chan error
-	normalized    int
-	calls         int
-	failAt        int
-	delivered     []string
-}
-
-func (sink *orderedDurableAuditSink) Log(
-	context.Context,
-	string,
-	string,
-	string,
-	string,
-	string,
-	audit.Attrs,
-) {
-}
-
-func (sink *orderedDurableAuditSink) LogDurable(
-	ctx context.Context,
-	_ string,
-	_ string,
-	_ string,
-	_ string,
-	_ string,
-	_ audit.Attrs,
-) error {
-	*sink.order = append(*sink.order, "audit")
-	if sink.contextErrors != nil {
-		sink.contextErrors <- ctx.Err()
-	}
-	return sink.err
-}
-
-func (sink *orderedDurableAuditSink) Normalize(
-	system string,
-	sessionID string,
-	eventName string,
-	level string,
-	msg string,
-	_ audit.Attrs,
-) audit.NormalizedEntry {
-	sink.normalized++
-	return audit.NormalizedEntry{
-		Event: audit.Event{
-			EventID: "evt_test_" + msg, SchemaVersion: 1, Time: "2026-07-11T04:00:00Z",
-			Level: level, Message: msg, System: system, SessionID: sessionID,
-			EventName: eventName,
-		},
-		Fingerprint: "fingerprint_test_" + msg,
-	}
-}
-
-func (sink *orderedDurableAuditSink) LogNormalizedDurable(
-	ctx context.Context,
-	entry audit.NormalizedEntry,
-) error {
-	sink.calls++
-	*sink.order = append(*sink.order, "audit")
-	if sink.contextErrors != nil {
-		sink.contextErrors <- ctx.Err()
-	}
-	if sink.failAt > 0 && sink.calls == sink.failAt {
-		return errors.New("forced normalized audit failure")
-	}
-	sink.delivered = append(sink.delivered, entry.Event.EventID)
-	return sink.err
-}
-
-func (sink *orderedDurableAuditSink) Close() error {
-	return nil
-}
-
 func TestDeferredImmediateEvaluationUsesReceiptAndCommitsBeforeCompletion(t *testing.T) {
 	order := make([]string, 0)
 	record := deferredLedgerRecord(41, 0)
 	store := &deferredLedgerStore{record: record, order: &order}
 	recorder := &orderedDeferredRecorder{order: &order, records: nil}
-	processor := deferredLedgerProcessor(t, store, recorder, &orderedDurableAuditSink{order: &order})
+	processor := deferredLedgerProcessor(t, store, recorder)
 
 	processor.processRecord(
 		context.Background(), record, deferredLedgerClaim(record), nil,
@@ -345,7 +269,7 @@ func TestDeferredReplayEvaluationUsesNextAttempt(t *testing.T) {
 	record := deferredLedgerRecord(44, 1)
 	store := &deferredLedgerStore{record: record, order: &order, replayRecord: record}
 	recorder := &orderedDeferredRecorder{order: &order, records: nil}
-	processor := deferredLedgerProcessor(t, store, recorder, &orderedDurableAuditSink{order: &order})
+	processor := deferredLedgerProcessor(t, store, recorder)
 
 	processor.processEvent(context.Background(), deferredWork{receiptID: record.ReceiptID})
 
@@ -365,7 +289,7 @@ func TestDeferredLedgerFailureLeavesReceiptPending(t *testing.T) {
 	recorder := &orderedDeferredRecorder{
 		order: &order, records: nil, err: errors.New("ledger unavailable"),
 	}
-	processor := deferredLedgerProcessor(t, store, recorder, &orderedDurableAuditSink{order: &order})
+	processor := deferredLedgerProcessor(t, store, recorder)
 
 	processor.processRecord(
 		context.Background(), record, deferredLedgerClaim(record), nil,
@@ -380,11 +304,11 @@ func deferredLedgerProcessor(
 	t *testing.T,
 	store intakeStore,
 	recorder evaluationRecorder,
-	sink audit.Sink,
 ) *deferredProcessor {
 	t.Helper()
+	cfg := auditOnlyDaemonTestConfig(t)
 	processor := newDeferredProcessor(
-		context.Background(), store, sink, auditOnlyDaemonTestConfig(t), nil, 1, 0,
+		context.Background(), store, audit.NewNormalizer(cfg), cfg, nil, 1, 0,
 		newDiscardLogger(),
 	)
 	processor.evaluationRecorder = recorder
@@ -420,5 +344,3 @@ func deferredLedgerClaim(record intake.Record) intake.DeferredClaim {
 func joinDeferredOrder(values []string) string {
 	return strings.Join(values, ",")
 }
-
-var _ audit.Sink = (*orderedDurableAuditSink)(nil)

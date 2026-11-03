@@ -57,7 +57,7 @@ func TestWriteEventsCommitsBatchOnceAndDeduplicatesChildren(t *testing.T) {
 	}
 	var commits atomic.Int32
 	if err := connection.Raw(func(raw any) error {
-		raw.(*sqlite3.SQLiteConn).RegisterCommitHook(func() int { commits.Add(1); return 0 })
+		raw.(*auditstorage.SQLiteConnection).RegisterCommitHook(func() int { commits.Add(1); return 0 })
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -208,7 +208,7 @@ func TestLoggerBoundsEachCommittedBatch(t *testing.T) {
 			batches := make(chan int, 10)
 			count := 0
 			if err := connection.Raw(func(raw any) error {
-				driver := raw.(*sqlite3.SQLiteConn)
+				driver := raw.(*auditstorage.SQLiteConnection)
 				driver.RegisterUpdateHook(func(operation int, database, table string, rowID int64) {
 					if operation == sqlite3.SQLITE_INSERT && table == "events" {
 						count++

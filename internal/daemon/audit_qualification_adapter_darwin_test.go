@@ -53,7 +53,6 @@ func qualificationAttach(server *Server, recorder *qualificationRecorder) {
 	snapshot := server.runtime.Load()
 	snapshot.intakeStore = qualificationIntake{intakeStore: snapshot.intakeStore, metrics: recorder}
 	snapshot.evaluationRecorder = recorder
-	snapshot.deferredProcessor.evaluationRecorder = recorder
 }
 
 func qualificationStatus(b *testing.B, server *Server, cfg *config.Config) {

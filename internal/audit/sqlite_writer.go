@@ -108,6 +108,8 @@ func WriteEventsInTx(ctx context.Context, transaction *sql.Tx, events []Event) e
 }
 
 func storageError(message string, err error) error {
-	slog.Warn(message, "err", err)
+	if !auditstorage.CancellationOnly(err) {
+		slog.Warn(message, "err", err)
+	}
 	return fmt.Errorf("%s: %w", message, err)
 }

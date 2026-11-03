@@ -37,6 +37,7 @@ func Connect(ctx context.Context) (*Client, error) {
 	conn, err := grpc.NewClient(
 		target,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(RPCMaxMessageBytes)),
 	)
 	if err != nil {
 		log.ErrorContext(ctx, "connect to daemon failed", "socket", socketPath, "err", err)

@@ -1,0 +1,36 @@
+[audit]
+enabled = {{AUDIT_ENABLED}}
+[audit.outputs.sqlite]
+path = {{PATH}}
+[audit.storage]
+profile = "{{PROFILE}}"
+max_size = "{{MAX_SIZE}}"
+bucket_interval = "{{INTERVAL}}"
+retention_buckets = 7
+{{DETAIL}}
+[performance.hook]
+deferred_queue_limit = {{QUEUE_LIMIT}}
+{{WORKERS}}
+[performance.intervals]
+deferred_claim_lease_ms = 200
+deferred_claim_renew_ms = 40
+[performance.timeouts]
+infer_default_ms = 10000
+infer_max_ms = 10000
+[update]
+enabled = false
+[[rules]]
+name = "ownership-audit"
+events = ["PreToolUse"]
+action = "audit"
+violation_message = "{{MESSAGE}}"
+[[rules.conditions]]
+kind = "infer"
+endpoint = {{ENDPOINT}}
+layer_name = "ownership"
+prompt = "Classify"
+input_field = "tool_input.command"
+output_schema = '{"type":"object"}'
+response_json_field = "decision"
+response_json_equals = "block"
+cache_ttl_ms = 0

@@ -4,7 +4,6 @@ package hotkv
 import (
 	"errors"
 	"log/slog"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -18,6 +17,8 @@ const (
 	DefaultMaxEntries = 4096
 	// DefaultMaxValueBytes is the default maximum value size for one entry.
 	DefaultMaxValueBytes = 1 << 20
+	// DefaultMaxBytes limits retained namespace, key, and value bytes.
+	DefaultMaxBytes = 64 * 1024 * 1024
 	// DefaultPruneInterval is the default interval for periodic expired-entry pruning.
 	DefaultPruneInterval = 30 * time.Second
 
@@ -47,6 +48,7 @@ var (
 type Options struct {
 	MaxEntries    int
 	MaxValueBytes int
+	MaxBytes      int
 	PruneInterval time.Duration
 }
 
@@ -81,11 +83,14 @@ type Entry struct {
 
 // Store is a concurrency-safe in-memory TTL key-value cache.
 type Store struct {
-	mu      sync.Mutex
-	now     func() time.Time
-	entries map[entryKey]*entry
-	options Options
-	closed  bool
+	mu                sync.Mutex
+	now               func() time.Time
+	entries           map[entryKey]*entry
+	options           Options
+	closed            bool
+	usedBytes         int
+	highestRegistered ObservationOrder
+	discardedBefore   ObservationOrder
 
 	stopPrune chan struct{}
 	pruneDone chan struct{}
@@ -97,24 +102,29 @@ type entryKey struct {
 }
 
 type entry struct {
-	value     []byte
-	version   uint64
-	createdAt time.Time
-	updatedAt time.Time
-	expiresAt time.Time
+	value       []byte
+	order       ObservationOrder
+	unavailable bool
+	version     uint64
+	createdAt   time.Time
+	updatedAt   time.Time
+	expiresAt   time.Time
 }
 
 // New returns a Store using normalized options.
 func New(options Options) *Store {
 	options = normalizeOptions(options)
 	store := &Store{
-		mu:        sync.Mutex{},
-		now:       time.Now,
-		entries:   make(map[entryKey]*entry),
-		options:   options,
-		closed:    false,
-		stopPrune: make(chan struct{}),
-		pruneDone: make(chan struct{}),
+		mu:                sync.Mutex{},
+		now:               time.Now,
+		entries:           make(map[entryKey]*entry),
+		options:           options,
+		closed:            false,
+		usedBytes:         0,
+		highestRegistered: ObservationOrder{Generation: 0, ReceiptID: 0},
+		discardedBefore:   ObservationOrder{Generation: 0, ReceiptID: 0},
+		stopPrune:         make(chan struct{}),
+		pruneDone:         make(chan struct{}),
 	}
 	if options.PruneInterval > 0 {
 		store.launchPruneLoop(options.PruneInterval, store.stopPrune, store.pruneDone)
@@ -130,6 +140,9 @@ func normalizeOptions(options Options) Options {
 	}
 	if options.MaxValueBytes <= 0 {
 		options.MaxValueBytes = DefaultMaxValueBytes
+	}
+	if options.MaxBytes <= 0 {
+		options.MaxBytes = DefaultMaxBytes
 	}
 	if options.PruneInterval < 0 {
 		options.PruneInterval = 0
@@ -184,6 +197,7 @@ func (s *Store) Configure(options Options) {
 	}
 	s.options.MaxEntries = options.MaxEntries
 	s.options.MaxValueBytes = options.MaxValueBytes
+	s.options.MaxBytes = options.MaxBytes
 	s.pruneOversizedLocked()
 	if s.options.PruneInterval != options.PruneInterval {
 		if s.options.PruneInterval > 0 {
@@ -223,7 +237,7 @@ func (s *Store) Get(namespace string, key string) (Entry, bool, error) {
 	if !ok {
 		return emptyEntry(), false, nil
 	}
-	return exportEntry(storedKey, found), true, nil
+	return exportEntry(storedKey, found, true), true, nil
 }
 
 // Set stores a value with optional NX, XX, and TTL semantics.
@@ -232,11 +246,11 @@ func (s *Store) Set(namespace string, key string, value []byte, options SetOptio
 	if err != nil {
 		return emptyEntry(), false, err
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if err := s.validateValue(value); err != nil {
 		return emptyEntry(), false, err
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	now := s.now()
 	current, exists := s.entryLocked(storedKey, now)
 	switch options.Mode {
@@ -253,26 +267,16 @@ func (s *Store) Set(namespace string, key string, value []byte, options SetOptio
 		return emptyEntry(), false, ErrInvalidSetMode
 	}
 
-	expiresAt := time.Time{}
-	if options.TTL > 0 {
-		expiresAt = now.Add(options.TTL)
+	if !s.prepareWriteLocked(storedKey, len(value), now) {
+		return emptyEntry(), false, ErrCapacity
 	}
-	if !exists {
-		current = &entry{
-			value:     nil,
-			version:   0,
-			createdAt: now,
-			updatedAt: time.Time{},
-			expiresAt: time.Time{},
-		}
-		s.entries[storedKey] = current
+	if exists && current.order.ReceiptID > 0 {
+		s.discardedBefore = s.highestRegistered
 	}
-	current.value = append([]byte(nil), value...)
-	current.version++
-	current.updatedAt = now
-	current.expiresAt = expiresAt
-	s.enforceMaxEntriesLocked(now)
-	return exportEntry(storedKey, current), true, nil
+	current = s.writeLocked(storedKey, value, now, options.TTL)
+	current.order = ObservationOrder{Generation: 0, ReceiptID: 0}
+	current.unavailable = false
+	return exportEntry(storedKey, current, true), true, nil
 }
 
 // Delete removes one entry and reports whether it existed.
@@ -287,13 +291,13 @@ func (s *Store) Delete(namespace string, key string) (bool, error) {
 	if _, ok := s.entryLocked(storedKey, now); !ok {
 		return false, nil
 	}
-	delete(s.entries, storedKey)
+	s.removeLocked(storedKey)
 	return true, nil
 }
 
 // Exists reports whether an entry exists and has not expired.
 func (s *Store) Exists(namespace string, key string) (bool, error) {
-	_, found, err := s.Get(namespace, key)
+	_, found, err := s.GetBounded(namespace, key, false, unlimitedReadBytes, nil)
 	return found, err
 }
 
@@ -310,8 +314,8 @@ func (s *Store) GetDelete(namespace string, key string) (Entry, bool, error) {
 	if !ok {
 		return emptyEntry(), false, nil
 	}
-	out := exportEntry(storedKey, found)
-	delete(s.entries, storedKey)
+	out := exportEntry(storedKey, found, true)
+	s.removeLocked(storedKey)
 	return out, true, nil
 }
 
@@ -355,7 +359,7 @@ func (s *Store) PTTL(namespace string, key string) (time.Duration, bool, bool, e
 	}
 	ttl := found.expiresAt.Sub(now)
 	if ttl <= 0 {
-		delete(s.entries, storedKey)
+		s.removeLocked(storedKey)
 		return 0, false, false, nil
 	}
 	return ttl, true, true, nil
@@ -363,42 +367,7 @@ func (s *Store) PTTL(namespace string, key string) (time.Duration, bool, bool, e
 
 // List returns entries in namespace whose key has prefix, sorted by key.
 func (s *Store) List(namespace string, prefix string, limit int, includeValues bool) ([]Entry, error) {
-	if _, err := validateNamespace(namespace); err != nil {
-		return nil, err
-	}
-	if strings.ContainsRune(prefix, '\x00') {
-		return nil, ErrInvalidKey
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	now := s.now()
-	s.pruneExpiredLocked(now)
-	keys := make([]entryKey, 0)
-	for storedKey := range s.entries {
-		if storedKey.namespace != namespace {
-			continue
-		}
-		if prefix != "" && !strings.HasPrefix(storedKey.key, prefix) {
-			continue
-		}
-		keys = append(keys, storedKey)
-	}
-	sort.Slice(keys, func(i int, j int) bool {
-		return keys[i].key < keys[j].key
-	})
-	if limit > 0 && len(keys) > limit {
-		keys = keys[:limit]
-	}
-	out := make([]Entry, 0, len(keys))
-	for _, storedKey := range keys {
-		current := s.entries[storedKey]
-		item := exportEntry(storedKey, current)
-		if !includeValues {
-			item.Value = nil
-		}
-		out = append(out, item)
-	}
-	return out, nil
+	return s.ListBounded(namespace, prefix, limit, includeValues, unlimitedReadBytes, nil)
 }
 
 // PruneExpired removes currently expired entries.
@@ -417,7 +386,7 @@ func (s *Store) entryLocked(storedKey entryKey, now time.Time) (*entry, bool) {
 		return nil, false
 	}
 	if isExpired(found, now) {
-		delete(s.entries, storedKey)
+		s.removeLocked(storedKey)
 		return nil, false
 	}
 	return found, true
@@ -426,7 +395,7 @@ func (s *Store) entryLocked(storedKey entryKey, now time.Time) (*entry, bool) {
 func (s *Store) pruneExpiredLocked(now time.Time) {
 	for storedKey, current := range s.entries {
 		if isExpired(current, now) {
-			delete(s.entries, storedKey)
+			s.removeLocked(storedKey)
 		}
 	}
 }
@@ -434,22 +403,11 @@ func (s *Store) pruneExpiredLocked(now time.Time) {
 func (s *Store) enforceMaxEntriesLocked(now time.Time) {
 	s.pruneExpiredLocked(now)
 	s.pruneOversizedLocked()
-	maxEntries := s.options.MaxEntries
-	if maxEntries <= 0 || len(s.entries) <= maxEntries {
-		return
-	}
-	keys := make([]entryKey, 0, len(s.entries))
-	for storedKey := range s.entries {
-		keys = append(keys, storedKey)
-	}
-	sort.Slice(keys, func(i int, j int) bool {
-		left := s.entries[keys[i]]
-		right := s.entries[keys[j]]
-		return left.updatedAt.Before(right.updatedAt)
-	})
-	for len(s.entries) > maxEntries && len(keys) > 0 {
-		delete(s.entries, keys[0])
-		keys = keys[1:]
+	for _, key := range s.evictionKeysLocked(entryKey{namespace: "", key: ""}) {
+		if len(s.entries) <= s.options.MaxEntries && s.usedBytes <= s.options.MaxBytes {
+			break
+		}
+		s.removeLocked(key)
 	}
 }
 
@@ -460,7 +418,7 @@ func (s *Store) pruneOversizedLocked() {
 	}
 	for storedKey, current := range s.entries {
 		if len(current.value) > maxValueBytes {
-			delete(s.entries, storedKey)
+			s.removeLocked(storedKey)
 		}
 	}
 }
@@ -508,14 +466,18 @@ func isExpired(current *entry, now time.Time) bool {
 	return !current.expiresAt.After(now)
 }
 
-func exportEntry(storedKey entryKey, current *entry) Entry {
+func exportEntry(storedKey entryKey, current *entry, includeValue bool) Entry {
 	if current == nil {
 		return emptyEntry()
+	}
+	var value []byte
+	if includeValue {
+		value = append([]byte(nil), current.value...)
 	}
 	return Entry{
 		Namespace: storedKey.namespace,
 		Key:       storedKey.key,
-		Value:     append([]byte(nil), current.value...),
+		Value:     value,
 		Version:   current.version,
 		CreatedAt: current.createdAt,
 		UpdatedAt: current.updatedAt,

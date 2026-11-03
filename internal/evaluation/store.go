@@ -546,7 +546,9 @@ func parseTime(value string) (time.Time, error) {
 }
 
 func wrapError(message string, err error) error {
-	slog.Warn(message+" failed", "err", err)
+	if !auditstorage.CancellationOnly(err) {
+		slog.Warn(message+" failed", "err", err)
+	}
 	return fmt.Errorf("%s: %w", message, err)
 }
 

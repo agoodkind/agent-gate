@@ -83,6 +83,11 @@ func (catalog *Catalog) pruneFiles(ctx context.Context, policy RotationPolicy, n
 	if err != nil {
 		return result, err
 	}
+	return catalog.pruneMeasuredFiles(ctx, policy, now, paths, selected, files, total)
+}
+
+func (catalog *Catalog) pruneMeasuredFiles(ctx context.Context, policy RotationPolicy, now time.Time, paths []string, selected bool, files []storageFile, total int64) (PruneResult, error) {
+	var result PruneResult
 	state, err := catalog.loadState()
 	if err != nil {
 		return result, err

@@ -1,0 +1,8 @@
+[audit]
+enabled = true
+
+[audit.storage]
+max_size = "16GiB"
+
+[update]
+enabled = false

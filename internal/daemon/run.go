@@ -13,7 +13,6 @@ import (
 
 	"google.golang.org/grpc"
 
-	"goodkind.io/agent-gate/api/daemonpb"
 	"goodkind.io/agent-gate/internal/config"
 	"goodkind.io/agent-gate/internal/processlock"
 )
@@ -54,10 +53,9 @@ func Run(log *slog.Logger, cfg *config.Config) error {
 	}
 	defer func() { srv.Close() }()
 
-	grpcServer := grpc.NewServer()
+	grpcServer := srv.GRPCServer()
 	stopOnCancel := context.AfterFunc(ctx, grpcServer.GracefulStop)
 	defer stopOnCancel()
-	daemonpb.RegisterAgentGateDServer(grpcServer, srv)
 	srv.StartUpdateScheduler(ctx, func() {
 		grpcServer.GracefulStop()
 	})

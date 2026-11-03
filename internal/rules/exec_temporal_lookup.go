@@ -46,12 +46,8 @@ func (s *execTemporalStore) load(key string) (string, bool) {
 	if s == nil || s.cache == nil || key == "" {
 		return "", false
 	}
-	entry, found, err := s.cache.Get(execTemporalNamespace, key)
-	if err != nil || !found {
-		return "", false
-	}
-	_, available, value, valid := decodeTemporalRecord(entry.Value)
-	if !valid || !available {
+	value, available, err := s.cache.Observation(execTemporalNamespace, key)
+	if err != nil || !available {
 		return "", false
 	}
 	return value, true

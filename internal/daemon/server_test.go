@@ -431,8 +431,8 @@ func TestRuntimeSnapshotsShareInferenceRuntime(t *testing.T) {
 	}
 	defer server.Close()
 	first := server.runtime.Load()
-	if first == nil || first.inferRuntime != server.inferRuntime {
-		t.Fatal("initial snapshot does not use the server inference runtime")
+	if first == nil || first.inferRuntime == nil {
+		t.Fatal("initial snapshot does not create an inference runtime")
 	}
 	second, err := server.snapshotForBucket(context.Background(), cfg, server.catalog, first.bucket)
 	if err != nil {
@@ -440,7 +440,7 @@ func TestRuntimeSnapshotsShareInferenceRuntime(t *testing.T) {
 	}
 	defer second.close(context.Background(), newDiscardLogger())
 	if second.inferRuntime != first.inferRuntime {
-		t.Fatal("replacement snapshot did not preserve inference channels")
+		t.Fatal("rotation did not preserve inference channels for unchanged configuration")
 	}
 }
 
@@ -1196,16 +1196,15 @@ cache_ttl_ms = 0
 	runner := &daemonInputRunner{mu: sync.Mutex{}}
 	runtime := rules.NewExecRuntimeWithCache(runner, newDiscardLogger(), server.hotKV)
 	fields := rules.FieldSet{ConversationID: "conversation-1"}
-	if !runtime.ObserveUserPrompt("cursor", fields, 10, "private prompt") {
+	if !runtime.ObserveUserPromptOrdered("cursor", fields, hotkv.ObservationOrder{Generation: server.runtime.Load().assignmentGeneration, ReceiptID: 10}, "private prompt") {
 		t.Fatal("ObserveUserPrompt did not store the prompt")
 	}
-	if !runtime.ObserveResponseOutput(
+	if !runtime.ObserveResponseOutputOrdered(
 		"cursor",
 		fields,
 		"stop",
-		config.ActionInject,
 		"context",
-		9,
+		hotkv.ObservationOrder{Generation: server.runtime.Load().assignmentGeneration, ReceiptID: 9},
 		"private response",
 	) {
 		t.Fatal("ObserveResponseOutput did not store the response")
@@ -1221,20 +1220,6 @@ cache_ttl_ms = 0
 	}
 	key := originalEntries[0].Key
 	keyPrefix := key[:8]
-	restoreEntries := func() {
-		t.Helper()
-		for _, entry := range originalEntries {
-			_, _, restoreErr := server.hotKV.Set(
-				namespace,
-				entry.Key,
-				entry.Value,
-				hotkv.SetOptions{},
-			)
-			if restoreErr != nil {
-				t.Fatalf("restore internal temporal entry: %v", restoreErr)
-			}
-		}
-	}
 
 	ctx := context.Background()
 	operations := []struct {
@@ -1347,7 +1332,6 @@ cache_ttl_ms = 0
 	}
 	for _, operation := range operations {
 		t.Run(operation.name, func(t *testing.T) {
-			restoreEntries()
 			callErr := operation.call()
 			if status.Code(callErr) != codes.PermissionDenied {
 				t.Fatalf(
@@ -1367,7 +1351,6 @@ cache_ttl_ms = 0
 		})
 	}
 
-	restoreEntries()
 	evaluationContext := rules.WithExecRuntime(context.Background(), runtime)
 	evaluationContext = rules.WithExecResponseTargetResolver(
 		evaluationContext,
@@ -2100,6 +2083,11 @@ func replaceDeferredProcessorForTest(t testing.TB, srv *Server, queueLimit int, 
 		workers,
 		newDiscardLogger(),
 	)
+	srv.deferredProcessor = snapshot.deferredProcessor
+	snapshot.deferredProcessor.service.mu.Lock()
+	snapshot.deferredProcessor.service.server = srv
+	snapshot.deferredProcessor.notify = srv.wakeAuditScheduler
+	snapshot.deferredProcessor.service.mu.Unlock()
 }
 
 func fillDeferredProcessorQueue(t testing.TB, srv *Server) {

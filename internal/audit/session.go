@@ -15,7 +15,6 @@ import (
 	"sync"
 	"time"
 
-	expirable "github.com/hashicorp/golang-lru/v2/expirable"
 	_ "github.com/mattn/go-sqlite3"
 
 	"goodkind.io/agent-gate/internal/auditstorage"
@@ -53,7 +52,7 @@ const (
 // and a concrete SQLite writer.
 type EventLogger struct {
 	minLevel slog.Level
-	dedup    *expirable.LRU[string, struct{}]
+	dedup    *auditDedupCache
 	writer   *sqliteWriter
 	rawHash  bool
 	enabled  bool
@@ -204,7 +203,12 @@ func NewEventLoggerWithOptions(ctx context.Context, cfg *config.Config, log *slo
 	el.sharedDB = options.SharedDB
 	el.cond = sync.NewCond(&el.mu)
 	el.dropLogInterval = cfg.AuditDropLogInterval()
-	el.dedup = expirable.NewLRU[string, struct{}](cfg.AuditDedupCacheSize(), nil, cfg.AuditDedupTTL())
+	dedup, err := newAuditDedupCache(cfg.AuditDedupCacheSize(), cfg.AuditDedupTTL())
+	if err != nil {
+		workerCancel()
+		return nil, fmt.Errorf("create audit deduplication cache: %w", err)
+	}
+	el.dedup = dedup
 
 	if cfg != nil && !cfg.AuditEnabled() {
 		el.enabled = false
@@ -283,11 +287,11 @@ func (el *EventLogger) Log(system, sessionID, eventName, level, msg string, attr
 		el.recordDrop(system, sessionID, eventName, msg)
 		return
 	}
-	if _, seen := el.dedup.Get(entry.Fingerprint); seen {
+	if el.seenFingerprint(entry.Fingerprint) {
 		el.mu.Unlock()
 		return
 	}
-	el.dedup.Add(entry.Fingerprint, struct{}{})
+	el.rememberFingerprint(entry.Fingerprint)
 	el.queue = append(el.queue, eventWrite{event: entry.Event, bytes: len(encoded)})
 	el.queuedBytes += len(encoded)
 	el.cond.Signal()
@@ -321,22 +325,11 @@ func (el *EventLogger) Normalize(
 	msg string,
 	attrs Attrs,
 ) NormalizedEntry {
-	if el == nil || !el.enabled || !el.shouldLog(level) {
+	if el == nil {
 		return emptyNormalizedEntry()
 	}
-	event := normalizeEvent(system, sessionID, eventName, level, msg, attrs)
-	fingerprint := dedupFingerprint(event, attrs)
-	rawPayload := ""
-	if value, ok := attrs["raw_payload"]; ok {
-		rawPayload = value.String()
-	}
-	if rawPayload != "" && el.rawHash {
-		event.RawPayloadHash = payloadHash(rawPayload)
-	}
-	event.EventID = "evt_" + fingerprint[:32]
-	return NormalizedEntry{
-		Event: event, Fingerprint: fingerprint,
-	}
+	normalizer := Normalizer{minLevel: el.minLevel, enabled: el.enabled, rawHash: el.rawHash}
+	return normalizer.Normalize(system, sessionID, eventName, level, msg, attrs)
 }
 
 // LogNormalizedDurable writes a previously normalized entry without changing
@@ -360,7 +353,7 @@ func (el *EventLogger) LogNormalizedDurable(
 		el.mu.Unlock()
 		return fmt.Errorf("audit logger is stopping")
 	}
-	if _, seen := el.dedup.Get(entry.Fingerprint); seen {
+	if el.seenFingerprint(entry.Fingerprint) {
 		el.mu.Unlock()
 		return nil
 	}
@@ -371,7 +364,7 @@ func (el *EventLogger) LogNormalizedDurable(
 		return err
 	}
 	el.mu.Lock()
-	el.dedup.Add(entry.Fingerprint, struct{}{})
+	el.rememberFingerprint(entry.Fingerprint)
 	el.mu.Unlock()
 	return nil
 }
@@ -431,6 +424,9 @@ func (el *EventLogger) CloseContext(ctx context.Context) error {
 	el.mu.Unlock()
 
 	el.wg.Wait()
+	el.mu.Lock()
+	el.dedup.purge()
+	el.mu.Unlock()
 	el.workerCancel()
 	if el.writer != nil {
 		el.closeErr = el.writer.Close()
@@ -438,6 +434,16 @@ func (el *EventLogger) CloseContext(ctx context.Context) error {
 	el.closeErr = errors.Join(el.closeErr, ctx.Err())
 	close(el.closeDone)
 	return el.closeErr
+}
+
+// seenFingerprint requires el.mu.
+func (el *EventLogger) seenFingerprint(fingerprint string) bool {
+	return el.dedup.seen(fingerprint, auditNow())
+}
+
+// rememberFingerprint requires el.mu and starts expiry after successful admission.
+func (el *EventLogger) rememberFingerprint(fingerprint string) {
+	el.dedup.remember(fingerprint, auditNow())
 }
 
 func (el *EventLogger) worker(ctx context.Context) {
