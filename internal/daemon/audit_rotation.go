@@ -200,8 +200,7 @@ func (s *Server) replaceAuditSnapshot(ctx context.Context, candidate *config.Con
 	return replacement, err
 }
 
-// publishRuntimeLocked assigns temporal order before exposing a current writer.
-// Lifecycle coordination and runtimeMu exclude concurrent storage transitions.
+// Callers must hold lifecycleMu and runtimeMu.
 func (s *Server) publishRuntimeLocked(replacement *runtimeSnapshot) *runtimeSnapshot {
 	current := s.runtime.Load()
 	if current != nil && current.owner != nil && current.owner == replacement.owner {
