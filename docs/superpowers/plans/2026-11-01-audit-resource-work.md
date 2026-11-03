@@ -8,6 +8,16 @@ Architecture: Retain SQLite as durable intake and pending-work storage. Reuse ac
 
 Technology: Go, SQLite, gRPC, native process counters, temporary files, and local subprocesses.
 
+## Current delivery scope
+
+Deliver the reviewed storage ownership, direct dispatch, finite recovery, completed-file finalization, cache bounds, hook input limit, and KV list sizing changes. Preserve SQLite history, enforcement, audit outcomes, recovery, and concurrent chats. The user authorized merging this work and deploying it locally.
+
+RPC admission before decoding, transport response-buffer accounting, external-validator lifecycle changes, bounded history-query redesign, and supervisor-log redesign remain deferred. Their unchecked tasks below are not prerequisites for this delivery. Dependency probes do not establish that those designs work in production.
+
+Use the existing analyzer and ordinary build pipeline. Do not change Makefiles, analyzer rules, or baselines, and do not use an analyzer override.
+
+The retained-history idle tests and live process observations verify the reported write pattern. They do not establish matched-workload CPU, latency, throughput, or long-term memory qualification. Broader performance acceptance remains unfinished under [AGATE-65](https://tack.home.goodkind.io/browse/AGATE-65).
+
 Read the [approved design](../specs/2026-11-01-audit-disk-work-design.md) before implementation. Its algorithms and proposed budgets are engineering decisions, not additions to the durable goal. Correct disproved assumptions, update affected tasks and interfaces, and record evidence. Preserve the user requirements when choosing a better implementation.
 
 ## Global constraints
@@ -20,7 +30,7 @@ Read the [approved design](../specs/2026-11-01-audit-disk-work-design.md) before
 - Keep current and unfinished files in WAL with NORMAL synchronization. Completed-file conversion must not delete sidecars manually.
 - Read the entire affected file before editing. Preserve unrelated work and use the current isolated worktree.
 - Use ordinary repository checks. Targeted package tests are acceptable during debugging. New tests must exercise real behavior through an appropriate public boundary.
-- Do not deploy, restart, change installed configuration, or reset the live installation.
+- Deploy and restart only the reviewed build under the user's authorization. Do not change installed configuration or reset live data.
 - Commit logical changes with the Codex trailer. Publish ready-for-review pull requests after verification; do not merge without authorization.
 
 ## Review focus
