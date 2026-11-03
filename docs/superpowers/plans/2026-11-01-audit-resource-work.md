@@ -10,7 +10,7 @@ Technology: Go, SQLite, gRPC, native process counters, temporary files, and loca
 
 ## Current delivery scope
 
-Deliver the reviewed storage ownership, direct dispatch, finite recovery, completed-file finalization, cache bounds, hook input limit, and KV list sizing changes. Preserve SQLite history, enforcement, audit outcomes, recovery, and concurrent chats. The user authorized merging this work and deploying it locally.
+Deliver the reviewed storage ownership, direct dispatch, finite recovery, completed-file finalization, cache bounds, hook input limit, and KV list sizing changes. Preserve SQLite history, enforcement, audit outcomes, recovery, and concurrent chats.
 
 RPC admission before decoding, transport response-buffer accounting, external-validator lifecycle changes, bounded history-query redesign, and supervisor-log redesign remain deferred. Their unchecked tasks below are not prerequisites for this delivery. Dependency probes do not establish that those designs work in production.
 

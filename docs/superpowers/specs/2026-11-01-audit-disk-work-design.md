@@ -2,7 +2,7 @@
 
 Agent Gate must process incoming events without rediscovering completed history. SQLite remains the durable record of accepted work. The daemon owns active storage and background jobs. Chat count does not create a database connection, worker, or backlog queue for each chat.
 
-The user requires a comprehensive disk correction, bounded memory, correct incoming-data reconciliation, and verification of interactions before implementation. The design preserves SQLite, existing history, audit detail selection, local atomic completion, and age and size retention. It does not authorize live deployment, reset, a database migration, or replacing SQLite.
+The design requires a comprehensive disk correction, bounded memory, correct incoming-data reconciliation, and verification of interactions before implementation. It preserves SQLite, existing history, audit detail selection, local atomic completion, and age and size retention. It excludes a data reset, database migration, and SQLite replacement.
 
 ## Establish the actual failure boundaries
 
@@ -57,7 +57,7 @@ Approach assessment:
 | Keep one storage owner, durable pending rows, and owners only for active files. | This preserves concurrency and local transactions with an explicit bound derived from active workers. Use this approach. |
 | Add a permanent replay database or replace SQLite. | This introduces cross-database publication and recovery contracts. Exclude it from this change. |
 
-The user selected retaining SQLite and rejected chat quotas and unnecessary resource-management machinery. Connection ownership, scheduling, and the numerical limits below are agent-selected proposals for design approval.
+The design retains SQLite and excludes chat quotas. Connection ownership and scheduling use the existing daemon and worker controls. Numerical limits for deferred components remain proposals.
 
 ## Separate the identities and lifetimes
 
