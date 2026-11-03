@@ -1,7 +1,5 @@
 # Agent Gate audit resource implementation plan
 
-> Use subagent-driven-development to implement and review each task before starting the next. Track completed steps with checkbox syntax.
-
 Goal: Eliminate unnecessary disk writes and uncontrolled memory growth while preserving enforcement, audit correctness, recovery, and concurrent chats.
 
 Architecture: Retain SQLite as durable intake and pending-work storage. Reuse active file owners and dispatch committed identifiers directly. Bound retained data through explicit lifetimes and validate the complete process under representative traffic.
