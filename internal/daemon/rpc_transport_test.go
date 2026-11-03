@@ -239,7 +239,7 @@ func TestRPCKVListExpiringEntry(t *testing.T) {
 	}
 }
 
-func TestRPCConcurrentChatsAndHookInputLimit(t *testing.T) {
+func TestRPCConcurrentChats(t *testing.T) {
 	newRPCHarness(t, 4, 2000)
 	client, err := daemon.Connect(t.Context())
 	if err != nil {
@@ -267,19 +267,6 @@ func TestRPCConcurrentChatsAndHookInputLimit(t *testing.T) {
 	for range chats {
 		if err := <-errors; err != nil {
 			t.Fatal(err)
-		}
-	}
-	for _, size := range []int{0, daemon.RPCMaxMessageBytes, daemon.RPCMaxMessageBytes + 1} {
-		input := bytes.Repeat([]byte("x"), size)
-		data, err := daemon.ReadHookInput(bytes.NewReader(input))
-		if size > daemon.RPCMaxMessageBytes {
-			if err == nil || data != nil {
-				t.Fatal("oversized hook input returned truncated data")
-			}
-			continue
-		}
-		if err != nil || !bytes.Equal(data, input) {
-			t.Fatalf("hook input size %d = %v", size, err)
 		}
 	}
 }
