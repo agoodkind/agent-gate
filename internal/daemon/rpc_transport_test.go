@@ -49,7 +49,7 @@ func newRPCHarness(t *testing.T, concurrency, wait int) rpcHarness {
 	}
 	body := fmt.Sprintf("[performance.hook]\nhot_concurrency = %d\nhot_queue_wait_ms = %d\n", concurrency, wait)
 	body += fmt.Sprintf("[performance.hook.cache]\nmax_value_bytes = %d\n", daemon.RPCMaxMessageBytes)
-	body += "[[rules]]\nname = 'rpc-block'\ncodex_events = ['PreToolUse']\nfield_paths = ['tool_input.command']\npattern = 'forbidden'\naction = 'block'\nviolation_message = 'blocked command'\n"
+	body += "[[rules]]\nname = 'rpc-block'\ncodex_events = ['PreToolUse']\nclaude_events = ['PreToolUse']\nfield_paths = ['tool_input.command']\npattern = 'forbidden'\naction = 'block'\nviolation_message = 'blocked command'\n"
 	if err := os.WriteFile(config.Path(), []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -175,6 +175,67 @@ func TestRPCSingleKVResponseAboveDefaultReceiveLimit(t *testing.T) {
 	}
 	if proto.Size(deleted) <= daemon.RPCMaxMessageBytes {
 		t.Fatalf("get-delete response size %d does not exceed the default receive limit", proto.Size(deleted))
+	}
+}
+
+func TestRPCKVListExactMessageLimit(t *testing.T) {
+	harness := newRPCHarness(t, 4, 25)
+	value := bytes.Repeat([]byte("v"), 2*rpcMiB)
+	first, err := harness.client.KVSet(t.Context(), &daemonpb.KVSetRequest{Namespace: "boundary", Key: "a", Value: value})
+	if err != nil || !first.GetStored() {
+		t.Fatalf("set first entry: %v", err)
+	}
+	second, err := harness.client.KVSet(t.Context(), &daemonpb.KVSetRequest{Namespace: "boundary", Key: "b", Value: value})
+	if err != nil || !second.GetStored() {
+		t.Fatalf("set second entry: %v", err)
+	}
+	candidate := &daemonpb.KVListResponse{Entries: []*daemonpb.KVEntry{first.GetEntry(), second.GetEntry()}}
+	for attempt := 0; attempt < 4 && proto.Size(candidate) != daemon.RPCMaxMessageBytes; attempt++ {
+		length := len(value) + daemon.RPCMaxMessageBytes - proto.Size(candidate)
+		value = bytes.Repeat([]byte("v"), length)
+		second, err = harness.client.KVSet(t.Context(), &daemonpb.KVSetRequest{Namespace: "boundary", Key: "b", Value: value})
+		if err != nil || !second.GetStored() {
+			t.Fatalf("set boundary entry: %v", err)
+		}
+		candidate.Entries[1] = second.GetEntry()
+	}
+	if size := proto.Size(candidate); size != daemon.RPCMaxMessageBytes {
+		t.Fatalf("fixture size = %d, want %d", size, daemon.RPCMaxMessageBytes)
+	}
+	listed, err := harness.client.KVList(t.Context(), &daemonpb.KVListRequest{Namespace: "boundary", IncludeValues: true})
+	if err != nil || !proto.Equal(listed, candidate) {
+		t.Fatalf("list at limit: %v", err)
+	}
+	value = append(value, 'v')
+	second, err = harness.client.KVSet(t.Context(), &daemonpb.KVSetRequest{Namespace: "boundary", Key: "b", Value: value})
+	if err != nil || !second.GetStored() {
+		t.Fatalf("set entry above limit: %v", err)
+	}
+	candidate.Entries[1] = second.GetEntry()
+	if size := proto.Size(candidate); size != daemon.RPCMaxMessageBytes+1 {
+		t.Fatalf("fixture size = %d, want %d", size, daemon.RPCMaxMessageBytes+1)
+	}
+	_, err = harness.client.KVList(t.Context(), &daemonpb.KVListRequest{Namespace: "boundary", IncludeValues: true})
+	if status.Code(err) != codes.ResourceExhausted {
+		t.Fatalf("list above limit: %v", err)
+	}
+}
+
+func TestRPCKVListExpiringEntry(t *testing.T) {
+	harness := newRPCHarness(t, 4, 25)
+	stored, err := harness.client.KVSet(t.Context(), &daemonpb.KVSetRequest{
+		Namespace: "expiry", Key: "entry", Value: []byte("value"), TtlMs: 20000,
+	})
+	if err != nil || !stored.GetStored() {
+		t.Fatalf("set expiring entry: %v", err)
+	}
+	response, err := harness.client.KVList(t.Context(), &daemonpb.KVListRequest{Namespace: "expiry", IncludeValues: true})
+	if err != nil || len(response.GetEntries()) != 1 {
+		t.Fatalf("list expiring entry: %v", err)
+	}
+	entry := response.GetEntries()[0]
+	if !bytes.Equal(entry.GetValue(), []byte("value")) || entry.GetPttlMs() <= 0 || entry.GetPttlMs() > 20000 || entry.GetExpiresUnixNano() != stored.GetEntry().GetExpiresUnixNano() {
+		t.Fatalf("expiring entry = %v", entry)
 	}
 }
 

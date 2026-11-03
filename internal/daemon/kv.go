@@ -179,20 +179,24 @@ func (s *Server) KVList(
 	if req.GetLimit() < 0 {
 		return nil, status.Error(codes.InvalidArgument, "limit must be non-negative")
 	}
+	var out []*daemonpb.KVEntry
 	entries, err := s.hotKV.ListBounded(
 		req.GetNamespace(),
 		req.GetPrefix(),
 		int(req.GetLimit()),
 		req.GetIncludeValues(),
 		RPCMaxMessageBytes,
-		kvEntryWireSize,
+		func(metadata hotkv.Entry, valueBytes int) (int64, error) {
+			entry := daemonKVEntry(metadata)
+			out = append(out, entry)
+			return kvEntryWireSize(entry, valueBytes), nil
+		},
 	)
 	if err != nil {
 		return nil, kvStatusError(err)
 	}
-	out := make([]*daemonpb.KVEntry, 0, len(entries))
-	for _, entry := range entries {
-		out = append(out, daemonKVEntry(entry))
+	for index, entry := range entries {
+		out[index].Value = entry.Value
 	}
 	return &daemonpb.KVListResponse{Entries: out}, nil
 }
@@ -284,12 +288,12 @@ func daemonKVEntry(entry hotkv.Entry) *daemonpb.KVEntry {
 }
 
 // kvEntryWireSize includes the nested message envelope and every retained string.
-func kvEntryWireSize(metadata hotkv.Entry, valueBytes int) (int64, error) {
-	size := proto.Size(daemonKVEntry(metadata))
+func kvEntryWireSize(metadata *daemonpb.KVEntry, valueBytes int) int64 {
+	size := proto.Size(metadata)
 	if valueBytes > 0 {
 		size += protowire.SizeTag(3) + protowire.SizeBytes(valueBytes)
 	}
-	return int64(protowire.SizeTag(1) + protowire.SizeBytes(size)), nil
+	return int64(protowire.SizeTag(1) + protowire.SizeBytes(size))
 }
 
 func unixNanoOrZero(value time.Time) int64 {
