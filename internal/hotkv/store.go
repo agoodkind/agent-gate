@@ -232,11 +232,11 @@ func (s *Store) Set(namespace string, key string, value []byte, options SetOptio
 	if err != nil {
 		return emptyEntry(), false, err
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if err := s.validateValue(value); err != nil {
 		return emptyEntry(), false, err
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	now := s.now()
 	current, exists := s.entryLocked(storedKey, now)
 	switch options.Mode {
