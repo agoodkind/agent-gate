@@ -447,7 +447,6 @@ func retained(bucket Bucket, policy RotationPolicy, now time.Time) bool {
 	return bucket.Start.Unix()%int64(policy.Interval/time.Second) == 0 && !bucket.Start.Before(oldest) && !bucket.Start.After(current)
 }
 
-// Retains checks a file against the current rotation window and age policy.
 func (policy RotationPolicy) Retains(bucket Bucket, now time.Time) bool {
 	return retained(bucket, policy, now)
 }
