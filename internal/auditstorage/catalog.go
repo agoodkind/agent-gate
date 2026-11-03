@@ -447,6 +447,7 @@ func retained(bucket Bucket, policy RotationPolicy, now time.Time) bool {
 	return bucket.Start.Unix()%int64(policy.Interval/time.Second) == 0 && !bucket.Start.Before(oldest) && !bucket.Start.After(current)
 }
 
+// Retains applies age retention; size-based pruning uses separate catalog checks.
 func (policy RotationPolicy) Retains(bucket Bucket, now time.Time) bool {
 	return retained(bucket, policy, now)
 }
