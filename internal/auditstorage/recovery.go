@@ -95,9 +95,27 @@ func (files *RecoveryFiles) Next() ([]Bucket, error) {
 		}
 	}
 	if errors.Is(err, io.EOF) {
+		if err := files.validate(); err != nil {
+			return nil, err
+		}
 		return buckets, io.EOF
 	}
 	return buckets, nil
+}
+
+func (files *RecoveryFiles) validate() error {
+	opened, err := files.directory.Stat()
+	if err != nil {
+		return storageError("stat open recovery directory", err)
+	}
+	current, err := os.Stat(filepath.Dir(files.base))
+	if err != nil {
+		return storageError("stat recovery directory", err)
+	}
+	if !os.SameFile(opened, current) {
+		return storageError("validate recovery directory", errors.New("recovery directory changed"))
+	}
+	return nil
 }
 
 // Close releases the directory descriptor.

@@ -339,6 +339,9 @@ func (p *deferredProcessor) recoveryTraversalError(ctx context.Context, pass *re
 
 func (p *deferredProcessor) recoveryError(ctx context.Context, pass *recoveryPass, bucket auditstorage.Bucket, err error) {
 	if auditstorage.MatchesOnly(err, os.ErrNotExist) {
+		if pass.historical && pass.files != nil {
+			p.deferDiscovery(bucket, p.now().Add(30*time.Second))
+		}
 		pass.clearFile()
 		return
 	}
