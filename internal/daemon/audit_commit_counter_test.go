@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/mattn/go-sqlite3"
+	"goodkind.io/agent-gate/internal/auditstorage"
 )
 
 func qualificationCommitCounter(b testing.TB, database *sql.DB) *atomic.Int64 {
@@ -18,7 +18,7 @@ func qualificationCommitCounter(b testing.TB, database *sql.DB) *atomic.Int64 {
 		b.Fatal(err)
 	}
 	err = connection.Raw(func(driverConnection any) error {
-		sqlite, ok := driverConnection.(*sqlite3.SQLiteConn)
+		sqlite, ok := driverConnection.(*auditstorage.SQLiteConnection)
 		if !ok {
 			return fmt.Errorf("unexpected SQLite connection %T", driverConnection)
 		}

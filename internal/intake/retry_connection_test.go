@@ -24,7 +24,7 @@ func retryFixture(t *testing.T, name string) string {
 	return string(body)
 }
 
-func TestRetryCleanupUsesImmediateWriteAndRestoresConnectionTimeout(t *testing.T) {
+func TestRetryCleanupUsesImmediateWriteAndPreservesConnectionTimeout(t *testing.T) {
 	for _, custom := range []bool{false, true} {
 		t.Run(map[bool]string{false: "default", true: "custom"}[custom], func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "audit.db")
@@ -88,7 +88,7 @@ func TestRetryCleanupUsesImmediateWriteAndRestoresConnectionTimeout(t *testing.T
 					t.Fatal(err)
 				}
 				if timeout != expectedTimeout {
-					t.Fatalf("restored timeout = %d, want %d", timeout, expectedTimeout)
+					t.Fatalf("connection timeout = %d, want %d", timeout, expectedTimeout)
 				}
 			}
 			assertTimeout()
@@ -119,7 +119,7 @@ func TestRetryCleanupUsesImmediateWriteAndRestoresConnectionTimeout(t *testing.T
 	}
 }
 
-func TestRetryCleanupDiscardsConnectionWhenTimeoutRestorationFails(t *testing.T) {
+func TestRetryCleanupPreservesTimeoutWhenSQLiteDeniesTimeoutChanges(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "audit.db")
 	database, err := auditstorage.OpenWriter(t.Context(), path)
 	if err != nil {
@@ -150,12 +150,12 @@ func TestRetryCleanupDiscardsConnectionWhenTimeoutRestorationFails(t *testing.T)
 		t.Fatal(err)
 	}
 	if err := connection.Raw(func(raw any) error {
-		sqliteConnection, ok := raw.(*sqlite3.SQLiteConn)
+		sqliteConnection, ok := raw.(*auditstorage.SQLiteConnection)
 		if !ok {
 			return errors.New("retry connection did not use SQLite")
 		}
 		sqliteConnection.RegisterAuthorizer(func(action int, name, value, _ string) int {
-			if action == sqlite3.SQLITE_PRAGMA && name == "busy_timeout" && value == "5000" {
+			if action == sqlite3.SQLITE_PRAGMA && name == "busy_timeout" && value != "" {
 				return sqlite3.SQLITE_DENY
 			}
 			return sqlite3.SQLITE_OK
@@ -167,21 +167,24 @@ func TestRetryCleanupDiscardsConnectionWhenTimeoutRestorationFails(t *testing.T)
 	if err := connection.Close(); err != nil {
 		t.Fatal(err)
 	}
-	now := time.Now()
-	err = store.ScheduleDeferredRetry(t.Context(), claim, now.Add(time.Second))
+	_, err = database.ExecContext(t.Context(), retryFixture(t, "retry_custom_timeout.sql"))
 	var sqliteError sqlite3.Error
 	if !errors.As(err, &sqliteError) || sqliteError.Code != sqlite3.ErrAuth {
-		t.Fatalf("restoration failure = %v", err)
+		t.Fatalf("SQLite allowed a timeout change: %v", err)
+	}
+	now := time.Now()
+	if err := store.ScheduleDeferredRetry(t.Context(), claim, now.Add(time.Second)); err != nil {
+		t.Fatal(err)
 	}
 	var timeout int
 	if err := database.QueryRowContext(t.Context(), retryFixture(t, "retry_timeout.sql")).Scan(&timeout); err != nil {
 		t.Fatal(err)
 	}
 	if timeout != 5000 {
-		t.Fatalf("replacement physical connection timeout = %d", timeout)
+		t.Fatalf("connection timeout = %d", timeout)
 	}
 	due, err := store.ListDueDeferred(t.Context(), now.Add(2*time.Second), 0, 10)
 	if err != nil || len(due) != 1 || due[0] != receipt.ReceiptID {
-		t.Fatalf("fenced update did not survive restoration failure: %v, %v", due, err)
+		t.Fatalf("retry did not schedule the receipt: %v, %v", due, err)
 	}
 }

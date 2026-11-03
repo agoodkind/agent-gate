@@ -1,1 +1,0 @@
-pragma busy_timeout;

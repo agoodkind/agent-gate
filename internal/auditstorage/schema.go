@@ -10,8 +10,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-
-	_ "github.com/mattn/go-sqlite3"
 )
 
 //go:embed schema.sql
@@ -53,10 +51,7 @@ func OpenWriter(ctx context.Context, path string) (*sql.DB, error) {
 	values.Set("_synchronous", "NORMAL")
 	values.Set("_busy_timeout", "5000")
 	location.RawQuery = values.Encode()
-	database, err := sql.Open("sqlite3", location.String())
-	if err != nil {
-		return nil, storageError("open audit database", err)
-	}
+	database := sql.OpenDB(&writerConnector{location: location.String(), driver: new(writerDriver)})
 	database.SetMaxOpenConns(1)
 	database.SetMaxIdleConns(1)
 	if err := database.PingContext(ctx); err != nil {

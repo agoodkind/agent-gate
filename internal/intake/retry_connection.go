@@ -2,51 +2,40 @@ package intake
 
 import (
 	"context"
-	"database/sql"
-	"database/sql/driver"
 	_ "embed"
 	"errors"
-	"fmt"
+
+	"goodkind.io/agent-gate/internal/auditstorage"
 )
 
-//go:embed retry_busy_timeout.sql
-var retryBusyTimeoutSQL string
+//go:embed retry_begin.sql
+var retryBeginSQL string
 
-//go:embed retry_no_wait.sql
-var retryNoWaitSQL string
+//go:embed retry_rollback.sql
+var retryRollbackSQL string
 
-//go:embed retry_restore_timeout.sql
-var retryRestoreTimeoutSQL string
+//go:embed retry_commit.sql
+var retryCommitSQL string
 
-func (s *Store) retryConnection(ctx context.Context) (*sql.Conn, func() error, error) {
-	connection, err := s.db.Conn(ctx)
+//go:embed retry_read.sql
+var retryReadSQL string
+
+func (s *Store) retryConnection(ctx context.Context) (*auditstorage.WriterConnection, func() error, error) {
+	connection, err := auditstorage.BorrowWriterConnection(ctx, s.db)
 	if err != nil {
 		return nil, nil, wrapLoggedError(ctx, s.log, "borrow deferred retry connection", err)
 	}
-	var timeout int
-	if err := connection.QueryRowContext(ctx, retryBusyTimeoutSQL).Scan(&timeout); err != nil {
-		return nil, nil, wrapLoggedError(ctx, s.log, "read deferred retry busy timeout", errors.Join(err, connection.Close()))
-	}
 	release := func() error {
-		restoreContext := context.WithoutCancel(ctx)
-		_, restoreError := connection.ExecContext(restoreContext, fmt.Sprintf(retryRestoreTimeoutSQL, timeout))
-		if restoreError == nil {
-			return wrapLoggedError(restoreContext, s.log, "release deferred retry connection", connection.Close())
+		cleanupContext := context.WithoutCancel(ctx)
+		if connection.InTransaction() {
+			if _, err := connection.ExecContext(cleanupContext, retryRollbackSQL); err != nil {
+				return wrapLoggedError(cleanupContext, s.log, "rollback deferred retry", errors.Join(err, connection.Discard()))
+			}
 		}
-		restoreError = fmt.Errorf("restore deferred retry busy timeout: %w", restoreError)
-		s.log.WarnContext(restoreContext, "restore deferred retry busy timeout failed", "err", restoreError)
-		// database/sql requires an untyped callback to discard the physical connection.
-		discardError := connection.Raw(func(_ any) error { return driver.ErrBadConn })
-		if errors.Is(discardError, driver.ErrBadConn) || errors.Is(discardError, sql.ErrConnDone) {
-			discardError = nil
-		}
-		return errors.Join(
-			restoreError,
-			wrapLoggedError(restoreContext, s.log, "discard deferred retry connection", discardError),
-		)
+		return wrapLoggedError(cleanupContext, s.log, "release deferred retry connection", connection.Close())
 	}
-	if _, err := connection.ExecContext(ctx, retryNoWaitSQL); err != nil {
-		return nil, nil, wrapLoggedError(ctx, s.log, "set deferred retry busy timeout", errors.Join(err, release()))
+	if _, err := connection.ExecContext(ctx, retryBeginSQL); err != nil {
+		return nil, nil, wrapLoggedError(ctx, s.log, "begin deferred retry", errors.Join(err, release()))
 	}
 	return connection, release, nil
 }
