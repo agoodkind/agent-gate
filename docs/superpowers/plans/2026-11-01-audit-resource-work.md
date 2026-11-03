@@ -51,10 +51,10 @@ Review layers:
 | codex/audit-storage-runtime | 2 | Snapshots and jobs retain valid active storage without duplicate worker sets. |
 | codex/audit-scheduling | 3 | Accepted work resumes fairly without repeated completed-history SQLite opens. |
 | codex/audit-cache-state | 4 | Cache bytes and temporal order remain correct across rotation and eviction. |
-| codex/audit-rpc-memory | 5 | RPC admission and response ownership prevent unaccounted application payload retention. |
-| codex/audit-external-work | 6 | External work has bounded buffers, lifetime, and cleanup. |
-| codex/audit-history | 7 and 8 | History and log operations use bounded work without recurring rewrites. |
-| codex/audit-qualification | 9 | Combined CPU, disk, memory, correctness, and CI qualification establish the result. |
+| codex/audit-rpc-memory | 5, partial | Hook stdin and KV list responses use explicit bounds before allocation. |
+| Deferred | 6 | External-job buffer, lifetime, and cleanup redesign. |
+| Deferred | 7 and 8 | History-query and supervisor-log redesign. |
+| Deferred | 9, broad qualification | Matched CPU, disk, latency, throughput, and memory acceptance. |
 
 Update boundaries before further implementation when evidence changes dependencies. Rebase descendants after an accepted lower-layer change. Each task review compares against its recorded starting commit rather than HEAD~1.
 
@@ -94,7 +94,7 @@ Consume the current Catalog.OpenWriter, newRuntimeSnapshotForBucket, runtimeSnap
 - [x] Maintain one W-worker service across snapshots. A job captures its file, configuration, recorder, and claim. Do not rebind a running job to another file. Task 4 adds assignment order beside its temporal consumer.
 - [x] Preserve unchanged-storage reload and captured configuration for admitted jobs. Cancel and drain before changed effective audit detail selection accepts replacement writes. Record the exact internal interfaces produced before Task 3 begins.
 - [x] Add real-SQLite regression coverage for shared-owner reload, two historical jobs, rotation during renewal, and cancellation cleanup. Verify default W=1 and configured W greater than 1.
-- [x] Correct the shared analyzer prerequisite that rejects compiler-required external callback and interface method signatures. Review the narrow tooling change separately. Keep local helpers typed and preserve the rule against arbitrary empty interfaces. Validate the complete build with the supported development checkout override until that dependency merges.
+- [x] Conform to the existing analyzer with typed SQLite connections. Run the ordinary build without analyzer overrides or changes to Makefiles, analyzer rules, or baselines.
 - [x] Run the relevant daemon and storage tests, review connection accounting, and commit.
 
 ## Task 3: Replace rediscovery with direct dispatch and finite recovery
@@ -119,9 +119,9 @@ Add current-file assignment order to the Task 2 snapshot and job interfaces toge
 - [ ] Preserve public KV semantics for successful requests. Expose a bounded list/read interface for Task 5 and record its exact signature and overflow error.
 - [ ] Run targeted hotkv, rules, configuration, and temporal daemon tests. Commit.
 
-## Task 5: Account for RPC input and response lifetimes
+## Task 5: Bound hook input and KV lists; defer remaining RPC ownership work
 
-Consume the bounded cache/list interface from Task 4. The dependency probes demonstrate the pinned gRPC registration and BufferPool APIs; production behavior still needs tests.
+Use the bounded cache/list interface from Task 4 for hook input and KV list sizing. The remaining admission and transport ownership items are deferred proposals. Dependency probes do not establish production behavior.
 
 - [ ] Admit before dec invokes RecvMsg using copied method descriptors and the existing H setting. Create a mutable lease carrier in stats.TagRPC and release owned slots at actual stats.End.
 - [ ] Reject before execution when no slot is available. Retry only the dedicated no-execution busy result within one daemon-supplied admission budget and the original RPC deadline. Never retry ambiguous completion or generic ResourceExhausted.
@@ -132,7 +132,7 @@ Consume the bounded cache/list interface from Task 4. The dependency probes demo
 - [ ] Test both hook RPCs, cancellation, saturated admission, malformed input, slow readers, and successful replies using a real gRPC client and server. Measure transport overhead without asserting an unsupported hard bound across unlimited connections.
 - [ ] Run targeted transport, daemon, KV, and hook tests. Commit.
 
-## Task 6: Account for external jobs through actual completion
+## Task 6: Deferred external-job redesign
 
 Consume the configuration and byte-reservation interface reported by Task 5. Correct that interface with evidence when necessary and update its consumers rather than copying accounting logic.
 
@@ -143,7 +143,7 @@ Consume the configuration and byte-reservation interface reported by Task 5. Cor
 - [ ] Preserve configured on_error results and reject truncated-success or cached-error outcomes.
 - [ ] Test real local subprocesses with repeated attempts, expanded targets, oversized output, inherited descriptors, reload, and shutdown. Run targeted exec, rules, inference, and daemon tests. Commit.
 
-## Task 7: Stream history and protect file lifetime
+## Task 7: Deferred history-query redesign
 
 Consume Task 3 completed-file and catalog coordination behavior. Preserve offline CLI access and current live-query semantics.
 
@@ -153,13 +153,15 @@ Consume Task 3 completed-file and catalog coordination behavior. Preserve offlin
 - [ ] Keep cancellation, corrupt-file errors, and incomplete streamed output explicit. Do not copy or spool history.
 - [ ] Test ordering, offsets, totals, large detail, concurrent pruning, late commits, completed files without sidecars, and offline queries. Run targeted query and catalog tests. Commit.
 
-## Task 8: Prevent supervisor-tail rewrite amplification
+## Task 8: Deferred supervisor-log redesign
 
 - [ ] Retain the 1 MiB supervisor cap and inode. After overflow retain at most the newest 512 KiB of complete lines, with bounded handling of oversized incomplete output.
 - [ ] Verify the open supervisor descriptor continues working, small subsequent appends do not trigger another full-tail copy, and diagnostic/fail-open policies retain their existing behavior.
 - [ ] Run targeted logstorage tests and commit.
 
-## Task 9: Qualify the combined correction
+## Task 9: Deferred broad performance qualification
+
+The scoped idle, live-write, concurrent-chat, and recovery checks support this delivery. The matched performance acceptance below remains unfinished; do not report it as passed.
 
 - [ ] Reuse the immutable Task 1 baseline and identical workload/fixture inputs. Extend the harness for the actual RPC entry points and resource lifetimes implemented above where initial evidence was narrower.
 - [ ] Run independent paired repetitions for idle, steady, bursts, recovery, status/history queries, cancellation, rotation, reload, and both detail profiles. Include 0, 7, 80, and 160 retained files and backlog beyond dispatch capacity.
