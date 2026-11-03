@@ -12,6 +12,7 @@ import (
 
 	"goodkind.io/agent-gate/api/daemonpb"
 	"goodkind.io/agent-gate/internal/hook"
+	"goodkind.io/agent-gate/internal/hotkv"
 	"goodkind.io/agent-gate/internal/rules"
 	execconcern "goodkind.io/agent-gate/internal/rules/concerns/exec"
 )
@@ -54,10 +55,10 @@ cache_ttl_ms = 0
 		logger,
 		server.hotKV,
 	)
-	if !snapshot.execRuntime.ObserveUserPrompt(
+	if !snapshot.execRuntime.ObserveUserPromptOrdered(
 		hook.SystemCursor.String(),
 		rules.FieldSet{ConversationID: "c1"},
-		1,
+		hotkv.ObservationOrder{Generation: snapshot.assignmentGeneration, ReceiptID: 1},
 		privatePrompt,
 	) {
 		t.Fatal("ObserveUserPrompt did not store private prompt")

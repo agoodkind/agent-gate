@@ -67,6 +67,7 @@ type HookPerformance struct {
 type HookCachePerformance struct {
 	MaxEntries      int `toml:"max_entries"`
 	MaxValueBytes   int `toml:"max_value_bytes"`
+	MaxBytes        int `toml:"max_bytes"`
 	PruneIntervalMS int `toml:"prune_interval_ms"`
 }
 

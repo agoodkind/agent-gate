@@ -83,6 +83,14 @@ func (c *Config) HookCacheMaxValueBytes() int {
 	return hotkv.DefaultMaxValueBytes
 }
 
+// HookCacheMaxBytes returns the aggregate charge limit for retained cache data.
+func (c *Config) HookCacheMaxBytes() int {
+	if c != nil && c.Performance.Hook.Cache.MaxBytes > 0 {
+		return c.Performance.Hook.Cache.MaxBytes
+	}
+	return hotkv.DefaultMaxBytes
+}
+
 // HookCachePruneInterval returns the daemon hot cache periodic prune interval.
 func (c *Config) HookCachePruneInterval() time.Duration {
 	if c != nil && c.Performance.Hook.Cache.PruneIntervalMS > 0 {

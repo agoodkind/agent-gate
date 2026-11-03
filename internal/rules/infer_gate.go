@@ -137,6 +137,7 @@ func NewInferRuntimeWithCache(log *slog.Logger, cache *hotkv.Store) *InferRuntim
 		cache = hotkv.New(hotkv.Options{
 			MaxEntries:    0,
 			MaxValueBytes: 0,
+			MaxBytes:      0,
 			PruneInterval: 0,
 		})
 		ownsCache = true

@@ -8,6 +8,7 @@ import (
 
 	"goodkind.io/agent-gate/internal/auditstorage"
 	"goodkind.io/agent-gate/internal/config"
+	"goodkind.io/agent-gate/internal/hotkv"
 )
 
 func auditRetryDelay(attempt int) time.Duration {
@@ -125,7 +126,7 @@ func (s *Server) reconcileAuditStorage(ctx context.Context, now time.Time) error
 			return wrapServerError("reconcile audit storage", err)
 		}
 		s.runtimeMu.Lock()
-		old := s.runtime.Swap(replacement)
+		old := s.publishRuntimeLocked(replacement)
 		s.runtimeMu.Unlock()
 		old.close(ctx, s.log)
 		s.deferredProcessor.service.mu.Lock()
@@ -197,4 +198,18 @@ func (s *Server) replaceAuditSnapshot(ctx context.Context, candidate *config.Con
 		return nil
 	})
 	return replacement, err
+}
+
+// publishRuntimeLocked assigns temporal order before exposing a current writer.
+// Lifecycle coordination and runtimeMu exclude concurrent storage transitions.
+func (s *Server) publishRuntimeLocked(replacement *runtimeSnapshot) *runtimeSnapshot {
+	current := s.runtime.Load()
+	if current != nil && current.owner != nil && current.owner == replacement.owner {
+		replacement.assignmentGeneration = current.assignmentGeneration
+	} else {
+		s.assignmentGeneration++
+		replacement.assignmentGeneration = s.assignmentGeneration
+	}
+	s.hotKV.RegisterObservation(hotkv.ObservationOrder{Generation: replacement.assignmentGeneration, ReceiptID: 0})
+	return s.runtime.Swap(replacement)
 }

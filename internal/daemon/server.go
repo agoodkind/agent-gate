@@ -39,54 +39,56 @@ const configReloadDebounce = 200 * time.Millisecond
 const intakeParseFailed = "intake_parse_failed"
 
 type runtimeSnapshot struct {
-	owner              *fileOwner
-	catalog            *auditstorage.Catalog
-	bucket             auditstorage.Bucket
-	bucketHandle       *auditstorage.BucketHandle
-	cfg                *config.Config
-	eventLogger        *audit.EventLogger
-	intakeStore        intakeStore
-	evaluationRecorder evaluationRecorder
-	deferredProcessor  *deferredProcessor
-	evaluateSlots      chan struct{}
-	evaluateQueueWait  time.Duration
-	hotEvaluate        func(context.Context, hook.EvaluationInput, *config.Config, func(string) string, string) hook.HotEvaluation
-	execRuntime        *rules.ExecRuntime
-	inferRuntime       *rules.InferRuntime
-	inference          *inferenceOwner
+	assignmentGeneration uint64
+	owner                *fileOwner
+	catalog              *auditstorage.Catalog
+	bucket               auditstorage.Bucket
+	bucketHandle         *auditstorage.BucketHandle
+	cfg                  *config.Config
+	eventLogger          *audit.EventLogger
+	intakeStore          intakeStore
+	evaluationRecorder   evaluationRecorder
+	deferredProcessor    *deferredProcessor
+	evaluateSlots        chan struct{}
+	evaluateQueueWait    time.Duration
+	hotEvaluate          func(context.Context, hook.EvaluationInput, *config.Config, func(string) string, string) hook.HotEvaluation
+	execRuntime          *rules.ExecRuntime
+	inferRuntime         *rules.InferRuntime
+	inference            *inferenceOwner
 }
 
 // Server implements the AgentGateD gRPC service.
 type Server struct {
 	daemonpb.UnimplementedAgentGateDServer
 
-	log               *slog.Logger
-	cfgMu             sync.RWMutex
-	runtimeMu         sync.RWMutex
-	runtime           atomic.Pointer[runtimeSnapshot]
-	configWatcher     *fsnotify.Watcher
-	configPath        string
-	hotKV             *hotkv.Store
-	deferredProcessor *deferredProcessor
-	owners            fileOwners
-	lifecycleMu       sync.Mutex
-	storageTransition chan struct{}
-	closing           bool
-	updateCancel      context.CancelFunc
-	stopDaemon        func()
-	catalog           *auditstorage.Catalog
-	shutdown          <-chan struct{}
-	auditCancel       context.CancelFunc
-	cancel            context.CancelFunc
-	now               func() time.Time
-	auditTicks        <-chan time.Time
-	auditWake         chan struct{}
-	auditRequested    bool
-	auditOnce         sync.Once
-	auditWG           sync.WaitGroup
-	auditStarted      chan struct{}
-	closeOnce         sync.Once
-	retryWait         func(context.Context, time.Duration) error
+	log                  *slog.Logger
+	cfgMu                sync.RWMutex
+	runtimeMu            sync.RWMutex
+	runtime              atomic.Pointer[runtimeSnapshot]
+	configWatcher        *fsnotify.Watcher
+	configPath           string
+	hotKV                *hotkv.Store
+	deferredProcessor    *deferredProcessor
+	owners               fileOwners
+	assignmentGeneration uint64
+	lifecycleMu          sync.Mutex
+	storageTransition    chan struct{}
+	closing              bool
+	updateCancel         context.CancelFunc
+	stopDaemon           func()
+	catalog              *auditstorage.Catalog
+	shutdown             <-chan struct{}
+	auditCancel          context.CancelFunc
+	cancel               context.CancelFunc
+	now                  func() time.Time
+	auditTicks           <-chan time.Time
+	auditWake            chan struct{}
+	auditRequested       bool
+	auditOnce            sync.Once
+	auditWG              sync.WaitGroup
+	auditStarted         chan struct{}
+	closeOnce            sync.Once
+	retryWait            func(context.Context, time.Duration) error
 
 	overloadLogMu       sync.Mutex
 	lastOverloadLogTime time.Time
@@ -114,6 +116,7 @@ func zeroConfig() *config.Config {
 				Cache: config.HookCachePerformance{
 					MaxEntries:      0,
 					MaxValueBytes:   0,
+					MaxBytes:        0,
 					PruneIntervalMS: 0,
 				},
 			},
@@ -198,6 +201,7 @@ func newServerWithStorageWait(ctx context.Context, log *slog.Logger, cfg *config
 		deferredProcessor:             nil,
 		owners:                        fileOwners{mu: sync.Mutex{}, files: nil},
 		closing:                       false,
+		assignmentGeneration:          0,
 		lifecycleMu:                   sync.Mutex{},
 		storageTransition:             nil,
 		updateCancel:                  nil,
@@ -225,7 +229,7 @@ func newServerWithStorageWait(ctx context.Context, log *slog.Logger, cfg *config
 		hotStore.Close()
 		return nil, err
 	}
-	s.runtime.Store(snapshot)
+	s.publishRuntimeLocked(snapshot)
 	s.deferredProcessor.configure(cfg)
 	if err := s.startConfigWatcher(lifetime); err != nil {
 		cancel()
@@ -241,6 +245,7 @@ func hotKVOptions(cfg *config.Config) hotkv.Options {
 	return hotkv.Options{
 		MaxEntries:    cfg.HookCacheMaxEntries(),
 		MaxValueBytes: cfg.HookCacheMaxValueBytes(),
+		MaxBytes:      cfg.HookCacheMaxBytes(),
 		PruneInterval: cfg.HookCachePruneInterval(),
 	}
 }
@@ -286,9 +291,10 @@ func newRuntimeSnapshotForBucket(ctx context.Context, cfg *config.Config, log *s
 	execRuntime.SetBackgroundTimeout(cfg.ExecBackgroundTimeout())
 
 	snapshot := &runtimeSnapshot{
-		owner:   owner,
-		catalog: nil,
-		bucket:  handle.Bucket, bucketHandle: handle,
+		assignmentGeneration: 0,
+		owner:                owner,
+		catalog:              nil,
+		bucket:               handle.Bucket, bucketHandle: handle,
 		cfg:                cfg,
 		eventLogger:        eventLogger,
 		intakeStore:        intakeStore,
@@ -490,7 +496,7 @@ func (s *Server) reloadConfig(ctx context.Context) error {
 		s.hotKV.Configure(hotKVOptions(candidate))
 	}
 	s.runtimeMu.Lock()
-	oldSnapshot := s.runtime.Swap(newSnapshot)
+	oldSnapshot := s.publishRuntimeLocked(newSnapshot)
 	s.runtimeMu.Unlock()
 	s.deferredProcessor.configure(candidate)
 	updateCancel := s.updateCancel
@@ -583,12 +589,14 @@ func (s *Server) EvaluateHook(ctx context.Context, req *daemonpb.EvaluateHookReq
 		requestLog.WarnContext(ctx, "append hook intake failed; failing open", "err", err)
 		return s.unevaluated(ctx, req, hook.FailOpenReasonIntakeWriteFailed, err.Error()), nil
 	}
+	order := hotkv.ObservationOrder{Generation: snapshot.assignmentGeneration, ReceiptID: appendResult.ReceiptID}
+	s.hotKV.RegisterObservation(order)
 	if intakeErr == nil {
 		observeUserPrompt(
 			snapshot.execRuntime,
 			intakeRecord.System,
 			evaluationInput.NormalizedJSON,
-			appendResult.ReceiptID,
+			order,
 		)
 	}
 
@@ -608,7 +616,7 @@ func (s *Server) EvaluateHook(ctx context.Context, req *daemonpb.EvaluateHookReq
 	}
 	return s.commitHotEvaluation(ctx, hotEvaluationCommitInput{
 		Log: requestLog, Snapshot: snapshot, Intake: intakeRecord,
-		AppendResult: appendResult, StartedAt: evalStart, Result: result,
+		AppendResult: appendResult, ObservationOrder: order, StartedAt: evalStart, Result: result,
 		SystemError: systemError, ErrorMessage: errorMessage,
 	}), nil
 }
@@ -662,7 +670,7 @@ func observeUserPrompt(
 	runtime *rules.ExecRuntime,
 	system string,
 	rawJSON []byte,
-	receiptID int64,
+	order hotkv.ObservationOrder,
 ) {
 	payload, err := hook.ParseHookPayload(hook.SystemFromString(system), rawJSON)
 	if err != nil {
@@ -672,7 +680,7 @@ func observeUserPrompt(
 	if !ok {
 		return
 	}
-	runtime.ObserveUserPrompt(system, payload.Fields(), receiptID, prompt)
+	runtime.ObserveUserPromptOrdered(system, payload.Fields(), order, prompt)
 }
 
 func copilotEventHint(argv []string) string {

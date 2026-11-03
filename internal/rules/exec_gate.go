@@ -93,6 +93,7 @@ func NewExecRuntimeWithCache(runner execconcern.Runner, log *slog.Logger, cache 
 		cache = hotkv.New(hotkv.Options{
 			MaxEntries:    hotkv.DefaultMaxEntries,
 			MaxValueBytes: hotkv.DefaultMaxValueBytes,
+			MaxBytes:      hotkv.DefaultMaxBytes,
 			PruneInterval: 0,
 		})
 	}
@@ -100,7 +101,7 @@ func NewExecRuntimeWithCache(runner execconcern.Runner, log *slog.Logger, cache 
 		runner:   runner,
 		canon:    canonpath.NewCache(canonCacheTTL),
 		cache:    cache,
-		temporal: &execTemporalStore{cache: cache, afterRead: nil},
+		temporal: &execTemporalStore{cache: cache},
 		log:      log,
 		mu:       sync.Mutex{},
 		inflight: make(map[string]*validatorFlight),

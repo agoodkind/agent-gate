@@ -8,20 +8,22 @@ import (
 	"goodkind.io/agent-gate/api/daemonpb"
 	"goodkind.io/agent-gate/internal/audit"
 	"goodkind.io/agent-gate/internal/hook"
+	"goodkind.io/agent-gate/internal/hotkv"
 	"goodkind.io/agent-gate/internal/intake"
 	"goodkind.io/agent-gate/internal/version"
 	gkversion "goodkind.io/gklog/version"
 )
 
 type hotEvaluationCommitInput struct {
-	Log          *slog.Logger
-	Snapshot     *runtimeSnapshot
-	Intake       intake.Record
-	AppendResult intake.AppendResult
-	StartedAt    time.Time
-	Result       hook.HotEvaluation
-	SystemError  string
-	ErrorMessage string
+	Log              *slog.Logger
+	Snapshot         *runtimeSnapshot
+	Intake           intake.Record
+	AppendResult     intake.AppendResult
+	ObservationOrder hotkv.ObservationOrder
+	StartedAt        time.Time
+	Result           hook.HotEvaluation
+	SystemError      string
+	ErrorMessage     string
 }
 
 func (s *Server) commitHotEvaluation(
@@ -89,13 +91,12 @@ func (s *Server) commitHotEvaluation(
 	}
 	if systemError == "" && len(result.Stdout) > 0 {
 		for _, output := range result.TemporalResponseOutputs {
-			input.Snapshot.execRuntime.ObserveResponseOutput(
+			input.Snapshot.execRuntime.ObserveResponseOutputOrdered(
 				result.Deferred.SystemString,
 				result.Deferred.Fields,
 				result.Deferred.EventName,
-				output.Action,
 				output.Target,
-				input.AppendResult.ReceiptID,
+				input.ObservationOrder,
 				output.Output,
 			)
 		}

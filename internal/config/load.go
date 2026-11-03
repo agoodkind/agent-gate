@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -171,6 +172,9 @@ type sectionRecorder func(kind string, scope string, err error, fallback func())
 // validateSections rejects invalid storage policies on every load because a
 // fallback could discard history. Other settings can degrade to their defaults.
 func validateSections(log *slog.Logger, cfg *Config, record sectionRecorder) error {
+	if cfg.Performance.Hook.Cache.MaxBytes < 0 {
+		return errors.New("performance.hook.cache.max_bytes must be non-negative")
+	}
 	storagePolicy, storageErr := resolveAuditStorage(cfg.Audit.Storage)
 	if storageErr != nil {
 		return storageErr

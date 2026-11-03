@@ -60,6 +60,7 @@ deferred_workers = 0
 # `agent-gate kv`. It is cleared on daemon restart and reconfigured on reload.
 max_entries = 4096
 max_value_bytes = 1048576
+max_bytes = 67108864
 prune_interval_ms = 30000
 
 # Named inference points declare a reusable endpoint and model. A point does
