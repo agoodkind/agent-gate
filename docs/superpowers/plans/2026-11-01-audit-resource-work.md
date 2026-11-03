@@ -43,8 +43,6 @@ Read the [approved design](../specs/2026-11-01-audit-disk-work-design.md) before
 
 ## Tracking and review boundaries
 
-The durable Codex goal tracks the user outcome. The private SDD ledger tracks task commits, reports, review findings, and evidence. Existing repository issues provide historical context; this task does not require another external tracker.
-
 The local stack exists before product edits. Each branch follows the previous branch in this table. The existing design branch remains the first layer.
 
 Review layers:
