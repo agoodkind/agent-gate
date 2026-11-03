@@ -48,21 +48,10 @@ cache_ttl_ms = 0
 		t.Fatal("initial temporal publication failed")
 	}
 	store.RegisterObservation(order(10))
-	entries, err := store.List(hotkv.InternalNamespacePrefix+"exec-temporal", "", 0, true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	removed := false
-	for _, entry := range entries {
-		if string(entry.Value) == "alpha prompt" {
-			removed, err = store.Delete(entry.Namespace, entry.Key)
-			if err != nil {
-				t.Fatal(err)
-			}
+	for _, key := range []string{"first", "second"} {
+		if _, stored, err := store.Set("capacity-pressure", key, []byte("value"), hotkv.SetOptions{}); err != nil || !stored {
+			t.Fatalf("create cache pressure: stored=%v, err=%v", stored, err)
 		}
-	}
-	if !removed {
-		t.Fatal("alpha prompt did not exist")
 	}
 	if runtime.ObserveUserPromptOrdered("cursor", alpha, order(4), "delayed alpha") {
 		t.Fatal("removed conversation accepted delayed context")
