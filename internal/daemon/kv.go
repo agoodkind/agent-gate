@@ -8,6 +8,8 @@ import (
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/encoding/protowire"
+	"google.golang.org/protobuf/proto"
 
 	"goodkind.io/agent-gate/api/daemonpb"
 	"goodkind.io/agent-gate/internal/hotkv"
@@ -177,11 +179,13 @@ func (s *Server) KVList(
 	if req.GetLimit() < 0 {
 		return nil, status.Error(codes.InvalidArgument, "limit must be non-negative")
 	}
-	entries, err := s.hotKV.List(
+	entries, err := s.hotKV.ListBounded(
 		req.GetNamespace(),
 		req.GetPrefix(),
 		int(req.GetLimit()),
 		req.GetIncludeValues(),
+		RPCMaxMessageBytes,
+		kvEntryWireSize,
 	)
 	if err != nil {
 		return nil, kvStatusError(err)
@@ -226,7 +230,7 @@ func kvStatusError(err error) error {
 		return nil
 	case errors.Is(err, hotkv.ErrInvalidNamespace), errors.Is(err, hotkv.ErrInvalidKey):
 		return status.Error(codes.InvalidArgument, err.Error())
-	case errors.Is(err, hotkv.ErrValueTooLarge):
+	case errors.Is(err, hotkv.ErrValueTooLarge), errors.Is(err, hotkv.ErrCapacity), errors.Is(err, hotkv.ErrReadOverflow):
 		return status.Error(codes.ResourceExhausted, err.Error())
 	default:
 		return status.Error(codes.Internal, err.Error())
@@ -270,13 +274,22 @@ func daemonKVEntry(entry hotkv.Entry) *daemonpb.KVEntry {
 	return &daemonpb.KVEntry{
 		Namespace:       entry.Namespace,
 		Key:             entry.Key,
-		Value:           append([]byte(nil), entry.Value...),
+		Value:           entry.Value,
 		Version:         entry.Version,
 		CreatedUnixNano: unixNanoOrZero(entry.CreatedAt),
 		UpdatedUnixNano: unixNanoOrZero(entry.UpdatedAt),
 		ExpiresUnixNano: expiresUnixNano,
 		PttlMs:          pttlMs,
 	}
+}
+
+// kvEntryWireSize includes the nested message envelope and every retained string.
+func kvEntryWireSize(metadata hotkv.Entry, valueBytes int) (int64, error) {
+	size := proto.Size(daemonKVEntry(metadata))
+	if valueBytes > 0 {
+		size += protowire.SizeTag(3) + protowire.SizeBytes(valueBytes)
+	}
+	return int64(protowire.SizeTag(1) + protowire.SizeBytes(size)), nil
 }
 
 func unixNanoOrZero(value time.Time) int64 {

@@ -1632,7 +1632,7 @@ func runHookWithRuntime(systemHint hook.System, runtime hookRuntime) (exitCode i
 		}
 	}()
 
-	data, err := io.ReadAll(runtime.stdin)
+	data, err := daemon.ReadHookInput(runtime.stdin)
 	if err != nil {
 		diagnostic := fmt.Sprintf("agent-gate: read stdin: %v", err)
 		response := hook.FailOpenResponse(systemHint, "", diagnostic, hook.FailOpenReasonStdinRead)
