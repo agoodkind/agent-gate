@@ -20,7 +20,7 @@ func TestReloadKeepsReplacementUpdateSchedulerAlive(t *testing.T) {
 	requested := make(chan struct{}, 1)
 	canceled := make(chan struct{}, 1)
 	backend := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, request *http.Request) {
-		if request.URL.Path != "/repos/agoodkind/agent-gate/releases" {
+		if request.URL.Path != "/agoodkind/agent-gate/releases.atom" {
 			t.Errorf("unexpected update request: %s", request.URL.Path)
 		}
 		requested <- struct{}{}
@@ -28,7 +28,7 @@ func TestReloadKeepsReplacementUpdateSchedulerAlive(t *testing.T) {
 		canceled <- struct{}{}
 	}))
 	t.Cleanup(backend.Close)
-	t.Setenv("AGENT_GATE_UPDATE_API_BASE_URL", backend.URL)
+	t.Setenv("AGENT_GATE_UPDATE_WEB_BASE_URL", backend.URL)
 
 	server, err := New(t.Context(), newDiscardLogger(), daemonTestConfig(t))
 	if err != nil {
