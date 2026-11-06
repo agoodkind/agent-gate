@@ -18,7 +18,7 @@ require (
 	go.opentelemetry.io/otel/sdk v1.47.0
 	go.opentelemetry.io/otel/sdk/metric v1.47.0
 	golang.org/x/sys v0.49.0
-	goodkind.io/clyde v0.0.0-20261106070702-1e3946c96096
+	goodkind.io/clyde v0.0.0-20261106163806-6e7f4af1d630
 	goodkind.io/gklog v0.4.6-0.20261028143852-27ab6bc7fa9f
 	goodkind.io/gksyntax v0.1.1-0.20261028154122-2b63552ac7fe
 	goodkind.io/go-makefile v0.1.1
@@ -108,7 +108,7 @@ require (
 	github.com/tree-sitter/tree-sitter-python v0.25.0 // indirect
 	github.com/tree-sitter/tree-sitter-ruby v0.23.1 // indirect
 	github.com/tree-sitter/tree-sitter-rust v0.24.2 // indirect
-	github.com/tree-sitter/tree-sitter-scala v0.26.4 // indirect
+	github.com/tree-sitter/tree-sitter-scala v0.26.5 // indirect
 	github.com/tree-sitter/tree-sitter-typescript v0.23.2 // indirect
 	github.com/xanzy/ssh-agent v0.3.3 // indirect
 	github.com/youmark/pkcs8 v0.0.0-20240726163527-a2c0da244d78 // indirect
