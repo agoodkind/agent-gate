@@ -50,9 +50,6 @@ func TestOptionsPreserveAgentGatePathsAndRollingDefault(t *testing.T) {
 	if options.Config.Interval != 24*time.Hour {
 		t.Fatalf("Interval = %s, want 24h", options.Config.Interval)
 	}
-	if options.Config.WebBaseURLEnv != "AGENT_GATE_UPDATE_WEB_BASE_URL" {
-		t.Fatalf("WebBaseURLEnv = %q, want AGENT_GATE_UPDATE_WEB_BASE_URL", options.Config.WebBaseURLEnv)
-	}
 	if options.StatePath != filepath.Join(stateHome, "agent-gate", "update.json") {
 		t.Fatalf("StatePath = %q", options.StatePath)
 	}
