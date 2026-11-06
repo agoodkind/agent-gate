@@ -12,8 +12,8 @@
 # GO_MK_CGO_PREFIX set, and PKG_CONFIG_PATH already pointed at the prefix.
 set -euo pipefail
 
-readonly PCRE2_VERSION="10.44"
-readonly PCRE2_SHA256="86b9cb0aa3bcb7994faa88018292bc704cdbb708e785f7c74352ff6ea7d3175b"
+readonly PCRE2_VERSION="10.49"
+readonly PCRE2_SHA256="929f0b20e62879252a15886b06c89f1edef61a363cbd5826fb041080a5e557ae"
 
 target_goos="${GO_MK_TARGET_GOOS:-}"
 target_goarch="${GO_MK_TARGET_GOARCH:-}"
@@ -29,8 +29,10 @@ cc="${CC:?CC must be set for the darwin cross build}"
 
 # Reuse a prior build when the static lib and its .pc are already installed.
 if [[ -f "${prefix}/lib/pkgconfig/libpcre2-8.pc" && -f "${prefix}/lib/libpcre2-8.a" ]]; then
-    echo "setup-cgo-pcre2: static pcre2 ${PCRE2_VERSION} already present in ${prefix}"
-    exit 0
+    if grep -Fxq "Version: ${PCRE2_VERSION}" "${prefix}/lib/pkgconfig/libpcre2-8.pc"; then
+        echo "setup-cgo-pcre2: static pcre2 ${PCRE2_VERSION} already present in ${prefix}"
+        exit 0
+    fi
 fi
 
 work_dir="$(mktemp -d)"
