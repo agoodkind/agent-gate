@@ -21,7 +21,7 @@ require (
 	goodkind.io/clyde v0.0.0-20260715020851-23020238ae53
 	goodkind.io/gklog v0.4.5
 	goodkind.io/gksyntax v0.1.1-0.20261028153718-690515cb5cb0
-	goodkind.io/go-makefile v0.1.1-0.20261106034522-05bd67dc1e65
+	goodkind.io/go-makefile v0.1.1
 	google.golang.org/grpc v1.84.0
 	google.golang.org/protobuf v1.36.12
 )
