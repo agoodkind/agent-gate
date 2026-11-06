@@ -45,6 +45,7 @@ GO_MK_WORKSPACE_USE := . third_party/gksyntax
 # darwin cross target go-makefile provisions a static pcre2 through this hook, so
 # the release binary is self-contained. Set before include bootstrap.mk.
 GO_MK_CGO_DEPS := pcre2
+GO_MK_CGO_CACHE_INPUTS := scripts/setup-cgo-pcre2.sh
 
 include bootstrap.mk
 
