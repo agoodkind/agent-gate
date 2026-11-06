@@ -41,7 +41,7 @@ func Options(cfg *config.Config, overrides Overrides) selfupdate.Options {
 			CurrentDirty:    isLocalBuild(gkversion.Version, gkversion.Dirty == "true"),
 			AllowPrerelease: &allowPrerelease,
 			Interval:        updateInterval(cfg),
-			APIBaseURLEnv:   "AGENT_GATE_UPDATE_API_BASE_URL",
+			WebBaseURLEnv:   "AGENT_GATE_UPDATE_WEB_BASE_URL",
 		},
 		Client:      overrides.Client,
 		InstallPath: overrides.InstallPath,
