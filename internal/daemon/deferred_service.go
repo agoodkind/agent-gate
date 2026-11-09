@@ -420,13 +420,7 @@ func prepareDeferredJob(
 		}
 	}
 
-	release := sync.OnceFunc(func() {
-		if err := owner.release(); err != nil {
-			s.log.WarnContext(ctx, "release deferred file failed", "err", err)
-		}
-
-		inference.release()
-	})
+	release := deferredJobRelease(ctx, s, owner, inference)
 	if store == nil {
 		retained, err := intake.NewStore(
 			ctx,
@@ -468,4 +462,19 @@ func prepareDeferredJob(
 		bucket:             work.bucket,
 		now:                s.now,
 	}, release, nil
+}
+
+func deferredJobRelease(
+	ctx context.Context,
+	server *Server,
+	owner *fileOwner,
+	inference *inferenceOwner,
+) func() {
+	return sync.OnceFunc(func() {
+		if err := owner.release(); err != nil {
+			server.log.WarnContext(ctx, "release deferred file failed", "err", err)
+		}
+
+		inference.release()
+	})
 }

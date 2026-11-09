@@ -342,57 +342,10 @@ func (s *Server) reloadConfig(ctx context.Context) error {
 		}
 	}()
 	defer cancel()
-	// Reload degraded, for the same reason the daemon starts degraded: a rule
-	// that will not compile costs that rule, not the whole rule set. A reload
-	// that refuses the file leaves the previous snapshot in place, which is
-	// safe, but an edit that drops one rule should still deliver the other
-	// seventy-two rather than silently keeping a stale set.
-	candidate, err := config.LoadDegradedPath(s.configPath)
+	candidate, err := s.loadReloadCandidate(ctx)
 	if err != nil {
-		s.log.WarnContext(ctx, "config load or compile failed", "path", s.configPath, "err", err)
-		return fmt.Errorf("config load or compile failed: %w", err)
+		return err
 	}
-
-	if candidate.Unusable() {
-		return fmt.Errorf(
-			"config did not decode; keeping previous config: %s",
-			candidate.Failures()[0].Reason,
-		)
-	}
-
-	for _, failure := range candidate.Failures() {
-		s.log.ErrorContext(
-			ctx,
-			"config degraded on reload",
-			"path",
-			s.configPath,
-			"kind",
-			failure.Kind,
-			"scope",
-			failure.Scope,
-			"err",
-			failure.Reason,
-		)
-		// Reload cannot replace a valid storage plan with a degraded fallback.
-		if failure.Kind == config.LoadFailureSection && failure.Scope == "audit.storage" {
-			return fmt.Errorf("audit storage config invalid: %s", failure.Reason)
-		}
-	}
-
-	if errs := hook.ValidateConfig(candidate); len(errs) > 0 {
-		s.log.WarnContext(
-			ctx,
-			"hook config validation failed",
-			"path",
-			s.configPath,
-			"err",
-			errs[0],
-		)
-
-		return fmt.Errorf("hook config validation failed: %w", errs[0])
-	}
-
-	hook.WarnCapabilityDowngrades(ctx, s.log, candidate)
 
 	newSnapshot, err := s.replaceAuditSnapshot(ctx, candidate)
 	if err != nil {
@@ -486,28 +439,7 @@ func (s *Server) EvaluateHook(
 	// down, because a hook that reaches no daemon at least says so. Report every
 	// call as unevaluated and record it, the same as any other fail-open.
 	if snapshot.cfg.Unusable() {
-		system := hook.SystemFromString(req.GetProviderHint())
-		diagnostic := unusableConfigDiagnostic(snapshot.cfg)
-		RecordFailOpen(
-			string(hook.FailOpenReasonConfigUnusable),
-			system.String(),
-			"",
-			"",
-			req.GetCwd(),
-			diagnostic,
-		)
-		requestLog.ErrorContext(
-			ctx,
-			"config unusable; call allowed without enforcement",
-			"err",
-			diagnostic,
-		)
-
-		return failOpenEvaluateHookResponseFor(
-			system,
-			hook.FailOpenReasonConfigUnusable,
-			diagnostic,
-		), nil
+		return unusableHookResponse(ctx, req, snapshot.cfg, requestLog), nil
 	}
 
 	if !s.acquireEvaluateSlot(ctx, snapshot) {
@@ -536,23 +468,11 @@ func (s *Server) EvaluateHook(
 	}
 
 	evalStart := hotEvalNow()
-	intakeRecord, intakeErr := buildClassifiedIntakeRecord(
-		evaluationInput.WireBytes,
-		evaluationInput.NormalizedJSON,
-		evaluationInput.Classification,
+	intakeRecord, intakeErr := prepareHookIntakeRecord(
+		evaluationInput,
 		envFingerprint,
+		normalizationErr,
 	)
-	if normalizationErr != nil {
-		intakeErr = normalizationErr
-	}
-
-	if intakeErr != nil {
-		intakeRecord = buildInvalidIntakeRecord(
-			evaluationInput.WireBytes,
-			evaluationInput.Classification,
-			envFingerprint,
-		)
-	}
 
 	appendResult, err := snapshot.intakeStore.Append(ctx, intakeRecord)
 	if err != nil {
@@ -1025,4 +945,60 @@ func (s *Server) unevaluated(
 	}
 
 	return failOpenEvaluateHookResponseFor(system, reason, diagnostic)
+}
+
+func (s *Server) loadReloadCandidate(ctx context.Context) (*config.Config, error) {
+	// Reload degraded, for the same reason the daemon starts degraded: a rule
+	// that will not compile costs that rule, not the whole rule set. A reload
+	// that refuses the file leaves the previous snapshot in place, which is
+	// safe, but an edit that drops one rule should still deliver the other
+	// seventy-two rather than silently keeping a stale set.
+	candidate, err := config.LoadDegradedPath(s.configPath)
+	if err != nil {
+		s.log.WarnContext(ctx, "config load or compile failed", "path", s.configPath, "err", err)
+		return nil, fmt.Errorf("config load or compile failed: %w", err)
+	}
+
+	if candidate.Unusable() {
+		return nil, fmt.Errorf(
+			"config did not decode; keeping previous config: %s",
+			candidate.Failures()[0].Reason,
+		)
+	}
+
+	for _, failure := range candidate.Failures() {
+		s.log.ErrorContext(
+			ctx,
+			"config degraded on reload",
+			"path",
+			s.configPath,
+			"kind",
+			failure.Kind,
+			"scope",
+			failure.Scope,
+			"err",
+			failure.Reason,
+		)
+		// Reload cannot replace a valid storage plan with a degraded fallback.
+		if failure.Kind == config.LoadFailureSection && failure.Scope == "audit.storage" {
+			return nil, fmt.Errorf("audit storage config invalid: %s", failure.Reason)
+		}
+	}
+
+	if errs := hook.ValidateConfig(candidate); len(errs) > 0 {
+		s.log.WarnContext(
+			ctx,
+			"hook config validation failed",
+			"path",
+			s.configPath,
+			"err",
+			errs[0],
+		)
+
+		return nil, fmt.Errorf("hook config validation failed: %w", errs[0])
+	}
+
+	hook.WarnCapabilityDowngrades(ctx, s.log, candidate)
+
+	return candidate, nil
 }

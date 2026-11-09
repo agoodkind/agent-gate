@@ -7,6 +7,7 @@ import (
 
 	"goodkind.io/agent-gate/api/daemonpb"
 	"goodkind.io/agent-gate/internal/audit"
+	"goodkind.io/agent-gate/internal/evaluation"
 	"goodkind.io/agent-gate/internal/hook"
 	"goodkind.io/agent-gate/internal/hotkv"
 	"goodkind.io/agent-gate/internal/intake"
@@ -80,41 +81,7 @@ func (s *Server) commitHotEvaluation(
 		record,
 		auditEntries,
 	); err != nil {
-		result = failOpenHotEvaluation(result)
-		failureRecord := buildHotEvaluationRecord(hotEvaluationRecordInput{
-			ReceiptID:       input.AppendResult.ReceiptID,
-			EventID:         input.AppendResult.EventID,
-			Intake:          input.Intake,
-			ConfigHash:      configHash,
-			EngineVersion:   gkversion.Version,
-			EngineCommit:    gkversion.Commit,
-			EngineBuildHash: version.BuildHash(),
-			StartedAt:       input.StartedAt,
-			CompletedAt:     hotEvalNow(),
-			Result:          result,
-			SystemError:     "hot_evaluation_commit_failed",
-			ErrorMessage:    err.Error(),
-		})
-		if fallbackErr := input.Snapshot.evaluationRecorder.RecordCompleted(
-			ctx,
-			failureRecord,
-		); fallbackErr != nil {
-			s.logHotEvaluationFailure(
-				ctx,
-				input,
-				failureRecord.Evaluation.EvaluationID,
-				"fallback_evaluation_persistence_failed",
-			)
-		}
-
-		s.logHotEvaluationFailure(
-			ctx,
-			input,
-			record.Evaluation.EvaluationID,
-			"hot_evaluation_commit_failed",
-		)
-
-		return s.discardedVerdict(ctx, input, err.Error())
+		return s.discardHotCommit(ctx, input, record, configHash, result, err)
 	}
 
 	if systemError == "" && len(result.Stdout) > 0 {
@@ -214,4 +181,49 @@ func (s *Server) discardedVerdict(
 		hook.FailOpenReasonVerdictNotRecorded,
 		diagnostic,
 	)
+}
+
+func (s *Server) discardHotCommit(
+	ctx context.Context,
+	input hotEvaluationCommitInput,
+	record evaluation.Record,
+	configHash string,
+	result hook.HotEvaluation,
+	commitErr error,
+) *daemonpb.EvaluateHookResponse {
+	result = failOpenHotEvaluation(result)
+	failureRecord := buildHotEvaluationRecord(hotEvaluationRecordInput{
+		ReceiptID:       input.AppendResult.ReceiptID,
+		EventID:         input.AppendResult.EventID,
+		Intake:          input.Intake,
+		ConfigHash:      configHash,
+		EngineVersion:   gkversion.Version,
+		EngineCommit:    gkversion.Commit,
+		EngineBuildHash: version.BuildHash(),
+		StartedAt:       input.StartedAt,
+		CompletedAt:     hotEvalNow(),
+		Result:          result,
+		SystemError:     "hot_evaluation_commit_failed",
+		ErrorMessage:    commitErr.Error(),
+	})
+	if fallbackErr := input.Snapshot.evaluationRecorder.RecordCompleted(
+		ctx,
+		failureRecord,
+	); fallbackErr != nil {
+		s.logHotEvaluationFailure(
+			ctx,
+			input,
+			failureRecord.Evaluation.EvaluationID,
+			"fallback_evaluation_persistence_failed",
+		)
+	}
+
+	s.logHotEvaluationFailure(
+		ctx,
+		input,
+		record.Evaluation.EvaluationID,
+		"hot_evaluation_commit_failed",
+	)
+
+	return s.discardedVerdict(ctx, input, commitErr.Error())
 }

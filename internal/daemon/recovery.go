@@ -222,20 +222,7 @@ func (p *deferredProcessor) recoverWork(
 	}
 
 	bucket := pass.bucket
-	p.service.mu.Lock()
-	active := p.service.active[identifier]
-	active.path = bucket.Path
-	active.bucket = bucket
-	p.service.active[identifier] = active
-	valid := pass.epoch == p.service.epoch && !p.service.paused
-	excluded := slices.Contains(p.service.excluded, bucket.Path)
-	p.service.mu.Unlock()
-	if excluded || !snapshot.cfg.AuditStoragePolicy().Rotation().Retains(bucket, p.now()) {
-		pass.clearFile()
-		return empty, nil
-	}
-
-	if !valid || ctx.Err() != nil {
+	if !p.recoveryBucketActive(ctx, identifier, pass, snapshot, bucket) {
 		return empty, nil
 	}
 
@@ -309,6 +296,30 @@ func (p *deferredProcessor) recoverWork(
 	}
 
 	return work, nil
+}
+
+func (p *deferredProcessor) recoveryBucketActive(
+	ctx context.Context,
+	identifier uint64,
+	pass *recoveryPass,
+	snapshot *runtimeSnapshot,
+	bucket auditstorage.Bucket,
+) bool {
+	p.service.mu.Lock()
+	active := p.service.active[identifier]
+	active.path = bucket.Path
+	active.bucket = bucket
+	p.service.active[identifier] = active
+	valid := pass.epoch == p.service.epoch && !p.service.paused
+	excluded := slices.Contains(p.service.excluded, bucket.Path)
+	p.service.mu.Unlock()
+	if excluded || !snapshot.cfg.AuditStoragePolicy().Rotation().Retains(bucket, p.now()) {
+		pass.clearFile()
+
+		return false
+	}
+
+	return valid && ctx.Err() == nil
 }
 
 func (p *deferredProcessor) finishRecoveredFile(
