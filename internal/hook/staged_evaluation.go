@@ -63,26 +63,16 @@ func evaluateStagedRules(
 	effects := deterministic.Effects
 	detailedResults := []rules.DetailedEvaluation{deterministic}
 	if len(blockingMatches(violations)) > 0 || len(inferenceRules) == 0 {
-		trace := mergeStagedDecisionTrace(
+		return skipInferenceEvaluation(
 			deterministic.Trace,
 			ruleSet,
 			detailedResults,
 			violations,
+			effects,
+			inferenceRules,
 			system,
 			eventName,
 		)
-		if len(inferenceRules) > 0 {
-			trace.Layers = append(
-				trace.Layers,
-				skippedStagedInferenceLayers(
-					inferenceRules,
-					len(trace.Layers),
-					"prior_condition_nonmatch",
-				)...,
-			)
-		}
-
-		return stagedRuleEvaluation{violations: violations, effects: effects, trace: trace}
 	}
 
 	inferenceCtx, cancel := context.WithTimeout(ctx, cfg.HookInferencePhaseTimeout())
@@ -110,10 +100,66 @@ func evaluateStagedRules(
 		effects = append(effects, inference.Effects...)
 	}
 
-	trace := mergeStagedDecisionTrace(
+	return completeStagedEvaluation(
 		deterministic.Trace,
 		ruleSet,
 		detailedResults,
+		violations,
+		effects,
+		inferenceRules,
+		firstUnprocessed,
+		system,
+		eventName,
+	)
+}
+
+func skipInferenceEvaluation(
+	deterministic rules.DecisionTrace,
+	ruleSet []config.Rule,
+	results []rules.DetailedEvaluation,
+	violations []rules.Violation,
+	effects []rules.ResponseEffect,
+	inferenceRules []config.Rule,
+	system string,
+	eventName string,
+) stagedRuleEvaluation {
+	trace := mergeStagedDecisionTrace(
+		deterministic,
+		ruleSet,
+		results,
+		violations,
+		system,
+		eventName,
+	)
+	if len(inferenceRules) > 0 {
+		trace.Layers = append(
+			trace.Layers,
+			skippedStagedInferenceLayers(
+				inferenceRules,
+				len(trace.Layers),
+				"prior_condition_nonmatch",
+			)...,
+		)
+	}
+
+	return stagedRuleEvaluation{violations: violations, effects: effects, trace: trace}
+}
+
+func completeStagedEvaluation(
+	deterministic rules.DecisionTrace,
+	ruleSet []config.Rule,
+	results []rules.DetailedEvaluation,
+	violations []rules.Violation,
+	effects []rules.ResponseEffect,
+	inferenceRules []config.Rule,
+	firstUnprocessed int,
+	system string,
+	eventName string,
+) stagedRuleEvaluation {
+	trace := mergeStagedDecisionTrace(
+		deterministic,
+		ruleSet,
+		results,
 		violations,
 		system,
 		eventName,

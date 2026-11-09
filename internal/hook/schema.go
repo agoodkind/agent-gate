@@ -268,22 +268,8 @@ func buildClaudeSchema() map[ClaudeEvent]EventSchema {
 			"agent_transcript_path",
 			"last_assistant_message",
 		),
-		ClaudeTaskCreated: makeSchema(
-			claudeEnvelope,
-			"task_id",
-			"task_subject",
-			"task_description",
-			"teammate_name",
-			"team_name",
-		),
-		ClaudeTaskCompleted: makeSchema(
-			claudeEnvelope,
-			"task_id",
-			"task_subject",
-			"task_description",
-			"teammate_name",
-			"team_name",
-		),
+		ClaudeTaskCreated:   claudeTaskEventSchema(),
+		ClaudeTaskCompleted: claudeTaskEventSchema(),
 
 		ClaudeNotification: makeSchema(
 			claudeEnvelope,
@@ -346,6 +332,17 @@ func buildClaudeSchema() map[ClaudeEvent]EventSchema {
 		ClaudeUserPromptExpansion: makeSchema(claudeEnvelope, "prompt"),
 		ClaudeMessageDisplay:      makeSchema(claudeEnvelope, "text", "assistant_message"),
 	}
+}
+
+func claudeTaskEventSchema() EventSchema {
+	return makeSchema(
+		claudeEnvelope,
+		"task_id",
+		"task_subject",
+		"task_description",
+		"teammate_name",
+		"team_name",
+	)
 }
 
 func buildCodexSchema() map[CodexEvent]EventSchema {

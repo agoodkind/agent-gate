@@ -142,47 +142,7 @@ func evaluatePayloadHot(
 	)
 	promptText := payloadPromptText(payload)
 
-	decision := ResponseDecisionAllow
-	diagnostic := ""
-	if len(blockingViolations) > 0 && canBlock {
-		decision = ResponseDecisionBlock
-		diagnostic := rules.FormatViolations(blockingViolations)
-		response := RenderResponse(ResponseRequest{
-			System:         payload.System,
-			EventName:      eventName,
-			Decision:       ResponseDecisionBlock,
-			DiagnosticText: diagnostic,
-			EventID:        eventID,
-			Footer:         cfg.BlockFooter(),
-			FailOpenReason: "",
-			ContextText:    "",
-			MutationText:   "",
-			PromptText:     promptText,
-		})
-
-		return HotEvaluation{
-			Stdout:   response.Stdout,
-			Stderr:   response.Stderr,
-			ExitCode: response.ExitCode,
-			Deferred: newDeferredAuditEvent(
-				wireBytes,
-				payload,
-				fields,
-				ruleSet,
-				blockingViolations,
-				auditOnlyViolations,
-				responseEffects,
-				staged.trace,
-				decision,
-				diagnostic,
-				eventID,
-			),
-			Trace:                   staged.trace,
-			TemporalResponseOutputs: nil,
-		}
-	}
-
-	response := RenderResponse(ResponseRequest{
+	request := ResponseRequest{
 		System:         payload.System,
 		EventName:      eventName,
 		Decision:       ResponseDecisionAllow,
@@ -193,7 +153,16 @@ func evaluatePayloadHot(
 		ContextText:    contextText,
 		MutationText:   mutationText,
 		PromptText:     promptText,
-	})
+	}
+	if len(blockingViolations) > 0 && canBlock {
+		request.Decision = ResponseDecisionBlock
+		request.DiagnosticText = rules.FormatViolations(blockingViolations)
+		request.Footer = cfg.BlockFooter()
+		request.ContextText = ""
+		request.MutationText = ""
+	}
+
+	response := RenderResponse(request)
 
 	return HotEvaluation{
 		Stdout:   response.Stdout,
@@ -208,19 +177,27 @@ func evaluatePayloadHot(
 			auditOnlyViolations,
 			responseEffects,
 			staged.trace,
-			decision,
-			diagnostic,
+			request.Decision,
+			request.DiagnosticText,
 			eventID,
 		),
-		Trace: staged.trace,
-		TemporalResponseOutputs: temporalResponseOutputs(
-			payload.System,
-			eventName,
-			contextText,
-			mutationText,
-			promptText,
-		),
+		Trace:                   staged.trace,
+		TemporalResponseOutputs: temporalOutputsForResponse(request),
 	}
+}
+
+func temporalOutputsForResponse(request ResponseRequest) []TemporalResponseOutput {
+	if request.Decision == ResponseDecisionBlock {
+		return nil
+	}
+
+	return temporalResponseOutputs(
+		request.System,
+		request.EventName,
+		request.ContextText,
+		request.MutationText,
+		request.PromptText,
+	)
 }
 
 func responseTargetForAction(system System, eventName string, action string) string {

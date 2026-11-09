@@ -120,26 +120,8 @@ func PrepareReset(options ResetOptions) (*ResetPlan, error) {
 		return nil, err
 	}
 
-	for _, path := range []*string{
-		&options.StateDir,
-		&options.CacheDir,
-		&options.RuntimeDir,
-		&options.ConfigDir,
-	} {
-		if !filepath.IsAbs(*path) || filepath.Base(filepath.Clean(*path)) != "agent-gate" {
-			return nil, fmt.Errorf("reset root %q must be an absolute application directory", *path)
-		}
-
-		resolved, err := resetCanonicalPath(*path)
-		if err != nil {
-			return nil, resetFailure("prepare reset", err)
-		}
-
-		if filepath.Base(resolved) != "agent-gate" {
-			return nil, fmt.Errorf("reset root %q resolves to a shared parent %q", *path, resolved)
-		}
-
-		*path = resolved
+	if err := canonicalizeResetRoots(&options); err != nil {
+		return nil, err
 	}
 
 	for _, path := range slices.Clone(options.PreservedPaths) {
@@ -199,6 +181,32 @@ func PrepareReset(options ResetOptions) (*ResetPlan, error) {
 	}
 
 	return plan, nil
+}
+
+func canonicalizeResetRoots(options *ResetOptions) error {
+	for _, path := range []*string{
+		&options.StateDir,
+		&options.CacheDir,
+		&options.RuntimeDir,
+		&options.ConfigDir,
+	} {
+		if !filepath.IsAbs(*path) || filepath.Base(filepath.Clean(*path)) != "agent-gate" {
+			return fmt.Errorf("reset root %q must be an absolute application directory", *path)
+		}
+
+		resolved, err := resetCanonicalPath(*path)
+		if err != nil {
+			return resetFailure("prepare reset", err)
+		}
+
+		if filepath.Base(resolved) != "agent-gate" {
+			return fmt.Errorf("reset root %q resolves to a shared parent %q", *path, resolved)
+		}
+
+		*path = resolved
+	}
+
+	return nil
 }
 
 func validateResetTargets(targets []ResetTarget) error {
@@ -390,6 +398,7 @@ func prepareResetStage(ctx context.Context, plan *ResetPlan, paths []string) (re
 	dir, err := os.MkdirTemp(filepath.Dir(plan.options.RuntimeDir), ".agent-gate-reset-")
 	if err != nil {
 		slog.WarnContext(ctx, "create reset stage failed", "err", err)
+
 		return resetStage{
 			dir:   "",
 			path:  "",
