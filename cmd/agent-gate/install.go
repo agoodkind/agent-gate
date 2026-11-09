@@ -63,15 +63,18 @@ type daemonStatusLookup func(context.Context) (daemonIdentity, error)
 type installDependencies struct {
 	resolveExecutable   func() (string, error)
 	validateExecutable  func(string) error
-	prepareInstallation func(agentinstall.InstallationOptions) (*agentinstall.InstallationPlan, error)
-	applyInstallation   func(*agentinstall.InstallationPlan) (agentinstall.ApplyResult, error)
-	prepareHooks        func(agentinstall.HooksOptions) (*agentinstall.HookInstallationPlan, error)
-	applyHooks          func(*agentinstall.HookInstallationPlan) error
-	validateService     func(agentinstall.ServiceOptions) error
-	ensureConfig        func(config.EnsureDefaultsOptions) error
-	validateConfig      func() error
-	installService      func(agentinstall.ServiceOptions) error
-	waitForReady        func(string) error
+	prepareInstallation func(agentinstall.InstallationOptions) (
+		*agentinstall.InstallationPlan,
+		error,
+	)
+	applyInstallation func(*agentinstall.InstallationPlan) (agentinstall.ApplyResult, error)
+	prepareHooks      func(agentinstall.HooksOptions) (*agentinstall.HookInstallationPlan, error)
+	applyHooks        func(*agentinstall.HookInstallationPlan) error
+	validateService   func(agentinstall.ServiceOptions) error
+	ensureConfig      func(config.EnsureDefaultsOptions) error
+	validateConfig    func() error
+	installService    func(agentinstall.ServiceOptions) error
+	waitForReady      func(string) error
 }
 
 func runInstall(args []string) int {
@@ -177,7 +180,12 @@ func runInstallAll(args []string, dependencies installDependencies) int {
 	flags.BoolVar(&values.noConfig, "no-config", false, "skip default config creation and merge")
 	flags.BoolVar(&values.noService, "no-service", false, "skip service installation and readiness")
 	flags.StringVar(&values.autoUpdate, "auto-update", "", "set update mode: check, apply, or off")
-	flags.StringVar(&values.auditProfile, "audit-profile", "", "set audit storage profile: full or minimal")
+	flags.StringVar(
+		&values.auditProfile,
+		"audit-profile",
+		"",
+		"set audit storage profile: full or minimal",
+	)
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
@@ -219,11 +227,7 @@ func runInstallAll(args []string, dependencies installDependencies) int {
 				return 2
 			}
 		}
-		return runPreparedInstallation(
-			"agent-gate install all",
-			installationOptions,
-			dependencies,
-		)
+		return runPreparedInstallation("agent-gate install all", installationOptions, dependencies)
 	}
 	hookPlan, err := dependencies.prepareHooks(hookOptions(values))
 	if err != nil {
@@ -334,7 +338,12 @@ func validateAutoUpdate(value string) error {
 	case "", config.UpdateModeCheck, config.UpdateModeApply, "off":
 		return nil
 	default:
-		return fmt.Errorf("auto-update mode must be %q, %q, or %q", config.UpdateModeCheck, config.UpdateModeApply, "off")
+		return fmt.Errorf(
+			"auto-update mode must be %q, %q, or %q",
+			config.UpdateModeCheck,
+			config.UpdateModeApply,
+			"off",
+		)
 	}
 }
 
@@ -373,11 +382,21 @@ func registerHookInstallFlags(flags *flag.FlagSet, values *installFlagValues) {
 	flags.BoolVar(&values.noCodex, "no-codex", false, "skip Codex hook config update")
 	flags.BoolVar(&values.noCursor, "no-cursor", false, "skip Cursor hook config update")
 	flags.BoolVar(&values.noGemini, "no-gemini", false, "skip Gemini hook config update")
-	flags.BoolVar(&values.noCopilot, "no-copilot", false, "skip GitHub Copilot Chat hook config update")
+	flags.BoolVar(
+		&values.noCopilot,
+		"no-copilot",
+		false,
+		"skip GitHub Copilot Chat hook config update",
+	)
 }
 
 func registerServiceInstallFlags(flags *flag.FlagSet, values *installFlagValues) {
-	flags.StringVar(&values.serviceTemplatesDir, "service-templates", "", "local service template directory")
+	flags.StringVar(
+		&values.serviceTemplatesDir,
+		"service-templates",
+		"",
+		"local service template directory",
+	)
 }
 
 func hookOptions(values installFlagValues) agentinstall.HooksOptions {
@@ -477,7 +496,9 @@ func waitForDaemonReady(
 		identity, err := status(ctx)
 		reportedPath := identity.ExecutablePath
 		if err == nil {
-			canonicalPath, resolveErr := agentinstall.CanonicalExecutablePath(identity.ExecutablePath)
+			canonicalPath, resolveErr := agentinstall.CanonicalExecutablePath(
+				identity.ExecutablePath,
+			)
 			if resolveErr != nil {
 				err = fmt.Errorf("resolve daemon executable identity: %w", resolveErr)
 			} else {

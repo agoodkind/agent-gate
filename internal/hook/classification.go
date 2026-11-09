@@ -134,24 +134,94 @@ type environmentSignal struct {
 }
 
 var classificationEnvironmentSignals = []environmentSignal{
-	{name: "CODEX_THREAD_ID", provider: SystemCodex, strength: classificationStrengthContext, match: nonEmptySignal},
-	{name: "CODEX_CI", provider: SystemCodex, strength: classificationStrengthContext, match: nonEmptySignal},
-	{name: "COPILOT_OTEL_FILE_EXPORTER_PATH", provider: SystemCopilot, strength: classificationStrengthContext, match: nonEmptySignal},
-	{name: "COPILOT_OTEL_ENABLED", provider: SystemCopilot, strength: classificationStrengthContext, match: nonEmptySignal},
-	{name: "COPILOT_OTEL_EXPORTER_TYPE", provider: SystemCopilot, strength: classificationStrengthContext, match: nonEmptySignal},
-	{name: "CURSOR_VERSION", provider: SystemCursor, strength: classificationStrengthContext, match: nonEmptySignal},
-	{name: "CURSOR_WORKSPACE_NAME", provider: SystemCursor, strength: classificationStrengthContext, match: nonEmptySignal},
-	{name: "CURSOR_MODE", provider: SystemCursor, strength: classificationStrengthContext, match: nonEmptySignal},
-	{name: "GEMINI_CLI", provider: SystemGemini, strength: classificationStrengthContext, match: nonEmptySignal},
-	{name: "CLAUDE_CODE_ENTRYPOINT", provider: SystemClaude, strength: classificationStrengthContext, match: nonEmptySignal},
-	{name: "AI_AGENT", provider: SystemClaude, strength: classificationStrengthContext, match: claudeAgentSignal},
-	{name: "VSCODE_PID", provider: SystemVSCode, strength: classificationStrengthShared, match: nonEmptySignal},
-	{name: "VSCODE_IPC_HOOK", provider: SystemVSCode, strength: classificationStrengthShared, match: nonEmptySignal},
+	{
+		name:     "CODEX_THREAD_ID",
+		provider: SystemCodex,
+		strength: classificationStrengthContext,
+		match:    nonEmptySignal,
+	},
+	{
+		name:     "CODEX_CI",
+		provider: SystemCodex,
+		strength: classificationStrengthContext,
+		match:    nonEmptySignal,
+	},
+	{
+		name:     "COPILOT_OTEL_FILE_EXPORTER_PATH",
+		provider: SystemCopilot,
+		strength: classificationStrengthContext,
+		match:    nonEmptySignal,
+	},
+	{
+		name:     "COPILOT_OTEL_ENABLED",
+		provider: SystemCopilot,
+		strength: classificationStrengthContext,
+		match:    nonEmptySignal,
+	},
+	{
+		name:     "COPILOT_OTEL_EXPORTER_TYPE",
+		provider: SystemCopilot,
+		strength: classificationStrengthContext,
+		match:    nonEmptySignal,
+	},
+	{
+		name:     "CURSOR_VERSION",
+		provider: SystemCursor,
+		strength: classificationStrengthContext,
+		match:    nonEmptySignal,
+	},
+	{
+		name:     "CURSOR_WORKSPACE_NAME",
+		provider: SystemCursor,
+		strength: classificationStrengthContext,
+		match:    nonEmptySignal,
+	},
+	{
+		name:     "CURSOR_MODE",
+		provider: SystemCursor,
+		strength: classificationStrengthContext,
+		match:    nonEmptySignal,
+	},
+	{
+		name:     "GEMINI_CLI",
+		provider: SystemGemini,
+		strength: classificationStrengthContext,
+		match:    nonEmptySignal,
+	},
+	{
+		name:     "CLAUDE_CODE_ENTRYPOINT",
+		provider: SystemClaude,
+		strength: classificationStrengthContext,
+		match:    nonEmptySignal,
+	},
+	{
+		name:     "AI_AGENT",
+		provider: SystemClaude,
+		strength: classificationStrengthContext,
+		match:    claudeAgentSignal,
+	},
+	{
+		name:     "VSCODE_PID",
+		provider: SystemVSCode,
+		strength: classificationStrengthShared,
+		match:    nonEmptySignal,
+	},
+	{
+		name:     "VSCODE_IPC_HOOK",
+		provider: SystemVSCode,
+		strength: classificationStrengthShared,
+		match:    nonEmptySignal,
+	},
 }
 
 var payloadProviderIdentifierFields = map[string]bool{
-	"provider": true, "provider_id": true, "providerId": true,
-	"system": true, "client": true, "client_name": true, "clientName": true,
+	"provider":    true,
+	"provider_id": true,
+	"providerId":  true,
+	"system":      true,
+	"client":      true,
+	"client_name": true,
+	"clientName":  true,
 }
 
 // Classify resolves a provider from legacy request evidence.
@@ -161,27 +231,50 @@ func Classify(
 	argv []string,
 	environment map[string]string,
 ) Classification {
-	return ClassifyWithContext(rawBytes, hint.String(), argv, environment, InvocationContext{
-		HookSubcommand: ObservedValue{
-			Value: "", Source: "", Provenance: "", Status: "",
+	return ClassifyWithContext(
+		rawBytes,
+		hint.String(),
+		argv,
+		environment,
+		InvocationContext{
+			HookSubcommand: ObservedValue{
+				Value:      "",
+				Source:     "",
+				Provenance: "",
+				Status:     "",
+			},
+			HookTags: nil,
+			WorkingDirectory: ObservedValue{
+				Value:      "",
+				Source:     "",
+				Provenance: "",
+				Status:     "",
+			},
+			Executable: ProcessEvidence{
+				Name:           "",
+				ExecutablePath: "",
+				Source:         "",
+				Provenance:     "",
+				Status:         "",
+			},
+			ParentProcess: ProcessEvidence{
+				Name:           "",
+				ExecutablePath: "",
+				Source:         "",
+				Provenance:     "",
+				Status:         "",
+			},
+			Ancestors:   nil,
+			Environment: nil,
+			ManagedRegistration: ObservedValue{
+				Value:      "",
+				Source:     "",
+				Provenance: "",
+				Status:     "",
+			},
+			CollectionIssues: nil,
 		},
-		HookTags: nil,
-		WorkingDirectory: ObservedValue{
-			Value: "", Source: "", Provenance: "", Status: "",
-		},
-		Executable: ProcessEvidence{
-			Name: "", ExecutablePath: "", Source: "", Provenance: "", Status: "",
-		},
-		ParentProcess: ProcessEvidence{
-			Name: "", ExecutablePath: "", Source: "", Provenance: "", Status: "",
-		},
-		Ancestors:   nil,
-		Environment: nil,
-		ManagedRegistration: ObservedValue{
-			Value: "", Source: "", Provenance: "", Status: "",
-		},
-		CollectionIssues: nil,
-	})
+	)
 }
 
 // ClassifyWithContext resolves a provider from the complete invocation evidence set.
@@ -209,6 +302,7 @@ func ClassifyWithContext(
 	if parseErr == nil {
 		candidates = append(candidates, payloadCandidates(payload, payloadInput)...)
 	}
+
 	candidates = append(candidates, environmentCandidates(invocation.Environment)...)
 
 	classification := resolveClassification(input, candidates)
@@ -216,22 +310,31 @@ func ClassifyWithContext(
 		classification.ResolvedProvider = SystemUnknown.String()
 		classification.Result = ClassificationResultInvalid
 		classification.Confidence = ClassificationConfidenceNone
+
 		classification.Conflicts = nil
 		for i := range classification.Evidence {
 			classification.Evidence[i].Result = "candidate"
 		}
 	}
+
 	return classification
 }
 
 func routeCandidates(providerHint string, argv []string) []classificationCandidate {
 	candidates := make([]classificationCandidate, 0, 2)
 	if provider := providerFromSignal(providerHint); provider != SystemUnknown {
-		candidates = append(candidates, classificationCandidate{
-			source: "provider_hint", provenance: "request", signal: providerHint,
-			provider: provider, strength: classificationStrengthRoute,
-		})
+		candidates = append(
+			candidates,
+			classificationCandidate{
+				source:     "provider_hint",
+				provenance: "request",
+				signal:     providerHint,
+				provider:   provider,
+				strength:   classificationStrengthRoute,
+			},
+		)
 	}
+
 	for _, argument := range argv {
 		provider := SystemUnknown
 		switch classificationCommand(argument) {
@@ -242,14 +345,23 @@ func routeCandidates(providerHint string, argv []string) []classificationCandida
 		case classificationCommandGemini:
 			provider = SystemGemini
 		}
+
 		if provider == SystemUnknown {
 			continue
 		}
-		candidates = append(candidates, classificationCandidate{
-			source: "hook_subcommand", provenance: "literal_argv", signal: argument,
-			provider: provider, strength: classificationStrengthRoute,
-		})
+
+		candidates = append(
+			candidates,
+			classificationCandidate{
+				source:     "hook_subcommand",
+				provenance: "literal_argv",
+				signal:     argument,
+				provider:   provider,
+				strength:   classificationStrengthRoute,
+			},
+		)
 	}
+
 	return candidates
 }
 
@@ -258,29 +370,45 @@ func invocationCandidates(invocation InvocationContext) []classificationCandidat
 	registration := invocation.ManagedRegistration
 	if registration.Status == SignalStatusObserved {
 		if provider := providerFromSignal(registration.Value); provider != SystemUnknown {
-			candidates = append(candidates, classificationCandidate{
-				source: registration.Source, provenance: registration.Provenance,
-				signal: registration.Value, provider: provider,
-				strength: classificationStrengthRegistration,
-			})
+			candidates = append(
+				candidates,
+				classificationCandidate{
+					source:     registration.Source,
+					provenance: registration.Provenance,
+					signal:     registration.Value,
+					provider:   provider,
+					strength:   classificationStrengthRegistration,
+				},
+			)
 		}
 	}
+
 	processes := make([]ProcessEvidence, 0, len(invocation.Ancestors)+2)
 	processes = append(processes, invocation.Executable, invocation.ParentProcess)
+
 	processes = append(processes, invocation.Ancestors...)
 	for _, process := range processes {
 		if process.Status != SignalStatusObserved {
 			continue
 		}
+
 		provider := providerFromProcess(process)
 		if provider == SystemUnknown {
 			continue
 		}
-		candidates = append(candidates, classificationCandidate{
-			source: process.Source, provenance: process.Provenance, signal: process.Name,
-			provider: provider, strength: classificationStrengthContext,
-		})
+
+		candidates = append(
+			candidates,
+			classificationCandidate{
+				source:     process.Source,
+				provenance: process.Provenance,
+				signal:     process.Name,
+				provider:   provider,
+				strength:   classificationStrengthContext,
+			},
+		)
 	}
+
 	return candidates
 }
 
@@ -288,45 +416,87 @@ func payloadCandidates(
 	payload DetectionPayload,
 	input PayloadClassificationInput,
 ) []classificationCandidate {
-	candidates := make([]classificationCandidate, 0, len(input.Shapes)+len(input.ProviderIdentifiers))
+	candidates := make(
+		[]classificationCandidate,
+		0,
+		len(input.Shapes)+len(input.ProviderIdentifiers),
+	)
 	for _, identifier := range input.ProviderIdentifiers {
 		provider := providerFromSignal(identifier.Value)
 		if provider == SystemUnknown {
 			continue
 		}
-		candidates = append(candidates, classificationCandidate{
-			source: "payload_identifier", provenance: identifier.Field,
-			signal: identifier.Value, provider: provider,
-			strength: classificationStrengthIdentifier,
-		})
-	}
-	if hasCursorPayload(payload) {
-		candidates = append(candidates, payloadCandidate("cursor_fields", SystemCursor, classificationStrengthPayload))
-	}
-	if hasCopilotPayload(payload) {
-		candidates = append(candidates, payloadCandidate("copilot_fields", SystemCopilot, classificationStrengthPayload))
-	}
-	if hasGeminiEvent(payload) {
-		candidates = append(candidates, classificationCandidate{
-			source: "payload_event", provenance: "hook_event_name", signal: payload.HookEventName,
-			provider: SystemGemini, strength: classificationStrengthPayload,
-		})
-	}
-	if hasClaudePayload(payload) {
-		candidates = append(candidates, payloadCandidate("claude_compatible_fields", SystemClaude, classificationStrengthShared))
-	}
-	if hasCursorEvent(payload) {
-		candidates = append(candidates,
+
+		candidates = append(
+			candidates,
 			classificationCandidate{
-				source: "payload_event", provenance: "hook_event_name", signal: payload.HookEventName,
-				provider: SystemCursor, strength: classificationStrengthShared,
-			},
-			classificationCandidate{
-				source: "payload_event", provenance: "hook_event_name", signal: payload.HookEventName,
-				provider: SystemCopilot, strength: classificationStrengthShared,
+				source:     "payload_identifier",
+				provenance: identifier.Field,
+				signal:     identifier.Value,
+				provider:   provider,
+				strength:   classificationStrengthIdentifier,
 			},
 		)
 	}
+
+	if hasCursorPayload(payload) {
+		candidates = append(
+			candidates,
+			payloadCandidate("cursor_fields", SystemCursor, classificationStrengthPayload),
+		)
+	}
+
+	if hasCopilotPayload(payload) {
+		candidates = append(
+			candidates,
+			payloadCandidate("copilot_fields", SystemCopilot, classificationStrengthPayload),
+		)
+	}
+
+	if hasGeminiEvent(payload) {
+		candidates = append(
+			candidates,
+			classificationCandidate{
+				source:     "payload_event",
+				provenance: "hook_event_name",
+				signal:     payload.HookEventName,
+				provider:   SystemGemini,
+				strength:   classificationStrengthPayload,
+			},
+		)
+	}
+
+	if hasClaudePayload(payload) {
+		candidates = append(
+			candidates,
+			payloadCandidate(
+				"claude_compatible_fields",
+				SystemClaude,
+				classificationStrengthShared,
+			),
+		)
+	}
+
+	if hasCursorEvent(payload) {
+		candidates = append(
+			candidates,
+			classificationCandidate{
+				source:     "payload_event",
+				provenance: "hook_event_name",
+				signal:     payload.HookEventName,
+				provider:   SystemCursor,
+				strength:   classificationStrengthShared,
+			},
+			classificationCandidate{
+				source:     "payload_event",
+				provenance: "hook_event_name",
+				signal:     payload.HookEventName,
+				provider:   SystemCopilot,
+				strength:   classificationStrengthShared,
+			},
+		)
+	}
+
 	return candidates
 }
 
@@ -336,8 +506,11 @@ func payloadCandidate(
 	strength classificationStrength,
 ) classificationCandidate {
 	return classificationCandidate{
-		source: "payload_shape", provenance: "raw_payload", signal: signal,
-		provider: provider, strength: strength,
+		source:     "payload_shape",
+		provenance: "raw_payload",
+		signal:     signal,
+		provider:   provider,
+		strength:   strength,
 	}
 }
 
@@ -347,28 +520,44 @@ func environmentCandidates(environment []EnvironmentEvidence) []classificationCa
 		if evidence.Status != SignalStatusObserved {
 			continue
 		}
+
 		if evidence.Name == "AGENT_GATE_HOOK_PROVIDER" ||
 			evidence.Name == "AGENT_GATE_HOOK_REGISTRATION" {
 			provider := providerFromSignal(evidence.Value)
 			if provider != SystemUnknown {
-				candidates = append(candidates, classificationCandidate{
-					source: evidence.Source, provenance: evidence.Provenance,
-					signal: evidence.Name, provider: provider,
-					strength: classificationStrengthContext,
-				})
+				candidates = append(
+					candidates,
+					classificationCandidate{
+						source:     evidence.Source,
+						provenance: evidence.Provenance,
+						signal:     evidence.Name,
+						provider:   provider,
+						strength:   classificationStrengthContext,
+					},
+				)
 			}
+
 			continue
 		}
+
 		for _, signal := range classificationEnvironmentSignals {
 			if signal.name != evidence.Name || !signal.match(evidence.Value) {
 				continue
 			}
-			candidates = append(candidates, classificationCandidate{
-				source: evidence.Source, provenance: evidence.Provenance,
-				signal: signal.name, provider: signal.provider, strength: signal.strength,
-			})
+
+			candidates = append(
+				candidates,
+				classificationCandidate{
+					source:     evidence.Source,
+					provenance: evidence.Provenance,
+					signal:     signal.name,
+					provider:   signal.provider,
+					strength:   signal.strength,
+				},
+			)
 		}
 	}
+
 	return candidates
 }
 
@@ -378,11 +567,13 @@ func resolveClassification(
 ) Classification {
 	maxStrength := classificationStrength(0)
 	providers := make(map[System]bool)
+
 	for _, candidate := range candidates {
 		if candidate.strength > maxStrength {
 			maxStrength = candidate.strength
 			clear(providers)
 		}
+
 		if candidate.strength == maxStrength {
 			providers[candidate.provider] = true
 		}
@@ -395,6 +586,7 @@ func resolveClassification(
 		for provider := range providers {
 			resolved = provider
 		}
+
 		result = ClassificationResultResolved
 		confidence = classificationConfidence(maxStrength, resolved, candidates)
 	} else if len(providers) > 1 {
@@ -403,21 +595,29 @@ func resolveClassification(
 
 	evidence := make([]ClassificationEvidence, 0, len(candidates))
 	conflicts := make([]ClassificationEvidence, 0)
+
 	for _, candidate := range candidates {
 		item := ClassificationEvidence{
-			Source: candidate.source, Provenance: candidate.provenance,
-			Signal: candidate.signal, Provider: candidate.provider.String(),
-			Strength: candidate.strength.String(),
-			Result:   evidenceResult(candidate.provider, resolved, result),
+			Source:     candidate.source,
+			Provenance: candidate.provenance,
+			Signal:     candidate.signal,
+			Provider:   candidate.provider.String(),
+			Strength:   candidate.strength.String(),
+			Result:     evidenceResult(candidate.provider, resolved, result),
 		}
 		evidence = append(evidence, item)
 		if item.Result == "conflict" {
 			conflicts = append(conflicts, item)
 		}
 	}
+
 	return Classification{
-		Input: input, ResolvedProvider: resolved.String(), Confidence: confidence,
-		Evidence: evidence, Conflicts: conflicts, Result: result,
+		Input:            input,
+		ResolvedProvider: resolved.String(),
+		Confidence:       confidence,
+		Evidence:         evidence,
+		Conflicts:        conflicts,
+		Result:           result,
 	}
 }
 
@@ -429,11 +629,13 @@ func classificationConfidence(
 	if strength < classificationStrengthPayload {
 		return ClassificationConfidenceLow
 	}
+
 	for _, candidate := range candidates {
 		if candidate.provider != resolved && candidate.strength >= classificationStrengthPayload {
 			return ClassificationConfidenceMedium
 		}
 	}
+
 	return ClassificationConfidenceHigh
 }
 
@@ -441,9 +643,11 @@ func evidenceResult(provider System, resolved System, result ClassificationResul
 	if result != ClassificationResultResolved {
 		return "candidate"
 	}
+
 	if provider == resolved {
 		return "match"
 	}
+
 	return "conflict"
 }
 
@@ -473,35 +677,53 @@ func completeInvocationEnvironment(
 	if len(invocation.Environment) > 0 {
 		return invocation
 	}
+
 	filtered := classificationEnvironment(environment)
+
 	names := make([]string, 0, len(filtered))
 	for name := range filtered {
 		names = append(names, name)
 	}
+
 	slices.Sort(names)
+
 	for _, name := range names {
-		invocation.Environment = append(invocation.Environment, EnvironmentEvidence{
-			Name: name, Value: filtered[name], Category: "provider_environment",
-			Source: "environment", Provenance: "inherited_environment",
-			Status: SignalStatusObserved,
-		})
+		invocation.Environment = append(
+			invocation.Environment,
+			EnvironmentEvidence{
+				Name:       name,
+				Value:      filtered[name],
+				Category:   "provider_environment",
+				Source:     "environment",
+				Provenance: "inherited_environment",
+				Status:     SignalStatusObserved,
+			},
+		)
 	}
+
 	return invocation
 }
 
 func classificationEnvironment(environment map[string]string) map[string]string {
 	result := make(map[string]string)
+
 	for _, signal := range classificationEnvironmentSignals {
 		value := environment[signal.name]
 		if value != "" {
 			result[signal.name] = value
 		}
 	}
-	for _, name := range []string{"AGENT_GATE_HOOK_PROVIDER", "AGENT_GATE_HOOK_REGISTRATION", "AGENT_GATE_HOOK_EVENT"} {
+
+	for _, name := range []string{
+		"AGENT_GATE_HOOK_PROVIDER",
+		"AGENT_GATE_HOOK_REGISTRATION",
+		"AGENT_GATE_HOOK_EVENT",
+	} {
 		if value := environment[name]; value != "" {
 			result[name] = value
 		}
 	}
+
 	return result
 }
 
@@ -509,56 +731,80 @@ func unmarshalClassificationPayload(
 	rawBytes []byte,
 ) (PayloadClassificationInput, DetectionPayload, error) {
 	input := PayloadClassificationInput{
-		Status: SignalStatusObserved, EventName: "", Fields: nil, Shapes: nil,
-		ProviderIdentifiers: nil, Error: "",
+		Status:              SignalStatusObserved,
+		EventName:           "",
+		Fields:              nil,
+		Shapes:              nil,
+		ProviderIdentifiers: nil,
+		Error:               "",
 	}
 	var payload DetectionPayload
 	if len(rawBytes) == 0 {
 		err := &emptyClassificationInputError{}
 		input.Status = SignalStatusMissing
 		input.Error = err.Error()
+
 		return input, payload, err
 	}
+
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(rawBytes, &fields); err != nil {
 		input.Status = SignalStatusUnreadable
 		input.Error = "payload is not valid JSON"
 		slog.Warn("decode classification fields failed", slog.Any("err", err))
+
 		return input, payload, fmt.Errorf("decode classification fields: %w", err)
 	}
+
 	if fields == nil {
 		err := &nonObjectClassificationInputError{}
 		input.Status = SignalStatusUnreadable
 		input.Error = err.Error()
+
 		return input, payload, err
 	}
+
 	if err := json.Unmarshal(rawBytes, &payload); err != nil {
 		input.Status = SignalStatusUnreadable
 		input.Error = "payload shape is unreadable"
 		slog.Warn("decode classification payload failed", slog.Any("err", err))
+
 		return input, payload, fmt.Errorf("decode classification payload: %w", err)
 	}
+
 	names := make([]string, 0, len(fields))
 	for name := range fields {
 		names = append(names, name)
 	}
+
 	slices.Sort(names)
+
 	for _, name := range names {
-		input.Fields = append(input.Fields, PayloadFieldEvidence{
-			Name: name, Casing: classificationFieldCasing(name),
-		})
+		input.Fields = append(
+			input.Fields,
+			PayloadFieldEvidence{
+				Name:   name,
+				Casing: classificationFieldCasing(name),
+			},
+		)
 		if !payloadProviderIdentifierFields[name] {
 			continue
 		}
+
 		var value string
 		if err := json.Unmarshal(fields[name], &value); err != nil {
 			continue
 		}
-		input.ProviderIdentifiers = append(input.ProviderIdentifiers,
-			PayloadProviderIdentifier{Field: name, Value: value})
+
+		input.ProviderIdentifiers = append(
+			input.ProviderIdentifiers,
+			PayloadProviderIdentifier{Field: name, Value: value},
+		)
 	}
+
 	input.EventName = payload.HookEventName
 	input.Shapes = detectedPayloadShapes(payload)
+
 	return input, payload, nil
 }
 
@@ -567,18 +813,23 @@ func detectedPayloadShapes(payload DetectionPayload) []string {
 	if hasCursorPayload(payload) {
 		shapes = append(shapes, "cursor_fields")
 	}
+
 	if hasCopilotPayload(payload) {
 		shapes = append(shapes, "copilot_fields")
 	}
+
 	if hasGeminiEvent(payload) {
 		shapes = append(shapes, "gemini_event")
 	}
+
 	if hasClaudePayload(payload) {
 		shapes = append(shapes, "claude_compatible_fields")
 	}
+
 	if hasCursorEvent(payload) {
 		shapes = append(shapes, "shared_lowercase_event")
 	}
+
 	return shapes
 }
 
@@ -586,23 +837,29 @@ func classificationFieldCasing(name string) string {
 	if strings.Contains(name, "_") {
 		return "snake_case"
 	}
+
 	first, _ := utf8.DecodeRuneInString(name)
 	if unicode.IsUpper(first) {
 		return "upper_camel"
 	}
+
 	hasUpper := false
+
 	for _, character := range name {
 		if unicode.IsUpper(character) {
 			hasUpper = true
 			break
 		}
 	}
+
 	if hasUpper {
 		return "lower_camel"
 	}
+
 	if strings.ToLower(name) == name {
 		return "lowercase"
 	}
+
 	return "mixed"
 }
 
@@ -612,6 +869,7 @@ func providerFromProcess(process ProcessEvidence) System {
 			return provider
 		}
 	}
+
 	return SystemUnknown
 }
 
@@ -671,5 +929,6 @@ func MarshalClassification(classification Classification) json.RawMessage {
 	if err != nil {
 		return json.RawMessage(`{}`)
 	}
+
 	return encoded
 }

@@ -117,8 +117,10 @@ func realMain() int {
 		if errors.Is(err, context.Canceled) {
 			return 130
 		}
+
 		return 1
 	}
+
 	return 0
 }
 
@@ -132,11 +134,13 @@ func run(
 	if err != nil {
 		return err
 	}
+
 	testRoot, err := os.MkdirTemp(testRootParent, testRootPattern)
 	if err != nil {
 		slog.ErrorContext(ctx, "ci.auto_update.root_create_failed", "err", err)
 		return fmt.Errorf("create test root: %w", err)
 	}
+
 	slog.InfoContext(ctx, "ci.auto_update.started", "repository", environment.repository)
 	check := &updateCheck{
 		environment: environment,
@@ -157,16 +161,19 @@ func run(
 				runErr = cleanupErr
 				return
 			}
+
 			fmt.Fprintf(stderr, "auto-update cleanup failed: %v\n", cleanupErr)
 		}
 	}()
 	if err := check.prepareDirectories(); err != nil {
 		return err
 	}
+
 	selection, err := check.fetchReleaseSelection(ctx)
 	if err != nil {
 		return err
 	}
+
 	fmt.Fprintf(
 		stdout,
 		"testing automatic update from %s to %s\n",
@@ -176,17 +183,22 @@ func run(
 	if err := check.installOldRelease(ctx, selection.previous); err != nil {
 		return err
 	}
+
 	if err := check.startAuthenticatedProxy(ctx); err != nil {
 		return err
 	}
+
 	if err := check.startDaemon(ctx); err != nil {
 		return err
 	}
+
 	if err := check.waitForUpdate(ctx, selection.target.TagName); err != nil {
 		check.printDiagnostics()
 		return err
 	}
+
 	fmt.Fprintf(stdout, "automatic update applied: %s\n", selection.target.TagName)
+
 	return nil
 }
 
@@ -199,6 +211,7 @@ func loadEnvironment(getenv func(string) string) (environment, error) {
 		token:      strings.TrimSpace(getenv("GH_TOKEN")),
 		manual:     strings.TrimSpace(getenv("GITHUB_EVENT_NAME")) == "workflow_dispatch",
 	}
+
 	required := []struct {
 		name  string
 		value string
@@ -214,9 +227,11 @@ func loadEnvironment(getenv func(string) string) (environment, error) {
 			return environment, fmt.Errorf("%s is required", variable.name)
 		}
 	}
+
 	if len(environment.commit) < 8 {
 		return environment, fmt.Errorf("GITHUB_SHA must contain at least eight characters")
 	}
+
 	return environment, nil
 }
 
@@ -227,18 +242,27 @@ func selectReleases(releases []githubRelease, environment environment) (releaseS
 			eligible = append(eligible, release)
 		}
 	}
-	sort.SliceStable(eligible, func(i int, j int) bool {
-		return eligible[i].PublishedAt.After(eligible[j].PublishedAt)
-	})
+
+	sort.SliceStable(
+		eligible,
+		func(i int, j int) bool {
+			return eligible[i].PublishedAt.After(eligible[j].PublishedAt)
+		},
+	)
 	if environment.manual {
 		if len(eligible) < 2 {
-			return releaseSelection{}, fmt.Errorf("manual run requires at least two published releases")
+			return releaseSelection{}, fmt.Errorf(
+				"manual run requires at least two published releases",
+			)
 		}
+
 		return releaseSelection{target: eligible[0], previous: eligible[1]}, nil
 	}
+
 	targetTag := environment.refName
 	if environment.refType != "tag" {
 		targetTag = ""
+
 		for _, release := range eligible {
 			if releaseMatchesCommit(release.TagName, environment.commit) {
 				targetTag = release.TagName
@@ -246,21 +270,26 @@ func selectReleases(releases []githubRelease, environment environment) (releaseS
 			}
 		}
 	}
+
 	if targetTag == "" {
 		return releaseSelection{}, fmt.Errorf(
 			"published release for commit %s was not found",
 			environment.commit,
 		)
 	}
+
 	for i, release := range eligible {
 		if release.TagName != targetTag {
 			continue
 		}
+
 		if i+1 >= len(eligible) {
 			return releaseSelection{}, fmt.Errorf("release %s has no preceding release", targetTag)
 		}
+
 		return releaseSelection{target: release, previous: eligible[i+1]}, nil
 	}
+
 	return releaseSelection{}, fmt.Errorf("target release %s was not found", targetTag)
 }
 
@@ -273,12 +302,14 @@ func releaseMatchesCommit(tag string, commit string) bool {
 			suffix = next
 		}
 	}
+
 	return len(suffix) >= 7 && strings.HasPrefix(commit, suffix)
 }
 
 func (check *updateCheck) fetchReleaseSelection(ctx context.Context) (releaseSelection, error) {
 	client := &http.Client{Timeout: requestTimeout}
 	var lastErr error
+
 	for attempt := 1; attempt <= maxReleaseAttempts; attempt++ {
 		releases, err := fetchGitHubReleases(ctx, client, check.environment)
 		if err == nil {
@@ -286,16 +317,20 @@ func (check *updateCheck) fetchReleaseSelection(ctx context.Context) (releaseSel
 			if selectErr == nil {
 				return selection, nil
 			}
+
 			lastErr = selectErr
 		} else {
 			lastErr = err
 		}
+
 		fmt.Fprintf(check.stderr, "release selection attempt %d failed: %v\n", attempt, lastErr)
 		if err := wait(ctx, pollInterval); err != nil {
 			return releaseSelection{}, err
 		}
 	}
+
 	slog.WarnContext(ctx, "ci.auto_update.release_selection_failed", "err", lastErr)
+
 	return releaseSelection{}, fmt.Errorf("resolve target and preceding releases: %w", lastErr)
 }
 
@@ -310,6 +345,7 @@ func fetchGitHubReleases(
 		slog.WarnContext(ctx, "ci.auto_update.release_request_failed", "err", err)
 		return nil, fmt.Errorf("build GitHub releases request: %w", err)
 	}
+
 	request.Header.Set("Accept", "application/vnd.github+json")
 	request.Header.Set("Authorization", "Bearer "+environment.token)
 	request.Header.Set("X-Github-Api-Version", "2022-11-28")
@@ -318,32 +354,43 @@ func fetchGitHubReleases(
 		slog.WarnContext(ctx, "ci.auto_update.release_fetch_failed", "err", err)
 		return nil, fmt.Errorf("query GitHub releases: %w", err)
 	}
+
 	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode != http.StatusOK {
-		slog.WarnContext(ctx, "ci.auto_update.release_fetch_rejected", "status", response.StatusCode)
+		slog.WarnContext(
+			ctx,
+			"ci.auto_update.release_fetch_rejected",
+			"status",
+			response.StatusCode,
+		)
 		return nil, fmt.Errorf("query GitHub releases: HTTP %d", response.StatusCode)
 	}
+
 	var releases []githubRelease
 	reader := io.LimitReader(response.Body, maxGitHubBodyBytes)
 	if err := json.NewDecoder(reader).Decode(&releases); err != nil {
 		slog.WarnContext(ctx, "ci.auto_update.release_decode_failed", "err", err)
 		return nil, fmt.Errorf("decode GitHub releases: %w", err)
 	}
+
 	return releases, nil
 }
 
 func releaseAsset(release githubRelease, goos string, goarch string) (githubAsset, error) {
 	assetName := fmt.Sprintf("agent-gate_%s_%s.tar.gz", goos, goarch)
+
 	for _, asset := range release.Assets {
 		if asset.Name == assetName && asset.BrowserDownloadURL != "" {
 			return asset, nil
 		}
 	}
+
 	return githubAsset{}, fmt.Errorf("release %s has no asset %s", release.TagName, assetName)
 }
 
 func (check *updateCheck) prepareDirectories() error {
 	slog.Debug("ci.auto_update.prepare_started", "root", check.testRoot)
+
 	for _, directory := range []string{
 		check.testHome,
 		filepath.Dir(check.installBin),
@@ -357,16 +404,19 @@ func (check *updateCheck) prepareDirectories() error {
 			return fmt.Errorf("create test directory %s: %w", directory, err)
 		}
 	}
+
 	configPath := filepath.Join(check.configRoot, "agent-gate", "config.toml")
 	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
 		slog.Warn("ci.auto_update.config_directory_create_failed", "path", configPath, "err", err)
 		return fmt.Errorf("create daemon config directory: %w", err)
 	}
+
 	daemonConfig := fmt.Sprintf(daemonConfigTemplate, check.environment.repository)
 	if err := os.WriteFile(configPath, []byte(daemonConfig), 0o600); err != nil {
 		slog.Warn("ci.auto_update.config_write_failed", "path", configPath, "err", err)
 		return fmt.Errorf("write daemon config: %w", err)
 	}
+
 	return nil
 }
 
@@ -375,41 +425,62 @@ func (check *updateCheck) installOldRelease(ctx context.Context, release githubR
 	if err != nil {
 		return err
 	}
+
 	client := &http.Client{Timeout: 5 * time.Minute}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, asset.BrowserDownloadURL, nil)
 	if err != nil {
 		slog.WarnContext(ctx, "ci.auto_update.old_release_request_failed", "err", err)
 		return fmt.Errorf("build old release request: %w", err)
 	}
+
 	response, err := client.Do(request)
 	if err != nil {
 		slog.WarnContext(ctx, "ci.auto_update.old_release_download_failed", "err", err)
 		return fmt.Errorf("download old release: %w", err)
 	}
+
 	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode != http.StatusOK {
-		slog.WarnContext(ctx, "ci.auto_update.old_release_download_rejected", "status", response.StatusCode)
+		slog.WarnContext(
+			ctx,
+			"ci.auto_update.old_release_download_rejected",
+			"status",
+			response.StatusCode,
+		)
 		return fmt.Errorf("download old release: HTTP %d", response.StatusCode)
 	}
+
 	if err := extractBinary(response.Body, check.installBin); err != nil {
 		return err
 	}
+
 	version, err := binaryVersion(ctx, check.installBin)
 	if err != nil {
 		return err
 	}
+
 	if version != release.TagName {
-		slog.WarnContext(ctx, "ci.auto_update.old_release_version_mismatch", "got", version, "want", release.TagName)
+		slog.WarnContext(
+			ctx,
+			"ci.auto_update.old_release_version_mismatch",
+			"got",
+			version,
+			"want",
+			release.TagName,
+		)
 		return fmt.Errorf("installed version is %q, expected %q", version, release.TagName)
 	}
+
 	return nil
 }
 
 func authenticatedProxy(target *url.URL, token string) *httputil.ReverseProxy {
-	return &httputil.ReverseProxy{Rewrite: func(request *httputil.ProxyRequest) {
-		request.SetURL(target)
-		request.Out.Header.Set("Authorization", "Bearer "+token)
-	}}
+	return &httputil.ReverseProxy{
+		Rewrite: func(request *httputil.ProxyRequest) {
+			request.SetURL(target)
+			request.Out.Header.Set("Authorization", "Bearer "+token)
+		},
+	}
 }
 
 func (check *updateCheck) startAuthenticatedProxy(ctx context.Context) error {
@@ -418,22 +489,27 @@ func (check *updateCheck) startAuthenticatedProxy(ctx context.Context) error {
 		slog.WarnContext(ctx, "ci.auto_update.api_proxy_url_invalid", "err", err)
 		return fmt.Errorf("parse GitHub API URL: %w", err)
 	}
+
 	listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", "localhost:0")
 	if err != nil {
 		slog.WarnContext(ctx, "ci.auto_update.api_proxy_listen_failed", "err", err)
 		return fmt.Errorf("listen for authenticated GitHub API proxy: %w", err)
 	}
+
 	_, port, err := net.SplitHostPort(listener.Addr().String())
 	if err != nil {
 		err = errors.Join(err, listener.Close())
 		slog.WarnContext(ctx, "ci.auto_update.api_proxy_address_failed", "err", err)
+
 		return fmt.Errorf("resolve authenticated GitHub API proxy address: %w", err)
 	}
+
 	server := httptest.NewUnstartedServer(authenticatedProxy(target, check.environment.token))
 	server.Listener = listener
 	server.Start()
 	server.URL = "http://localhost:" + port
 	check.apiProxy = server
+
 	return nil
 }
 
@@ -443,43 +519,54 @@ func extractBinary(archive io.Reader, destination string) error {
 		slog.Warn("ci.auto_update.archive_open_failed", "err", err)
 		return fmt.Errorf("open old release archive: %w", err)
 	}
+
 	defer func() { _ = gzipReader.Close() }()
 	tarReader := tar.NewReader(gzipReader)
+
 	for {
 		header, nextErr := tarReader.Next()
 		if errors.Is(nextErr, io.EOF) {
 			break
 		}
+
 		if nextErr != nil {
 			slog.Warn("ci.auto_update.archive_read_failed", "err", nextErr)
 			return fmt.Errorf("read old release archive: %w", nextErr)
 		}
+
 		if header.Typeflag != tar.TypeReg || filepath.Base(header.Name) != "agent-gate" {
 			continue
 		}
+
 		if header.Size <= 0 || header.Size > maxBinaryBytes {
 			slog.Warn("ci.auto_update.archive_binary_size_invalid", "size", header.Size)
 			return fmt.Errorf("old release binary has invalid size %d", header.Size)
 		}
+
 		output, openErr := os.OpenFile(destination, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o700)
 		if openErr != nil {
 			slog.Warn("ci.auto_update.binary_create_failed", "path", destination, "err", openErr)
 			return fmt.Errorf("create old release binary: %w", openErr)
 		}
+
 		_, copyErr := io.CopyN(output, tarReader, header.Size)
 		closeErr := output.Close()
 		if copyErr != nil {
 			slog.Warn("ci.auto_update.binary_extract_failed", "path", destination, "err", copyErr)
 			return fmt.Errorf("extract old release binary: %w", copyErr)
 		}
+
 		if closeErr != nil {
 			slog.Warn("ci.auto_update.binary_close_failed", "path", destination, "err", closeErr)
 			return fmt.Errorf("close old release binary: %w", closeErr)
 		}
+
 		return nil
 	}
+
 	err = fmt.Errorf("old release archive has no agent-gate binary")
 	slog.Warn("ci.auto_update.archive_binary_missing", "err", err)
+
 	return err
 }
 
@@ -487,45 +574,67 @@ func (check *updateCheck) startDaemon(ctx context.Context) error {
 	if check.apiProxy == nil {
 		return fmt.Errorf("authenticated GitHub API proxy is not running")
 	}
+
 	logFile, err := os.OpenFile(check.daemonLog, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
-		slog.WarnContext(ctx, "ci.auto_update.daemon_log_create_failed", "path", check.daemonLog, "err", err)
+		slog.WarnContext(
+			ctx,
+			"ci.auto_update.daemon_log_create_failed",
+			"path",
+			check.daemonLog,
+			"err",
+			err,
+		)
 		return fmt.Errorf("create daemon log: %w", err)
 	}
+
 	// #nosec G204 -- installBin is created under the validated temporary root.
 	command := exec.CommandContext(context.WithoutCancel(ctx), check.installBin, "daemon")
 	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	command.Env = replaceEnvironment(os.Environ(), map[string]string{
-		"AGENT_GATE_UPDATE_API_BASE_URL": check.apiProxy.URL,
-		"HOME":                           check.testHome,
-		"XDG_CACHE_HOME":                 check.cacheRoot,
-		"XDG_CONFIG_HOME":                check.configRoot,
-		"XDG_RUNTIME_DIR":                check.runtimeRoot,
-		"XDG_STATE_HOME":                 check.stateRoot,
-	})
+	command.Env = replaceEnvironment(
+		os.Environ(),
+		map[string]string{
+			"AGENT_GATE_UPDATE_API_BASE_URL": check.apiProxy.URL,
+			"HOME":                           check.testHome,
+			"XDG_CACHE_HOME":                 check.cacheRoot,
+			"XDG_CONFIG_HOME":                check.configRoot,
+			"XDG_RUNTIME_DIR":                check.runtimeRoot,
+			"XDG_STATE_HOME":                 check.stateRoot,
+		},
+	)
 	command.Stdout = logFile
 	command.Stderr = logFile
 	if err := command.Start(); err != nil {
 		_ = logFile.Close()
 		slog.WarnContext(ctx, "ci.auto_update.daemon_start_failed", "err", err)
+
 		return fmt.Errorf("start daemon: %w", err)
 	}
+
 	done := make(chan error, 1)
 	go func() {
 		var waitErr error
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				slog.ErrorContext(ctx, "ci.auto_update.daemon_wait_panic", "err", fmt.Sprintf("panic: %v", recovered))
+				slog.ErrorContext(
+					ctx,
+					"ci.auto_update.daemon_wait_panic",
+					"err",
+					fmt.Sprintf("panic: %v", recovered),
+				)
 				waitErr = fmt.Errorf("wait for daemon panic: %v", recovered)
 			}
+
 			if closeErr := logFile.Close(); waitErr == nil {
 				waitErr = closeErr
 			}
+
 			done <- waitErr
 		}()
 		waitErr = command.Wait()
 	}()
 	check.child = &childProcess{process: command.Process, done: done}
+
 	return nil
 }
 
@@ -533,9 +642,11 @@ func (process *childProcess) status() (error, bool) {
 	if process == nil {
 		return nil, true
 	}
+
 	if process.finished {
 		return process.result, true
 	}
+
 	select {
 	case process.result = <-process.done:
 		process.finished = true
@@ -549,11 +660,14 @@ func (process *childProcess) stop() error {
 	if process == nil || process.finished {
 		return nil
 	}
+
 	processGroupID := -process.process.Pid
-	if err := syscall.Kill(processGroupID, syscall.SIGTERM); err != nil && !errors.Is(err, syscall.ESRCH) {
+	if err := syscall.Kill(processGroupID, syscall.SIGTERM); err != nil &&
+		!errors.Is(err, syscall.ESRCH) {
 		slog.Warn("ci.auto_update.daemon_signal_failed", "pid", process.process.Pid, "err", err)
 		return fmt.Errorf("signal daemon process group: %w", err)
 	}
+
 	timer := time.NewTimer(processStopTimeout)
 	defer timer.Stop()
 	select {
@@ -562,12 +676,16 @@ func (process *childProcess) stop() error {
 		return nil
 	case <-timer.C:
 	}
-	if err := syscall.Kill(processGroupID, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+
+	if err := syscall.Kill(processGroupID, syscall.SIGKILL); err != nil &&
+		!errors.Is(err, syscall.ESRCH) {
 		slog.Warn("ci.auto_update.daemon_kill_failed", "pid", process.process.Pid, "err", err)
 		return fmt.Errorf("kill daemon process group: %w", err)
 	}
+
 	process.result = <-process.done
 	process.finished = true
+
 	return nil
 }
 
@@ -578,20 +696,26 @@ func (check *updateCheck) waitForUpdate(ctx context.Context, targetTag string) e
 		if versionErr == nil && stateErr == nil && version == targetTag && applied {
 			return nil
 		}
+
 		if processErr, exited := check.child.status(); exited {
 			if processErr == nil {
 				slog.WarnContext(ctx, "ci.auto_update.daemon_exited_early")
 				return fmt.Errorf("daemon exited before applying the update")
 			}
+
 			slog.WarnContext(ctx, "ci.auto_update.daemon_exited", "err", processErr)
+
 			return fmt.Errorf("daemon exited before applying the update: %w", processErr)
 		}
+
 		if err := wait(ctx, pollInterval); err != nil {
 			return err
 		}
 	}
+
 	err := fmt.Errorf("automatic update did not apply within ten minutes")
 	slog.WarnContext(ctx, "ci.auto_update.timed_out", "err", err)
+
 	return err
 }
 
@@ -601,6 +725,7 @@ func stateReportsApplied(path string) (bool, error) {
 		slog.Warn("ci.auto_update.state_load_failed", "path", path, "err", err)
 		return false, fmt.Errorf("load update state: %w", err)
 	}
+
 	return state.LastResult == "applied", nil
 }
 
@@ -617,8 +742,14 @@ func binaryVersion(ctx context.Context, binary string) (string, error) {
 	command.Stderr = &stderr
 	if err := command.Run(); err != nil {
 		slog.WarnContext(ctx, "ci.auto_update.version_failed", "binary", binary, "err", err)
-		return "", fmt.Errorf("run %s --version: %w: %s", binary, err, strings.TrimSpace(stderr.String()))
+		return "", fmt.Errorf(
+			"run %s --version: %w: %s",
+			binary,
+			err,
+			strings.TrimSpace(stderr.String()),
+		)
 	}
+
 	return parseVersion(stdout.String())
 }
 
@@ -631,6 +762,7 @@ func parseVersion(output string) (string, error) {
 			}
 		}
 	}
+
 	return "", fmt.Errorf("version output has no version field")
 }
 
@@ -644,12 +776,14 @@ func (check *updateCheck) printDiagnostics() {
 			fmt.Fprintln(check.stderr, line)
 		}
 	}
+
 	fmt.Fprintln(check.stderr, "update state:")
 	content, err := os.ReadFile(check.updateStatePath())
 	if err != nil {
 		fmt.Fprintf(check.stderr, "(unavailable: %v)\n", err)
 		return
 	}
+
 	_, _ = check.stderr.Write(content)
 }
 
@@ -659,22 +793,27 @@ func tailLines(path string, count int) ([]string, error) {
 		slog.Warn("ci.auto_update.diagnostic_open_failed", "path", path, "err", err)
 		return nil, fmt.Errorf("open %s: %w", path, err)
 	}
+
 	defer func() { _ = file.Close() }()
 	lines := make([]string, 0, count)
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+
 	for scanner.Scan() {
 		if len(lines) == count {
 			copy(lines, lines[1:])
 			lines[count-1] = scanner.Text()
 			continue
 		}
+
 		lines = append(lines, scanner.Text())
 	}
+
 	if err := scanner.Err(); err != nil {
 		slog.Warn("ci.auto_update.diagnostic_scan_failed", "path", path, "err", err)
 		return nil, fmt.Errorf("scan %s: %w", path, err)
 	}
+
 	return lines, nil
 }
 
@@ -685,16 +824,20 @@ func (check *updateCheck) cleanup() error {
 			cleanupErrors = append(cleanupErrors, err)
 		}
 	}
+
 	if check.apiProxy != nil {
 		check.apiProxy.Close()
 	}
+
 	if err := removeTestRoot(check.testRoot); err != nil {
 		cleanupErrors = append(cleanupErrors, err)
 	}
+
 	err := errors.Join(cleanupErrors...)
 	if err != nil {
 		slog.Warn("ci.auto_update.cleanup_failed", "err", err)
 	}
+
 	return err
 }
 
@@ -705,16 +848,21 @@ func removeTestRoot(path string) error {
 		slog.Warn("ci.auto_update.root_resolve_failed", "path", path, "err", err)
 		return fmt.Errorf("resolve test root %s: %w", path, err)
 	}
-	if relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(os.PathSeparator)) {
+
+	if relative == "." || relative == ".." ||
+		strings.HasPrefix(relative, ".."+string(os.PathSeparator)) {
 		return fmt.Errorf("refuse to remove test root outside the temp directory: %s", path)
 	}
+
 	if !strings.HasPrefix(filepath.Base(cleaned), testRootPattern) {
 		return fmt.Errorf("refuse to remove unexpected test root %s", path)
 	}
+
 	if err := os.RemoveAll(cleaned); err != nil {
 		slog.Warn("ci.auto_update.root_remove_failed", "path", cleaned, "err", err)
 		return fmt.Errorf("remove test root %s: %w", cleaned, err)
 	}
+
 	return nil
 }
 
@@ -727,11 +875,14 @@ func replaceEnvironment(current []string, replacements map[string]string) []stri
 				continue
 			}
 		}
+
 		result = append(result, entry)
 	}
+
 	for name, value := range replacements {
 		result = append(result, name+"="+value)
 	}
+
 	return result
 }
 

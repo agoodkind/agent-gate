@@ -16,10 +16,17 @@ import (
 
 func TestOSRunnerReportsCleanExitCode(t *testing.T) {
 	var runner OSRunner
-	res, err := runner.Run(context.Background(), []string{"/bin/sh", "-c", "exit 3"}, time.Second, nil, nil)
+	res, err := runner.Run(
+		context.Background(),
+		[]string{"/bin/sh", "-c", "exit 3"},
+		time.Second,
+		nil,
+		nil,
+	)
 	if err != nil {
 		t.Fatalf("clean non-zero exit should not be an error: %v", err)
 	}
+
 	if res.ExitCode != 3 {
 		t.Fatalf("expected exit code 3, got %d", res.ExitCode)
 	}
@@ -27,10 +34,17 @@ func TestOSRunnerReportsCleanExitCode(t *testing.T) {
 
 func TestOSRunnerCapturesStdout(t *testing.T) {
 	var runner OSRunner
-	res, err := runner.Run(context.Background(), []string{"/bin/sh", "-c", "echo hello"}, time.Second, nil, nil)
+	res, err := runner.Run(
+		context.Background(),
+		[]string{"/bin/sh", "-c", "echo hello"},
+		time.Second,
+		nil,
+		nil,
+	)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
+
 	if res.ExitCode != 0 || firstLine(res.Stdout) != "hello" {
 		t.Fatalf("unexpected result: %+v", res)
 	}
@@ -38,7 +52,13 @@ func TestOSRunnerCapturesStdout(t *testing.T) {
 
 func TestOSRunnerTimesOut(t *testing.T) {
 	var runner OSRunner
-	_, err := runner.Run(context.Background(), []string{"/bin/sh", "-c", "sleep 2"}, 50*time.Millisecond, nil, nil)
+	_, err := runner.Run(
+		context.Background(),
+		[]string{"/bin/sh", "-c", "sleep 2"},
+		50*time.Millisecond,
+		nil,
+		nil,
+	)
 	if !errors.Is(err, ErrTimeout) {
 		t.Fatalf("expected timeout error, got %v", err)
 	}
@@ -46,7 +66,13 @@ func TestOSRunnerTimesOut(t *testing.T) {
 
 func TestOSRunnerSpawnFailureIsError(t *testing.T) {
 	var runner OSRunner
-	_, err := runner.Run(context.Background(), []string{"/nonexistent/agent-gate-validator"}, time.Second, nil, nil)
+	_, err := runner.Run(
+		context.Background(),
+		[]string{"/nonexistent/agent-gate-validator"},
+		time.Second,
+		nil,
+		nil,
+	)
 	if err == nil {
 		t.Fatalf("expected spawn failure error")
 	}
@@ -78,12 +104,15 @@ func TestBuildRequestCarriesJSONAndEnv(t *testing.T) {
 	if err := json.Unmarshal(stdin, &decoded); err != nil {
 		t.Fatalf("stdin is not valid JSON: %v", err)
 	}
+
 	if decoded.Rule != "grep-codebase-approval" || decoded.EffectiveCWD.Canonical != "/real/cwd" {
 		t.Fatalf("decoded JSON missing fields: %+v", decoded)
 	}
+
 	if decoded.CacheKey.IsCanonical != true {
 		t.Fatalf("expected cache_key canonical flag preserved")
 	}
+
 	if len(decoded.ReadTargets) != 2 || decoded.ReadTargets[0].Canonical != "/real/a.go" {
 		t.Fatalf("decoded read_targets not preserved: %+v", decoded.ReadTargets)
 	}
@@ -108,28 +137,26 @@ func TestBuildRequestCarriesJSONAndEnv(t *testing.T) {
 func TestBuildRequestAddsAvailabilityOnlyForOptInFields(t *testing.T) {
 	available := true
 	unavailable := false
-	stdin, _, err := BuildRequest(Input{Matched: []FieldValue{
-		{Field: "tool_input.command", Value: "make test", Available: nil},
-		{Field: "loop_count", Value: "0", Available: &available},
-		{Field: "last_response_output", Value: "", Available: &unavailable},
-	}})
+	stdin, _, err := BuildRequest(Input{
+		Matched: []FieldValue{
+			{Field: "tool_input.command", Value: "make test", Available: nil},
+			{Field: "loop_count", Value: "0", Available: &available},
+			{Field: "last_response_output", Value: "", Available: &unavailable},
+		},
+	})
 	if err != nil {
 		t.Fatalf("BuildRequest: %v", err)
 	}
 
 	document := string(stdin)
-	if !strings.Contains(
-		document,
-		`{"field":"tool_input.command","value":"make test"}`,
-	) {
+	if !strings.Contains(document, `{"field":"tool_input.command","value":"make test"}`) {
 		t.Fatalf("legacy matched field changed shape: %s", document)
 	}
-	if !strings.Contains(
-		document,
-		`{"field":"loop_count","value":"0","available":true}`,
-	) {
+
+	if !strings.Contains(document, `{"field":"loop_count","value":"0","available":true}`) {
 		t.Fatalf("present opt-in field missing availability: %s", document)
 	}
+
 	if !strings.Contains(
 		document,
 		`{"field":"last_response_output","value":"","available":false}`,
@@ -143,19 +170,28 @@ func TestBuildRequestAddsAvailabilityOnlyForOptInFields(t *testing.T) {
 // therefore never emit NUL in any env value, whatever the input carries.
 func TestBuildRequestStripsNULFromEnv(t *testing.T) {
 	in := Input{
-		Event:        "PreToolUse",
-		System:       "claude",
-		ToolName:     "Bash",
-		Rule:         "grep-code-use-semantic-search",
-		Command:      "grep -rn \x00marker .",
-		EffectiveCWD: PathView{Raw: "\x00UNRESOLVABLE", Canonical: "\x00UNRESOLVABLE", IsCanonical: false},
-		CacheKey:     PathView{Raw: "\x00UNRESOLVABLE", Canonical: "\x00UNRESOLVABLE", IsCanonical: false},
+		Event:    "PreToolUse",
+		System:   "claude",
+		ToolName: "Bash",
+		Rule:     "grep-code-use-semantic-search",
+		Command:  "grep -rn \x00marker .",
+		EffectiveCWD: PathView{
+			Raw:         "\x00UNRESOLVABLE",
+			Canonical:   "\x00UNRESOLVABLE",
+			IsCanonical: false,
+		},
+		CacheKey: PathView{
+			Raw:         "\x00UNRESOLVABLE",
+			Canonical:   "\x00UNRESOLVABLE",
+			IsCanonical: false,
+		},
 	}
 
 	_, env, err := BuildRequest(in)
 	if err != nil {
 		t.Fatalf("BuildRequest: %v", err)
 	}
+
 	for _, kv := range env {
 		if strings.Contains(kv, "\x00") {
 			t.Fatalf("env entry %q contains a NUL byte", kv)
@@ -167,8 +203,12 @@ func TestBuildRequestStripsNULFromEnv(t *testing.T) {
 // input must start a process without error.
 func TestOSRunnerStartsWithSanitizedMarkerEnv(t *testing.T) {
 	in := Input{
-		Command:      "grep -rn \x00marker .",
-		EffectiveCWD: PathView{Raw: "\x00UNRESOLVABLE", Canonical: "\x00UNRESOLVABLE", IsCanonical: false},
+		Command: "grep -rn \x00marker .",
+		EffectiveCWD: PathView{
+			Raw:         "\x00UNRESOLVABLE",
+			Canonical:   "\x00UNRESOLVABLE",
+			IsCanonical: false,
+		},
 	}
 	_, env, err := BuildRequest(in)
 	if err != nil {
@@ -180,41 +220,61 @@ func TestOSRunnerStartsWithSanitizedMarkerEnv(t *testing.T) {
 	if err != nil {
 		t.Fatalf("spawn with sanitized env failed: %v", err)
 	}
+
 	if res.ExitCode != 0 {
 		t.Fatalf("expected exit 0, got %d", res.ExitCode)
 	}
 }
 
 func TestInterpretBlockOnNonzero(t *testing.T) {
-	c := &config.Condition{Kind: string(config.ConditionKindExec), BlockOn: config.BlockOnNonzero, OnError: config.OnErrorOpen}
+	c := &config.Condition{
+		Kind:    string(config.ConditionKindExec),
+		BlockOn: config.BlockOnNonzero,
+		OnError: config.OnErrorOpen,
+	}
 
 	if Interpret(c, RunResult{ExitCode: 0}, nil).Block {
 		t.Fatalf("exit 0 should allow under nonzero policy")
 	}
+
 	if !Interpret(c, RunResult{ExitCode: 1}, nil).Block {
 		t.Fatalf("exit 1 should block under nonzero policy")
 	}
 }
 
 func TestInterpretBlockOnZero(t *testing.T) {
-	c := &config.Condition{Kind: string(config.ConditionKindExec), BlockOn: config.BlockOnZero, OnError: config.OnErrorOpen}
+	c := &config.Condition{
+		Kind:    string(config.ConditionKindExec),
+		BlockOn: config.BlockOnZero,
+		OnError: config.OnErrorOpen,
+	}
 
 	if !Interpret(c, RunResult{ExitCode: 0}, nil).Block {
 		t.Fatalf("exit 0 should block under zero policy")
 	}
+
 	if Interpret(c, RunResult{ExitCode: 1}, nil).Block {
 		t.Fatalf("exit 1 should allow under zero policy")
 	}
 }
 
 func TestInterpretErrorPolicy(t *testing.T) {
-	open := &config.Condition{Kind: string(config.ConditionKindExec), BlockOn: config.BlockOnNonzero, OnError: config.OnErrorOpen}
-	closed := &config.Condition{Kind: string(config.ConditionKindExec), BlockOn: config.BlockOnNonzero, OnError: config.OnErrorClosed}
+	open := &config.Condition{
+		Kind:    string(config.ConditionKindExec),
+		BlockOn: config.BlockOnNonzero,
+		OnError: config.OnErrorOpen,
+	}
+	closed := &config.Condition{
+		Kind:    string(config.ConditionKindExec),
+		BlockOn: config.BlockOnNonzero,
+		OnError: config.OnErrorClosed,
+	}
 
 	openVerdict := Interpret(open, RunResult{}, errors.New("boom"))
 	if openVerdict.Block || !openVerdict.Errored {
 		t.Fatalf("open policy should not block on error: %+v", openVerdict)
 	}
+
 	closedVerdict := Interpret(closed, RunResult{}, errors.New("boom"))
 	if !closedVerdict.Block || !closedVerdict.Errored {
 		t.Fatalf("closed policy should block on error: %+v", closedVerdict)
@@ -222,13 +282,22 @@ func TestInterpretErrorPolicy(t *testing.T) {
 }
 
 func TestInterpretMessageOverrideFromFirstStdoutLine(t *testing.T) {
-	c := &config.Condition{Kind: string(config.ConditionKindExec), BlockOn: config.BlockOnNonzero, OnError: config.OnErrorOpen}
+	c := &config.Condition{
+		Kind:    string(config.ConditionKindExec),
+		BlockOn: config.BlockOnNonzero,
+		OnError: config.OnErrorOpen,
+	}
 
-	verdict := Interpret(c, RunResult{ExitCode: 1, Stdout: "codebase X not approved\ndetail line\n"}, nil)
+	verdict := Interpret(
+		c,
+		RunResult{ExitCode: 1, Stdout: "codebase X not approved\ndetail line\n"},
+		nil,
+	)
 
 	if !verdict.Block {
 		t.Fatalf("expected block")
 	}
+
 	if verdict.Message != "codebase X not approved" {
 		t.Fatalf("expected first stdout line as message, got %q", verdict.Message)
 	}
@@ -268,7 +337,10 @@ func TestInterpretBlockOnMatchTreatsNonzeroExitAsError(t *testing.T) {
 
 	verdict := Interpret(c, RunResult{ExitCode: 2, Stdout: `{"searchable":true}`}, nil)
 	if verdict.Block || !verdict.Errored {
-		t.Fatalf("nonzero exit under block_on=match should be treated as an error, got %+v", verdict)
+		t.Fatalf(
+			"nonzero exit under block_on=match should be treated as an error, got %+v",
+			verdict,
+		)
 	}
 }
 
@@ -292,9 +364,11 @@ stdout_json_equals = "true"
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
+
 	cfg, err := config.LoadExisting(path)
 	if err != nil {
 		t.Fatalf("LoadExisting: %v", err)
 	}
+
 	return &cfg.Rules[0].Conditions[0]
 }

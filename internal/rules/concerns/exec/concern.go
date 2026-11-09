@@ -64,7 +64,13 @@ type RunResult struct {
 // Runner executes the validator command. It is an interface so tests can inject
 // a deterministic fake in place of forking a real process.
 type Runner interface {
-	Run(ctx context.Context, command []string, timeout time.Duration, stdin []byte, env []string) (RunResult, error)
+	Run(
+		ctx context.Context,
+		command []string,
+		timeout time.Duration,
+		stdin []byte,
+		env []string,
+	) (RunResult, error)
 }
 
 // Verdict is the interpreted gate decision for one validator run.
@@ -98,6 +104,7 @@ func BuildRequest(in Input) (stdin []byte, env []string, err error) {
 	if err != nil {
 		return nil, nil, errors.New("marshal exec validator request: " + err.Error())
 	}
+
 	env = sanitizeEnv([]string{
 		"AGENT_GATE_EVENT=" + in.Event,
 		"AGENT_GATE_SYSTEM=" + in.System,
@@ -109,6 +116,7 @@ func BuildRequest(in Input) (stdin []byte, env []string, err error) {
 		"AGENT_GATE_CACHE_KEY=" + in.CacheKey.Canonical,
 		"AGENT_GATE_READ_TARGETS=" + readTargetsEnv(in.ReadTargets),
 	})
+
 	return stdin, env, nil
 }
 
@@ -122,6 +130,7 @@ func sanitizeEnv(env []string) []string {
 			env[i] = strings.ReplaceAll(kv, "\x00", "")
 		}
 	}
+
 	return env
 }
 
@@ -136,11 +145,14 @@ func readTargetsEnv(targets []PathView) string {
 		if path == "" {
 			path = target.Raw
 		}
+
 		if path == "" {
 			continue
 		}
+
 		lines = append(lines, path)
 	}
+
 	return strings.Join(lines, "\n")
 }
 
@@ -159,6 +171,7 @@ func Interpret(c *config.Condition, res RunResult, runErr error) Verdict {
 			PartialError: false,
 		}
 	}
+
 	if c.BlockOn == config.BlockOnMatch {
 		if res.ExitCode != 0 {
 			return Verdict{
@@ -169,6 +182,7 @@ func Interpret(c *config.Condition, res RunResult, runErr error) Verdict {
 				PartialError: false,
 			}
 		}
+
 		matched, err := decodeStdoutJSONMatch(c, res.Stdout)
 		if err != nil {
 			return Verdict{
@@ -179,14 +193,29 @@ func Interpret(c *config.Condition, res RunResult, runErr error) Verdict {
 				PartialError: false,
 			}
 		}
-		return Verdict{Block: matched, Message: "", Output: res.Stdout, Errored: false, PartialError: false}
+
+		return Verdict{
+			Block:        matched,
+			Message:      "",
+			Output:       res.Stdout,
+			Errored:      false,
+			PartialError: false,
+		}
 	}
+
 	block := exitBlocks(c.BlockOn, res.ExitCode)
 	message := ""
 	if block {
 		message = firstLine(res.Stdout)
 	}
-	return Verdict{Block: block, Message: message, Output: res.Stdout, Errored: false, PartialError: false}
+
+	return Verdict{
+		Block:        block,
+		Message:      message,
+		Output:       res.Stdout,
+		Errored:      false,
+		PartialError: false,
+	}
 }
 
 // exitBlocks reports whether exitCode blocks under policy. The nonzero policy
@@ -195,6 +224,7 @@ func exitBlocks(policy string, exitCode int) bool {
 	if policy == config.BlockOnZero {
 		return exitCode == 0
 	}
+
 	return exitCode != 0
 }
 
@@ -203,6 +233,7 @@ func firstLine(s string) string {
 	if idx := strings.IndexAny(trimmed, "\r\n"); idx >= 0 {
 		return strings.TrimSpace(trimmed[:idx])
 	}
+
 	return strings.TrimSpace(trimmed)
 }
 
@@ -211,22 +242,27 @@ func decodeStdoutJSONMatch(c *config.Condition, stdout string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+
 	return jsonScalarMatches(c.StdoutJSONEqualsValue(), field)
 }
 
 func extractJSONField(document []byte, path string) (json.RawMessage, error) {
 	current := json.RawMessage(document)
+
 	for part := range strings.SplitSeq(path, ".") {
 		var object map[string]json.RawMessage
 		if err := json.Unmarshal(current, &object); err != nil {
 			return nil, errors.New("invalid JSON stdout")
 		}
+
 		next, ok := object[part]
 		if !ok {
 			return nil, errors.New("missing JSON field")
 		}
+
 		current = next
 	}
+
 	return current, nil
 }
 
@@ -239,26 +275,31 @@ func jsonScalarMatches(expected config.TOMLScalarValue, actual json.RawMessage) 
 		if err := json.Unmarshal(actual, &got); err != nil {
 			return false, errors.New("invalid boolean JSON field")
 		}
+
 		return got == expected.BoolValue(), nil
 	case config.TOMLScalarString:
 		var got string
 		if err := json.Unmarshal(actual, &got); err != nil {
 			return false, errors.New("invalid string JSON field")
 		}
+
 		return got == expected.StringValue(), nil
 	case config.TOMLScalarInt:
 		got, err := decodeJSONNumber(actual)
 		if err != nil {
 			return false, err
 		}
+
 		return jsonIntEquals(expected.IntValue(), got), nil
 	case config.TOMLScalarFloat:
 		got, err := decodeJSONNumber(actual)
 		if err != nil {
 			return false, err
 		}
+
 		return jsonFloatEquals(expected.FloatValue(), got), nil
 	}
+
 	return false, errors.New("unsupported stdout_json_equals type")
 }
 
@@ -269,6 +310,7 @@ func decodeJSONNumber(actual json.RawMessage) (json.Number, error) {
 	if err := decoder.Decode(&got); err != nil {
 		return json.Number(""), errors.New("invalid numeric JSON field")
 	}
+
 	return got, nil
 }
 
@@ -277,7 +319,9 @@ func jsonIntEquals(expected int64, actual json.Number) bool {
 	if err == nil {
 		return parsed == expected
 	}
+
 	parsedFloat, floatErr := actual.Float64()
+
 	return floatErr == nil && parsedFloat == float64(expected)
 }
 
@@ -286,7 +330,9 @@ func jsonFloatEquals(expected float64, actual json.Number) bool {
 	if err == nil {
 		return parsed == expected
 	}
+
 	parsedInt, intErr := strconv.ParseInt(actual.String(), 10, 64)
+
 	return intErr == nil && float64(parsedInt) == expected
 }
 
@@ -298,10 +344,17 @@ type OSRunner struct{}
 
 // Run executes command with a timeout, returning a clean exit status as a
 // RunResult and a deadline, start failure, or signal kill as an error.
-func (OSRunner) Run(ctx context.Context, command []string, timeout time.Duration, stdin []byte, env []string) (RunResult, error) {
+func (OSRunner) Run(
+	ctx context.Context,
+	command []string,
+	timeout time.Duration,
+	stdin []byte,
+	env []string,
+) (RunResult, error) {
 	if len(command) == 0 {
 		return RunResult{}, errors.New("exec validator command is empty")
 	}
+
 	runCtx := ctx
 	var cancel context.CancelFunc
 	if timeout > 0 {
@@ -321,6 +374,7 @@ func (OSRunner) Run(ctx context.Context, command []string, timeout time.Duration
 	if runCtx.Err() == context.DeadlineExceeded {
 		return RunResult{ExitCode: 0, Stdout: out}, ErrTimeout
 	}
+
 	if err != nil {
 		var exitErr *osexec.ExitError
 		if errors.As(err, &exitErr) {
@@ -328,9 +382,15 @@ func (OSRunner) Run(ctx context.Context, command []string, timeout time.Duration
 			if code < 0 {
 				return RunResult{ExitCode: 0, Stdout: out}, ErrSignaled
 			}
+
 			return RunResult{ExitCode: code, Stdout: out}, nil
 		}
-		return RunResult{ExitCode: 0, Stdout: out}, errors.New("start exec validator: " + err.Error())
+
+		return RunResult{
+			ExitCode: 0,
+			Stdout:   out,
+		}, errors.New("start exec validator: " + err.Error())
 	}
+
 	return RunResult{ExitCode: 0, Stdout: out}, nil
 }

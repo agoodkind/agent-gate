@@ -56,20 +56,28 @@ type IntervalPerformance struct {
 func (c *Config) limits() LimitPerformance {
 	if c == nil {
 		return LimitPerformance{
-			RegexMatchLimit: 0, RegexDepthLimit: 0, AuditQueueLimit: 0,
-			AuditDedupCacheSize: 0, HookInferencePhaseMaxMs: 0,
+			RegexMatchLimit:         0,
+			RegexDepthLimit:         0,
+			AuditQueueLimit:         0,
+			AuditDedupCacheSize:     0,
+			HookInferencePhaseMaxMs: 0,
 		}
 	}
+
 	return c.Performance.Limits
 }
 
 func (c *Config) intervals() IntervalPerformance {
 	if c == nil {
 		return IntervalPerformance{
-			AuditDedupTTLMs: 0, AuditDropLogIntervalMs: 0, OverloadLogIntervalMs: 0,
-			DeferredClaimLeaseMs: 0, DeferredClaimRenewMs: 0,
+			AuditDedupTTLMs:        0,
+			AuditDropLogIntervalMs: 0,
+			OverloadLogIntervalMs:  0,
+			DeferredClaimLeaseMs:   0,
+			DeferredClaimRenewMs:   0,
 		}
 	}
+
 	return c.Performance.Intervals
 }
 
@@ -167,7 +175,9 @@ func validateLimits(limits LimitPerformance, intervals IntervalPerformance) erro
 		if field.value > math.MaxUint32 {
 			return fmt.Errorf(
 				"performance.%s %d exceeds the largest value PCRE2 accepts, %d",
-				field.name, field.value, uint32(math.MaxUint32),
+				field.name,
+				field.value,
+				uint32(math.MaxUint32),
 			)
 		}
 	}
@@ -177,8 +187,10 @@ func validateLimits(limits LimitPerformance, intervals IntervalPerformance) erro
 	if claimRenew >= claimLease {
 		return fmt.Errorf(
 			"performance.intervals.deferred_claim_renew_ms %d must stay under deferred_claim_lease_ms %d",
-			claimRenew, claimLease,
+			claimRenew,
+			claimLease,
 		)
 	}
+
 	return nil
 }

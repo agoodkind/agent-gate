@@ -25,11 +25,13 @@ func loadSecretDumpConfig(t *testing.T) *config.Config {
 	if err != nil {
 		t.Fatalf("read secret dump rules: %v", err)
 	}
+
 	cfg := loadRuleConfig(t, string(body))
 	validationErrors := hook.ValidateConfig(cfg)
 	if len(validationErrors) != 0 {
 		t.Fatalf("secret dump rules are invalid for shipped hook schemas: %v", validationErrors)
 	}
+
 	return cfg
 }
 
@@ -42,11 +44,13 @@ func secretDumpViolations(t *testing.T, cfg *config.Config, command string) []ru
 		"tool_name":  "Bash",
 		"tool_input": map[string]any{"command": command},
 	}
+
 	return rules.EvaluateAll(ctx, "claude", "PreToolUse", testFields(payload), cfg.Rules, nil)
 }
 
 func TestSecretDumpRulesBlockCredentialPrinting(t *testing.T) {
 	cfg := loadSecretDumpConfig(t)
+
 	blocked := []secretDumpCase{
 		{"make short flag", "make -p"},
 		{"make combined flag group", "make -qp"},
@@ -91,8 +95,14 @@ func TestSecretDumpRulesBlockCredentialPrinting(t *testing.T) {
 		{"readonly without names", "readonly"},
 		{"bash script runs env", "bash -c 'env'"},
 		{"bash script runs env with the long null flag", "bash -c 'env --null'"},
-		{"bash script runs env null flag with assignment only", "bash -c 'env -0 CANARY_TOKEN=canary-0000-not-a-secret'"},
-		{"bash script runs env with assignment only", "bash -c 'env CANARY_TOKEN=canary-0000-not-a-secret'"},
+		{
+			"bash script runs env null flag with assignment only",
+			"bash -c 'env -0 CANARY_TOKEN=canary-0000-not-a-secret'",
+		},
+		{
+			"bash script runs env with assignment only",
+			"bash -c 'env CANARY_TOKEN=canary-0000-not-a-secret'",
+		},
 		{"sh script runs printenv", `sh -c "printenv"`},
 		{"login shell script runs env after cd", "bash -lc 'cd /tmp && env | sort'"},
 		{"zsh script runs export listing", "zsh -c 'export -p'"},
@@ -111,12 +121,15 @@ func TestSecretDumpRulesBlockCredentialPrinting(t *testing.T) {
 		{"xargs reads proc environ", "xargs -0 -a /proc/4242/environ"},
 	}
 	for _, testCase := range blocked {
-		t.Run(testCase.name, func(t *testing.T) {
-			violations := secretDumpViolations(t, cfg, testCase.command)
-			if len(violations) == 0 {
-				t.Fatalf("command %q was allowed", testCase.command)
-			}
-		})
+		t.Run(
+			testCase.name,
+			func(t *testing.T) {
+				violations := secretDumpViolations(t, cfg, testCase.command)
+				if len(violations) == 0 {
+					t.Fatalf("command %q was allowed", testCase.command)
+				}
+			},
+		)
 	}
 }
 
@@ -124,6 +137,7 @@ func TestSecretDumpRulesSeparateProcessEnvironmentFromArguments(t *testing.T) {
 	cfg := loadSecretDumpConfig(t)
 	const environmentRule = "no-secret-dump-ps-environment"
 	const argumentsRule = "no-secret-dump-ps-arguments"
+
 	cases := []struct {
 		command         string
 		wantEnvironment bool
@@ -138,28 +152,48 @@ func TestSecretDumpRulesSeparateProcessEnvironmentFromArguments(t *testing.T) {
 		{"ps -o pid,args -p 4242", false, true},
 	}
 	for _, testCase := range cases {
-		t.Run(testCase.command, func(t *testing.T) {
-			matched := map[string]bool{}
-			for _, violation := range secretDumpViolations(t, cfg, testCase.command) {
-				matched[violation.RuleName] = true
-			}
-			if matched[environmentRule] != testCase.wantEnvironment {
-				t.Errorf("%s matched = %t, want %t", environmentRule, matched[environmentRule], testCase.wantEnvironment)
-			}
-			if matched[argumentsRule] != testCase.wantArguments {
-				t.Errorf("%s matched = %t, want %t", argumentsRule, matched[argumentsRule], testCase.wantArguments)
-			}
-		})
+		t.Run(
+			testCase.command,
+			func(t *testing.T) {
+				matched := map[string]bool{}
+
+				for _, violation := range secretDumpViolations(t, cfg, testCase.command) {
+					matched[violation.RuleName] = true
+				}
+
+				if matched[environmentRule] != testCase.wantEnvironment {
+					t.Errorf(
+						"%s matched = %t, want %t",
+						environmentRule,
+						matched[environmentRule],
+						testCase.wantEnvironment,
+					)
+				}
+
+				if matched[argumentsRule] != testCase.wantArguments {
+					t.Errorf(
+						"%s matched = %t, want %t",
+						argumentsRule,
+						matched[argumentsRule],
+						testCase.wantArguments,
+					)
+				}
+			},
+		)
 	}
 }
 
 func TestSecretDumpRulesAllowOrdinaryCommands(t *testing.T) {
 	cfg := loadSecretDumpConfig(t)
+
 	allowed := []secretDumpCase{
 		{"env runs a command with an assignment", "env CANARY_TOKEN=canary-0000-not-a-secret true"},
 		{"env unset flag runs a command", "env -u CANARY_TOKEN true"},
 		{"env null flag runs a command", "env -0 true"},
-		{"env null flag runs a command with an assignment", "env -0 CANARY_TOKEN=canary-0000-not-a-secret true"},
+		{
+			"env null flag runs a command with an assignment",
+			"env -0 CANARY_TOKEN=canary-0000-not-a-secret true",
+		},
 		{"printenv with a name", "printenv CANARY_TOKEN"},
 		{"make build", "make build"},
 		{"make dry run", "make -n build"},
@@ -167,8 +201,14 @@ func TestSecretDumpRulesAllowOrdinaryCommands(t *testing.T) {
 		{"make directory named p", "make -C p build"},
 		{"make parallel flag", "make -j8 build"},
 		{"make file flag", "make -f Makefile build"},
-		{"make variable quotes a test skip flag", `make test "TEST_ARGS=-count=1 -v -skip 'TestCanary'"`},
-		{"patch body lists dump commands", "*** Begin Patch\n*** Add File: canary.sh\n+env\n+set\n+ps aux\n+export -p\n*** End Patch"},
+		{
+			"make variable quotes a test skip flag",
+			`make test "TEST_ARGS=-count=1 -v -skip 'TestCanary'"`,
+		},
+		{
+			"patch body lists dump commands",
+			"*** Begin Patch\n*** Add File: canary.sh\n+env\n+set\n+ps aux\n+export -p\n*** End Patch",
+		},
 		{"export assigns a value", "export CANARY_TOKEN=canary-0000-not-a-secret"},
 		{"declare prints one variable", "declare -p CANARY_TOKEN"},
 		{"declare exports an assignment", "declare -x CANARY_TOKEN=canary-0000-not-a-secret"},
@@ -181,8 +221,14 @@ func TestSecretDumpRulesAllowOrdinaryCommands(t *testing.T) {
 		{"comment mentions export", "true # export -p"},
 		{"readonly marks one variable", "readonly CANARY_LIMIT=1"},
 		{"bash script sets errexit", "bash -c 'set -e; make build'"},
-		{"bash script runs env with a command", "bash -c 'env CANARY_TOKEN=canary-0000-not-a-secret true'"},
-		{"bash script runs env null flag with a command", "bash -c 'env -0 CANARY_TOKEN=canary-0000-not-a-secret true'"},
+		{
+			"bash script runs env with a command",
+			"bash -c 'env CANARY_TOKEN=canary-0000-not-a-secret true'",
+		},
+		{
+			"bash script runs env null flag with a command",
+			"bash -c 'env -0 CANARY_TOKEN=canary-0000-not-a-secret true'",
+		},
 		{"bash script prints one variable", "bash -c 'printenv CANARY_TOKEN'"},
 		{"bash script echoes the word env", "bash -c 'echo env'"},
 		{"bash runs an unquoted true script", "bash -c true"},
@@ -205,19 +251,25 @@ func TestSecretDumpRulesAllowOrdinaryCommands(t *testing.T) {
 		{"echo mentions proc environ", "echo /proc/1/environ"},
 		{"commit message quotes make", `git commit -m "document make -p and env and export -p"`},
 		{"echo quotes env", `echo "env"`},
-		{"heredoc body mentions dump commands", "git commit -F - <<'EOF'\nmake -p\nenv\nset\nps eww\nEOF"},
+		{
+			"heredoc body mentions dump commands",
+			"git commit -F - <<'EOF'\nmake -p\nenv\nset\nps eww\nEOF",
+		},
 	}
 	for _, testCase := range allowed {
-		t.Run(testCase.name, func(t *testing.T) {
-			violations := secretDumpViolations(t, cfg, testCase.command)
-			if len(violations) != 0 {
-				t.Fatalf(
-					"command %q was blocked by rule %q: %s",
-					testCase.command,
-					violations[0].RuleName,
-					violations[0].Message,
-				)
-			}
-		})
+		t.Run(
+			testCase.name,
+			func(t *testing.T) {
+				violations := secretDumpViolations(t, cfg, testCase.command)
+				if len(violations) != 0 {
+					t.Fatalf(
+						"command %q was blocked by rule %q: %s",
+						testCase.command,
+						violations[0].RuleName,
+						violations[0].Message,
+					)
+				}
+			},
+		)
 	}
 }

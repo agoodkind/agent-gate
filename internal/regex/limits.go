@@ -241,7 +241,10 @@ func pcre2CaptureCount(handle *C.pcre2_regex_handle) uint32 {
 	return uint32(C.pcre2_handle_capture_count(handle))
 }
 
-func pcre2GroupBounds(handle *C.pcre2_regex_handle, group uint32) (start, end int, unset bool, ok bool) {
+func pcre2GroupBounds(
+	handle *C.pcre2_regex_handle,
+	group uint32,
+) (start, end int, unset bool, ok bool) {
 	if handle == nil {
 		return 0, 0, false, false
 	}
@@ -267,7 +270,11 @@ func pcre2MatchError(rc int) error {
 
 	var buf [256]C.char
 
-	C.pcre2_format_match_error(C.int(rc), (*C.char)(unsafe.Pointer(&buf[0])), C.PCRE2_SIZE(len(buf)))
+	C.pcre2_format_match_error(
+		C.int(rc),
+		(*C.char)(unsafe.Pointer(&buf[0])),
+		C.PCRE2_SIZE(len(buf)),
+	)
 	msg := C.GoString((*C.char)(unsafe.Pointer(&buf[0])))
 	if msg == "" {
 		msg = fmt.Sprintf("pcre2_match error %d", rc)

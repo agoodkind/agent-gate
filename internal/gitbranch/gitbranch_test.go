@@ -11,15 +11,23 @@ import (
 // git config and hooks cannot interfere with the fixture repos.
 func runGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
-	full := append([]string{
-		"-c", "user.email=test@example.com",
-		"-c", "user.name=Test",
-		"-c", "commit.gpgsign=false",
-		"-c", "init.defaultBranch=main",
-	}, args...)
+	full := append(
+		[]string{
+			"-c",
+			"user.email=test@example.com",
+			"-c",
+			"user.name=Test",
+			"-c",
+			"commit.gpgsign=false",
+			"-c",
+			"init.defaultBranch=main",
+		},
+		args...,
+	)
 	cmd := exec.Command("git", full...)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(),
+	cmd.Env = append(
+		os.Environ(),
 		"GIT_CONFIG_GLOBAL="+os.DevNull,
 		"GIT_CONFIG_SYSTEM="+os.DevNull,
 		"GIT_TERMINAL_PROMPT=0",
@@ -34,13 +42,16 @@ func initRepo(t *testing.T, dir string) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git binary not available")
 	}
+
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
+
 	runGit(t, dir, "init", "-q")
 	if err := os.WriteFile(filepath.Join(dir, "f.txt"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+
 	runGit(t, dir, "add", "f.txt")
 	runGit(t, dir, "commit", "-qm", "init")
 }
@@ -48,8 +59,14 @@ func initRepo(t *testing.T, dir string) {
 func assert(t *testing.T, label string, gotMatch, gotResolved, wantMatch, wantResolved bool) {
 	t.Helper()
 	if gotMatch != wantMatch || gotResolved != wantResolved {
-		t.Fatalf("%s: got match=%v resolved=%v, want match=%v resolved=%v",
-			label, gotMatch, gotResolved, wantMatch, wantResolved)
+		t.Fatalf(
+			"%s: got match=%v resolved=%v, want match=%v resolved=%v",
+			label,
+			gotMatch,
+			gotResolved,
+			wantMatch,
+			wantResolved,
+		)
 	}
 }
 
@@ -58,12 +75,15 @@ func onDefaultBranchForTest(path string) (bool, bool) {
 	if err != nil {
 		return false, false
 	}
+
 	if state.CurrentBranch == "" {
 		return false, true
 	}
+
 	if state.DefaultBranch == "" {
 		return false, false
 	}
+
 	return state.CurrentBranch == state.DefaultBranch, true
 }
 
@@ -92,10 +112,12 @@ func TestExistingNestedFileResolvesRepo(t *testing.T) {
 	if err := os.MkdirAll(sub, 0o755); err != nil {
 		t.Fatal(err)
 	}
+
 	nested := filepath.Join(sub, "nested.go")
 	if err := os.WriteFile(nested, []byte("package x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+
 	match, resolved := onDefaultBranchForTest(nested)
 	assert(t, "existing nested file on main", match, resolved, true, true)
 }
@@ -116,6 +138,7 @@ func TestLinkedWorktreeOnFeatureBranch(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(wt), 0o755); err != nil {
 		t.Fatal(err)
 	}
+
 	runGit(t, repo, "worktree", "add", "-q", "-b", "task", wt)
 	match, resolved := onDefaultBranchForTest(filepath.Join(wt, "f.txt"))
 	assert(t, "worktree on feature", match, resolved, false, true)

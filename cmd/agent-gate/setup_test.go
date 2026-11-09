@@ -18,18 +18,34 @@ func TestSetupNonInteractivePreviewsBeforeWrites(t *testing.T) {
 	var stderr bytes.Buffer
 	applyCalls := 0
 	exitCode := runSetupWithDependencies(
-		[]string{"--non-interactive", "--providers", "codex", "--audit-profile", "minimal", "--auto-update", "check"},
+		[]string{
+			"--non-interactive",
+			"--providers",
+			"codex",
+			"--audit-profile",
+			"minimal",
+			"--auto-update",
+			"check",
+		},
 		&stdout,
 		&stderr,
 		setupCommandDependencies{
 			ResolveExecutable: func() (string, error) { return "/bin/echo", nil },
-			Prepare: func(context.Context, setup.Options, setup.Dependencies) (*setup.Plan, error) {
+			Prepare: func(context.Context, setup.Options, setup.Dependencies) (
+				*setup.Plan,
+				error,
+			) {
 				return &setup.Plan{
-					Providers:       []installer.Provider{installer.ProviderCodex},
-					EffectivePolicy: config.AuditStoragePolicy{Profile: config.AuditStorageProfileMinimal},
+					Providers: []installer.Provider{installer.ProviderCodex},
+					EffectivePolicy: config.AuditStoragePolicy{
+						Profile: config.AuditStorageProfileMinimal,
+					},
 				}, nil
 			},
-			Apply: func(context.Context, *setup.Plan, setup.Dependencies) (setup.Result, error) {
+			Apply: func(context.Context, *setup.Plan, setup.Dependencies) (
+				setup.Result,
+				error,
+			) {
 				applyCalls++
 				if !strings.Contains(stdout.String(), "audit storage: minimal") {
 					t.Fatalf("stdout before apply = %q", stdout.String())
@@ -39,41 +55,76 @@ func TestSetupNonInteractivePreviewsBeforeWrites(t *testing.T) {
 		},
 	)
 	if exitCode != 0 || applyCalls != 1 {
-		t.Fatalf("exit code = %d, apply calls = %d, stderr = %q", exitCode, applyCalls, stderr.String())
+		t.Fatalf(
+			"exit code = %d, apply calls = %d, stderr = %q",
+			exitCode,
+			applyCalls,
+			stderr.String(),
+		)
 	}
 }
 
 func TestSetupNonInteractiveRequiresProviderSelection(t *testing.T) {
-	exitCode, stderr := runSetupError(t, []string{
-		"--non-interactive", "--audit-profile", "full", "--auto-update", "apply",
-	})
+	exitCode, stderr := runSetupError(
+		t,
+		[]string{
+			"--non-interactive",
+			"--audit-profile",
+			"full",
+			"--auto-update",
+			"apply",
+		},
+	)
 	if exitCode != 2 || !strings.Contains(stderr, "--providers is required") {
 		t.Fatalf("exit code = %d, stderr = %q", exitCode, stderr)
 	}
 }
 
 func TestSetupNonInteractiveRejectsEmptyProviderSelection(t *testing.T) {
-	exitCode, stderr := runSetupError(t, []string{
-		"--non-interactive", "--providers", "", "--audit-profile", "full", "--auto-update", "apply",
-	})
+	exitCode, stderr := runSetupError(
+		t,
+		[]string{
+			"--non-interactive",
+			"--providers",
+			"",
+			"--audit-profile",
+			"full",
+			"--auto-update",
+			"apply",
+		},
+	)
 	if exitCode != 2 || !strings.Contains(stderr, "at least one provider is required") {
 		t.Fatalf("exit code = %d, stderr = %q", exitCode, stderr)
 	}
 }
 
 func TestSetupNonInteractiveRequiresAuditProfile(t *testing.T) {
-	exitCode, stderr := runSetupError(t, []string{
-		"--non-interactive", "--providers", "claude", "--auto-update", "apply",
-	})
+	exitCode, stderr := runSetupError(
+		t,
+		[]string{
+			"--non-interactive",
+			"--providers",
+			"claude",
+			"--auto-update",
+			"apply",
+		},
+	)
 	if exitCode != 2 || !strings.Contains(stderr, "--audit-profile is required") {
 		t.Fatalf("exit code = %d, stderr = %q", exitCode, stderr)
 	}
 }
 
 func TestSetupNonInteractiveRequiresAutoUpdateMode(t *testing.T) {
-	exitCode, stderr := runSetupError(t, []string{
-		"--non-interactive", "--providers", "claude", "--audit-profile", "full",
-	})
+	exitCode, stderr := runSetupError(
+		t,
+		[]string{
+			"--non-interactive",
+			"--providers",
+			"claude",
+			"--audit-profile",
+			"full",
+		},
+	)
 	if exitCode != 2 || !strings.Contains(stderr, "--auto-update is required") {
 		t.Fatalf("exit code = %d, stderr = %q", exitCode, stderr)
 	}
@@ -102,8 +153,9 @@ func TestSetupNonInteractiveReturnsOneForProbeFailure(t *testing.T) {
 
 func TestSetupNonInteractivePrintsRepairCommand(t *testing.T) {
 	applyErr := &installer.ApplyError{
-		Stage: installer.StageHooks, RepairCommand: "agent-gate install hooks --providers codex",
-		Err: errors.New("write hooks"),
+		Stage:         installer.StageHooks,
+		RepairCommand: "agent-gate install hooks --providers codex",
+		Err:           errors.New("write hooks"),
 	}
 	exitCode, stderr := runSetupFailure(t, nil, applyErr)
 	if exitCode != 1 || !strings.Contains(stderr, applyErr.RepairCommand) {
@@ -115,18 +167,35 @@ func TestSetupNonInteractiveJSONOutputIsMachineReadable(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	exitCode := runSetupWithDependencies(
-		[]string{"--non-interactive", "--providers", "claude", "--audit-profile", "full", "--auto-update", "apply", "--json"},
+		[]string{
+			"--non-interactive",
+			"--providers",
+			"claude",
+			"--audit-profile",
+			"full",
+			"--auto-update",
+			"apply",
+			"--json",
+		},
 		&stdout,
 		&stderr,
 		setupCommandDependencies{
 			ResolveExecutable: func() (string, error) { return "/bin/echo", nil },
-			Prepare: func(context.Context, setup.Options, setup.Dependencies) (*setup.Plan, error) {
+			Prepare: func(context.Context, setup.Options, setup.Dependencies) (
+				*setup.Plan,
+				error,
+			) {
 				return &setup.Plan{
-					Providers:       []installer.Provider{installer.ProviderClaude},
-					EffectivePolicy: config.AuditStoragePolicy{Profile: config.AuditStorageProfileFull},
+					Providers: []installer.Provider{installer.ProviderClaude},
+					EffectivePolicy: config.AuditStoragePolicy{
+						Profile: config.AuditStorageProfileFull,
+					},
 				}, nil
 			},
-			Apply: func(context.Context, *setup.Plan, setup.Dependencies) (setup.Result, error) {
+			Apply: func(context.Context, *setup.Plan, setup.Dependencies) (
+				setup.Result,
+				error,
+			) {
 				return setup.Result{SetupID: "setup-json"}, nil
 			},
 		},
@@ -134,7 +203,11 @@ func TestSetupNonInteractiveJSONOutputIsMachineReadable(t *testing.T) {
 	if exitCode != 0 || stderr.Len() != 0 {
 		t.Fatalf("exit code = %d, stderr = %q", exitCode, stderr.String())
 	}
-	for _, want := range []string{`"phase":"preview"`, `"phase":"complete"`, `"setup_id":"setup-json"`} {
+	for _, want := range []string{
+		`"phase":"preview"`,
+		`"phase":"complete"`,
+		`"setup_id":"setup-json"`,
+	} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Fatalf("stdout = %q, want %q", stdout.String(), want)
 		}
@@ -154,32 +227,58 @@ func TestSetupInteractivePreviewsConfirmsAppliesAndPrintsEveryProvider(t *testin
 			return true, nil
 		},
 	}
-	exitCode := runSetupWithDependencies(nil, &stdout, &stderr, setupCommandDependencies{
-		ResolveExecutable: func() (string, error) { return "/bin/echo", nil },
-		DetectProviders: func(setup.DetectOptions) ([]setup.ProviderState, error) {
-			return []setup.ProviderState{{Provider: installer.ProviderClaude, ClientPath: "/bin/claude"}}, nil
+	exitCode := runSetupWithDependencies(
+		nil,
+		&stdout,
+		&stderr,
+		setupCommandDependencies{
+			ResolveExecutable: func() (string, error) { return "/bin/echo", nil },
+			DetectProviders: func(setup.DetectOptions) ([]setup.ProviderState, error) {
+				return []setup.ProviderState{
+					{Provider: installer.ProviderClaude, ClientPath: "/bin/claude"},
+				}, nil
+			},
+			LoadConfig: func() (*config.Config, error) { return &config.Config{}, nil },
+			Prompter:   prompter,
+			Prepare: func(_ context.Context, options setup.Options, _ setup.Dependencies) (
+				*setup.Plan,
+				error,
+			) {
+				if !reflect.DeepEqual(options.Providers, prompter.providers) {
+					t.Fatalf("providers = %#v", options.Providers)
+				}
+				if options.AuditProfile != prompter.profile || options.AutoUpdate != "" {
+					t.Fatalf("options = %#v", options)
+				}
+				return &setup.Plan{
+					Providers:       append([]installer.Provider(nil), options.Providers...),
+					EffectivePolicy: config.AuditStoragePolicy{Profile: options.AuditProfile},
+				}, nil
+			},
+			Apply: func(context.Context, *setup.Plan, setup.Dependencies) (
+				setup.Result,
+				error,
+			) {
+				return setup.Result{
+					SetupID: "setup-interactive",
+					Probes: []setup.ProbeResult{
+						{
+							Provider:     installer.ProviderClaude,
+							ReceiptID:    1,
+							EvaluationID: "eval-1",
+							Decision:     "allow",
+						},
+						{
+							Provider:     installer.ProviderCursor,
+							ReceiptID:    2,
+							EvaluationID: "eval-2",
+							Decision:     "allow",
+						},
+					},
+				}, nil
+			},
 		},
-		LoadConfig: func() (*config.Config, error) { return &config.Config{}, nil },
-		Prompter:   prompter,
-		Prepare: func(_ context.Context, options setup.Options, _ setup.Dependencies) (*setup.Plan, error) {
-			if !reflect.DeepEqual(options.Providers, prompter.providers) {
-				t.Fatalf("providers = %#v", options.Providers)
-			}
-			if options.AuditProfile != prompter.profile || options.AutoUpdate != "" {
-				t.Fatalf("options = %#v", options)
-			}
-			return &setup.Plan{
-				Providers:       append([]installer.Provider(nil), options.Providers...),
-				EffectivePolicy: config.AuditStoragePolicy{Profile: options.AuditProfile},
-			}, nil
-		},
-		Apply: func(context.Context, *setup.Plan, setup.Dependencies) (setup.Result, error) {
-			return setup.Result{SetupID: "setup-interactive", Probes: []setup.ProbeResult{
-				{Provider: installer.ProviderClaude, ReceiptID: 1, EvaluationID: "eval-1", Decision: "allow"},
-				{Provider: installer.ProviderCursor, ReceiptID: 2, EvaluationID: "eval-2", Decision: "allow"},
-			}}, nil
-		},
-	})
+	)
 	if exitCode != 0 || stderr.Len() != 0 {
 		t.Fatalf("exit code = %d, stderr = %q", exitCode, stderr.String())
 	}
@@ -194,50 +293,75 @@ func TestSetupInteractiveCancellationClosesPlanWithoutApply(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	closeCalls := 0
-	exitCode := runSetupWithDependencies(nil, &stdout, &stderr, setupCommandDependencies{
-		ResolveExecutable: func() (string, error) { return "/bin/echo", nil },
-		DetectProviders: func(setup.DetectOptions) ([]setup.ProviderState, error) {
-			return nil, nil
+	exitCode := runSetupWithDependencies(
+		nil,
+		&stdout,
+		&stderr,
+		setupCommandDependencies{
+			ResolveExecutable: func() (string, error) { return "/bin/echo", nil },
+			DetectProviders: func(setup.DetectOptions) ([]setup.ProviderState, error) {
+				return nil, nil
+			},
+			LoadConfig: func() (*config.Config, error) { return &config.Config{}, nil },
+			Prompter: &scriptedSetupPrompter{
+				providers: []installer.Provider{installer.ProviderCodex},
+				profile:   config.AuditStorageProfileFull,
+				confirm:   func(PlanSummary) (bool, error) { return false, nil },
+			},
+			Prepare: func(context.Context, setup.Options, setup.Dependencies) (
+				*setup.Plan,
+				error,
+			) {
+				return &setup.Plan{}, nil
+			},
+			Close: func(*setup.Plan) error {
+				closeCalls++
+				return nil
+			},
+			Apply: func(context.Context, *setup.Plan, setup.Dependencies) (
+				setup.Result,
+				error,
+			) {
+				t.Fatal("Apply called after cancellation")
+				return setup.Result{}, nil
+			},
 		},
-		LoadConfig: func() (*config.Config, error) { return &config.Config{}, nil },
-		Prompter: &scriptedSetupPrompter{
-			providers: []installer.Provider{installer.ProviderCodex},
-			profile:   config.AuditStorageProfileFull,
-			confirm:   func(PlanSummary) (bool, error) { return false, nil },
-		},
-		Prepare: func(context.Context, setup.Options, setup.Dependencies) (*setup.Plan, error) {
-			return &setup.Plan{}, nil
-		},
-		Close: func(*setup.Plan) error {
-			closeCalls++
-			return nil
-		},
-		Apply: func(context.Context, *setup.Plan, setup.Dependencies) (setup.Result, error) {
-			t.Fatal("Apply called after cancellation")
-			return setup.Result{}, nil
-		},
-	})
+	)
 	if exitCode != 0 || closeCalls != 1 || !strings.Contains(stdout.String(), "setup cancelled") {
-		t.Fatalf("exit code = %d, close calls = %d, stdout = %q, stderr = %q", exitCode, closeCalls, stdout.String(), stderr.String())
+		t.Fatalf(
+			"exit code = %d, close calls = %d, stdout = %q, stderr = %q",
+			exitCode,
+			closeCalls,
+			stdout.String(),
+			stderr.String(),
+		)
 	}
 }
 
 func TestSetupInteractiveRejectsEmptySelectionBeforePrepare(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	exitCode := runSetupWithDependencies(nil, &stdout, &stderr, setupCommandDependencies{
-		ResolveExecutable: func() (string, error) { return "/bin/echo", nil },
-		DetectProviders:   func(setup.DetectOptions) ([]setup.ProviderState, error) { return nil, nil },
-		LoadConfig:        func() (*config.Config, error) { return &config.Config{}, nil },
-		Prompter: &scriptedSetupPrompter{
-			providers: []installer.Provider{},
-			profile:   config.AuditStorageProfileFull,
+	exitCode := runSetupWithDependencies(
+		nil,
+		&stdout,
+		&stderr,
+		setupCommandDependencies{
+			ResolveExecutable: func() (string, error) { return "/bin/echo", nil },
+			DetectProviders:   func(setup.DetectOptions) ([]setup.ProviderState, error) { return nil, nil },
+			LoadConfig:        func() (*config.Config, error) { return &config.Config{}, nil },
+			Prompter: &scriptedSetupPrompter{
+				providers: []installer.Provider{},
+				profile:   config.AuditStorageProfileFull,
+			},
+			Prepare: func(context.Context, setup.Options, setup.Dependencies) (
+				*setup.Plan,
+				error,
+			) {
+				t.Fatal("Prepare called for empty selection")
+				return nil, nil
+			},
 		},
-		Prepare: func(context.Context, setup.Options, setup.Dependencies) (*setup.Plan, error) {
-			t.Fatal("Prepare called for empty selection")
-			return nil, nil
-		},
-	})
+	)
 	if exitCode != 2 || !strings.Contains(stderr.String(), "at least one provider is required") {
 		t.Fatalf("exit code = %d, stderr = %q", exitCode, stderr.String())
 	}
@@ -247,13 +371,21 @@ func runSetupError(t *testing.T, args []string) (int, string) {
 	t.Helper()
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	exitCode := runSetupWithDependencies(args, &stdout, &stderr, setupCommandDependencies{
-		ResolveExecutable: func() (string, error) { return "/bin/echo", nil },
-		Prepare: func(context.Context, setup.Options, setup.Dependencies) (*setup.Plan, error) {
-			t.Fatal("prepare called")
-			return nil, nil
+	exitCode := runSetupWithDependencies(
+		args,
+		&stdout,
+		&stderr,
+		setupCommandDependencies{
+			ResolveExecutable: func() (string, error) { return "/bin/echo", nil },
+			Prepare: func(context.Context, setup.Options, setup.Dependencies) (
+				*setup.Plan,
+				error,
+			) {
+				t.Fatal("prepare called")
+				return nil, nil
+			},
 		},
-	})
+	)
 	return exitCode, stderr.String()
 }
 
@@ -262,18 +394,32 @@ func runSetupFailure(t *testing.T, prepareErr error, applyErr error) (int, strin
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	exitCode := runSetupWithDependencies(
-		[]string{"--non-interactive", "--providers", "codex", "--audit-profile", "full", "--auto-update", "apply"},
+		[]string{
+			"--non-interactive",
+			"--providers",
+			"codex",
+			"--audit-profile",
+			"full",
+			"--auto-update",
+			"apply",
+		},
 		&stdout,
 		&stderr,
 		setupCommandDependencies{
 			ResolveExecutable: func() (string, error) { return "/bin/echo", nil },
-			Prepare: func(context.Context, setup.Options, setup.Dependencies) (*setup.Plan, error) {
+			Prepare: func(context.Context, setup.Options, setup.Dependencies) (
+				*setup.Plan,
+				error,
+			) {
 				if prepareErr != nil {
 					return nil, prepareErr
 				}
 				return &setup.Plan{EffectivePolicy: config.AuditStoragePolicy{}}, nil
 			},
-			Apply: func(context.Context, *setup.Plan, setup.Dependencies) (setup.Result, error) {
+			Apply: func(context.Context, *setup.Plan, setup.Dependencies) (
+				setup.Result,
+				error,
+			) {
 				return setup.Result{}, applyErr
 			},
 		},

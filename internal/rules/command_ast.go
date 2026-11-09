@@ -36,6 +36,7 @@ func renderCommandAST(command, cwd, home string) string {
 
 	var builder strings.Builder
 	renderDecomposition(&builder, decomposition, cwd, 0)
+
 	return strings.TrimRight(builder.String(), "\n")
 }
 
@@ -44,7 +45,12 @@ func renderCommandAST(command, cwd, home string) string {
 // top-level command's starting directory, threaded through unchanged at
 // every recursion depth so a nested command's cwd is only called out when it
 // differs from where the judge already believes the command started.
-func renderDecomposition(builder *strings.Builder, decomposition *shelldecomp.Decomposition, topCwd string, depth int) {
+func renderDecomposition(
+	builder *strings.Builder,
+	decomposition *shelldecomp.Decomposition,
+	topCwd string,
+	depth int,
+) {
 	renderCommands(builder, decomposition.Commands(), topCwd)
 	renderReadTargets(builder, decomposition.ReadTargets())
 	renderWriteTargets(builder, decomposition.WriteTargets())
@@ -59,7 +65,9 @@ func renderCommands(builder *strings.Builder, commands []shelldecomp.Command, to
 	if len(commands) == 0 {
 		return
 	}
+
 	builder.WriteString("cmd:\n")
+
 	for _, command := range commands {
 		builder.WriteString("  ")
 		builder.WriteString(renderCommandLine(command, topCwd))
@@ -73,14 +81,17 @@ func renderCommands(builder *strings.Builder, commands []shelldecomp.Command, to
 // the same script).
 func renderCommandLine(command shelldecomp.Command, topCwd string) string {
 	parts := make([]string, 0, len(command.Args)+1)
+
 	parts = append(parts, command.Argv0)
 	for _, arg := range command.Args {
 		parts = append(parts, renderWord(arg))
 	}
+
 	line := strings.Join(parts, " ")
 	if command.Cwd != "" && command.Cwd != topCwd {
 		line += " [cwd: " + renderResolvablePath(command.Cwd) + "]"
 	}
+
 	return line
 }
 
@@ -92,6 +103,7 @@ func renderWord(word shelldecomp.Word) string {
 	if word.Resolvable {
 		return word.Value
 	}
+
 	return word.Text + "<unresolved>"
 }
 
@@ -102,6 +114,7 @@ func renderResolvablePath(path string) string {
 	if path == shelldecomp.Unresolvable {
 		return "<unresolved>"
 	}
+
 	return path
 }
 
@@ -114,7 +127,9 @@ func renderReadTargets(builder *strings.Builder, targets []shelldecomp.ReadTarge
 	if len(targets) == 0 {
 		return
 	}
+
 	builder.WriteString("reads:\n")
+
 	for _, target := range targets {
 		builder.WriteString("  ")
 		builder.WriteString(renderTarget(target.Path, target.Resolvable, target.Argv0, target.Raw))
@@ -130,7 +145,9 @@ func renderWriteTargets(builder *strings.Builder, targets []shelldecomp.WriteTar
 	if len(targets) == 0 {
 		return
 	}
+
 	builder.WriteString("writes:\n")
+
 	for _, target := range targets {
 		builder.WriteString("  ")
 		builder.WriteString(renderTarget(target.Path, target.Resolvable, target.Argv0, target.Raw))
@@ -145,6 +162,7 @@ func renderTarget(path string, resolvable bool, argv0, raw string) string {
 	if !resolvable || path == shelldecomp.Unresolvable {
 		return fmt.Sprintf("<unresolved: %s> (%s)", raw, argv0)
 	}
+
 	return fmt.Sprintf("%s (%s)", path, argv0)
 }
 
@@ -156,15 +174,24 @@ func renderTarget(path string, resolvable bool, argv0, raw string) string {
 // laundered search or write hiding inside a nested shell or interpreter
 // becomes visible to the judge. depth guards the recursion independently of
 // shelldecomp's own parse-depth cap.
-func renderEmbeddedRegions(builder *strings.Builder, regions []shelldecomp.EmbeddedRegion, topCwd string, depth int) {
+func renderEmbeddedRegions(
+	builder *strings.Builder,
+	regions []shelldecomp.EmbeddedRegion,
+	topCwd string,
+	depth int,
+) {
 	if len(regions) == 0 || depth >= renderMaxEmbeddedDepth {
 		return
 	}
+
 	for _, region := range regions {
-		builder.WriteString("embedded[" + region.Lang.String() + "]: " + renderSnippet(region.Text) + "\n")
+		builder.WriteString(
+			"embedded[" + region.Lang.String() + "]: " + renderSnippet(region.Text) + "\n",
+		)
 		if region.Parsed == nil {
 			continue
 		}
+
 		var nested strings.Builder
 		renderDecomposition(&nested, region.Parsed, topCwd, depth+1)
 		builder.WriteString(indentLines(nested.String()))
@@ -181,6 +208,7 @@ func renderSnippet(text string) string {
 	if len(runes) <= renderSnippetMaxChars {
 		return collapsed
 	}
+
 	return string(runes[:renderSnippetMaxChars]) + "…"
 }
 
@@ -192,9 +220,11 @@ func indentLines(text string) string {
 	if trimmed == "" {
 		return ""
 	}
+
 	lines := strings.Split(trimmed, "\n")
 	for index, line := range lines {
 		lines[index] = "  " + line
 	}
+
 	return strings.Join(lines, "\n") + "\n"
 }

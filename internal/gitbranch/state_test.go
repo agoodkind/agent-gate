@@ -22,12 +22,20 @@ func TestReadStatePrimaryCheckoutFromNestedTarget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadState: %v", err)
 	}
+
 	if state.PrimaryCheckout != primary || state.CurrentWorktree != primary {
-		t.Fatalf("checkout paths = %q, %q; want %q", state.PrimaryCheckout, state.CurrentWorktree, primary)
+		t.Fatalf(
+			"checkout paths = %q, %q; want %q",
+			state.PrimaryCheckout,
+			state.CurrentWorktree,
+			primary,
+		)
 	}
+
 	if state.DefaultBranch != "main" || state.CurrentBranch != "main" {
 		t.Fatalf("branches = %q, %q; want main, main", state.DefaultBranch, state.CurrentBranch)
 	}
+
 	if len(state.Worktrees) != 1 || !state.Worktrees[0].IsPrimary {
 		t.Fatalf("Worktrees = %#v; want one primary checkout", state.Worktrees)
 	}
@@ -45,16 +53,27 @@ func TestReadStateLinkedWorktree(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadState: %v", err)
 	}
+
 	if state.PrimaryCheckout != primary || state.CurrentWorktree != linked {
-		t.Fatalf("checkout paths = %q, %q; want %q, %q", state.PrimaryCheckout, state.CurrentWorktree, primary, linked)
+		t.Fatalf(
+			"checkout paths = %q, %q; want %q, %q",
+			state.PrimaryCheckout,
+			state.CurrentWorktree,
+			primary,
+			linked,
+		)
 	}
+
 	if state.CurrentBranch != "feature" {
 		t.Fatalf("CurrentBranch = %q, want feature", state.CurrentBranch)
 	}
+
 	if len(state.Worktrees) != 2 {
 		t.Fatalf("Worktrees = %#v, want primary and linked", state.Worktrees)
 	}
-	if worktree, ok := WorktreeForPath(state, filepath.Join(linked, "src", "file.go")); !ok || worktree.Branch != "feature" {
+
+	if worktree, ok := WorktreeForPath(state, filepath.Join(linked, "src", "file.go")); !ok ||
+		worktree.Branch != "feature" {
 		t.Fatalf("WorktreeForPath = %#v, %v; want feature worktree", worktree, ok)
 	}
 }
@@ -62,10 +81,14 @@ func TestReadStateLinkedWorktree(t *testing.T) {
 func TestReadStateLinkedDefaultBranchWorktree(t *testing.T) {
 	primary, repo := initStateRepository(t)
 	setBranch(t, repo, "feature-primary")
-	setReference(t, repo, plumbing.NewHashReference(
-		plumbing.NewBranchReferenceName("main"),
-		plumbing.NewHash(testHash),
-	))
+	setReference(
+		t,
+		repo,
+		plumbing.NewHashReference(
+			plumbing.NewBranchReferenceName("main"),
+			plumbing.NewHash(testHash),
+		),
+	)
 	linked := filepath.Join(t.TempDir(), "main-copy")
 	addLinkedWorktree(t, primary, linked, "main")
 
@@ -73,9 +96,11 @@ func TestReadStateLinkedDefaultBranchWorktree(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadState: %v", err)
 	}
+
 	if state.DefaultBranch != "main" || state.CurrentBranch != "main" {
 		t.Fatalf("branches = %q, %q; want main, main", state.DefaultBranch, state.CurrentBranch)
 	}
+
 	if !IsDefaultBranchWorktree(state, filepath.Join(linked, "new.go")) {
 		t.Fatal("linked main checkout was not recognized as the default-branch worktree")
 	}
@@ -84,18 +109,27 @@ func TestReadStateLinkedDefaultBranchWorktree(t *testing.T) {
 func TestReadStateUsesOriginHeadAndSupportsDetachedHead(t *testing.T) {
 	primary, repo := initStateRepository(t)
 	setBranch(t, repo, "release")
-	setReference(t, repo, plumbing.NewSymbolicReference(
-		plumbing.ReferenceName("refs/remotes/origin/HEAD"),
-		plumbing.ReferenceName("refs/remotes/origin/release"),
-	))
+	setReference(
+		t,
+		repo,
+		plumbing.NewSymbolicReference(
+			plumbing.ReferenceName("refs/remotes/origin/HEAD"),
+			plumbing.ReferenceName("refs/remotes/origin/release"),
+		),
+	)
 	setReference(t, repo, plumbing.NewHashReference(plumbing.HEAD, plumbing.NewHash(testHash)))
 
 	state, err := ReadState(primary)
 	if err != nil {
 		t.Fatalf("ReadState: %v", err)
 	}
+
 	if state.DefaultBranch != "release" || state.CurrentBranch != "" {
-		t.Fatalf("branches = %q, %q; want release and detached", state.DefaultBranch, state.CurrentBranch)
+		t.Fatalf(
+			"branches = %q, %q; want release and detached",
+			state.DefaultBranch,
+			state.CurrentBranch,
+		)
 	}
 }
 
@@ -109,9 +143,11 @@ func TestReadStateSkipsStaleLinkedWorktree(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadState: %v", err)
 	}
+
 	if len(state.Worktrees) != 1 || !state.Worktrees[0].IsPrimary {
 		t.Fatalf("Worktrees = %#v; want only the healthy primary checkout", state.Worktrees)
 	}
+
 	if state.CurrentBranch != "main" || state.DefaultBranch != "main" {
 		t.Fatalf("branches = %q, %q; want main, main", state.CurrentBranch, state.DefaultBranch)
 	}
@@ -125,10 +161,12 @@ func TestWorktreeForPathResolvesSymlinkedMissingTarget(t *testing.T) {
 	if err := os.Symlink(primary, alias); err != nil {
 		t.Fatalf("Symlink: %v", err)
 	}
+
 	state, err := ReadState(primary)
 	if err != nil {
 		t.Fatalf("ReadState: %v", err)
 	}
+
 	target := filepath.Join(alias, "missing", "new.go")
 	worktree, found := WorktreeForPath(state, target)
 	if !found || !worktree.IsPrimary {
@@ -152,18 +190,27 @@ func TestReadStateUsesPackedBranchRef(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadState: %v", err)
 	}
+
 	if state.DefaultBranch != "main" || state.CurrentBranch != "main" {
-		t.Fatalf("branches = %q, %q; want packed main for both", state.DefaultBranch, state.CurrentBranch)
+		t.Fatalf(
+			"branches = %q, %q; want packed main for both",
+			state.DefaultBranch,
+			state.CurrentBranch,
+		)
 	}
 }
 
 func TestReadStateListsLooseAndPackedLocalBranches(t *testing.T) {
 	primary, repo := initStateRepository(t)
 	setBranch(t, repo, "main")
-	setReference(t, repo, plumbing.NewHashReference(
-		plumbing.NewBranchReferenceName("feature"),
-		plumbing.NewHash(testHash),
-	))
+	setReference(
+		t,
+		repo,
+		plumbing.NewHashReference(
+			plumbing.NewBranchReferenceName("feature"),
+			plumbing.NewHash(testHash),
+		),
+	)
 	writeStateFile(
 		t,
 		filepath.Join(primary, ".git", "packed-refs"),
@@ -176,6 +223,7 @@ func TestReadStateListsLooseAndPackedLocalBranches(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadState: %v", err)
 	}
+
 	want := []string{"feature", "main", "release"}
 	if !slices.Equal(state.LocalBranches, want) {
 		t.Fatalf("LocalBranches = %v, want %v", state.LocalBranches, want)
@@ -208,15 +256,19 @@ func TestStatePredicates(t *testing.T) {
 	if !IsPrimaryCheckout(state, "/repo/main/internal/file.go") {
 		t.Fatal("primary descendant was not recognized")
 	}
+
 	if IsPrimaryCheckout(state, "/repo/main-copy/file.go") {
 		t.Fatal("path-prefix sibling was recognized as primary")
 	}
+
 	if !IsDefaultBranchWorktree(state, "/repo/main/file.go") {
 		t.Fatal("default branch worktree was not recognized")
 	}
+
 	if !BranchCheckedOutElsewhere(state, "/worktrees/feature", "release") {
 		t.Fatal("branch in another worktree was not recognized")
 	}
+
 	if BranchCheckedOutElsewhere(state, "/worktrees/feature", "feature") {
 		t.Fatal("current worktree branch was recognized elsewhere")
 	}
@@ -234,17 +286,21 @@ func TestReadStateToleratesWorktreeConfigExtension(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read config: %v", err)
 	}
+
 	updated := string(existing) + "\n[extensions]\n\tworktreeconfig = true\n"
 	if err := os.WriteFile(configPath, []byte(updated), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
+
 	state, err := ReadState(primary)
 	if err != nil {
 		t.Fatalf("ReadState with worktreeconfig extension: %v", err)
 	}
+
 	if state.CurrentBranch != "main" {
 		t.Fatalf("CurrentBranch = %q, want main", state.CurrentBranch)
 	}
+
 	if !IsPrimaryCheckout(state, primary) {
 		t.Fatal("primary checkout not recognized with worktreeconfig extension set")
 	}
@@ -257,6 +313,7 @@ func initStateRepository(t *testing.T) (string, *git.Repository) {
 	if err != nil {
 		t.Fatalf("PlainInit: %v", err)
 	}
+
 	return primary, repo
 }
 
@@ -280,9 +337,11 @@ func addLinkedWorktree(t *testing.T, primary, linked, branch string) {
 	if err := os.MkdirAll(admin, 0o755); err != nil {
 		t.Fatalf("MkdirAll admin: %v", err)
 	}
+
 	if err := os.MkdirAll(linked, 0o755); err != nil {
 		t.Fatalf("MkdirAll linked: %v", err)
 	}
+
 	writeStateFile(t, filepath.Join(linked, ".git"), "gitdir: "+admin+"\n")
 	writeStateFile(t, filepath.Join(admin, "gitdir"), filepath.Join(linked, ".git")+"\n")
 	writeStateFile(t, filepath.Join(admin, "commondir"), "../..\n")
@@ -295,6 +354,7 @@ func writeStateFile(t *testing.T, path, content string) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatalf("MkdirAll %s: %v", path, err)
 	}
+
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("WriteFile %s: %v", path, err)
 	}

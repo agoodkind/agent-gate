@@ -159,15 +159,20 @@ func run(logger *slog.Logger) int {
 		InputBytes:   len(inputBytes),
 		PayloadKind:  cfg.payloadKind,
 		PayloadBytes: len(payloadBytes),
-		Baseline: runScenario(targetBinary, payloadBytes, padScenario{
-			argvPadBytes: cfg.argvPadBytes,
-			envPadBytes:  cfg.envPadBytes,
-		}),
+		Baseline: runScenario(
+			targetBinary,
+			payloadBytes,
+			padScenario{
+				argvPadBytes: cfg.argvPadBytes,
+				envPadBytes:  cfg.envPadBytes,
+			},
+		),
 	}
 
 	out.Probes = runProbes(cfg, targetBinary, payloadBytes)
 
-	logger.Info("spawn smoke run completed",
+	logger.Info(
+		"spawn smoke run completed",
 		slog.String("target_binary", out.TargetBinary),
 		slog.String("input_mode", out.InputMode),
 		slog.Int("input_bytes", out.InputBytes),
@@ -191,30 +196,54 @@ func run(logger *slog.Logger) int {
 func runProbes(cfg config, targetBinary string, payloadBytes []byte) []probeReport {
 	var probes []probeReport
 	if cfg.probeEnv {
-		probes = append(probes, probeLimit(
-			"env_only", targetBinary, payloadBytes, cfg.probeStep, cfg.probeUpperBound,
-			func(size int) padScenario {
-				return padScenario{argvPadBytes: cfg.argvPadBytes, envPadBytes: size}
-			},
-		))
+		probes = append(
+			probes,
+			probeLimit(
+				"env_only",
+				targetBinary,
+				payloadBytes,
+				cfg.probeStep,
+				cfg.probeUpperBound,
+				func(size int) padScenario {
+					return padScenario{argvPadBytes: cfg.argvPadBytes, envPadBytes: size}
+				},
+			),
+		)
 	}
+
 	if cfg.probeArgv {
-		probes = append(probes, probeLimit(
-			"argv_only", targetBinary, payloadBytes, cfg.probeStep, cfg.probeUpperBound,
-			func(size int) padScenario {
-				return padScenario{argvPadBytes: size, envPadBytes: cfg.envPadBytes}
-			},
-		))
+		probes = append(
+			probes,
+			probeLimit(
+				"argv_only",
+				targetBinary,
+				payloadBytes,
+				cfg.probeStep,
+				cfg.probeUpperBound,
+				func(size int) padScenario {
+					return padScenario{argvPadBytes: size, envPadBytes: cfg.envPadBytes}
+				},
+			),
+		)
 	}
+
 	if cfg.probeCombined {
-		probes = append(probes, probeLimit(
-			"argv_plus_env_equal_split", targetBinary, payloadBytes, cfg.probeStep, cfg.probeUpperBound,
-			func(size int) padScenario {
-				argvPadBytes := size / 2
-				return padScenario{argvPadBytes: argvPadBytes, envPadBytes: size - argvPadBytes}
-			},
-		))
+		probes = append(
+			probes,
+			probeLimit(
+				"argv_plus_env_equal_split",
+				targetBinary,
+				payloadBytes,
+				cfg.probeStep,
+				cfg.probeUpperBound,
+				func(size int) padScenario {
+					argvPadBytes := size / 2
+					return padScenario{argvPadBytes: argvPadBytes, envPadBytes: size - argvPadBytes}
+				},
+			),
+		)
 	}
+
 	return probes
 }
 
@@ -223,31 +252,75 @@ func parseFlags() (config, error) {
 
 	defaultTarget := filepath.Join(os.Getenv("HOME"), ".local", "bin", "agent-gate")
 
-	flag.StringVar(&cfg.targetBinary, "target", defaultTarget, "path to the agent-gate binary to execute")
-	flag.StringVar(&cfg.inputFile, "input-file", "", "path to a large text file used to build the hook payload")
-	flag.IntVar(&cfg.generateBytes, "generate-bytes", defaultGenerateBytes, "generate lorem-style input of this size in a temporary directory instead of reading -input-file")
-	flag.StringVar(&cfg.payloadKind, "payload-kind", defaultPayloadKind, "payload shape: beforeSubmitPrompt, beforeReadFile, or preToolUse")
+	flag.StringVar(
+		&cfg.targetBinary,
+		"target",
+		defaultTarget,
+		"path to the agent-gate binary to execute",
+	)
+	flag.StringVar(
+		&cfg.inputFile,
+		"input-file",
+		"",
+		"path to a large text file used to build the hook payload",
+	)
+	flag.IntVar(
+		&cfg.generateBytes,
+		"generate-bytes",
+		defaultGenerateBytes,
+		"generate lorem-style input of this size in a temporary directory instead of reading -input-file",
+	)
+	flag.StringVar(
+		&cfg.payloadKind,
+		"payload-kind",
+		defaultPayloadKind,
+		"payload shape: beforeSubmitPrompt, beforeReadFile, or preToolUse",
+	)
 	flag.IntVar(&cfg.argvPadBytes, "argv-pad-bytes", 0, "fixed argv padding to add to every spawn")
 	flag.IntVar(&cfg.envPadBytes, "env-pad-bytes", 0, "fixed env padding to add to every spawn")
-	flag.BoolVar(&cfg.probeEnv, "probe-env", true, "binary-search the env padding failure threshold")
-	flag.BoolVar(&cfg.probeArgv, "probe-argv", true, "binary-search the argv padding failure threshold")
-	flag.BoolVar(&cfg.probeCombined, "probe-combined", true, "binary-search the combined argv+env failure threshold")
-	flag.IntVar(&cfg.probeUpperBound, "probe-upper-bound", defaultProbeUpperBound, "maximum synthetic padding to test in bytes")
+	flag.BoolVar(
+		&cfg.probeEnv,
+		"probe-env",
+		true,
+		"binary-search the env padding failure threshold",
+	)
+	flag.BoolVar(
+		&cfg.probeArgv,
+		"probe-argv",
+		true,
+		"binary-search the argv padding failure threshold",
+	)
+	flag.BoolVar(
+		&cfg.probeCombined,
+		"probe-combined",
+		true,
+		"binary-search the combined argv+env failure threshold",
+	)
+	flag.IntVar(
+		&cfg.probeUpperBound,
+		"probe-upper-bound",
+		defaultProbeUpperBound,
+		"maximum synthetic padding to test in bytes",
+	)
 	flag.IntVar(&cfg.probeStep, "probe-step", defaultProbeStep, "search granularity in bytes")
 	flag.Parse()
 
 	if cfg.inputFile == "" && cfg.generateBytes <= 0 {
 		return config{}, errors.New("missing input source: set -input-file or -generate-bytes")
 	}
+
 	if cfg.inputFile != "" && cfg.generateBytes > 0 {
 		return config{}, errors.New("choose only one input source: -input-file or -generate-bytes")
 	}
+
 	if cfg.generateBytes < 0 {
 		return config{}, errors.New("-generate-bytes must be zero or positive")
 	}
+
 	if cfg.probeUpperBound <= 0 {
 		return config{}, errors.New("-probe-upper-bound must be positive")
 	}
+
 	if cfg.probeStep <= 0 {
 		return config{}, errors.New("-probe-step must be positive")
 	}
@@ -259,12 +332,15 @@ func loadInput(cfg config, logger *slog.Logger) (string, string, []byte, func(),
 	if cfg.inputFile != "" {
 		inputBytes, err := os.ReadFile(cfg.inputFile)
 		if err != nil {
-			logger.Error("read spawn smoke input file failed",
+			logger.Error(
+				"read spawn smoke input file failed",
 				slog.String("input_file", cfg.inputFile),
 				slog.Any("err", err),
 			)
+
 			return "", "", nil, func() {}, fmt.Errorf("read input file: %w", err)
 		}
+
 		return cfg.inputFile, "file", inputBytes, func() {}, nil
 	}
 
@@ -278,11 +354,13 @@ func loadInput(cfg config, logger *slog.Logger) (string, string, []byte, func(),
 	inputBytes := []byte(generateLoremText(cfg.generateBytes))
 	if err := os.WriteFile(inputPath, inputBytes, 0o600); err != nil {
 		_ = os.RemoveAll(tempDir)
-		logger.Error("write generated spawn smoke input failed",
+		logger.Error(
+			"write generated spawn smoke input failed",
 			slog.String("input_file", inputPath),
 			slog.Int("generate_bytes", cfg.generateBytes),
 			slog.Any("err", err),
 		)
+
 		return "", "", nil, func() {}, fmt.Errorf("write generated input file: %w", err)
 	}
 
@@ -300,12 +378,15 @@ func resolveTargetBinary(target string, logger *slog.Logger) (string, error) {
 
 	info, err := os.Stat(target)
 	if err != nil {
-		logger.Error("stat spawn smoke target binary failed",
+		logger.Error(
+			"stat spawn smoke target binary failed",
 			slog.String("target_binary", target),
 			slog.Any("err", err),
 		)
+
 		return "", fmt.Errorf("stat target binary %q: %w", target, err)
 	}
+
 	if info.IsDir() {
 		return "", fmt.Errorf("target binary %q is a directory", target)
 	}
@@ -339,21 +420,30 @@ func startIsolatedDaemon(targetBinary string, logger *slog.Logger) (func(), erro
 		logger.Error("create isolated smoke home failed", slog.Any("err", err))
 		return nil, fmt.Errorf("create isolated smoke home: %w", err)
 	}
+
 	for key, value := range isolatedXDG(home) {
 		if setErr := os.Setenv(key, value); setErr != nil {
 			_ = os.RemoveAll(home)
-			logger.Error("set isolated XDG var failed", slog.String("key", key), slog.Any("err", setErr))
+			logger.Error(
+				"set isolated XDG var failed",
+				slog.String("key", key),
+				slog.Any("err", setErr),
+			)
+
 			return nil, fmt.Errorf("set %s: %w", key, setErr)
 		}
 	}
+
 	// Drop provider env so it cannot steer detection or audit on the isolated
 	// daemon's replays.
 	for _, key := range []string{"CODEX_CI", "CODEX_THREAD_ID"} {
 		_ = os.Unsetenv(key)
 	}
+
 	if mkErr := agconfig.EnsureRuntimeDir(); mkErr != nil {
 		_ = os.RemoveAll(home)
 		logger.Error("create isolated runtime dir failed", slog.Any("err", mkErr))
+
 		return nil, fmt.Errorf("create isolated runtime dir: %w", mkErr)
 	}
 
@@ -362,6 +452,7 @@ func startIsolatedDaemon(targetBinary string, logger *slog.Logger) (func(), erro
 	if startErr := daemonCmd.Start(); startErr != nil {
 		_ = os.RemoveAll(home)
 		logger.Error("start isolated daemon failed", slog.Any("err", startErr))
+
 		return nil, fmt.Errorf("start isolated daemon: %w", startErr)
 	}
 
@@ -370,16 +461,28 @@ func startIsolatedDaemon(targetBinary string, logger *slog.Logger) (func(), erro
 			_ = daemonCmd.Process.Kill()
 			_, _ = daemonCmd.Process.Wait()
 		}
+
 		_ = os.RemoveAll(home)
 	}
 
 	socket := agconfig.DaemonSocketPath()
 	if waitErr := waitForSocket(context.Background(), socket, 5*time.Second); waitErr != nil {
 		cleanup()
-		logger.Error("isolated daemon not ready", slog.String("socket", socket), slog.Any("err", waitErr))
+		logger.Error(
+			"isolated daemon not ready",
+			slog.String("socket", socket),
+			slog.Any("err", waitErr),
+		)
+
 		return nil, fmt.Errorf("isolated daemon not ready at %s: %w", socket, waitErr)
 	}
-	logger.Info("isolated smoke daemon ready", slog.String("socket", socket), slog.String("home", home))
+
+	logger.Info(
+		"isolated smoke daemon ready",
+		slog.String("socket", socket),
+		slog.String("home", home),
+	)
+
 	return cleanup, nil
 }
 
@@ -388,6 +491,7 @@ func startIsolatedDaemon(targetBinary string, logger *slog.Logger) (func(), erro
 func waitForSocket(ctx context.Context, path string, timeout time.Duration) error {
 	var dialer net.Dialer
 	dialer.Timeout = 200 * time.Millisecond
+
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		conn, err := dialer.DialContext(ctx, "unix", path)
@@ -395,8 +499,10 @@ func waitForSocket(ctx context.Context, path string, timeout time.Duration) erro
 			_ = conn.Close()
 			return nil
 		}
+
 		time.Sleep(50 * time.Millisecond)
 	}
+
 	return fmt.Errorf("timed out waiting for daemon socket %s", path)
 }
 
@@ -437,10 +543,12 @@ func buildPayload(payloadKindValue string, largeText string, logger *slog.Logger
 
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
-		logger.Error("marshal spawn smoke payload failed",
+		logger.Error(
+			"marshal spawn smoke payload failed",
 			slog.String("payload_kind", payloadKindValue),
 			slog.Any("err", err),
 		)
+
 		return nil, fmt.Errorf("marshal %s payload: %w", payloadKindValue, err)
 	}
 
@@ -469,6 +577,7 @@ func probeLimit(
 	}
 
 	high := step
+
 	firstFail := runScenario(targetBinary, payloadBytes, buildScenario(high))
 	for firstFail.OK && high < upperBound {
 		low = high
@@ -477,6 +586,7 @@ func probeLimit(
 		if high > upperBound {
 			high = upperBound
 		}
+
 		firstFail = runScenario(targetBinary, payloadBytes, buildScenario(high))
 		if high == upperBound {
 			break
@@ -502,6 +612,7 @@ func probeLimit(
 		if mid >= high {
 			mid = high - step
 		}
+
 		if mid <= low {
 			mid = low + step
 		}
@@ -536,7 +647,10 @@ func runScenario(targetBinary string, payloadBytes []byte, scenario padScenario)
 
 	cmd := exec.CommandContext(context.Background(), targetBinary, args...)
 	cmd.Stdin = bytes.NewReader(payloadBytes)
-	cmd.Env = append(os.Environ(), "AGENT_GATE_SPAWN_SMOKE_PAD="+strings.Repeat("e", scenario.envPadBytes))
+	cmd.Env = append(
+		os.Environ(),
+		"AGENT_GATE_SPAWN_SMOKE_PAD="+strings.Repeat("e", scenario.envPadBytes),
+	)
 
 	stdout, err := cmd.Output()
 
@@ -551,6 +665,7 @@ func runScenario(targetBinary string, payloadBytes []byte, scenario padScenario)
 	if err == nil {
 		result.ExitCode = 0
 		result.ResponseSnippet = trimSnippet(stdout)
+
 		return result
 	}
 
@@ -561,6 +676,7 @@ func runScenario(targetBinary string, payloadBytes []byte, scenario padScenario)
 		result.ErrorKind = "exit_error"
 		result.ErrorMessage = exitErr.Error()
 		result.ResponseSnippet = trimSnippet(stdout)
+
 		return result
 	}
 
@@ -573,6 +689,7 @@ func runScenario(targetBinary string, payloadBytes []byte, scenario padScenario)
 	}
 
 	result.ErrorKind = "start_error"
+
 	return result
 }
 

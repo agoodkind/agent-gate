@@ -2,14 +2,9 @@ package rules
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -82,13 +77,19 @@ func NewExecRuntime(runner execconcern.Runner, log *slog.Logger) *ExecRuntime {
 // NewExecRuntimeWithCache returns an ExecRuntime backed by cache. A nil cache
 // gets a private in-memory store with no periodic prune goroutine, which keeps
 // tests and standalone callers isolated.
-func NewExecRuntimeWithCache(runner execconcern.Runner, log *slog.Logger, cache *hotkv.Store) *ExecRuntime {
+func NewExecRuntimeWithCache(
+	runner execconcern.Runner,
+	log *slog.Logger,
+	cache *hotkv.Store,
+) *ExecRuntime {
 	if runner == nil {
 		runner = execconcern.OSRunner{}
 	}
+
 	if log == nil {
 		log = slog.Default()
 	}
+
 	if cache == nil {
 		cache = hotkv.New(hotkv.Options{
 			MaxEntries:    hotkv.DefaultMaxEntries,
@@ -97,6 +98,7 @@ func NewExecRuntimeWithCache(runner execconcern.Runner, log *slog.Logger, cache 
 			PruneInterval: 0,
 		})
 	}
+
 	return &ExecRuntime{
 		runner:   runner,
 		canon:    canonpath.NewCache(canonCacheTTL),
@@ -123,6 +125,7 @@ func defaultExecRuntime() *ExecRuntime {
 	defaultExecRuntimeOnce.Do(func() {
 		defaultExecRuntimeInst = NewExecRuntime(nil, nil)
 	})
+
 	return defaultExecRuntimeInst
 }
 
@@ -140,7 +143,9 @@ func execRuntimeFromContext(ctx context.Context) *ExecRuntime {
 	if ctx == nil {
 		return nil
 	}
+
 	runtime, _ := ctx.Value(execRuntimeKey{}).(*ExecRuntime)
+
 	return runtime
 }
 
@@ -152,7 +157,9 @@ func execEventMemoFromContext(ctx context.Context) *execEventMemo {
 	if ctx == nil {
 		return nil
 	}
+
 	memo, _ := ctx.Value(execEventMemoKey{}).(*execEventMemo)
+
 	return memo
 }
 
@@ -167,7 +174,13 @@ type execTemporalCacheScope struct {
 // whether it blocks. The result is memoized per event so the command forks at
 // most once per event, and cached across events by canonical cache key so a hot
 // working set forks rarely. Error outcomes are never cached and are logged.
-func execConditionGateMatch(ctx context.Context, fields FieldSet, rule *config.Rule, conditionIndex int, c *config.Condition) bool {
+func execConditionGateMatch(
+	ctx context.Context,
+	fields FieldSet,
+	rule *config.Rule,
+	conditionIndex int,
+	c *config.Condition,
+) bool {
 	memo := execEventMemoFromContext(ctx)
 	if memo != nil {
 		if v, ok := memo.lookup(c); ok {
@@ -189,12 +202,13 @@ func execConditionGateMatch(ctx context.Context, fields FieldSet, rule *config.R
 	cacheEnabled := execConditionCacheEnabled(rule, c, cacheScope)
 
 	if cacheEnabled {
-		if v, ok := runtime.cacheLookup(ctx, cacheNamespace, cacheKey); ok {
-			v = sanitizeTemporalExecVerdict(rule, c, v)
+		if cachedVerdict, ok := runtime.cacheLookup(ctx, cacheNamespace, cacheKey); ok {
+			cachedVerdict = sanitizeTemporalExecVerdict(rule, c, cachedVerdict)
 			if memo != nil {
-				memo.record(c, rule.Name, v)
+				memo.record(c, rule.Name, cachedVerdict)
 			}
-			return v.Block
+
+			return cachedVerdict.Block
 		}
 	}
 
@@ -213,6 +227,7 @@ func execConditionGateMatch(ctx context.Context, fields FieldSet, rule *config.R
 	if memo != nil {
 		memo.record(c, rule.Name, verdict)
 	}
+
 	return verdict.Block
 }
 
@@ -220,6 +235,7 @@ func execValidatorCacheNamespaceForCondition(c *config.Condition) string {
 	if execConditionUsesTemporalSelector(c) {
 		return hotkv.InternalNamespacePrefix + execValidatorCacheNamespace
 	}
+
 	return execValidatorCacheNamespace
 }
 
@@ -229,6 +245,7 @@ func execConditionUsesTemporalSelector(c *config.Condition) bool {
 			return true
 		}
 	}
+
 	return false
 }
 
@@ -240,15 +257,19 @@ func execConditionCacheEnabled(
 	if c.CacheTTLMs <= 0 {
 		return false
 	}
+
 	if !execConditionUsesTemporalSelector(c) {
 		return true
 	}
+
 	if scope.system == "" || scope.conversationID == "" || scope.eventName == "" {
 		return false
 	}
+
 	if rule.IsResponseAction() && scope.responseTarget == "" {
 		return false
 	}
+
 	return true
 }
 
@@ -267,10 +288,12 @@ func temporalExecCacheScope(
 			responseTarget: "",
 		}
 	}
+
 	conversationID := fields.ConversationID
 	if conversationID == "" {
 		conversationID = fields.SessionID
 	}
+
 	scope := execTemporalCacheScope{
 		system:         "",
 		conversationID: conversationID,
@@ -281,9 +304,11 @@ func temporalExecCacheScope(
 		scope.system = memo.system
 		scope.eventName = memo.eventName
 	}
+
 	if rule.IsResponseAction() {
 		scope.responseTarget = execResponseTargetFromContext(ctx, rule.Action)
 	}
+
 	return scope
 }
 
@@ -295,8 +320,10 @@ func sanitizeTemporalExecVerdict(
 	if rule.IsResponseAction() || !execConditionUsesTemporalSelector(c) {
 		return verdict
 	}
+
 	verdict.Message = ""
 	verdict.Output = ""
+
 	return verdict
 }
 
@@ -307,11 +334,25 @@ func execCacheKeyValue(fields FieldSet, c *config.Condition) string {
 
 func execSelectorValue(fields FieldSet, selector config.FieldSelector, c *config.Condition) string {
 	if selector == config.FieldCmdReadTargets {
-		return fields.CmdReadTargetsWithPolicy(c.SearchTools, c.ReadSpecs, c.EnumerationSpecs, c.RecursiveGlobs, diskFileResolver())
+		return fields.CmdReadTargetsWithPolicy(
+			c.SearchTools,
+			c.ReadSpecs,
+			c.EnumerationSpecs,
+			c.RecursiveGlobs,
+			diskFileResolver(),
+		)
 	}
+
 	if selector == config.FieldExecTargets {
-		return fields.ExecTargetsWithPolicy(c.SearchTools, c.ReadSpecs, c.EnumerationSpecs, c.RecursiveGlobs, diskFileResolver())
+		return fields.ExecTargetsWithPolicy(
+			c.SearchTools,
+			c.ReadSpecs,
+			c.EnumerationSpecs,
+			c.RecursiveGlobs,
+			diskFileResolver(),
+		)
 	}
+
 	return fields.StringForCondition(selector, c)
 }
 
@@ -319,6 +360,7 @@ func (r *ExecRuntime) expandExecCommands(fields FieldSet, c *config.Condition) [
 	if c.ForEachSelector().Selector == config.FieldSelectorInvalid {
 		command := make([]string, len(c.Command))
 		copy(command, c.Command)
+
 		return [][]string{command}
 	}
 
@@ -333,8 +375,10 @@ func (r *ExecRuntime) expandExecCommands(fields FieldSet, c *config.Condition) [
 		for i, arg := range c.Command {
 			command[i] = strings.ReplaceAll(arg, "{{item}}", item)
 		}
+
 		commands = append(commands, command)
 	}
+
 	return commands
 }
 
@@ -346,25 +390,31 @@ func (r *ExecRuntime) forEachItems(fields FieldSet, c *config.Condition) []strin
 
 	cwd := fields.BaseCWD()
 	seen := make(map[string]struct{})
+
 	items := make([]string, 0, strings.Count(raw, "\n")+1)
 	for part := range strings.SplitSeq(raw, "\n") {
 		if part == "" {
 			continue
 		}
+
 		view := canonicalizePathField(r.canon, cwd, part)
 		value := view.Canonical
 		if value == "" {
 			value = view.Raw
 		}
+
 		if value == "" {
 			continue
 		}
+
 		if _, ok := seen[value]; ok {
 			continue
 		}
+
 		seen[value] = struct{}{}
 		items = append(items, value)
 	}
+
 	return items
 }
 
@@ -393,42 +443,52 @@ func (r *ExecRuntime) runValidatorSingleflight(
 		case <-done:
 			return flight.verdict
 		case <-ctx.Done():
-			return execconcern.Verdict{
-				Block:        c.OnError == config.OnErrorClosed,
-				Message:      "",
-				Output:       "",
-				Errored:      true,
-				PartialError: false,
-			}
+			return erroredValidatorVerdict(c)
 		}
 	}
+
 	flight = &validatorFlight{
-		done:    make(chan struct{}),
-		verdict: execconcern.Verdict{Block: false, Message: "", Output: "", Errored: false, PartialError: false},
+		done: make(chan struct{}),
+		verdict: execconcern.Verdict{
+			Block:        false,
+			Message:      "",
+			Output:       "",
+			Errored:      false,
+			PartialError: false,
+		},
 	}
 	r.inflight[cacheKey] = flight
 	r.mu.Unlock()
 
-	verdict := execconcern.Verdict{Block: false, Message: "", Output: "", Errored: false, PartialError: false}
+	verdict := execconcern.Verdict{
+		Block:        false,
+		Message:      "",
+		Output:       "",
+		Errored:      false,
+		PartialError: false,
+	}
 	backgroundManaged := false
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			r.log.ErrorContext(ctx, "exec validator singleflight panic",
-				"rule", rule.Name, "err", fmt.Errorf("panic: %v", recovered))
-			verdict = execconcern.Verdict{
-				Block:        c.OnError == config.OnErrorClosed,
-				Message:      "",
-				Output:       "",
-				Errored:      true,
-				PartialError: false,
-			}
+			r.log.ErrorContext(
+				ctx,
+				"exec validator singleflight panic",
+				"rule",
+				rule.Name,
+				"err",
+				fmt.Errorf("panic: %v", recovered),
+			)
+			verdict = erroredValidatorVerdict(c)
 		}
+
 		if backgroundManaged {
 			return
 		}
+
 		if !verdict.Errored && cacheEnabled {
 			r.cacheStore(ctx, cacheNamespace, cacheKey, c.CacheTTLMs, verdict)
 		}
+
 		r.finishValidatorFlight(cacheKey, flight, verdict)
 	}()
 
@@ -436,43 +496,91 @@ func (r *ExecRuntime) runValidatorSingleflight(
 	verdict = sanitizeTemporalExecVerdict(rule, c, runResult.verdict)
 	if runResult.background != nil {
 		backgroundManaged = true
-		go func() {
-			backgroundCtx := context.WithoutCancel(ctx)
-			defer func() {
-				if recovered := recover(); recovered != nil {
-					r.log.ErrorContext(backgroundCtx, "exec validator background completion panic",
-						"rule", rule.Name, "err", fmt.Errorf("panic: %v", recovered))
-					r.finishValidatorFlight(cacheKey, flight, execconcern.Verdict{
-						Block:        c.OnError == config.OnErrorClosed,
-						Message:      "",
-						Output:       "",
-						Errored:      true,
-						PartialError: false,
-					})
-				}
-			}()
-			backgroundVerdict := <-runResult.background
-			backgroundVerdict = sanitizeTemporalExecVerdict(rule, c, backgroundVerdict)
-			if !backgroundVerdict.Errored && cacheEnabled {
-				r.cacheStore(
-					backgroundCtx,
-					cacheNamespace,
-					cacheKey,
-					c.CacheTTLMs,
-					backgroundVerdict,
-				)
-			}
-			r.finishValidatorFlight(cacheKey, flight, backgroundVerdict)
-		}()
+		r.startValidatorCompletion(
+			ctx,
+			rule,
+			c,
+			cacheNamespace,
+			cacheKey,
+			flight,
+			cacheEnabled,
+			runResult.background,
+		)
 	}
 
 	return verdict
 }
 
-func (r *ExecRuntime) finishValidatorFlight(cacheKey string, flight *validatorFlight, verdict execconcern.Verdict) {
+func erroredValidatorVerdict(condition *config.Condition) execconcern.Verdict {
+	return execconcern.Verdict{
+		Block:        condition.OnError == config.OnErrorClosed,
+		Message:      "",
+		Output:       "",
+		Errored:      true,
+		PartialError: false,
+	}
+}
+
+func (r *ExecRuntime) startValidatorCompletion(
+	ctx context.Context,
+	rule *config.Rule,
+	condition *config.Condition,
+	cacheNamespace string,
+	cacheKey string,
+	flight *validatorFlight,
+	cacheEnabled bool,
+	background <-chan execconcern.Verdict,
+) {
+	go func() {
+		backgroundCtx := context.WithoutCancel(ctx)
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				r.log.ErrorContext(
+					backgroundCtx,
+					"exec validator background completion panic",
+					"rule",
+					rule.Name,
+					"err",
+					&validatorPanicError{value: fmt.Sprint(recovered)},
+				)
+				r.finishValidatorFlight(
+					cacheKey,
+					flight,
+					execconcern.Verdict{
+						Block:        condition.OnError == config.OnErrorClosed,
+						Message:      "",
+						Output:       "",
+						Errored:      true,
+						PartialError: false,
+					},
+				)
+			}
+		}()
+		backgroundVerdict := <-background
+		backgroundVerdict = sanitizeTemporalExecVerdict(rule, condition, backgroundVerdict)
+		if !backgroundVerdict.Errored && cacheEnabled {
+			r.cacheStore(
+				backgroundCtx,
+				cacheNamespace,
+				cacheKey,
+				condition.CacheTTLMs,
+				backgroundVerdict,
+			)
+		}
+
+		r.finishValidatorFlight(cacheKey, flight, backgroundVerdict)
+	}()
+}
+
+func (r *ExecRuntime) finishValidatorFlight(
+	cacheKey string,
+	flight *validatorFlight,
+	verdict execconcern.Verdict,
+) {
 	if flight == nil {
 		return
 	}
+
 	flight.verdict = verdict
 	close(flight.done)
 
@@ -492,52 +600,114 @@ func (r *ExecRuntime) runValidator(
 	in := r.buildInput(ctx, fields, rule, c, keyView, memo)
 	stdin, env, err := execconcern.BuildRequest(in)
 	if err != nil {
-		r.log.WarnContext(ctx, "exec validator request build failed",
-			"rule", rule.Name, "on_error", c.OnError, "err", err)
+		r.log.WarnContext(
+			ctx,
+			"exec validator request build failed",
+			"rule",
+			rule.Name,
+			"on_error",
+			c.OnError,
+			"err",
+			err,
+		)
+
 		return validatorRunResult{
-			verdict:    execconcern.Verdict{Block: c.OnError == config.OnErrorClosed, Message: "", Output: "", Errored: true, PartialError: false},
+			verdict: execconcern.Verdict{
+				Block:        c.OnError == config.OnErrorClosed,
+				Message:      "",
+				Output:       "",
+				Errored:      true,
+				PartialError: false,
+			},
 			background: nil,
 		}
 	}
+
 	commands := r.expandExecCommands(fields, c)
 	if len(commands) == 0 {
 		return validatorRunResult{
-			verdict:    execconcern.Verdict{Block: false, Message: "", Output: "", Errored: false, PartialError: false},
+			verdict: execconcern.Verdict{
+				Block:        false,
+				Message:      "",
+				Output:       "",
+				Errored:      false,
+				PartialError: false,
+			},
 			background: nil,
 		}
 	}
 
 	done := make(chan execconcern.Verdict, 1)
 	bgCtx := context.WithoutCancel(ctx)
-	go func() {
-		defer func() {
-			if rec := recover(); rec != nil {
-				r.log.ErrorContext(bgCtx, "exec validator panic",
-					"rule", rule.Name, "err", fmt.Errorf("panic: %v", rec))
-				done <- execconcern.Verdict{Block: c.OnError == config.OnErrorClosed, Message: "", Output: "", Errored: true, PartialError: false}
-			}
-		}()
-		verdict := r.runExpandedCommands(bgCtx, rule.Name, c, commands, stdin, env)
-		done <- verdict
-	}()
+	r.startValidatorCommands(bgCtx, rule, c, commands, stdin, env, done)
 
 	syncBudget := time.Duration(c.TimeoutMs) * time.Millisecond
 	if syncBudget <= 0 {
 		return validatorRunResult{verdict: <-done, background: nil}
 	}
+
 	timer := time.NewTimer(syncBudget)
 	defer timer.Stop()
 	select {
 	case verdict := <-done:
 		return validatorRunResult{verdict: verdict, background: nil}
 	case <-timer.C:
-		r.log.WarnContext(ctx, "exec validator exceeded synchronous budget; continuing in background",
-			"rule", rule.Name, "on_error", c.OnError, "budget_ms", c.TimeoutMs)
+		r.log.WarnContext(
+			ctx,
+			"exec validator exceeded synchronous budget; continuing in background",
+			"rule",
+			rule.Name,
+			"on_error",
+			c.OnError,
+			"budget_ms",
+			c.TimeoutMs,
+		)
+
 		return validatorRunResult{
-			verdict:    execconcern.Verdict{Block: c.OnError == config.OnErrorClosed, Message: "", Output: "", Errored: true, PartialError: false},
+			verdict: execconcern.Verdict{
+				Block:        c.OnError == config.OnErrorClosed,
+				Message:      "",
+				Output:       "",
+				Errored:      true,
+				PartialError: false,
+			},
 			background: done,
 		}
 	}
+}
+
+func (r *ExecRuntime) startValidatorCommands(
+	ctx context.Context,
+	rule *config.Rule,
+	condition *config.Condition,
+	commands [][]string,
+	stdin []byte,
+	environment []string,
+	done chan<- execconcern.Verdict,
+) {
+	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				r.log.ErrorContext(
+					ctx,
+					"exec validator panic",
+					"rule",
+					rule.Name,
+					"err",
+					&validatorPanicError{value: fmt.Sprint(recovered)},
+				)
+				done <- execconcern.Verdict{
+					Block:        condition.OnError == config.OnErrorClosed,
+					Message:      "",
+					Output:       "",
+					Errored:      true,
+					PartialError: false,
+				}
+			}
+		}()
+		verdict := r.runExpandedCommands(ctx, rule.Name, condition, commands, stdin, environment)
+		done <- verdict
+	}()
 }
 
 func (r *ExecRuntime) runExpandedCommands(
@@ -549,19 +719,33 @@ func (r *ExecRuntime) runExpandedCommands(
 	env []string,
 ) execconcern.Verdict {
 	if len(commands) == 0 {
-		return execconcern.Verdict{Block: false, Message: "", Output: "", Errored: false, PartialError: false}
+		return execconcern.Verdict{
+			Block:        false,
+			Message:      "",
+			Output:       "",
+			Errored:      false,
+			PartialError: false,
+		}
 	}
 
 	forEach := c.ForEachSelector().Selector != config.FieldSelectorInvalid
 	matchAll := forEach && c.MatchMode == config.ExecMatchAll
 	firstBlockMessage := ""
-	firstErrored := execconcern.Verdict{Block: false, Message: "", Output: "", Errored: false, PartialError: false}
+	firstErrored := execconcern.Verdict{
+		Block:        false,
+		Message:      "",
+		Output:       "",
+		Errored:      false,
+		PartialError: false,
+	}
 	sawErrored := false
+
 	for _, command := range commands {
 		verdict := r.runExpandedCommandWithRetry(ctx, ruleName, c, command, stdin, env)
 		if !forEach {
 			return verdict
 		}
+
 		if verdict.Errored {
 			// Under match_mode = "any" one target the validator cannot classify
 			// must not veto the rest. A single unresolvable target would
@@ -574,15 +758,19 @@ func (r *ExecRuntime) runExpandedCommands(
 			if matchAll {
 				return verdict
 			}
+
 			if !sawErrored {
 				sawErrored = true
 				firstErrored = verdict
 			}
+
 			continue
 		}
+
 		if verdict.Block && firstBlockMessage == "" {
 			firstBlockMessage = verdict.Message
 		}
+
 		if !matchAll && verdict.Block {
 			// The block stands, but if an earlier target could not be classified
 			// then the expansion was only partly probed. Say so, or the audit
@@ -590,21 +778,39 @@ func (r *ExecRuntime) runExpandedCommands(
 			verdict.PartialError = sawErrored
 			return verdict
 		}
+
 		if matchAll && !verdict.Block {
 			return execconcern.Verdict{
-				Block: false, Message: "", Output: "", Errored: false, PartialError: false,
+				Block:        false,
+				Message:      "",
+				Output:       "",
+				Errored:      false,
+				PartialError: false,
 			}
 		}
 	}
+
 	if matchAll {
 		return execconcern.Verdict{
-			Block: true, Message: firstBlockMessage, Output: "", Errored: false, PartialError: false,
+			Block:        true,
+			Message:      firstBlockMessage,
+			Output:       "",
+			Errored:      false,
+			PartialError: false,
 		}
 	}
+
 	if sawErrored {
 		return firstErrored
 	}
-	return execconcern.Verdict{Block: false, Message: "", Output: "", Errored: false, PartialError: false}
+
+	return execconcern.Verdict{
+		Block:        false,
+		Message:      "",
+		Output:       "",
+		Errored:      false,
+		PartialError: false,
+	}
 }
 
 func (r *ExecRuntime) logExpandedCommandError(
@@ -617,17 +823,55 @@ func (r *ExecRuntime) logExpandedCommandError(
 ) {
 	switch {
 	case runErr != nil:
-		r.log.WarnContext(ctx, "exec validator expanded command errored",
-			"rule", ruleName, "on_error", c.OnError, "command", command, "err", runErr)
+		r.log.WarnContext(
+			ctx,
+			"exec validator expanded command errored",
+			"rule",
+			ruleName,
+			"on_error",
+			c.OnError,
+			"command",
+			command,
+			"err",
+			runErr,
+		)
 	case c.BlockOn == config.BlockOnMatch && res.ExitCode != 0:
-		r.log.WarnContext(ctx, "exec validator expanded command exited nonzero for JSON match",
-			"rule", ruleName, "on_error", c.OnError, "command", command, "exit_code", res.ExitCode)
+		r.log.WarnContext(
+			ctx,
+			"exec validator expanded command exited nonzero for JSON match",
+			"rule",
+			ruleName,
+			"on_error",
+			c.OnError,
+			"command",
+			command,
+			"exit_code",
+			res.ExitCode,
+		)
 	case c.BlockOn == config.BlockOnMatch:
-		r.log.WarnContext(ctx, "exec validator expanded command returned invalid JSON predicate output",
-			"rule", ruleName, "on_error", c.OnError, "command", command)
+		r.log.WarnContext(
+			ctx,
+			"exec validator expanded command returned invalid JSON predicate output",
+			"rule",
+			ruleName,
+			"on_error",
+			c.OnError,
+			"command",
+			command,
+		)
 	default:
-		r.log.WarnContext(ctx, "exec validator expanded command produced an errored verdict",
-			"rule", ruleName, "on_error", c.OnError, "command", command, "exit_code", res.ExitCode)
+		r.log.WarnContext(
+			ctx,
+			"exec validator expanded command produced an errored verdict",
+			"rule",
+			ruleName,
+			"on_error",
+			c.OnError,
+			"command",
+			command,
+			"exit_code",
+			res.ExitCode,
+		)
 	}
 }
 
@@ -646,10 +890,12 @@ func (r *ExecRuntime) buildInput(
 		system = memo.system
 		eventName = memo.eventName
 	}
+
 	command := fields.String(config.FieldToolInputCommand)
 	if command == "" {
 		command = fields.String(config.FieldCommand)
 	}
+
 	matched := make([]execconcern.FieldValue, 0, len(c.Selectors()))
 	for _, sel := range c.Selectors() {
 		if isExecAvailabilitySelector(sel.Selector) {
@@ -661,19 +907,32 @@ func (r *ExecRuntime) buildInput(
 				rule,
 				sel.Selector,
 			)
-			matched = append(matched, execconcern.FieldValue{
-				Field: sel.Path, Value: value, Available: &available,
-			})
+			matched = append(
+				matched,
+				execconcern.FieldValue{
+					Field:     sel.Path,
+					Value:     value,
+					Available: &available,
+				},
+			)
 			continue
 		}
+
 		value := fields.StringForCondition(sel.Selector, c)
 		if value == "" {
 			continue
 		}
-		matched = append(matched, execconcern.FieldValue{
-			Field: sel.Path, Value: value, Available: nil,
-		})
+
+		matched = append(
+			matched,
+			execconcern.FieldValue{
+				Field:     sel.Path,
+				Value:     value,
+				Available: nil,
+			},
+		)
 	}
+
 	effectiveCwd := fields.String(config.FieldEffectiveCWD)
 	if effectiveCwd == shelldecomp.Unresolvable {
 		// The marker means "directory unknown". The validator contract
@@ -681,6 +940,7 @@ func (r *ExecRuntime) buildInput(
 		// never reach the process environment.
 		effectiveCwd = ""
 	}
+
 	return execconcern.Input{
 		Event:        eventName,
 		System:       system,
@@ -711,9 +971,11 @@ func (r *ExecRuntime) execAvailabilitySelectorValue(
 	if selector == config.FieldLoopCount {
 		return fields.Value(selector)
 	}
+
 	if selector == config.FieldLastUserMessage {
 		return r.lastUserMessage(system, fields)
 	}
+
 	if selector == config.FieldLastResponseOutput {
 		return r.lastResponseOutput(
 			system,
@@ -723,10 +985,12 @@ func (r *ExecRuntime) execAvailabilitySelectorValue(
 			execResponseTargetFromContext(ctx, rule.Action),
 		)
 	}
+
 	if selector == config.FieldResponseOutput {
 		output := rule.OutputText()
 		return output, output != ""
 	}
+
 	return "", false
 }
 
@@ -738,15 +1002,22 @@ func (r *ExecRuntime) execAvailabilitySelectorValue(
 // and applies the cd chain itself, so a search run after `cd /other` is
 // attributed to /other rather than the session cwd without applying the cd
 // chain twice.
-func (r *ExecRuntime) readTargetViews(cwd, command string, searchTools []string) []execconcern.PathView {
+func (r *ExecRuntime) readTargetViews(
+	cwd string,
+	command string,
+	searchTools []string,
+) []execconcern.PathView {
 	targets := shellread.ExtractCodeSearchTargets(command, cwd, searchTools, diskFileResolver())
+
 	views := make([]execconcern.PathView, 0, len(targets))
 	for _, target := range targets {
 		if target.Remote || target.Path == "" {
 			continue
 		}
+
 		views = append(views, canonicalizePathField(r.canon, cwd, target.Path))
 	}
+
 	return views
 }
 
@@ -762,177 +1033,16 @@ func diskFileResolver() shelldecomp.FileResolver {
 		if err != nil || !info.Mode().IsRegular() {
 			return nil, false
 		}
+
 		if info.Size() > maxResolvedScriptBytes {
 			return nil, false
 		}
+
 		content, err := os.ReadFile(absPath)
 		if err != nil {
 			return nil, false
 		}
+
 		return content, true
 	}
-}
-
-func (r *ExecRuntime) cacheLookup(
-	ctx context.Context,
-	cacheNamespace string,
-	cacheKey string,
-) (execconcern.Verdict, bool) {
-	if r.cache == nil {
-		return execconcern.Verdict{Block: false, Message: "", Output: "", Errored: false, PartialError: false}, false
-	}
-	entry, found, err := r.cache.Get(cacheNamespace, cacheKey)
-	if err != nil {
-		r.log.WarnContext(ctx, "exec validator hot cache get failed", "err", err)
-		return execconcern.Verdict{Block: false, Message: "", Output: "", Errored: false, PartialError: false}, false
-	}
-	if !found {
-		return execconcern.Verdict{Block: false, Message: "", Output: "", Errored: false, PartialError: false}, false
-	}
-
-	var cached cachedExecVerdict
-	if err := json.Unmarshal(entry.Value, &cached); err != nil {
-		r.log.WarnContext(ctx, "exec validator hot cache decode failed", "err", err)
-		_, _ = r.cache.Delete(cacheNamespace, cacheKey)
-		return execconcern.Verdict{Block: false, Message: "", Output: "", Errored: false, PartialError: false}, false
-	}
-	return execconcern.Verdict{
-		Block:   cached.Block,
-		Message: cached.Message,
-		Output:  cached.Output,
-		Errored: false,
-		// Only a clean verdict is cached, and the cached entry says nothing
-		// about the expansion that produced it, so a cache hit never claims a
-		// partial failure it cannot substantiate.
-		PartialError: false,
-	}, true
-}
-
-func (r *ExecRuntime) cacheStore(
-	ctx context.Context,
-	cacheNamespace string,
-	cacheKey string,
-	ttlMs int,
-	verdict execconcern.Verdict,
-) {
-	if r.cache == nil {
-		return
-	}
-	cached := cachedExecVerdict{
-		Block:   verdict.Block,
-		Message: verdict.Message,
-		Output:  verdict.Output,
-	}
-	value, err := json.Marshal(cached)
-	if err != nil {
-		r.log.WarnContext(ctx, "exec validator hot cache encode failed", "err", err)
-		return
-	}
-	_, _, err = r.cache.Set(cacheNamespace, cacheKey, value, hotkv.SetOptions{
-		Mode: hotkv.SetModeAny,
-		TTL:  time.Duration(ttlMs) * time.Millisecond,
-	})
-	if err != nil {
-		r.log.WarnContext(ctx, "exec validator hot cache set failed", "err", err)
-	}
-}
-
-func stableExecCacheEntryKey(
-	rule *config.Rule,
-	conditionIndex int,
-	c *config.Condition,
-	keyView execconcern.PathView,
-	cacheScope execTemporalCacheScope,
-) string {
-	hash := sha256.New()
-	writeHashPart := func(value string) {
-		_, _ = hash.Write([]byte(value))
-		_, _ = hash.Write([]byte{0})
-	}
-	writeHashPart(rule.Name)
-	writeHashPart(rule.Action)
-	writeHashPart(rule.OutputText())
-	writeHashPart(strconv.Itoa(conditionIndex))
-	writeHashPart(c.Kind)
-	writeHashPart(strings.Join(c.Command, "\x1f"))
-	writeHashPart(c.CacheKey)
-	writeHashPart(c.ForEach)
-	writeHashPart(c.MatchMode)
-	for _, selector := range c.Selectors() {
-		writeHashPart(selector.Path)
-	}
-	writeHashPart(c.BlockOn)
-	writeHashPart(c.OnError)
-	writeHashPart(c.StdoutJSONField)
-	writeHashPart(string(c.StdoutJSONEqualsValue().Kind()))
-	writeHashPart(c.StdoutJSONEqualsValue().CanonicalString())
-	writeHashPart(strconv.Itoa(c.CacheTTLMs))
-	writeHashPart(strconv.Itoa(c.TimeoutMs))
-	writeHashPart(strconv.Itoa(c.RetryCount))
-	writeHashPart(strings.Join(c.SearchTools, "\x1f"))
-	for _, spec := range c.WriteSpecs {
-		writeHashPart(strings.Join(spec.Argv0, "\x1f"))
-		writeHashPart(spec.TargetMode)
-		writeHashPart(strings.Join(spec.SkipFlagsWithValues, "\x1f"))
-		writeHashPart(strconv.FormatBool(spec.EndOfOptions))
-		writeHashPart(strings.Join(spec.CwdFlags, "\x1f"))
-	}
-	if execConditionUsesTemporalSelector(c) {
-		writeHashPart(cacheScope.system)
-		writeHashPart(cacheScope.conversationID)
-		writeHashPart(cacheScope.eventName)
-		writeHashPart(cacheScope.responseTarget)
-	}
-	writeHashPart(keyView.Canonical)
-	return "sha256:" + hex.EncodeToString(hash.Sum(nil))
-}
-
-func canonicalizeCacheKeyField(cache *canonpath.Cache, cwd string, value string) execconcern.PathView {
-	if !strings.Contains(value, "\n") {
-		return canonicalizePathField(cache, cwd, value)
-	}
-
-	parts := strings.Split(value, "\n")
-	canonicalParts := make([]string, 0, len(parts))
-	allCanonical := true
-	for _, part := range parts {
-		if part == "" {
-			continue
-		}
-		view := canonicalizePathField(cache, cwd, part)
-		canonicalParts = append(canonicalParts, view.Canonical)
-		if !view.IsCanonical {
-			allCanonical = false
-		}
-	}
-	return execconcern.PathView{
-		Raw:         value,
-		Canonical:   strings.Join(canonicalParts, "\n"),
-		IsCanonical: allCanonical,
-	}
-}
-
-// canonicalizePathField resolves a path-like field value to its canonical real
-// path. A non-path value (no separators, not absolute) is used verbatim as the
-// key with IsCanonical false, so a non-path cache key still works as a literal.
-func canonicalizePathField(cache *canonpath.Cache, cwd string, value string) execconcern.PathView {
-	if value == "" {
-		return execconcern.PathView{Raw: "", Canonical: "", IsCanonical: false}
-	}
-	if !looksLikePath(value) {
-		return execconcern.PathView{Raw: value, Canonical: value, IsCanonical: false}
-	}
-	result := cache.Resolve(cwd, value)
-	return execconcern.PathView{
-		Raw:         result.Raw,
-		Canonical:   result.Canonical,
-		IsCanonical: result.IsCanonical,
-	}
-}
-
-func looksLikePath(value string) bool {
-	return filepath.IsAbs(value) ||
-		strings.HasPrefix(value, "./") ||
-		strings.HasPrefix(value, "../") ||
-		strings.Contains(value, "/")
 }

@@ -39,6 +39,7 @@ func TestPatchWriteTargetsSeesWhatFilePathCannot(t *testing.T) {
 	}
 
 	got := fields.PatchWriteTargets()
+
 	for _, want := range []string{
 		"/repo/internal/config/config.go",
 		"/repo/relative/new_file.go",
@@ -57,20 +58,31 @@ func TestPatchWriteTargetsIgnoresNonPatchPayloads(t *testing.T) {
 		name   string
 		fields rules.FieldSet
 	}{
-		{"a shell command", rules.FieldSet{
-			ToolInputCommand: "rm -rf /repo/internal", CWD: "/repo",
-		}},
+		{
+			"a shell command",
+			rules.FieldSet{
+				ToolInputCommand: "rm -rf /repo/internal",
+				CWD:              "/repo",
+			},
+		},
 		{"an empty payload", rules.FieldSet{CWD: "/repo"}},
-		{"prose that mentions a patch", rules.FieldSet{
-			ToolInputCommand: "explain how to apply a patch to config.go", CWD: "/repo",
-		}},
+		{
+			"prose that mentions a patch",
+			rules.FieldSet{
+				ToolInputCommand: "explain how to apply a patch to config.go",
+				CWD:              "/repo",
+			},
+		},
 	}
 	for _, testCase := range cases {
-		t.Run(testCase.name, func(t *testing.T) {
-			if got := testCase.fields.PatchWriteTargets(); got != "" {
-				t.Fatalf("PatchWriteTargets() = %q, want empty", got)
-			}
-		})
+		t.Run(
+			testCase.name,
+			func(t *testing.T) {
+				if got := testCase.fields.PatchWriteTargets(); got != "" {
+					t.Fatalf("PatchWriteTargets() = %q, want empty", got)
+				}
+			},
+		)
 	}
 }
 

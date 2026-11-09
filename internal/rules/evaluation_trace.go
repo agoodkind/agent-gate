@@ -93,8 +93,11 @@ type RuleDecision struct {
 // the rule engine records for ruleName.
 func LargestRuleDecision(ruleName string) RuleDecision {
 	return RuleDecision{
-		RuleName: ruleName, Status: traceStatusSkipped, SkipReason: skipEventNotApplicable,
-		Matched: false, PartialError: true,
+		RuleName:     ruleName,
+		Status:       traceStatusSkipped,
+		SkipReason:   skipEventNotApplicable,
+		Matched:      false,
+		PartialError: true,
 	}
 }
 
@@ -130,30 +133,54 @@ type LayerTrace struct {
 
 func newLayerTrace(ruleName string, conditionIndex int, layerName string, kind string) LayerTrace {
 	return LayerTrace{
-		RuleName: ruleName, ConditionIndex: conditionIndex, LayerName: layerName,
-		Kind: kind, Status: "", Outcome: "", SkipReason: "", ParentTraceIndex: nil,
-		StartedAt: time.Time{}, CompletedAt: time.Time{}, InputReference: "",
-		InputJSON: nil, OutputJSON: nil, InputHash: "", OutputHash: "",
-		ServiceName: "", ServiceVersion: "", VerifiedProvenance: emptyVerifiedProvenance(),
-		CacheStatus:  "",
-		CacheKeyHash: "", CacheEntryVersion: nil, CacheExpiresAt: nil,
-		UpstreamMetadata: emptyUpstreamMetadata(), ErrorCode: "", ErrorMessage: "",
-		RetryCount: 0,
+		RuleName:           ruleName,
+		ConditionIndex:     conditionIndex,
+		LayerName:          layerName,
+		Kind:               kind,
+		Status:             "",
+		Outcome:            "",
+		SkipReason:         "",
+		ParentTraceIndex:   nil,
+		StartedAt:          time.Time{},
+		CompletedAt:        time.Time{},
+		InputReference:     "",
+		InputJSON:          nil,
+		OutputJSON:         nil,
+		InputHash:          "",
+		OutputHash:         "",
+		ServiceName:        "",
+		ServiceVersion:     "",
+		VerifiedProvenance: emptyVerifiedProvenance(),
+		CacheStatus:        "",
+		CacheKeyHash:       "",
+		CacheEntryVersion:  nil,
+		CacheExpiresAt:     nil,
+		UpstreamMetadata:   emptyUpstreamMetadata(),
+		ErrorCode:          "",
+		ErrorMessage:       "",
+		RetryCount:         0,
 	}
 }
 
 func emptyVerifiedProvenance() VerifiedProvenance {
 	return VerifiedProvenance{
-		RequestedModel: "", EndpointHash: "", CacheKeyHash: "", InputHash: "",
-		PromptSHA256: "", SchemaSHA256: "", ReportedPromptHashStatus: "absent",
+		RequestedModel:           "",
+		EndpointHash:             "",
+		CacheKeyHash:             "",
+		InputHash:                "",
+		PromptSHA256:             "",
+		SchemaSHA256:             "",
+		ReportedPromptHashStatus: "absent",
 		ReportedSchemaHashStatus: "absent",
 	}
 }
 
 func emptyUpstreamMetadata() UpstreamMetadata {
 	return UpstreamMetadata{
-		Source: "inference_reply", Trust: "untrusted", Status: UpstreamMetadataAbsent,
-		Raw: nil,
+		Source: "inference_reply",
+		Trust:  "untrusted",
+		Status: UpstreamMetadataAbsent,
+		Raw:    nil,
 	}
 }
 
@@ -180,16 +207,22 @@ func EvaluateAllDetailed(
 	fields.protectedSource = sourceReadPolicy(rulesSlice, system, eventName, getenv)
 	startedAt := decisionTraceNow().UTC()
 	collector := &richTraceCollector{
-		mu: sync.Mutex{}, layers: make([]LayerTrace, 0),
-		seen: make(map[traceIdentity]struct{}),
+		mu:     sync.Mutex{},
+		layers: make([]LayerTrace, 0),
+		seen:   make(map[traceIdentity]struct{}),
 	}
 	evalCtx := withCommandEnvironment(ctx, getenv)
 	evalCtx = withRichTraceCollector(evalCtx, collector)
 	collectPreSkippedInferenceLayers(evalCtx, rulesSlice, system, eventName, getenv)
 	result := evaluateAll(evalCtx, system, eventName, fields, rulesSlice, getenv)
 	decisions := deterministicRuleDecisions(
-		rulesSlice, system, eventName, getenv,
-		result.violations, result.effects, result.partialRules,
+		rulesSlice,
+		system,
+		eventName,
+		getenv,
+		result.violations,
+		result.effects,
+		result.partialRules,
 	)
 	outputJSON := deterministicOutputJSON(system, eventName, decisions, result.violations)
 	completedAt := decisionTraceNow().UTC()
@@ -197,16 +230,21 @@ func EvaluateAllDetailed(
 	if len(inputCopy) == 0 {
 		inputCopy = json.RawMessage(`{}`)
 	}
+
 	return DetailedEvaluation{
 		Violations: result.violations,
 		Effects:    result.effects,
 		Trace: DecisionTrace{
 			Deterministic: DeterministicTrace{
-				StartedAt: startedAt, CompletedAt: completedAt,
-				InputJSON: inputCopy, OutputJSON: outputJSON,
-				InputHash: traceJSONHash(inputCopy), OutputHash: traceJSONHash(outputJSON),
-				ServiceName: "agent-gate", ServiceVersion: serviceVersion,
-				CheckedRules: decisions,
+				StartedAt:      startedAt,
+				CompletedAt:    completedAt,
+				InputJSON:      inputCopy,
+				OutputJSON:     outputJSON,
+				InputHash:      traceJSONHash(inputCopy),
+				OutputHash:     traceJSONHash(outputJSON),
+				ServiceName:    "agent-gate",
+				ServiceVersion: serviceVersion,
+				CheckedRules:   decisions,
 			},
 			Layers: collector.orderedSnapshot(rulesSlice),
 		},
@@ -240,12 +278,18 @@ func (collector *richTraceCollector) collect(layer LayerTrace) {
 	if collector == nil {
 		return
 	}
-	identity := traceIdentity{ruleName: layer.RuleName, conditionIndex: layer.ConditionIndex, kind: layer.Kind}
+
+	identity := traceIdentity{
+		ruleName:       layer.RuleName,
+		conditionIndex: layer.ConditionIndex,
+		kind:           layer.Kind,
+	}
 	collector.mu.Lock()
 	defer collector.mu.Unlock()
 	if _, exists := collector.seen[identity]; exists {
 		return
 	}
+
 	collector.seen[identity] = struct{}{}
 	collector.layers = append(collector.layers, cloneLayerTrace(layer))
 }
@@ -253,48 +297,65 @@ func (collector *richTraceCollector) collect(layer LayerTrace) {
 func (collector *richTraceCollector) snapshot() []LayerTrace {
 	collector.mu.Lock()
 	defer collector.mu.Unlock()
+
 	layers := make([]LayerTrace, len(collector.layers))
 	for i := range collector.layers {
 		layers[i] = cloneLayerTrace(collector.layers[i])
 	}
+
 	return layers
 }
 
 func (collector *richTraceCollector) orderedSnapshot(rulesSlice []config.Rule) []LayerTrace {
 	layers := collector.snapshot()
+
 	ruleOrder := make(map[string]int, len(rulesSlice))
 	for i := range rulesSlice {
 		ruleOrder[rulesSlice[i].Name] = i
 	}
-	sort.SliceStable(layers, func(i int, j int) bool {
-		left := layers[i]
-		right := layers[j]
-		if ruleOrder[left.RuleName] != ruleOrder[right.RuleName] {
-			return ruleOrder[left.RuleName] < ruleOrder[right.RuleName]
-		}
-		if left.ConditionIndex != right.ConditionIndex {
-			return left.ConditionIndex < right.ConditionIndex
-		}
-		return left.Kind == "context" && right.Kind == "inference"
-	})
+
+	sort.SliceStable(
+		layers,
+		func(i int, j int) bool {
+			left := layers[i]
+			right := layers[j]
+			if ruleOrder[left.RuleName] != ruleOrder[right.RuleName] {
+				return ruleOrder[left.RuleName] < ruleOrder[right.RuleName]
+			}
+
+			if left.ConditionIndex != right.ConditionIndex {
+				return left.ConditionIndex < right.ConditionIndex
+			}
+
+			return left.Kind == "context" && right.Kind == "inference"
+		},
+	)
 	contextIndexes := make(map[traceIdentity]int)
+
 	for i := range layers {
 		layer := &layers[i]
 		parent := 0
 		if layer.Kind == "context" {
 			layer.ParentTraceIndex = &parent
 			contextIndexes[traceIdentity{
-				ruleName: layer.RuleName, conditionIndex: layer.ConditionIndex, kind: "context",
+				ruleName:       layer.RuleName,
+				conditionIndex: layer.ConditionIndex,
+				kind:           "context",
 			}] = i + 1
 			continue
 		}
+
 		if contextIndex, ok := contextIndexes[traceIdentity{
-			ruleName: layer.RuleName, conditionIndex: layer.ConditionIndex, kind: "context",
+			ruleName:       layer.RuleName,
+			conditionIndex: layer.ConditionIndex,
+			kind:           "context",
 		}]; ok {
 			parent = contextIndex
 		}
+
 		layer.ParentTraceIndex = &parent
 	}
+
 	return layers
 }
 
@@ -306,14 +367,17 @@ func cloneLayerTrace(layer LayerTrace) LayerTrace {
 		parent := *layer.ParentTraceIndex
 		layer.ParentTraceIndex = &parent
 	}
+
 	if layer.CacheEntryVersion != nil {
 		version := *layer.CacheEntryVersion
 		layer.CacheEntryVersion = &version
 	}
+
 	if layer.CacheExpiresAt != nil {
 		expiresAt := *layer.CacheExpiresAt
 		layer.CacheExpiresAt = &expiresAt
 	}
+
 	return layer
 }
 
@@ -371,17 +435,23 @@ func deterministicRuleDecisions(
 	partialRules map[string]bool,
 ) []RuleDecision {
 	matchedRules := make(map[string]bool)
+
 	for _, violation := range violations {
 		matchedRules[violation.RuleName] = true
 	}
+
 	for _, effect := range effects {
 		matchedRules[effect.RuleName] = true
 	}
+
 	decisions := make([]RuleDecision, 0, len(rulesSlice))
 	for i := range rulesSlice {
 		rule := &rulesSlice[i]
 		decision := RuleDecision{
-			RuleName: rule.Name, Status: "nonmatched", SkipReason: "", Matched: false,
+			RuleName:     rule.Name,
+			Status:       "nonmatched",
+			SkipReason:   "",
+			Matched:      false,
 			PartialError: partialRules[rule.Name],
 		}
 		switch {
@@ -395,8 +465,10 @@ func deterministicRuleDecisions(
 			decision.Status = "matched"
 			decision.Matched = true
 		}
+
 		decisions = append(decisions, decision)
 	}
+
 	return decisions
 }
 
@@ -409,10 +481,12 @@ func deterministicOutputJSON(
 	outputRules := make([]deterministicOutputRule, len(decisions))
 	for i := range decisions {
 		outputRules[i].RuleDecision = decisions[i]
+
 		for _, violation := range violations {
 			if violation.RuleName != decisions[i].RuleName {
 				continue
 			}
+
 			outputRules[i].ViolationIdentities = append(
 				outputRules[i].ViolationIdentities,
 				violationIdentity{
@@ -424,14 +498,17 @@ func deterministicOutputJSON(
 				},
 			)
 		}
+
 		if outputRules[i].ViolationIdentities == nil {
 			outputRules[i].ViolationIdentities = make([]violationIdentity, 0)
 		}
 	}
+
 	result := "allow"
 	if len(violations) > 0 {
 		result = "block"
 	}
+
 	encoded, err := json.Marshal(deterministicOutput{
 		Rules:                      outputRules,
 		ProviderBlockingCapability: providerBlockingCapability(system, eventName),
@@ -440,6 +517,7 @@ func deterministicOutputJSON(
 	if err != nil {
 		return json.RawMessage(`{}`)
 	}
+
 	return encoded
 }
 
@@ -473,9 +551,11 @@ func collectPreSkippedInferenceLayers(
 		} else if envGuardFires(getenv, rule.DisableIfEnv) {
 			reason = skipDisabledByEnv
 		}
+
 		if reason == "" {
 			continue
 		}
+
 		for conditionIndex := range rule.Conditions {
 			condition := &rule.Conditions[conditionIndex]
 			if conditionKind(condition) == config.ConditionKindInfer {
@@ -496,10 +576,14 @@ func collectSkippedInferenceCondition(
 	if collector == nil {
 		return
 	}
+
 	parent := 0
 	if condition.ContextSource != "" {
 		contextLayer := newLayerTrace(
-			rule.Name, conditionIndex, rule.Name+"/"+condition.LayerName+"/context", "context",
+			rule.Name,
+			conditionIndex,
+			rule.Name+"/"+condition.LayerName+"/context",
+			"context",
 		)
 		contextLayer.Status = traceStatusSkipped
 		contextLayer.SkipReason = reason
@@ -511,6 +595,7 @@ func collectSkippedInferenceCondition(
 		collector.collect(contextLayer)
 		parent = collector.traceIndex(rule.Name, conditionIndex, "context")
 	}
+
 	inferenceLayer := newLayerTrace(rule.Name, conditionIndex, condition.LayerName, "inference")
 	inferenceLayer.Status = traceStatusSkipped
 	inferenceLayer.SkipReason = reason
@@ -523,14 +608,21 @@ func collectSkippedInferenceCondition(
 	collector.collect(inferenceLayer)
 }
 
-func (collector *richTraceCollector) traceIndex(ruleName string, conditionIndex int, kind string) int {
+func (collector *richTraceCollector) traceIndex(
+	ruleName string,
+	conditionIndex int,
+	kind string,
+) int {
 	collector.mu.Lock()
 	defer collector.mu.Unlock()
+
 	for i := range collector.layers {
 		layer := &collector.layers[i]
-		if layer.RuleName == ruleName && layer.ConditionIndex == conditionIndex && layer.Kind == kind {
+		if layer.RuleName == ruleName && layer.ConditionIndex == conditionIndex &&
+			layer.Kind == kind {
 			return i + 1
 		}
 	}
+
 	return 0
 }

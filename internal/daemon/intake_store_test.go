@@ -15,6 +15,7 @@ func TestSQLiteEvaluationRecorderNilLoggerPreservesStoreErrors(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenSQLite: %v", err)
 	}
+
 	t.Cleanup(func() {
 		if err := store.Handle().Close(); err != nil {
 			t.Fatalf("Close: %v", err)
@@ -42,16 +43,22 @@ func TestSQLiteEvaluationRecorderNilLoggerPreservesStoreErrors(t *testing.T) {
 			name: "commit deferred evaluation",
 			run: func() error {
 				return recorder.CommitDeferredEvaluation(
-					ctx, intake.DeferredClaim{}, evaluation.Record{}, nil,
+					ctx,
+					intake.DeferredClaim{},
+					evaluation.Record{},
+					nil,
 				)
 			},
 		},
 	}
 	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			if err := test.run(); err == nil {
-				t.Fatal("error = nil, want wrapped store error")
-			}
-		})
+		t.Run(
+			test.name,
+			func(t *testing.T) {
+				if err := test.run(); err == nil {
+					t.Fatal("error = nil, want wrapped store error")
+				}
+			},
+		)
 	}
 }

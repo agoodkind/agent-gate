@@ -15,6 +15,7 @@ func writeDegradedConfig(t *testing.T, body string) string {
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
+
 	return path
 }
 
@@ -67,11 +68,14 @@ func TestOutageConfigNoLongerCostsEveryRule(t *testing.T) {
 		for i := range cfg.Rules {
 			names = append(names, cfg.Rules[i].Name)
 		}
+
 		t.Fatalf("rules kept = %v, want only keeps-working", names)
 	}
+
 	if cfg.Rules[0].Name != "keeps-working" {
 		t.Fatalf("kept rule = %q, want keeps-working", cfg.Rules[0].Name)
 	}
+
 	if cfg.Rules[0].Compiled() == nil {
 		t.Fatal("the surviving rule did not compile")
 	}
@@ -80,12 +84,15 @@ func TestOutageConfigNoLongerCostsEveryRule(t *testing.T) {
 	if len(failures) != 1 {
 		t.Fatalf("failures = %d, want 1: %v", len(failures), failures)
 	}
+
 	if failures[0].Kind != config.LoadFailureRule || failures[0].Scope != "asks-too-much" {
 		t.Fatalf("failure = %+v, want the asks-too-much rule", failures[0])
 	}
+
 	if !strings.Contains(failures[0].Reason, "timeout_ms") {
 		t.Fatalf("failure reason = %q, want it to name timeout_ms", failures[0].Reason)
 	}
+
 	if !cfg.Degraded() {
 		t.Fatal("Degraded() = false after dropping a rule")
 	}
@@ -106,17 +113,24 @@ func TestBadSettingsBlockFallsBackToDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("degraded load should not fail: %v", err)
 	}
+
 	if len(cfg.Rules) != 1 {
 		t.Fatalf("rules kept = %d, want 1", len(cfg.Rules))
 	}
+
 	if got := cfg.ExecMaxTimeoutMs(); got != config.DefaultMaxExecTimeoutMs {
-		t.Fatalf("ExecMaxTimeoutMs = %d, want the default %d after fallback",
-			got, config.DefaultMaxExecTimeoutMs)
+		t.Fatalf(
+			"ExecMaxTimeoutMs = %d, want the default %d after fallback",
+			got,
+			config.DefaultMaxExecTimeoutMs,
+		)
 	}
+
 	failures := cfg.Failures()
 	if len(failures) != 1 || failures[0].Kind != config.LoadFailureSection {
 		t.Fatalf("failures = %v, want one section failure", failures)
 	}
+
 	if failures[0].Scope != "performance.timeouts" {
 		t.Fatalf("failure scope = %q, want performance.timeouts", failures[0].Scope)
 	}
@@ -142,9 +156,11 @@ pattern = '''['''
 	if err == nil {
 		t.Fatal("a config whose every rule failed was accepted; enforcement would be empty")
 	}
+
 	if !strings.Contains(err.Error(), "none compiled") {
 		t.Fatalf("error = %v, want it to say no rule compiled", err)
 	}
+
 	if !strings.Contains(err.Error(), "keeping the previous config") {
 		t.Fatalf("error = %v, want it to say the previous config is kept", err)
 	}
@@ -165,6 +181,7 @@ pattern = '''['''
 	if err != nil {
 		t.Fatalf("one surviving rule should be accepted: %v", err)
 	}
+
 	if len(cfg.Rules) != 1 || cfg.Rules[0].Name != "keeps-working" {
 		t.Fatalf("rules = %d, want the one that compiles", len(cfg.Rules))
 	}
@@ -179,14 +196,20 @@ func TestCleanConfigReportsNoFailures(t *testing.T) {
 	if err != nil {
 		t.Fatalf("strict load of a clean config: %v", err)
 	}
+
 	degraded, err := config.LoadDegradedPath(path)
 	if err != nil {
 		t.Fatalf("degraded load of a clean config: %v", err)
 	}
+
 	if len(strict.Rules) != len(degraded.Rules) {
-		t.Fatalf("rule counts differ: strict %d, degraded %d",
-			len(strict.Rules), len(degraded.Rules))
+		t.Fatalf(
+			"rule counts differ: strict %d, degraded %d",
+			len(strict.Rules),
+			len(degraded.Rules),
+		)
 	}
+
 	if degraded.Degraded() || len(degraded.Failures()) != 0 {
 		t.Fatalf("clean config reported failures: %v", degraded.Failures())
 	}

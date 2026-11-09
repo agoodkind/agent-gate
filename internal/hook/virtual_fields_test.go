@@ -35,8 +35,10 @@ var syntheticSelectors = []string{
 // was deployed.
 func TestEverySyntheticSelectorValidatesInARule(t *testing.T) {
 	for _, selector := range syntheticSelectors {
-		t.Run(selector, func(t *testing.T) {
-			body := `
+		t.Run(
+			selector,
+			func(t *testing.T) {
+				body := `
 [[rules]]
 name = "synthetic"
 claude_events = ["PreToolUse"]
@@ -45,21 +47,27 @@ violation_message = "blocked"
 field_paths = ["` + selector + `"]
 pattern = '''anything'''
 `
-			path := filepath.Join(t.TempDir(), "config.toml")
-			if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
-				t.Fatalf("write config: %v", err)
-			}
-			cfg, err := config.LoadExisting(path)
-			if err != nil {
-				t.Fatalf("LoadExisting rejected %q: %v", selector, err)
-			}
-			if errs := hook.ValidateConfig(cfg); len(errs) > 0 {
-				t.Fatalf("ValidateConfig rejected %q: %v\n"+
-					"a rule naming it would be refused, and the daemon would keep "+
-					"its previous rules while the new guard silently never applies",
-					selector, errs[0])
-			}
-		})
+				path := filepath.Join(t.TempDir(), "config.toml")
+				if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+					t.Fatalf("write config: %v", err)
+				}
+
+				cfg, err := config.LoadExisting(path)
+				if err != nil {
+					t.Fatalf("LoadExisting rejected %q: %v", selector, err)
+				}
+
+				if errs := hook.ValidateConfig(cfg); len(errs) > 0 {
+					t.Fatalf(
+						"ValidateConfig rejected %q: %v\n"+
+							"a rule naming it would be refused, and the daemon would keep "+
+							"its previous rules while the new guard silently never applies",
+						selector,
+						errs[0],
+					)
+				}
+			},
+		)
 	}
 }
 
@@ -79,11 +87,13 @@ pattern = '''anything'''
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
+
 	cfg, err := config.LoadExisting(path)
 	if err != nil {
 		// A load-time rejection is also a loud failure, which is what matters.
 		return
 	}
+
 	if errs := hook.ValidateConfig(cfg); len(errs) == 0 {
 		t.Fatal("a misspelled selector was accepted")
 	}

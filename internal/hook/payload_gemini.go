@@ -27,6 +27,7 @@ func (e GeminiEnvelope) baseFields() rules.FieldSet {
 	fields.TranscriptPath = e.TranscriptPath
 	fields.CWD = e.Cwd
 	fields.Timestamp = e.Timestamp
+
 	return fields
 }
 
@@ -107,7 +108,13 @@ type GeminiPreCompressPayload struct {
 	Trigger string `json:"trigger"`
 }
 
-func geminiToolFields(base rules.FieldSet, toolName string, originalRequestName string, mcpContext string, input GeminiToolInput) rules.FieldSet {
+func geminiToolFields(
+	base rules.FieldSet,
+	toolName string,
+	originalRequestName string,
+	mcpContext string,
+	input GeminiToolInput,
+) rules.FieldSet {
 	base.ToolName = toolName
 	base.OriginalRequestName = originalRequestName
 	base.MCPContext = mcpContext
@@ -123,18 +130,32 @@ func geminiToolFields(base rules.FieldSet, toolName string, originalRequestName 
 	base.ToolInputPath = input.Path
 	base.ToolInputURL = input.URL
 	base.ToolInputQuery = input.Query
+
 	return base
 }
 
 // Fields renders the payload as a [rules.FieldSet].
 func (p GeminiBeforeToolPayload) Fields() rules.FieldSet {
-	return geminiToolFields(p.baseFields(), p.ToolName, p.OriginalRequestName, p.MCPContext, p.ToolInput)
+	return geminiToolFields(
+		p.baseFields(),
+		p.ToolName,
+		p.OriginalRequestName,
+		p.MCPContext,
+		p.ToolInput,
+	)
 }
 
 // Fields renders the payload as a [rules.FieldSet].
 func (p GeminiAfterToolPayload) Fields() rules.FieldSet {
-	fields := geminiToolFields(p.baseFields(), p.ToolName, p.OriginalRequestName, p.MCPContext, p.ToolInput)
+	fields := geminiToolFields(
+		p.baseFields(),
+		p.ToolName,
+		p.OriginalRequestName,
+		p.MCPContext,
+		p.ToolInput,
+	)
 	fields.ToolResponse = p.ToolResponse.SearchableText()
+
 	return fields
 }
 
@@ -142,6 +163,7 @@ func (p GeminiAfterToolPayload) Fields() rules.FieldSet {
 func (p GeminiBeforeAgentPayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.Prompt = p.Prompt
+
 	return fields
 }
 
@@ -151,6 +173,7 @@ func (p GeminiAfterAgentPayload) Fields() rules.FieldSet {
 	fields.Prompt = p.Prompt
 	fields.PromptResponse = p.PromptResponse
 	fields.StopHookActive = boolString(p.StopHookActive)
+
 	return fields
 }
 
@@ -158,6 +181,7 @@ func (p GeminiAfterAgentPayload) Fields() rules.FieldSet {
 func (p GeminiBeforeModelPayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.LLMRequest = p.LLMRequest.Text
+
 	return fields
 }
 
@@ -172,6 +196,7 @@ func (p GeminiAfterModelPayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.LLMRequest = p.LLMRequest.Text
 	fields.LLMResponse = p.LLMResponse.Text
+
 	return fields
 }
 
@@ -179,6 +204,7 @@ func (p GeminiAfterModelPayload) Fields() rules.FieldSet {
 func (p GeminiSessionStartPayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.Source = p.Source
+
 	return fields
 }
 
@@ -186,6 +212,7 @@ func (p GeminiSessionStartPayload) Fields() rules.FieldSet {
 func (p GeminiSessionEndPayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.Reason = p.Reason
+
 	return fields
 }
 
@@ -195,6 +222,7 @@ func (p GeminiNotificationPayload) Fields() rules.FieldSet {
 	fields.NotificationType = p.NotificationType
 	fields.Message = p.Message
 	fields.Details = p.Details
+
 	return fields
 }
 
@@ -202,5 +230,6 @@ func (p GeminiNotificationPayload) Fields() rules.FieldSet {
 func (p GeminiPreCompressPayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.Trigger = p.Trigger
+
 	return fields
 }

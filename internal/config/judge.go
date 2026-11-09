@@ -90,7 +90,9 @@ func (c *Config) JudgePricing() map[string]ModelPrice {
 	if c == nil {
 		return pricing
 	}
+
 	maps.Copy(pricing, c.Judge.Pricing)
+
 	return pricing
 }
 
@@ -99,6 +101,7 @@ func (c *Config) JudgeTranscriptEndpoint() string {
 	if c == nil {
 		return ""
 	}
+
 	return c.Judge.TranscriptEndpoint
 }
 
@@ -108,6 +111,7 @@ func (c *Config) JudgeTranscriptMaxTokens() int {
 	if c != nil && c.Judge.TranscriptMaxTokens > 0 {
 		return c.Judge.TranscriptMaxTokens
 	}
+
 	return defaultJudgeTranscriptMaxTokens
 }
 
@@ -116,6 +120,7 @@ func (c *Config) JudgeTranscriptTokenModel() string {
 	if c == nil {
 		return ""
 	}
+
 	return c.Judge.TranscriptTokenModel
 }
 
@@ -125,6 +130,7 @@ func (c *Config) JudgeTranscriptTimeout() time.Duration {
 	if c != nil && c.Judge.TranscriptTimeoutMS > 0 {
 		return time.Duration(c.Judge.TranscriptTimeoutMS) * time.Millisecond
 	}
+
 	return defaultJudgeTranscriptTimeout
 }
 
@@ -133,6 +139,7 @@ func (c *Config) JudgeTranscriptOnError() string {
 	if c == nil {
 		return ""
 	}
+
 	return c.Judge.TranscriptOnError
 }
 
@@ -142,15 +149,20 @@ func validateJudge(judge Judge) error {
 	if judge.TranscriptMaxTokens < 0 {
 		return fmt.Errorf("judge.transcript_max_tokens must be non-negative")
 	}
+
 	if judge.TranscriptTimeoutMS < 0 {
 		return fmt.Errorf("judge.transcript_timeout_ms must be non-negative")
 	}
+
 	if !validContextOnError(judge.TranscriptOnError) {
 		return fmt.Errorf(
 			"judge.transcript_on_error %q must be %q, %q, or empty",
-			judge.TranscriptOnError, OnErrorOpen, OnErrorClosed,
+			judge.TranscriptOnError,
+			OnErrorOpen,
+			OnErrorClosed,
 		)
 	}
+
 	for model, price := range judge.Pricing {
 		if price.InputPerMillion < 0 ||
 			price.CachedInputPerMillion < 0 ||
@@ -158,5 +170,6 @@ func validateJudge(judge Judge) error {
 			return fmt.Errorf("judge.pricing[%q] prices must be non-negative", model)
 		}
 	}
+
 	return nil
 }

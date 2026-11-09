@@ -24,17 +24,26 @@ func (r *ExecRuntime) runExpandedCommandWithRetry(
 	env []string,
 ) execconcern.Verdict {
 	attempts := c.RetryCount + 1
-	verdict := execconcern.Verdict{Block: false, Message: "", Output: "", Errored: false, PartialError: false}
+	verdict := execconcern.Verdict{
+		Block:        false,
+		Message:      "",
+		Output:       "",
+		Errored:      false,
+		PartialError: false,
+	}
+
 	for range attempts {
 		res, runErr := r.runner.Run(ctx, command, r.backgroundTimeout(), stdin, env)
 		verdict = execconcern.Interpret(c, res, runErr)
 		if !verdict.Errored {
 			return verdict
 		}
+
 		r.logExpandedCommandError(ctx, ruleName, c, command, res, runErr)
 		if ctx.Err() != nil {
 			return verdict
 		}
 	}
+
 	return verdict
 }

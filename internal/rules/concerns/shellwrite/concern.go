@@ -37,35 +37,72 @@ type MatchResult struct {
 // commandSelector defaults to [config.FieldToolInputCommand] when the zero
 // value is passed; this matches the canonical Claude/Cursor PreToolUse
 // payload shape.
-func EvalShellWriteMatches(fields FieldAccessor, commandSelector config.FieldSelector, globs []string) []MatchResult {
+func EvalShellWriteMatches(
+	fields FieldAccessor,
+	commandSelector config.FieldSelector,
+	globs []string,
+) []MatchResult {
 	return EvalShellWriteMatchesWithSpecs(fields, commandSelector, globs, nil, true)
 }
 
 // EvalShellWriteMatchesWithSpecs applies condition-owned command descriptions.
-func EvalShellWriteMatchesWithSpecs(fields FieldAccessor, commandSelector config.FieldSelector, globs []string, specs []config.ShellWriteSpec, matchUnresolved bool) []MatchResult {
+func EvalShellWriteMatchesWithSpecs(
+	fields FieldAccessor,
+	commandSelector config.FieldSelector,
+	globs []string,
+	specs []config.ShellWriteSpec,
+	matchUnresolved bool,
+) []MatchResult {
 	if commandSelector == config.FieldSelectorInvalid {
 		commandSelector = config.FieldToolInputCommand
 	}
+
 	command := fields.String(commandSelector)
 	if command == "" {
 		command = fields.String(config.FieldCommand)
 	}
+
 	if command == "" {
 		return nil
 	}
+
 	cwd := fields.BaseCWD()
 	targets := ExtractWriteTargetsWithSpecs(command, cwd, specs)
 	if len(targets) == 0 {
 		return nil
 	}
+
 	filePath := fields.FilePathValue()
 	var out []MatchResult
+
 	for _, target := range targets {
 		if target.Reason == ReasonUnparsedCommandShape {
 			if !matchUnresolved {
 				continue
 			}
-			out = append(out, MatchResult{
+
+			out = append(
+				out,
+				MatchResult{
+					FieldPath: "tool_input.command",
+					FilePath:  filePath,
+					Value:     command,
+					Start:     0,
+					End:       minLen(command, 1),
+					Tool:      target.Tool,
+					Reason:    target.Reason,
+				},
+			)
+			continue
+		}
+
+		if !pathMatchesAnyGlob(target.Path, globs) {
+			continue
+		}
+
+		out = append(
+			out,
+			MatchResult{
 				FieldPath: "tool_input.command",
 				FilePath:  filePath,
 				Value:     command,
@@ -73,22 +110,10 @@ func EvalShellWriteMatchesWithSpecs(fields FieldAccessor, commandSelector config
 				End:       minLen(command, 1),
 				Tool:      target.Tool,
 				Reason:    target.Reason,
-			})
-			continue
-		}
-		if !pathMatchesAnyGlob(target.Path, globs) {
-			continue
-		}
-		out = append(out, MatchResult{
-			FieldPath: "tool_input.command",
-			FilePath:  filePath,
-			Value:     command,
-			Start:     0,
-			End:       minLen(command, 1),
-			Tool:      target.Tool,
-			Reason:    target.Reason,
-		})
+			},
+		)
 	}
+
 	return out
 }
 
@@ -96,15 +121,19 @@ func pathMatchesAnyGlob(path string, globs []string) bool {
 	if len(globs) == 0 {
 		return false
 	}
+
 	base := filepath.Base(path)
+
 	for _, glob := range globs {
 		if matched, err := filepath.Match(glob, path); err == nil && matched {
 			return true
 		}
+
 		if matched, err := filepath.Match(glob, base); err == nil && matched {
 			return true
 		}
 	}
+
 	return false
 }
 
@@ -112,5 +141,6 @@ func minLen(s string, want int) int {
 	if len(s) < want {
 		return len(s)
 	}
+
 	return want
 }

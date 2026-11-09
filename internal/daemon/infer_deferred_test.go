@@ -30,7 +30,9 @@ type deferredInferenceFake struct {
 func newDeferredInferenceFake(outputJSON string) *deferredInferenceFake {
 	return &deferredInferenceFake{
 		UnimplementedInferenceServer: inferencepb.UnimplementedInferenceServer{},
-		mu:                           sync.Mutex{}, calls: 0, outputJSON: outputJSON,
+		mu:                           sync.Mutex{},
+		calls:                        0,
+		outputJSON:                   outputJSON,
 	}
 }
 
@@ -45,6 +47,7 @@ func (server *deferredInferenceFake) Infer(
 	if outputJSON == "" {
 		outputJSON = `{"decision":"block"}`
 	}
+
 	return &inferencepb.InferReply{
 		OutputJson: outputJSON,
 		Status:     inferencepb.InferenceStatus_INFERENCE_STATUS_COMPLETE,
@@ -54,6 +57,7 @@ func (server *deferredInferenceFake) Infer(
 func (server *deferredInferenceFake) callCount() int {
 	server.mu.Lock()
 	defer server.mu.Unlock()
+
 	return server.calls
 }
 
@@ -73,11 +77,13 @@ func TestDurableDeferredReplayExcludesSynchronousInference(t *testing.T) {
 	)
 	t.Cleanup(processor.Close)
 	record := intake.Record{
-		EventID:        "evt-replay",
-		System:         "codex",
-		SessionID:      "s1",
-		EventName:      "PreToolUse",
-		RawPayload:     []byte(`{"session_id":"s1","hook_event_name":"PreToolUse","tool_name":"Shell","tool_input":{"command":"echo audit"}}`),
+		EventID:   "evt-replay",
+		System:    "codex",
+		SessionID: "s1",
+		EventName: "PreToolUse",
+		RawPayload: []byte(
+			`{"session_id":"s1","hook_event_name":"PreToolUse","tool_name":"Shell","tool_input":{"command":"echo audit"}}`,
+		),
 		EnvFingerprint: map[string]string{},
 	}
 
@@ -86,9 +92,11 @@ func TestDurableDeferredReplayExcludesSynchronousInference(t *testing.T) {
 	if !ok {
 		t.Fatal("rebuildDeferredAudit returned invalid event")
 	}
+
 	if fake.callCount() != 0 {
 		t.Fatalf("inference calls = %d, want 0", fake.callCount())
 	}
+
 	if len(deferredEvent.AuditOnlyViolations) != 1 {
 		t.Fatalf("audit-only violations = %d, want 1", len(deferredEvent.AuditOnlyViolations))
 	}
@@ -110,11 +118,13 @@ func TestDurableDeferredReplayRunsAuditInferenceAndReportsEvaluatedRules(t *test
 	)
 	t.Cleanup(processor.Close)
 	record := intake.Record{
-		EventID:        "evt-audit-replay",
-		System:         "codex",
-		SessionID:      "s1",
-		EventName:      "PreToolUse",
-		RawPayload:     []byte(`{"session_id":"s1","hook_event_name":"PreToolUse","tool_name":"Shell","tool_input":{"command":"echo audit"}}`),
+		EventID:   "evt-audit-replay",
+		System:    "codex",
+		SessionID: "s1",
+		EventName: "PreToolUse",
+		RawPayload: []byte(
+			`{"session_id":"s1","hook_event_name":"PreToolUse","tool_name":"Shell","tool_input":{"command":"echo audit"}}`,
+		),
 		EnvFingerprint: map[string]string{},
 	}
 
@@ -123,12 +133,15 @@ func TestDurableDeferredReplayRunsAuditInferenceAndReportsEvaluatedRules(t *test
 	if !ok {
 		t.Fatal("rebuildDeferredAudit returned invalid event")
 	}
+
 	if fake.callCount() != 1 {
 		t.Fatalf("inference calls = %d, want 1", fake.callCount())
 	}
+
 	if len(deferredEvent.Rules) != 1 {
 		t.Fatalf("reported evaluated rules = %+v, want one deferred rule", deferredEvent.Rules)
 	}
+
 	if deferredEvent.Decision != hook.ResponseDecisionAllow {
 		t.Fatalf("reconstructed decision = %q, want allow", deferredEvent.Decision)
 	}
@@ -151,7 +164,9 @@ func TestDeferredAuditOnlyInferenceUsesDaemonRuntimeAndOwnTrace(t *testing.T) {
 		newDiscardLogger(),
 	)
 	t.Cleanup(processor.Close)
-	rawPayload := []byte(`{"session_id":"s1","hook_event_name":"PreToolUse","tool_name":"Shell","tool_input":{"command":"echo audit"}}`)
+	rawPayload := []byte(
+		`{"session_id":"s1","hook_event_name":"PreToolUse","tool_name":"Shell","tool_input":{"command":"echo audit"}}`,
+	)
 
 	for i := range 2 {
 		eventID := "evt-audit-" + strconv.Itoa(i+1)
@@ -164,14 +179,13 @@ func TestDeferredAuditOnlyInferenceUsesDaemonRuntimeAndOwnTrace(t *testing.T) {
 			EnvFingerprint: map[string]string{},
 		}
 
-		deferredEvent, ok := processor.rebuildDeferredAudit(
-			context.Background(),
-			record,
-		)
+		deferredEvent, ok := processor.rebuildDeferredAudit(context.Background(), record)
 		if !ok {
 			t.Fatal("rebuildDeferredAudit returned invalid event")
 		}
-		if len(deferredEvent.Trace.Layers) != 1 || deferredEvent.Trace.Layers[0].LayerName != "audit-classification" {
+
+		if len(deferredEvent.Trace.Layers) != 1 ||
+			deferredEvent.Trace.Layers[0].LayerName != "audit-classification" {
 			t.Fatalf("deferred layers = %+v", deferredEvent.Trace.Layers)
 		}
 	}
@@ -179,6 +193,7 @@ func TestDeferredAuditOnlyInferenceUsesDaemonRuntimeAndOwnTrace(t *testing.T) {
 	if fake.callCount() != 2 {
 		t.Fatalf("inference calls = %d, want 2", fake.callCount())
 	}
+
 	if connections.count.Load() != 1 {
 		t.Fatalf("inference connections = %d, want 1", connections.count.Load())
 	}
@@ -190,12 +205,14 @@ func startDeferredInferenceServer(t *testing.T, fake *deferredInferenceFake) str
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	server := grpc.NewServer()
 	inferencepb.RegisterInferenceServer(server, fake)
 	go func() {
 		_ = server.Serve(listener)
 	}()
 	t.Cleanup(server.Stop)
+
 	return listener.Addr().String()
 }
 
@@ -203,13 +220,19 @@ type deferredConnectionCounter struct {
 	count atomic.Int32
 }
 
-func (counter *deferredConnectionCounter) TagRPC(ctx context.Context, _ *stats.RPCTagInfo) context.Context {
+func (counter *deferredConnectionCounter) TagRPC(
+	ctx context.Context,
+	_ *stats.RPCTagInfo,
+) context.Context {
 	return ctx
 }
 
 func (counter *deferredConnectionCounter) HandleRPC(context.Context, stats.RPCStats) {}
 
-func (counter *deferredConnectionCounter) TagConn(ctx context.Context, _ *stats.ConnTagInfo) context.Context {
+func (counter *deferredConnectionCounter) TagConn(
+	ctx context.Context,
+	_ *stats.ConnTagInfo,
+) context.Context {
 	return ctx
 }
 
@@ -228,6 +251,7 @@ func startCountedDeferredInferenceServer(
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	counter := &deferredConnectionCounter{}
 	server := grpc.NewServer(grpc.StatsHandler(counter))
 	inferencepb.RegisterInferenceServer(server, fake)
@@ -235,6 +259,7 @@ func startCountedDeferredInferenceServer(
 		_ = server.Serve(listener)
 	}()
 	t.Cleanup(server.Stop)
+
 	return listener.Addr().String(), counter
 }
 
@@ -269,10 +294,12 @@ field_paths = ["tool_input.command"]
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
+
 	cfg, err := config.LoadExisting(path)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	return cfg
 }
 
@@ -299,9 +326,11 @@ cache_ttl_ms = 0
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
+
 	cfg, err := config.LoadExisting(path)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	return cfg
 }

@@ -36,10 +36,13 @@ func (store *deferredLedgerStore) ClaimDeferred(
 ) (intake.Record, intake.DeferredClaim, error) {
 	record := store.replayRecord
 	claim := intake.DeferredClaim{
-		ReceiptID: record.ReceiptID, EventID: record.EventID,
-		Owner: "test-owner", Attempt: record.DeferredReplays + 1,
+		ReceiptID: record.ReceiptID,
+		EventID:   record.EventID,
+		Owner:     "test-owner",
+		Attempt:   record.DeferredReplays + 1,
 		ExpiresAt: time.Now().Add(time.Minute),
 	}
+
 	return record, claim, nil
 }
 
@@ -51,7 +54,11 @@ func (store *deferredLedgerStore) ReleaseDeferredClaim(
 	return nil
 }
 
-func (store *deferredLedgerStore) ScheduleDeferredRetry(ctx context.Context, claim intake.DeferredClaim, _ time.Time) error {
+func (store *deferredLedgerStore) ScheduleDeferredRetry(
+	ctx context.Context,
+	claim intake.DeferredClaim,
+	_ time.Time,
+) error {
 	return store.ReleaseDeferredClaim(ctx, claim)
 }
 
@@ -66,9 +73,11 @@ func (store *deferredLedgerStore) RenewDeferredClaim(
 		default:
 		}
 	}
+
 	if store.releaseRenew != nil {
 		<-store.releaseRenew
 	}
+
 	return store.renewErr
 }
 
@@ -97,7 +106,9 @@ func (recorder *orderedDeferredRecorder) RecordCompleted(
 	if recorder.err != nil {
 		return recorder.err
 	}
+
 	recorder.records = append(recorder.records, record)
+
 	return nil
 }
 
@@ -124,18 +135,23 @@ func (recorder *orderedDeferredRecorder) CommitDeferredEvaluation(
 	if recorder.commitStarted != nil {
 		recorder.commitStarted <- struct{}{}
 	}
+
 	if recorder.releaseCommit != nil {
 		<-recorder.releaseCommit
 	}
+
 	if recorder.panicOnCommit {
 		panic("forced deferred commit panic")
 	}
+
 	recorder.mu.Lock()
 	defer recorder.mu.Unlock()
 	if recorder.err != nil {
 		return recorder.err
 	}
+
 	recorder.records = append(recorder.records, record)
+
 	return nil
 }
 
@@ -144,17 +160,20 @@ func TestDeferredEvaluationRenewsClaimWhileProcessing(t *testing.T) {
 	record := deferredLedgerRecord(45, 0)
 	renewed := make(chan struct{}, 1)
 	store := &deferredLedgerStore{
-		record: record, order: &order, replayRecord: record, renewed: renewed,
+		record:       record,
+		order:        &order,
+		replayRecord: record,
+		renewed:      renewed,
 	}
 	commitStarted := make(chan struct{}, 1)
 	releaseCommit := make(chan struct{})
 	recorder := &orderedDeferredRecorder{
-		order: &order, records: nil, commitStarted: commitStarted,
+		order:         &order,
+		records:       nil,
+		commitStarted: commitStarted,
 		releaseCommit: releaseCommit,
 	}
-	processor := deferredLedgerProcessor(
-		t, store, recorder,
-	)
+	processor := deferredLedgerProcessor(t, store, recorder)
 	processor.claimLease = 60 * time.Millisecond
 	processor.claimRenewInterval = 10 * time.Millisecond
 	done := make(chan struct{})
@@ -168,11 +187,13 @@ func TestDeferredEvaluationRenewsClaimWhileProcessing(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("deferred evaluation did not reach commit")
 	}
+
 	select {
 	case <-renewed:
 	case <-time.After(time.Second):
 		t.Fatal("deferred claim was not renewed while evaluation remained active")
 	}
+
 	close(releaseCommit)
 	select {
 	case <-done:
@@ -186,17 +207,21 @@ func TestDeferredPanicStopsClaimRenewal(t *testing.T) {
 	record := deferredLedgerRecord(47, 0)
 	renewed := make(chan struct{}, 1)
 	store := &deferredLedgerStore{
-		record: record, order: &order, replayRecord: record, renewed: renewed,
+		record:       record,
+		order:        &order,
+		replayRecord: record,
+		renewed:      renewed,
 	}
 	commitStarted := make(chan struct{}, 1)
 	releaseCommit := make(chan struct{})
 	recorder := &orderedDeferredRecorder{
-		order: &order, records: nil, commitStarted: commitStarted,
-		releaseCommit: releaseCommit, panicOnCommit: true,
+		order:         &order,
+		records:       nil,
+		commitStarted: commitStarted,
+		releaseCommit: releaseCommit,
+		panicOnCommit: true,
 	}
-	processor := deferredLedgerProcessor(
-		t, store, recorder,
-	)
+	processor := deferredLedgerProcessor(t, store, recorder)
 	processor.claimLease = 60 * time.Millisecond
 	processor.claimRenewInterval = 10 * time.Millisecond
 	done := make(chan struct{})
@@ -213,21 +238,25 @@ func TestDeferredPanicStopsClaimRenewal(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("deferred evaluation did not reach commit")
 	}
+
 	select {
 	case <-renewed:
 	case <-time.After(time.Second):
 		t.Fatal("deferred claim was not renewed before panic")
 	}
+
 	close(releaseCommit)
 	select {
 	case <-done:
 	case <-time.After(time.Second):
 		t.Fatal("panicking deferred evaluation did not unwind")
 	}
+
 	select {
 	case <-renewed:
 	default:
 	}
+
 	select {
 	case <-renewed:
 		t.Fatal("deferred claim renewed after processing panic")
@@ -242,22 +271,23 @@ func TestDeferredImmediateEvaluationUsesReceiptAndCommitsBeforeCompletion(t *tes
 	recorder := &orderedDeferredRecorder{order: &order, records: nil}
 	processor := deferredLedgerProcessor(t, store, recorder)
 
-	processor.processRecord(
-		context.Background(), record, deferredLedgerClaim(record), nil,
-	)
+	processor.processRecord(context.Background(), record, deferredLedgerClaim(record), nil)
 
 	if len(recorder.records) != 1 {
 		t.Fatalf("records = %d, want 1", len(recorder.records))
 	}
+
 	got := recorder.records[0]
 	if got.Evaluation.ReceiptID != 41 || got.Evaluation.Mode != "deferred" ||
 		got.Evaluation.Attempt != 1 {
 		t.Fatalf("evaluation identity = %+v", got.Evaluation)
 	}
+
 	if len(got.Layers) != 2 || got.Layers[0].Kind != "deterministic" ||
 		got.Layers[1].Name != "audit-result" {
 		t.Fatalf("deferred layers = %+v", got.Layers)
 	}
+
 	wantOrder := "commit"
 	if joined := joinDeferredOrder(order); joined != wantOrder {
 		t.Fatalf("order = %q, want %q", joined, wantOrder)
@@ -276,6 +306,7 @@ func TestDeferredReplayEvaluationUsesNextAttempt(t *testing.T) {
 	if len(recorder.records) != 1 {
 		t.Fatalf("records = %d, want 1", len(recorder.records))
 	}
+
 	got := recorder.records[0].Evaluation
 	if got.ReceiptID != 44 || got.Mode != "deferred_replay" || got.Attempt != 2 {
 		t.Fatalf("evaluation identity = %+v", got)
@@ -287,13 +318,13 @@ func TestDeferredLedgerFailureLeavesReceiptPending(t *testing.T) {
 	record := deferredLedgerRecord(42, 0)
 	store := &deferredLedgerStore{record: record, order: &order}
 	recorder := &orderedDeferredRecorder{
-		order: &order, records: nil, err: errors.New("ledger unavailable"),
+		order:   &order,
+		records: nil,
+		err:     errors.New("ledger unavailable"),
 	}
 	processor := deferredLedgerProcessor(t, store, recorder)
 
-	processor.processRecord(
-		context.Background(), record, deferredLedgerClaim(record), nil,
-	)
+	processor.processRecord(context.Background(), record, deferredLedgerClaim(record), nil)
 
 	if joined := joinDeferredOrder(order); joined != "commit,release" {
 		t.Fatalf("order = %q, want commit,release", joined)
@@ -308,7 +339,13 @@ func deferredLedgerProcessor(
 	t.Helper()
 	cfg := auditOnlyDaemonTestConfig(t)
 	processor := newDeferredProcessor(
-		context.Background(), store, audit.NewNormalizer(cfg), cfg, nil, 1, 0,
+		context.Background(),
+		store,
+		audit.NewNormalizer(cfg),
+		cfg,
+		nil,
+		1,
+		0,
 		newDiscardLogger(),
 	)
 	processor.evaluationRecorder = recorder
@@ -317,16 +354,25 @@ func deferredLedgerProcessor(
 			orderedRecorder.store = deferredStore
 		}
 	}
+
 	t.Cleanup(processor.Close)
+
 	return processor
 }
 
 func deferredLedgerRecord(receiptID int64, replayCount int) intake.Record {
 	return intake.Record{
-		ReceiptID: receiptID, EventID: "deferred-event", System: "codex",
-		SessionID: "session", EventName: "PreToolUse",
-		RawPayload:      []byte(`{"session_id":"session","hook_event_name":"PreToolUse","tool_name":"Shell","tool_input":{"command":"echo ok"}}`),
-		NormalizedJSON:  []byte(`{"session_id":"session","hook_event_name":"PreToolUse","tool_name":"Shell","tool_input":{"command":"echo ok"}}`),
+		ReceiptID: receiptID,
+		EventID:   "deferred-event",
+		System:    "codex",
+		SessionID: "session",
+		EventName: "PreToolUse",
+		RawPayload: []byte(
+			`{"session_id":"session","hook_event_name":"PreToolUse","tool_name":"Shell","tool_input":{"command":"echo ok"}}`,
+		),
+		NormalizedJSON: []byte(
+			`{"session_id":"session","hook_event_name":"PreToolUse","tool_name":"Shell","tool_input":{"command":"echo ok"}}`,
+		),
 		EnvFingerprint:  map[string]string{},
 		DeferredState:   intake.DeferredStatePending,
 		DeferredReplays: replayCount,
@@ -335,8 +381,10 @@ func deferredLedgerRecord(receiptID int64, replayCount int) intake.Record {
 
 func deferredLedgerClaim(record intake.Record) intake.DeferredClaim {
 	return intake.DeferredClaim{
-		ReceiptID: record.ReceiptID, EventID: record.EventID,
-		Owner: "test-owner", Attempt: record.DeferredReplays + 1,
+		ReceiptID: record.ReceiptID,
+		EventID:   record.EventID,
+		Owner:     "test-owner",
+		Attempt:   record.DeferredReplays + 1,
 		ExpiresAt: time.Now().Add(time.Minute),
 	}
 }

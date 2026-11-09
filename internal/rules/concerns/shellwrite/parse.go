@@ -84,11 +84,14 @@ func ExtractWriteTargetsWithSpecs(cmd, cwd string, specs []config.ShellWriteSpec
 	if strings.TrimSpace(cmd) == "" {
 		return nil
 	}
+
 	cmd = shellparse.ExpandLiteralAssignments(cmd)
 	home := homeDir()
 	decomposition := shelldecomp.Parse(cmd, cwd, home)
 	if decomposition.IsOpaque() {
-		return []WriteTarget{{Path: "", Tool: ToolUnparseable, Reason: ReasonUnparsedCommandShape, Raw: cmd}}
+		return []WriteTarget{
+			{Path: "", Tool: ToolUnparseable, Reason: ReasonUnparsedCommandShape, Raw: cmd},
+		}
 	}
 
 	var out []WriteTarget
@@ -96,26 +99,36 @@ func ExtractWriteTargetsWithSpecs(cmd, cwd string, specs []config.ShellWriteSpec
 	if opaque {
 		out = append(out, sentinel)
 	}
+
 	for _, target := range decomposition.WriteTargets() {
 		if replacedArgumentTarget(decomposition, target, specs) {
 			continue
 		}
+
 		if !target.Resolvable || target.Path == shelldecomp.Unresolvable {
-			out = append(out, WriteTarget{
-				Path:   "",
-				Tool:   ToolUnparseable,
-				Reason: ReasonUnparsedCommandShape,
-				Raw:    target.Raw,
-			})
+			out = append(
+				out,
+				WriteTarget{
+					Path:   "",
+					Tool:   ToolUnparseable,
+					Reason: ReasonUnparsedCommandShape,
+					Raw:    target.Raw,
+				},
+			)
 			continue
 		}
-		out = append(out, WriteTarget{
-			Path:   target.Path,
-			Tool:   toolLabel(target.Argv0),
-			Reason: ReasonOK,
-			Raw:    target.Raw,
-		})
+
+		out = append(
+			out,
+			WriteTarget{
+				Path:   target.Path,
+				Tool:   toolLabel(target.Argv0),
+				Reason: ReasonOK,
+				Raw:    target.Raw,
+			},
+		)
 	}
+
 	out = append(out, declaredWriteTargets(decomposition, specs)...)
 	out = append(out, commonWriteTargets(decomposition, specs)...)
 	// Only recurse into embedded bodies for the local opaque shapes the sentinel
@@ -127,22 +140,30 @@ func ExtractWriteTargetsWithSpecs(cmd, cwd string, specs []config.ShellWriteSpec
 	if opaque {
 		out = append(out, embeddedWriteTargets(decomposition, specs, 0)...)
 	}
+
 	return dedupeWriteTargets(out)
 }
 
-func declaredWriteTargets(decomposition *shelldecomp.Decomposition, specs []config.ShellWriteSpec) []WriteTarget {
+func declaredWriteTargets(
+	decomposition *shelldecomp.Decomposition,
+	specs []config.ShellWriteSpec,
+) []WriteTarget {
 	if len(specs) == 0 {
 		return nil
 	}
+
 	var targets []WriteTarget
+
 	for _, command := range decomposition.Commands() {
 		for _, spec := range specs {
 			if !slices.Contains(spec.Argv0, filepath.Base(command.Argv0)) {
 				continue
 			}
+
 			targets = append(targets, declaredCommandTargets(command, spec)...)
 		}
 	}
+
 	return targets
 }
 
@@ -151,35 +172,47 @@ func declaredCommandTargets(command shelldecomp.Command, spec config.ShellWriteS
 	if !result.Selected {
 		return nil
 	}
+
 	operands := result.Operands
 	if spec.TargetMode == config.WriteTargetLastOperand && len(operands) > 1 {
 		operands = operands[len(operands)-1:]
 	}
+
 	if !result.ActivationUnresolved {
 		for _, name := range spec.TargetOptions {
 			operands = append(operands, result.Options[name]...)
 		}
 	}
+
 	targets := make([]WriteTarget, 0, len(operands))
 	if result.Unresolved && spec.Unresolved != "ignore" {
 		targets = append(targets, sentinelFor(command.Argv0))
 	}
+
 	for _, operand := range operands {
 		if !operand.Resolvable {
 			if spec.Unresolved != "ignore" {
 				targets = append(targets, sentinelFor(command.Argv0))
 			}
+
 			continue
 		}
+
 		path := resolveDeclaredPath(operand.Value, result.CWD)
 		if path == "" {
 			if spec.Unresolved != "ignore" {
 				targets = append(targets, sentinelFor(command.Argv0))
 			}
+
 			continue
 		}
-		targets = append(targets, WriteTarget{Path: path, Tool: command.Argv0, Reason: ReasonOK, Raw: operand.Text})
+
+		targets = append(
+			targets,
+			WriteTarget{Path: path, Tool: command.Argv0, Reason: ReasonOK, Raw: operand.Text},
+		)
 	}
+
 	return targets
 }
 
@@ -187,26 +220,32 @@ func resolveDeclaredPath(value string, cwd string) string {
 	if filepath.IsAbs(value) {
 		return filepath.Clean(value)
 	}
+
 	if cwd == "" || cwd == shelldecomp.Unresolvable {
 		return ""
 	}
+
 	return filepath.Clean(filepath.Join(cwd, value))
 }
 
 func dedupeWriteTargets(targets []WriteTarget) []WriteTarget {
 	seen := make(map[string]struct{}, len(targets))
+
 	out := make([]WriteTarget, 0, len(targets))
 	for _, target := range targets {
 		key := target.Path
 		if key == "" {
 			key = target.Reason + "\x00" + target.Tool + "\x00" + target.Raw
 		}
+
 		if _, found := seen[key]; found {
 			continue
 		}
+
 		seen[key] = struct{}{}
 		out = append(out, target)
 	}
+
 	return out
 }
 
@@ -221,33 +260,47 @@ const maxEmbeddedDepth = 5
 // so wrapping an edit in a subshell does not evade the checkout guard.
 // Unresolvable embedded writes are dropped; the outer sentinel already covers the
 // default-deny case for those.
-func embeddedWriteTargets(decomposition *shelldecomp.Decomposition, specs []config.ShellWriteSpec, depth int) []WriteTarget {
+func embeddedWriteTargets(
+	decomposition *shelldecomp.Decomposition,
+	specs []config.ShellWriteSpec,
+	depth int,
+) []WriteTarget {
 	if decomposition == nil || depth >= maxEmbeddedDepth {
 		return nil
 	}
+
 	var out []WriteTarget
+
 	for _, region := range decomposition.EmbeddedRegions() {
 		if region.Parsed == nil {
 			continue
 		}
+
 		for _, target := range region.Parsed.WriteTargets() {
 			if replacedArgumentTarget(region.Parsed, target, specs) {
 				continue
 			}
+
 			if !target.Resolvable || target.Path == shelldecomp.Unresolvable {
 				continue
 			}
-			out = append(out, WriteTarget{
-				Path:   target.Path,
-				Tool:   toolLabel(target.Argv0),
-				Reason: ReasonOK,
-				Raw:    target.Raw,
-			})
+
+			out = append(
+				out,
+				WriteTarget{
+					Path:   target.Path,
+					Tool:   toolLabel(target.Argv0),
+					Reason: ReasonOK,
+					Raw:    target.Raw,
+				},
+			)
 		}
+
 		out = append(out, declaredWriteTargets(region.Parsed, specs)...)
 		out = append(out, commonWriteTargets(region.Parsed, specs)...)
 		out = append(out, embeddedWriteTargets(region.Parsed, specs, depth+1)...)
 	}
+
 	return out
 }
 
@@ -261,27 +314,43 @@ func unparseableSentinel(decomposition *shelldecomp.Decomposition) (WriteTarget,
 		if command.Argv0 == "eval" || command.Argv0 == "exec" {
 			return sentinelFor(command.Argv0), true
 		}
+
 		if isInterpreterWithScript(command) {
 			return sentinelFor(command.Argv0), true
 		}
+
 		if hasCommandSubstitution(command) {
 			return sentinelFor(command.Argv0), true
 		}
 	}
+
 	return WriteTarget{Path: "", Tool: "", Reason: "", Raw: ""}, false
 }
 
 // sentinelFor builds a ReasonUnparsedCommandShape target labeled with the
 // command that produced the opaque shape.
 func sentinelFor(argv0 string) WriteTarget {
-	return WriteTarget{Path: "", Tool: ToolUnparseable, Reason: ReasonUnparsedCommandShape, Raw: argv0}
+	return WriteTarget{
+		Path:   "",
+		Tool:   ToolUnparseable,
+		Reason: ReasonUnparsedCommandShape,
+		Raw:    argv0,
+	}
 }
 
 // shellInterpreters are the argv0 names whose -c argument is a quoted program
 // the outer gate cannot statically resolve into write targets.
 var shellInterpreters = map[string]bool{
-	"bash": true, "sh": true, "zsh": true, "ksh": true, "dash": true,
-	"python": true, "python3": true, "perl": true, "ruby": true, "node": true,
+	"bash":    true,
+	"sh":      true,
+	"zsh":     true,
+	"ksh":     true,
+	"dash":    true,
+	"python":  true,
+	"python3": true,
+	"perl":    true,
+	"ruby":    true,
+	"node":    true,
 }
 
 // isInterpreterWithScript reports whether a command runs a known interpreter
@@ -290,61 +359,81 @@ func isInterpreterWithScript(command shelldecomp.Command) bool {
 	if !shellInterpreters[command.Argv0] {
 		return false
 	}
+
 	for _, arg := range command.Args {
 		if arg.Text == "-c" {
 			return true
 		}
 	}
+
 	return false
 }
 
 // commonWriteTargets applies shipped descriptions unless a condition replaces them.
-func commonWriteTargets(decomposition *shelldecomp.Decomposition, specs []config.ShellWriteSpec) []WriteTarget {
+func commonWriteTargets(
+	decomposition *shelldecomp.Decomposition,
+	specs []config.ShellWriteSpec,
+) []WriteTarget {
 	commonSpecs, err := config.CommonWriteSpecs()
 	if err != nil {
 		return []WriteTarget{sentinelFor(err.Error())}
 	}
+
 	var targets []WriteTarget
+
 	for _, command := range decomposition.Commands() {
 		overridden := false
+
 		for _, spec := range specs {
 			if !slices.Contains(spec.Argv0, filepath.Base(command.Argv0)) {
 				continue
 			}
+
 			if shellargs.Parse(command, spec.ArgumentDescription()).Matched {
 				overridden = true
 				break
 			}
 		}
+
 		if overridden {
 			continue
 		}
+
 		for _, spec := range commonSpecs {
 			if slices.Contains(spec.Argv0, filepath.Base(command.Argv0)) {
 				targets = append(targets, declaredCommandTargets(command, spec)...)
 			}
 		}
 	}
+
 	return targets
 }
 
-func replacedArgumentTarget(decomposition *shelldecomp.Decomposition, target shelldecomp.WriteTarget, specs []config.ShellWriteSpec) bool {
+func replacedArgumentTarget(
+	decomposition *shelldecomp.Decomposition,
+	target shelldecomp.WriteTarget,
+	specs []config.ShellWriteSpec,
+) bool {
 	if target.Origin != shelldecomp.WriteOriginArgument {
 		return false
 	}
+
 	for _, command := range decomposition.Commands() {
 		if command.Node == nil || command.Node.StartByte != target.CommandStartByte {
 			continue
 		}
+
 		for _, spec := range specs {
 			if !slices.Contains(spec.Argv0, filepath.Base(command.Argv0)) {
 				continue
 			}
+
 			if shellargs.Parse(command, spec.ArgumentDescription()).Matched {
 				return true
 			}
 		}
 	}
+
 	return false
 }
 
@@ -356,10 +445,12 @@ func hasCommandSubstitution(command shelldecomp.Command) bool {
 		if arg.Resolvable {
 			continue
 		}
+
 		if strings.Contains(arg.Text, "$(") || strings.Contains(arg.Text, "`") {
 			return true
 		}
 	}
+
 	return false
 }
 
@@ -381,6 +472,7 @@ func toolLabel(argv0 string) string {
 	if label, ok := toolLabelByArgv0[argv0]; ok {
 		return label
 	}
+
 	return ToolRedirect
 }
 
@@ -392,5 +484,6 @@ func homeDir() string {
 	if err != nil {
 		return ""
 	}
+
 	return dir
 }

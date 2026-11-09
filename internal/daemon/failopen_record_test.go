@@ -19,32 +19,37 @@ func TestFailOpenLeavesADurableRecord(t *testing.T) {
 	if err != nil {
 		t.Fatalf("summary before any record: %v", err)
 	}
+
 	if summary.Count != 0 || summary.Earliest != "" || summary.Latest != "" {
-		t.Fatalf("clean state reported %d records (%s..%s)",
-			summary.Count, summary.Earliest, summary.Latest)
+		t.Fatalf(
+			"clean state reported %d records (%s..%s)",
+			summary.Count,
+			summary.Earliest,
+			summary.Latest,
+		)
 	}
+
 	if summary.Truncated {
 		t.Fatal("clean state reported a truncated history")
 	}
 
 	for range 3 {
-		RecordFailOpen(
-			"daemon_unavailable", "claude",
-			"PreToolUse", "Bash", "/repo", "no socket",
-		)
+		RecordFailOpen("daemon_unavailable", "claude", "PreToolUse", "Bash", "/repo", "no socket")
 	}
 
 	summary, err = FailOpenRecordSummary()
 	if err != nil {
 		t.Fatalf("summary after recording: %v", err)
 	}
+
 	if summary.Count != 3 {
 		t.Fatalf("records = %d, want 3", summary.Count)
 	}
+
 	if summary.Earliest == "" || summary.Latest == "" {
-		t.Fatalf("record window = %q..%q, want both ends set",
-			summary.Earliest, summary.Latest)
+		t.Fatalf("record window = %q..%q, want both ends set", summary.Earliest, summary.Latest)
 	}
+
 	if summary.Truncated {
 		t.Fatal("three small records should not have hit the size cap")
 	}
@@ -62,6 +67,7 @@ func TestRecordFailOpenIgnoresAnEmptyReason(t *testing.T) {
 	if err != nil {
 		t.Fatalf("summary: %v", err)
 	}
+
 	if summary.Count != 0 {
 		t.Fatalf("records = %d, want 0 for an evaluated call", summary.Count)
 	}
@@ -78,21 +84,20 @@ func TestFailOpenRecordReportsItsOwnTruncation(t *testing.T) {
 	// Fill the record past its cap. Each call carries a long detail so the file
 	// reaches the limit without needing a very large number of records.
 	detail := strings.Repeat("x", 4096)
+
 	for range 3000 {
-		RecordFailOpen(
-			"daemon_unavailable", "claude",
-			"PreToolUse", "Bash", "/repo", detail,
-		)
+		RecordFailOpen("daemon_unavailable", "claude", "PreToolUse", "Bash", "/repo", detail)
 	}
 
 	summary, err := FailOpenRecordSummary()
 	if err != nil {
 		t.Fatalf("summary: %v", err)
 	}
+
 	if !summary.Truncated {
-		t.Fatalf("summary reports %d records as a complete history after the cap",
-			summary.Count)
+		t.Fatalf("summary reports %d records as a complete history after the cap", summary.Count)
 	}
+
 	if summary.Count == 0 {
 		t.Fatal("the cap dropped everything, so no outage window survives at all")
 	}
@@ -102,6 +107,7 @@ func TestFailOpenRecordReportsItsOwnTruncation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat record: %v", err)
 	}
+
 	if info.Size() > maxFailOpenRecordBytes {
 		t.Fatalf("record is %d bytes, above its 2 MiB cap", info.Size())
 	}

@@ -13,11 +13,13 @@ func (s *Server) StartUpdateScheduler(ctx context.Context, stopDaemon func()) {
 	if stopDaemon == nil {
 		return
 	}
+
 	schedulerCtx, cancel := context.WithCancel(ctx)
 	s.cfgMu.Lock()
 	if s.updateCancel != nil {
 		s.updateCancel()
 	}
+
 	s.updateCancel = cancel
 	s.stopDaemon = stopDaemon
 	s.cfgMu.Unlock()
@@ -32,29 +34,36 @@ func (s *Server) StartUpdateScheduler(ctx context.Context, stopDaemon func()) {
 }
 
 func (s *Server) runUpdateScheduler(ctx context.Context, stopDaemon func()) {
-	selfupdate.RunScheduler(ctx, selfupdate.SchedulerHooks{
-		Enabled: func() bool {
-			cfg := s.updateConfig()
-			return cfg != nil && cfg.UpdateEnabled()
+	selfupdate.RunScheduler(
+		ctx,
+		selfupdate.SchedulerHooks{
+			Enabled: func() bool {
+				cfg := s.updateConfig()
+				return cfg != nil && cfg.UpdateEnabled()
+			},
+			Mode: func() string {
+				cfg := s.updateConfig()
+				if cfg == nil {
+					return ""
+				}
+
+				return cfg.UpdateMode()
+			},
+			Options: func() selfupdate.Options {
+				return updateopts.Options(
+					s.updateConfig(),
+					updateopts.Overrides{
+						Client:      nil,
+						InstallPath: "",
+						DryRun:      false,
+						Log:         nil,
+					},
+				)
+			},
+			StopForRelaunch: stopDaemon,
+			Log:             s.log,
 		},
-		Mode: func() string {
-			cfg := s.updateConfig()
-			if cfg == nil {
-				return ""
-			}
-			return cfg.UpdateMode()
-		},
-		Options: func() selfupdate.Options {
-			return updateopts.Options(s.updateConfig(), updateopts.Overrides{
-				Client:      nil,
-				InstallPath: "",
-				DryRun:      false,
-				Log:         nil,
-			})
-		},
-		StopForRelaunch: stopDaemon,
-		Log:             s.log,
-	})
+	)
 }
 
 func (s *Server) updateConfig() *config.Config {
@@ -62,5 +71,6 @@ func (s *Server) updateConfig() *config.Config {
 	if snapshot == nil {
 		return nil
 	}
+
 	return snapshot.cfg
 }

@@ -39,12 +39,22 @@ func (catalog *Catalog) Status(policy RotationPolicy, now time.Time) (AuditStatu
 	if err := policy.Validate(); err != nil {
 		return AuditStatus{}, err
 	}
+
 	current := catalog.current(policy, now)
 	status := AuditStatus{
-		BucketInterval: policy.Interval.String(), RetentionBuckets: policy.Retained,
-		CurrentBucketID: current.ID, CurrentBucketPath: current.Path,
-		RetainedFiles: make([]BucketStatus, 0), NextBoundary: current.Start.Add(policy.Interval), TotalBytes: 0, ResetPending: false, CleanupError: "",
-		MaxBytes: policy.MaxBytes, ExcessBytes: 0, PendingFiles: make([]BucketStatus, 0), DeferredFiles: nil,
+		BucketInterval:    policy.Interval.String(),
+		RetentionBuckets:  policy.Retained,
+		CurrentBucketID:   current.ID,
+		CurrentBucketPath: current.Path,
+		RetainedFiles:     make([]BucketStatus, 0),
+		NextBoundary:      current.Start.Add(policy.Interval),
+		TotalBytes:        0,
+		ResetPending:      false,
+		CleanupError:      "",
+		MaxBytes:          policy.MaxBytes,
+		ExcessBytes:       0,
+		PendingFiles:      make([]BucketStatus, 0),
+		DeferredFiles:     nil,
 	}
 	state, err := catalog.checkState(policy)
 	status.ResetPending = state.ResetPending
@@ -58,44 +68,63 @@ func (catalog *Catalog) Status(policy RotationPolicy, now time.Time) (AuditStatu
 		status.CurrentBucketPath = active.Path
 		status.NextBoundary = active.Start.Add(policy.Interval)
 	}
+
 	if err != nil {
 		status.CleanupError = err.Error()
 	}
+
 	files, total, err := catalog.storageFiles(state.PendingBasePaths...)
 	if err != nil {
 		return status, storageError("read bucket status", err)
 	}
+
 	status.TotalBytes = total
 	if policy.MaxBytes > 0 {
 		status.ExcessBytes = max(int64(0), total-policy.MaxBytes)
 	}
+
 	for _, file := range files {
 		bucket, recognized := parseBucket(catalog.options.BasePath, filepath.Base(file.path))
 		if !recognized || bucket.Path != file.path {
 			recognized = false
 			bucket.Path = file.path
 		}
-		entry := BucketStatus{ID: bucket.ID, Path: bucket.Path, DatabaseBytes: 0, WALBytes: 0, SHMBytes: 0, JournalBytes: 0}
+
+		entry := BucketStatus{
+			ID:            bucket.ID,
+			Path:          bucket.Path,
+			DatabaseBytes: 0,
+			WALBytes:      0,
+			SHMBytes:      0,
+			JournalBytes:  0,
+		}
 		for _, file := range []struct {
 			suffix string
 			size   *int64
 		}{
-			{"", &entry.DatabaseBytes}, {"-wal", &entry.WALBytes}, {"-shm", &entry.SHMBytes}, {"-journal", &entry.JournalBytes},
+			{"", &entry.DatabaseBytes},
+			{"-wal", &entry.WALBytes},
+			{"-shm", &entry.SHMBytes},
+			{"-journal", &entry.JournalBytes},
 		} {
 			info, err := os.Stat(bucket.Path + file.suffix)
 			if errors.Is(err, os.ErrNotExist) {
 				continue
 			}
+
 			if err != nil {
 				return status, storageError("stat retained bucket", err)
 			}
+
 			*file.size = info.Size()
 		}
+
 		if recognized && retained(bucket, policy, now) {
 			status.RetainedFiles = append(status.RetainedFiles, entry)
 		} else {
 			status.PendingFiles = append(status.PendingFiles, entry)
 		}
 	}
+
 	return status, nil
 }

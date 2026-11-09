@@ -131,6 +131,7 @@ func New(options Options) *Store {
 	} else {
 		close(store.pruneDone)
 	}
+
 	return store
 }
 
@@ -138,15 +139,19 @@ func normalizeOptions(options Options) Options {
 	if options.MaxEntries <= 0 {
 		options.MaxEntries = DefaultMaxEntries
 	}
+
 	if options.MaxValueBytes <= 0 {
 		options.MaxValueBytes = DefaultMaxValueBytes
 	}
+
 	if options.MaxBytes <= 0 {
 		options.MaxBytes = DefaultMaxBytes
 	}
+
 	if options.PruneInterval < 0 {
 		options.PruneInterval = 0
 	}
+
 	return options
 }
 
@@ -155,6 +160,7 @@ func (s *Store) Close() {
 	if s == nil {
 		return
 	}
+
 	var (
 		stop         chan struct{}
 		done         chan struct{}
@@ -165,6 +171,7 @@ func (s *Store) Close() {
 		s.mu.Unlock()
 		return
 	}
+
 	s.closed = true
 	stop = s.stopPrune
 	done = s.pruneDone
@@ -173,6 +180,7 @@ func (s *Store) Close() {
 	if !pruningAlive {
 		return
 	}
+
 	close(stop)
 	<-done
 }
@@ -182,6 +190,7 @@ func (s *Store) Configure(options Options) {
 	if s == nil {
 		return
 	}
+
 	options = normalizeOptions(options)
 	var (
 		oldStop       chan struct{}
@@ -195,6 +204,7 @@ func (s *Store) Configure(options Options) {
 		s.mu.Unlock()
 		return
 	}
+
 	s.options.MaxEntries = options.MaxEntries
 	s.options.MaxValueBytes = options.MaxValueBytes
 	s.options.MaxBytes = options.MaxBytes
@@ -204,6 +214,7 @@ func (s *Store) Configure(options Options) {
 			oldStop = s.stopPrune
 			oldDone = s.pruneDone
 		}
+
 		s.options.PruneInterval = options.PruneInterval
 		newStop = make(chan struct{})
 		newDone = make(chan struct{})
@@ -216,6 +227,7 @@ func (s *Store) Configure(options Options) {
 			close(s.pruneDone)
 		}
 	}
+
 	s.enforceMaxEntriesLocked(s.now())
 	s.mu.Unlock()
 	if oldStop != nil {
@@ -230,6 +242,7 @@ func (s *Store) Get(namespace string, key string) (Entry, bool, error) {
 	if err != nil {
 		return emptyEntry(), false, err
 	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.now()
@@ -237,20 +250,28 @@ func (s *Store) Get(namespace string, key string) (Entry, bool, error) {
 	if !ok {
 		return emptyEntry(), false, nil
 	}
+
 	return exportEntry(storedKey, found, true), true, nil
 }
 
 // Set stores a value with optional NX, XX, and TTL semantics.
-func (s *Store) Set(namespace string, key string, value []byte, options SetOptions) (Entry, bool, error) {
+func (s *Store) Set(
+	namespace string,
+	key string,
+	value []byte,
+	options SetOptions,
+) (Entry, bool, error) {
 	storedKey, err := validateKey(namespace, key)
 	if err != nil {
 		return emptyEntry(), false, err
 	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.validateValue(value); err != nil {
 		return emptyEntry(), false, err
 	}
+
 	now := s.now()
 	current, exists := s.entryLocked(storedKey, now)
 	switch options.Mode {
@@ -270,12 +291,15 @@ func (s *Store) Set(namespace string, key string, value []byte, options SetOptio
 	if !s.prepareWriteLocked(storedKey, len(value), now) {
 		return emptyEntry(), false, ErrCapacity
 	}
+
 	if exists && current.order.ReceiptID > 0 {
 		s.discardedBefore = s.highestRegistered
 	}
+
 	current = s.writeLocked(storedKey, value, now, options.TTL)
 	current.order = ObservationOrder{Generation: 0, ReceiptID: 0}
 	current.unavailable = false
+
 	return exportEntry(storedKey, current, true), true, nil
 }
 
@@ -285,13 +309,16 @@ func (s *Store) Delete(namespace string, key string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.now()
 	if _, ok := s.entryLocked(storedKey, now); !ok {
 		return false, nil
 	}
+
 	s.removeLocked(storedKey)
+
 	return true, nil
 }
 
@@ -307,6 +334,7 @@ func (s *Store) GetDelete(namespace string, key string) (Entry, bool, error) {
 	if err != nil {
 		return emptyEntry(), false, err
 	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.now()
@@ -314,8 +342,10 @@ func (s *Store) GetDelete(namespace string, key string) (Entry, bool, error) {
 	if !ok {
 		return emptyEntry(), false, nil
 	}
+
 	out := exportEntry(storedKey, found, true)
 	s.removeLocked(storedKey)
+
 	return out, true, nil
 }
 
@@ -325,9 +355,11 @@ func (s *Store) Expire(namespace string, key string, ttl time.Duration) (bool, e
 	if err != nil {
 		return false, err
 	}
+
 	if ttl <= 0 {
 		return s.Delete(namespace, key)
 	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.now()
@@ -335,9 +367,11 @@ func (s *Store) Expire(namespace string, key string, ttl time.Duration) (bool, e
 	if !ok {
 		return false, nil
 	}
+
 	found.version++
 	found.updatedAt = now
 	found.expiresAt = now.Add(ttl)
+
 	return true, nil
 }
 
@@ -347,6 +381,7 @@ func (s *Store) PTTL(namespace string, key string) (time.Duration, bool, bool, e
 	if err != nil {
 		return 0, false, false, err
 	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.now()
@@ -354,19 +389,27 @@ func (s *Store) PTTL(namespace string, key string) (time.Duration, bool, bool, e
 	if !ok {
 		return 0, false, false, nil
 	}
+
 	if found.expiresAt.IsZero() {
 		return 0, true, false, nil
 	}
+
 	ttl := found.expiresAt.Sub(now)
 	if ttl <= 0 {
 		s.removeLocked(storedKey)
 		return 0, false, false, nil
 	}
+
 	return ttl, true, true, nil
 }
 
 // List returns entries in namespace whose key has prefix, sorted by key.
-func (s *Store) List(namespace string, prefix string, limit int, includeValues bool) ([]Entry, error) {
+func (s *Store) List(
+	namespace string,
+	prefix string,
+	limit int,
+	includeValues bool,
+) ([]Entry, error) {
 	return s.ListBounded(namespace, prefix, limit, includeValues, unlimitedReadBytes, nil)
 }
 
@@ -375,6 +418,7 @@ func (s *Store) PruneExpired() {
 	if s == nil {
 		return
 	}
+
 	s.mu.Lock()
 	s.pruneExpiredLocked(s.now())
 	s.mu.Unlock()
@@ -385,10 +429,12 @@ func (s *Store) entryLocked(storedKey entryKey, now time.Time) (*entry, bool) {
 	if !ok {
 		return nil, false
 	}
+
 	if isExpired(found, now) {
 		s.removeLocked(storedKey)
 		return nil, false
 	}
+
 	return found, true
 }
 
@@ -403,10 +449,15 @@ func (s *Store) pruneExpiredLocked(now time.Time) {
 func (s *Store) enforceMaxEntriesLocked(now time.Time) {
 	s.pruneExpiredLocked(now)
 	s.pruneOversizedLocked()
-	for _, key := range s.evictionKeysLocked(entryKey{namespace: "", key: ""}) {
+
+	for _, key := range s.evictionKeysLocked(entryKey{
+		namespace: "",
+		key:       "",
+	}) {
 		if len(s.entries) <= s.options.MaxEntries && s.usedBytes <= s.options.MaxBytes {
 			break
 		}
+
 		s.removeLocked(key)
 	}
 }
@@ -416,6 +467,7 @@ func (s *Store) pruneOversizedLocked() {
 	if maxValueBytes <= 0 {
 		return
 	}
+
 	for storedKey, current := range s.entries {
 		if len(current.value) > maxValueBytes {
 			s.removeLocked(storedKey)
@@ -428,9 +480,11 @@ func (s *Store) validateValue(value []byte) error {
 	if s != nil && s.options.MaxValueBytes > 0 {
 		maxValueBytes = s.options.MaxValueBytes
 	}
+
 	if len(value) > maxValueBytes {
 		return ErrValueTooLarge
 	}
+
 	return nil
 }
 
@@ -449,6 +503,7 @@ func (s *Store) pruneLoop(interval time.Duration, stop <-chan struct{}, done cha
 	defer close(done)
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+
 	for {
 		select {
 		case <-ticker.C:
@@ -463,6 +518,7 @@ func isExpired(current *entry, now time.Time) bool {
 	if current == nil || current.expiresAt.IsZero() {
 		return false
 	}
+
 	return !current.expiresAt.After(now)
 }
 
@@ -470,10 +526,12 @@ func exportEntry(storedKey entryKey, current *entry, includeValue bool) Entry {
 	if current == nil {
 		return emptyEntry()
 	}
+
 	var value []byte
 	if includeValue {
 		value = append([]byte(nil), current.value...)
 	}
+
 	return Entry{
 		Namespace: storedKey.namespace,
 		Key:       storedKey.key,
@@ -502,15 +560,19 @@ func validateKey(namespace string, key string) (entryKey, error) {
 	if err != nil {
 		return entryKey{namespace: "", key: ""}, err
 	}
+
 	if key == "" || len(key) > MaxKeyBytes || strings.ContainsRune(key, '\x00') {
 		return entryKey{namespace: "", key: ""}, ErrInvalidKey
 	}
+
 	return entryKey{namespace: normalizedNamespace, key: key}, nil
 }
 
 func validateNamespace(namespace string) (string, error) {
-	if namespace == "" || len(namespace) > MaxNamespaceBytes || strings.ContainsRune(namespace, '\x00') {
+	if namespace == "" || len(namespace) > MaxNamespaceBytes ||
+		strings.ContainsRune(namespace, '\x00') {
 		return "", ErrInvalidNamespace
 	}
+
 	return namespace, nil
 }

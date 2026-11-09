@@ -21,8 +21,10 @@ var (
 	markdownLinkPattern     = regexp.MustCompile(`\[[^]]+\]\(([^)]+)\)`)
 	makeCommandPattern      = regexp.MustCompile(`(?m)^\s*(?:\$ )?make ([A-Za-z0-9_-]+)`)
 	makeTargetPattern       = regexp.MustCompile(`(?m)^([A-Za-z0-9][A-Za-z0-9_-]*):(?:[ \t]|$)`)
-	agentGateCommandPattern = regexp.MustCompile(`(?m)^\s*(?:\$ )?agent-gate ([a-z][a-z0-9-]*)(?: ([a-z][a-z0-9-]*))?`)
-	installerFlagPattern    = regexp.MustCompile(`--[a-z][a-z0-9-]*`)
+	agentGateCommandPattern = regexp.MustCompile(
+		`(?m)^\s*(?:\$ )?agent-gate ([a-z][a-z0-9-]*)(?: ([a-z][a-z0-9-]*))?`,
+	)
+	installerFlagPattern = regexp.MustCompile(`--[a-z][a-z0-9-]*`)
 )
 
 func TestConfigExampleLoadsAsProductionConfig(t *testing.T) {
@@ -31,6 +33,7 @@ func TestConfigExampleLoadsAsProductionConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("config.toml.example does not load as production config: %v", err)
 	}
+
 	if validationErrors := hook.ValidateConfig(loadedConfig); len(validationErrors) != 0 {
 		t.Fatalf("config.toml.example is not valid for shipped hook schemas: %v", validationErrors)
 	}
@@ -38,6 +41,7 @@ func TestConfigExampleLoadsAsProductionConfig(t *testing.T) {
 
 func TestTemporalExecContextDocumentationAndExample(t *testing.T) {
 	configReference := readFiles(t, "config.toml.example")
+
 	for _, want := range []string{
 		"loop_count",
 		"last_user_message",
@@ -55,6 +59,7 @@ func TestTemporalExecContextDocumentationAndExample(t *testing.T) {
 	}
 
 	hookContract := readFiles(t, "HOOKS.md")
+
 	for _, want := range []string{
 		"send gate",
 		"script decides",
@@ -70,9 +75,11 @@ func TestTemporalExecContextDocumentationAndExample(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat temporal exec example: %v", err)
 	}
+
 	if scriptInfo.Mode()&0o111 == 0 {
 		t.Errorf("%s is not executable", scriptPath)
 	}
+
 	if _, err := exec.LookPath("jq"); err != nil {
 		t.Skipf("temporal response gate example requires jq: %v", err)
 	}
@@ -81,6 +88,7 @@ func TestTemporalExecContextDocumentationAndExample(t *testing.T) {
 		t.Helper()
 		command := exec.Command("bash", scriptPath)
 		command.Stdin = strings.NewReader(input)
+
 		return command.Output()
 	}
 	assertPolicySuppression := func(t *testing.T, input string) {
@@ -90,8 +98,12 @@ func TestTemporalExecContextDocumentationAndExample(t *testing.T) {
 		if !ok {
 			t.Fatalf("temporal exec example policy suppression error = %v", err)
 		}
+
 		if exitError.ExitCode() != 1 {
-			t.Errorf("temporal exec example policy suppression exit code = %d, want 1", exitError.ExitCode())
+			t.Errorf(
+				"temporal exec example policy suppression exit code = %d, want 1",
+				exitError.ExitCode(),
+			)
 		}
 	}
 
@@ -100,6 +112,7 @@ func TestTemporalExecContextDocumentationAndExample(t *testing.T) {
 	if err != nil {
 		t.Fatalf("temporal exec example first stop: %v", err)
 	}
+
 	if string(output) != "Continue the new request." {
 		t.Errorf("temporal exec example first stop output = %q", output)
 	}
@@ -112,6 +125,7 @@ func TestTemporalExecContextDocumentationAndExample(t *testing.T) {
 	if err != nil {
 		t.Fatalf("temporal exec example later request: %v", err)
 	}
+
 	if string(output) != "Continue the later request." {
 		t.Errorf("temporal exec example later request output = %q", output)
 	}
@@ -121,6 +135,7 @@ func TestTemporalExecContextDocumentationAndExample(t *testing.T) {
 	if err != nil {
 		t.Fatalf("temporal exec example trailing newlines: %v", err)
 	}
+
 	if string(output) != "line one\n\n" {
 		t.Errorf("temporal exec example trailing newline output = %q", output)
 	}
@@ -142,9 +157,12 @@ func TestTemporalExecContextDocumentationAndExample(t *testing.T) {
 			input: `{"matched":[{"field":"last_user_message","value":"Continue.","available":true},{"field":"last_response_output","value":"","available":false},{"field":"response_output","value":"Continue.","available":true},{"field":"loop_count","value":"1","available":true}]}`,
 		},
 	} {
-		t.Run(testCase.name, func(t *testing.T) {
-			assertPolicySuppression(t, testCase.input)
-		})
+		t.Run(
+			testCase.name,
+			func(t *testing.T) {
+				assertPolicySuppression(t, testCase.input)
+			},
+		)
 	}
 }
 
@@ -162,10 +180,15 @@ func TestTemporalExecExampleReportsMissingJQ(t *testing.T) {
 	if !ok {
 		t.Fatalf("temporal exec example missing jq error = %v", err)
 	}
+
 	waitStatus, ok := exitError.ProcessState.Sys().(syscall.WaitStatus)
 	if !ok || !waitStatus.Signaled() || waitStatus.Signal() != syscall.SIGTERM {
-		t.Errorf("temporal exec example missing jq status = %v, want SIGTERM", exitError.ProcessState)
+		t.Errorf(
+			"temporal exec example missing jq status = %v, want SIGTERM",
+			exitError.ProcessState,
+		)
 	}
+
 	if !strings.Contains(stderr.String(), "jq") {
 		t.Errorf("temporal exec example missing jq stderr = %q", stderr.String())
 	}
@@ -176,6 +199,7 @@ func TestTemporalExecExampleReportsJQFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("find false: %v", err)
 	}
+
 	binDirectory := t.TempDir()
 	if err := os.Symlink(falsePath, filepath.Join(binDirectory, "jq")); err != nil {
 		t.Fatalf("link jq stub: %v", err)
@@ -192,10 +216,15 @@ func TestTemporalExecExampleReportsJQFailure(t *testing.T) {
 	if !ok {
 		t.Fatalf("temporal exec example jq failure = %v", err)
 	}
+
 	waitStatus, ok := exitError.ProcessState.Sys().(syscall.WaitStatus)
 	if !ok || !waitStatus.Signaled() || waitStatus.Signal() != syscall.SIGTERM {
-		t.Errorf("temporal exec example jq failure status = %v, want SIGTERM", exitError.ProcessState)
+		t.Errorf(
+			"temporal exec example jq failure status = %v, want SIGTERM",
+			exitError.ProcessState,
+		)
 	}
+
 	if !strings.Contains(stderr.String(), "jq failed") {
 		t.Errorf("temporal exec example jq failure stderr = %q", stderr.String())
 	}
@@ -224,6 +253,7 @@ func TestFirstPartyDocumentationRejectsStaleClaims(t *testing.T) {
 		if err != nil {
 			t.Fatalf("read %s: %v", path, err)
 		}
+
 		for _, stale := range staleStrings {
 			if strings.Contains(string(contents), stale) {
 				t.Errorf("%s contains stale string %q", path, stale)
@@ -238,18 +268,26 @@ func TestDocumentedShellInstallerFlagsAreSupported(t *testing.T) {
 		"--require-attestation": true,
 		"--version":             true,
 	}
+
 	for _, path := range firstPartyDocumentationPaths(t) {
 		contents, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatalf("read %s: %v", path, err)
 		}
+
 		for lineNumber, line := range strings.Split(string(contents), "\n") {
 			if !strings.Contains(line, "install.sh") {
 				continue
 			}
+
 			for _, flag := range installerFlagPattern.FindAllString(line, -1) {
 				if !supportedFlags[flag] {
-					t.Errorf("%s:%d documents unsupported install.sh flag %q", path, lineNumber+1, flag)
+					t.Errorf(
+						"%s:%d documents unsupported install.sh flag %q",
+						path,
+						lineNumber+1,
+						flag,
+					)
 				}
 			}
 		}
@@ -262,6 +300,7 @@ func TestReleaseInstallerRoutesSetupAndCleansTemporaryFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("release installer setup test: %v\n%s", err, output)
 	}
+
 	if !bytes.Contains(output, []byte("test-install-setup.sh: PASS")) {
 		t.Fatalf("release installer setup output = %q", output)
 	}
@@ -273,6 +312,7 @@ func TestDocumentedCommandsExecute(t *testing.T) {
 	if err != nil {
 		t.Fatalf("documented commands: %v\n%s", err, output)
 	}
+
 	if !bytes.Contains(output, []byte("check-doc-commands.sh: PASS")) {
 		t.Fatalf("documented command output = %q", output)
 	}
@@ -284,11 +324,14 @@ func TestFirstPartyDocumentationLocalLinksResolve(t *testing.T) {
 		if err != nil {
 			t.Fatalf("read %s: %v", path, err)
 		}
+
 		for _, match := range markdownLinkPattern.FindAllStringSubmatch(string(contents), -1) {
 			target := match[1]
-			if strings.HasPrefix(target, "https://") || strings.HasPrefix(target, "http://") || strings.HasPrefix(target, "#") {
+			if strings.HasPrefix(target, "https://") || strings.HasPrefix(target, "http://") ||
+				strings.HasPrefix(target, "#") {
 				continue
 			}
+
 			target, _, _ = strings.Cut(target, "#")
 			resolved := filepath.Clean(filepath.Join(filepath.Dir(path), target))
 			if _, err := os.Stat(resolved); err != nil {
@@ -306,25 +349,35 @@ func firstPartyDocumentationPaths(t *testing.T) []string {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("inspect CONTRIBUTING.md: %v", err)
 	}
-	err := filepath.WalkDir("docs", func(path string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if entry.IsDir() {
-			if path == filepath.Join("docs", "superpowers") {
-				return filepath.SkipDir
+
+	err := filepath.WalkDir(
+		"docs",
+		func(path string, entry fs.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
 			}
+
+			if entry.IsDir() {
+				if path == filepath.Join("docs", "superpowers") {
+					return filepath.SkipDir
+				}
+
+				return nil
+			}
+
+			if filepath.Ext(path) == ".md" {
+				paths = append(paths, path)
+			}
+
 			return nil
-		}
-		if filepath.Ext(path) == ".md" {
-			paths = append(paths, path)
-		}
-		return nil
-	})
+		},
+	)
 	if err != nil {
 		t.Fatalf("discover first-party documentation: %v", err)
 	}
+
 	sort.Strings(paths)
+
 	return paths
 }
 
@@ -332,9 +385,11 @@ func TestDocumentedMakeTargetsExist(t *testing.T) {
 	documentation := readFiles(t, firstPartyDocumentationPaths(t)...)
 	makeSources := readGlobbedFiles(t, "Makefile", ".make/*.mk")
 	knownTargets := make(map[string]bool)
+
 	for _, match := range makeTargetPattern.FindAllStringSubmatch(makeSources, -1) {
 		knownTargets[match[1]] = true
 	}
+
 	for _, match := range makeCommandPattern.FindAllStringSubmatch(documentation, -1) {
 		if !knownTargets[match[1]] {
 			t.Errorf("documentation names unknown Make target %q", match[1])
@@ -345,6 +400,7 @@ func TestDocumentedMakeTargetsExist(t *testing.T) {
 func TestDocumentedCLICommandNamesExist(t *testing.T) {
 	documentation := readFiles(t, firstPartyDocumentationPaths(t)...)
 	commandSource := readFiles(t, "cmd/agent-gate/main.go", "cmd/agent-gate/install.go")
+
 	for _, match := range agentGateCommandPattern.FindAllStringSubmatch(documentation, -1) {
 		command := match[1]
 		if !strings.Contains(commandSource, `"`+command+`"`) {
@@ -358,15 +414,19 @@ func TestDocumentedProvidersMatchShippedTemplates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list hook templates: %v", err)
 	}
+
 	providerSet := make(map[string]bool)
+
 	for _, path := range templates {
 		name := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 		providerSet[name] = true
 	}
+
 	providers := make([]string, 0, len(providerSet))
 	for provider := range providerSet {
 		providers = append(providers, provider)
 	}
+
 	sort.Strings(providers)
 	if got := strings.Join(providers, ","); got != "claude,codex,copilot,cursor,gemini" {
 		t.Fatalf("shipped providers = %q", got)
@@ -382,14 +442,17 @@ func TestDocumentedProvidersMatchShippedTemplates(t *testing.T) {
 		"cursor":  "Cursor",
 		"gemini":  "Gemini",
 	}
+
 	for _, provider := range providers {
 		displayName := providerNames[provider]
 		if !strings.Contains(readme, displayName) {
 			t.Errorf("README.md omits shipped provider %s", displayName)
 		}
+
 		if !strings.Contains(hooks, "## "+displayName) {
 			t.Errorf("HOOKS.md omits shipped provider section %s", displayName)
 		}
+
 		if !strings.Contains(schemas, "## "+displayName) {
 			t.Errorf("docs/hook-schemas.md omits shipped provider section %s", displayName)
 		}
@@ -399,26 +462,32 @@ func TestDocumentedProvidersMatchShippedTemplates(t *testing.T) {
 func readFiles(t *testing.T, paths ...string) string {
 	t.Helper()
 	var contents strings.Builder
+
 	for _, path := range paths {
 		data, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatalf("read %s: %v", path, err)
 		}
+
 		contents.Write(data)
 		contents.WriteByte('\n')
 	}
+
 	return contents.String()
 }
 
 func readGlobbedFiles(t *testing.T, paths ...string) string {
 	t.Helper()
 	var files []string
+
 	for _, pattern := range paths {
 		matches, err := filepath.Glob(pattern)
 		if err != nil {
 			t.Fatalf("glob %s: %v", pattern, err)
 		}
+
 		files = append(files, matches...)
 	}
+
 	return readFiles(t, files...)
 }

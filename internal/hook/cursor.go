@@ -84,6 +84,7 @@ func CursorAllow() []byte {
 		// cannot fail in practice. Fall back to a literal allow response.
 		return []byte(`{"permission":"allow"}` + "\n")
 	}
+
 	return append(b, '\n')
 }
 
@@ -112,6 +113,7 @@ func CursorBlockText(text string) []byte {
 	if err != nil {
 		return []byte(`{"permission":"deny"}` + "\n")
 	}
+
 	return append(b, '\n')
 }
 
@@ -134,10 +136,12 @@ func renderCursorResponse(request ResponseRequest) Response {
 			ExitCode: 0,
 		}
 	}
+
 	capability := LookupResponseCapability(SystemCursor, request.EventName)
 	if request.ContextText == "" && request.MutationText == "" {
 		return Response{Stdout: CursorAllow(), Stderr: nil, ExitCode: 0}
 	}
+
 	response := cursorResponse{
 		Permission:           "allow",
 		Continue:             nil,
@@ -154,18 +158,23 @@ func renderCursorResponse(request ResponseRequest) Response {
 			response.AdditionalContext = request.ContextText
 		}
 	}
+
 	if capability.Supports(ResponseCapabilityToolOutputMutation) && request.MutationText != "" {
 		mutation, ok := validStructuredMutation(request.MutationText)
 		if ok {
 			response.UpdatedMCPToolOutput = mutation
 		}
 	}
-	if response.FollowupMessage == "" && response.AdditionalContext == "" && len(response.UpdatedMCPToolOutput) == 0 {
+
+	if response.FollowupMessage == "" && response.AdditionalContext == "" &&
+		len(response.UpdatedMCPToolOutput) == 0 {
 		return Response{Stdout: CursorAllow(), Stderr: nil, ExitCode: 0}
 	}
+
 	encoded, err := json.Marshal(response)
 	if err != nil {
 		return Response{Stdout: CursorAllow(), Stderr: nil, ExitCode: 0}
 	}
+
 	return Response{Stdout: append(encoded, '\n'), Stderr: nil, ExitCode: 0}
 }

@@ -16,14 +16,19 @@ func ValidateRecordableRuleSet(configRules []config.Rule) error {
 	for index := range configRules {
 		decisions[index] = rules.LargestRuleDecision(configRules[index].Name)
 	}
+
 	metadata := marshalDeterministicMetadata(deterministicLayerMetadata{
-		SchemaVersion: 1, CheckedRules: decisions,
+		SchemaVersion: 1,
+		CheckedRules:  decisions,
 	})
 	if _, err := evaluation.UnmarshalLayerMetadata(metadata); err != nil {
 		return fmt.Errorf(
 			"%d rules produce %d bytes of rule-engine metadata: %s",
-			len(configRules), len(metadata), err.Error(),
+			len(configRules),
+			len(metadata),
+			err.Error(),
 		)
 	}
+
 	return nil
 }

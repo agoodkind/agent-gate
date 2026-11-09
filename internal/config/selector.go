@@ -354,6 +354,7 @@ func CompileFieldSelector(path string) FieldSelector {
 	if selector, ok := fieldSelectorByPath[path]; ok {
 		return selector
 	}
+
 	return FieldSelectorInvalid
 }
 
@@ -370,7 +371,11 @@ func IsTemporalExecSelector(selector FieldSelector) bool {
 func CompileFieldSelectorSpecs(paths []string) []FieldSelectorSpec {
 	selectors := make([]FieldSelectorSpec, 0, len(paths))
 	for _, path := range paths {
-		selectors = append(selectors, FieldSelectorSpec{Path: path, Selector: CompileFieldSelector(path)})
+		selectors = append(
+			selectors,
+			FieldSelectorSpec{Path: path, Selector: CompileFieldSelector(path)},
+		)
 	}
+
 	return selectors
 }

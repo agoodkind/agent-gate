@@ -22,10 +22,16 @@ func TestRecoveryRetriesWhenDirectoryDisappearsDuringTraversal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	harness.cfg = cfg
-	if _, err := ownershipCatalog(t, cfg).Reset(t.Context(), cfg.AuditStoragePolicy().Rotation(), time.Now().Add(-24*time.Hour)); err != nil {
+	if _, err := ownershipCatalog(t, cfg).Reset(
+		t.Context(),
+		cfg.AuditStoragePolicy().Rotation(),
+		time.Now().Add(-24*time.Hour),
+	); err != nil {
 		t.Fatal(err)
 	}
+
 	seedRecoveryBacklog(t, harness, 2)
 	logPath := filepath.Join(t.TempDir(), "probe.log")
 	logFile, err := os.Create(logPath)
@@ -44,16 +50,19 @@ func TestRecoveryRetriesWhenDirectoryDisappearsDuringTraversal(t *testing.T) {
 	if !strings.Contains(first.input, "backlog-0") {
 		t.Fatalf("first historical input = %s", first.input)
 	}
+
 	harness.accept(t, "current-before-rename")
 	close(first.release)
 	current := harness.nextCall(t)
 	if !strings.Contains(current.input, "current-before-rename") {
 		t.Fatalf("next input = %s", current.input)
 	}
+
 	unavailable := directory + "-unavailable"
 	if err := os.Rename(directory, unavailable); err != nil {
 		t.Fatal(err)
 	}
+
 	restored := false
 	defer func() {
 		if !restored {
@@ -65,21 +74,27 @@ func TestRecoveryRetriesWhenDirectoryDisappearsDuringTraversal(t *testing.T) {
 	if err := os.Rename(unavailable, directory); err != nil {
 		t.Fatal(err)
 	}
+
 	restored = true
 	harness.accept(t, "current-after-restore")
 	after := harness.nextCall(t)
 	if !strings.Contains(after.input, "current-after-restore") {
 		t.Fatalf("input after restore = %s", after.input)
 	}
+
 	close(after.release)
 	select {
 	case call := <-harness.service.entered:
 		if !strings.Contains(call.input, "backlog-1") {
 			t.Fatalf("unexpected recovery inference: %s", call.input)
 		}
+
 		close(call.release)
 		ownershipWait(t, func() bool { return ownershipOutcomes(t, cfg) == [4]int{4, 4, 4, 4} })
 	case <-time.After(40 * time.Second):
-		t.Fatalf("historical receipt did not recover after directory restoration; log=%s", readRecoveryLog(t, logPath))
+		t.Fatalf(
+			"historical receipt did not recover after directory restoration; log=%s",
+			readRecoveryLog(t, logPath),
+		)
 	}
 }

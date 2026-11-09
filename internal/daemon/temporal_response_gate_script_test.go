@@ -25,6 +25,7 @@ func TestTemporalResponseGateMissingJQIsExecutionError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("absolute temporal response gate path: %v", err)
 	}
+
 	_, err = (execconcern.OSRunner{}).Run(
 		context.Background(),
 		[]string{"/bin/bash", scriptPath},
@@ -41,14 +42,19 @@ func TestEvaluateHookCursorTemporalGateScriptSequence(t *testing.T) {
 	if _, err := exec.LookPath("jq"); err != nil {
 		t.Skipf("temporal-response-gate.sh requires jq: %v", err)
 	}
+
 	scriptPath, err := filepath.Abs(
 		filepath.Join("..", "..", "examples", "validators", "temporal-response-gate.sh"),
 	)
 	if err != nil {
 		t.Fatalf("absolute temporal response gate path: %v", err)
 	}
+
 	setDaemonTestDirs(t)
-	cfg := temporalDaemonConfig(t, fmt.Sprintf(`
+	cfg := temporalDaemonConfig(
+		t,
+		fmt.Sprintf(
+			`
 [[rules]]
 name = "temporal-response-gate"
 cursor_events = ["stop"]
@@ -65,9 +71,14 @@ field_paths = [
     "loop_count",
 ]
 cache_ttl_ms = 0
-`, scriptPath))
+`,
+			scriptPath,
+		),
+	)
 	var diagnostics bytes.Buffer
-	logger := slog.New(slog.NewTextHandler(&diagnostics, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	logger := slog.New(
+		slog.NewTextHandler(&diagnostics, &slog.HandlerOptions{Level: slog.LevelDebug}),
+	)
 	t.Cleanup(func() {
 		if t.Failed() {
 			t.Logf("temporal gate diagnostics:\n%s", diagnostics.String())
@@ -96,6 +107,7 @@ cache_ttl_ms = 0
 		if evaluateErr != nil {
 			t.Fatalf("EvaluateHook: %v", evaluateErr)
 		}
+
 		return response
 	}
 

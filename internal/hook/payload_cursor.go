@@ -34,6 +34,7 @@ func (e CursorEnvelope) baseFields() rules.FieldSet {
 	fields.CursorVersion = e.CursorVersion
 	fields.UserEmail = e.UserEmail
 	fields.TranscriptPath = e.TranscriptPath.String()
+
 	return fields
 }
 
@@ -224,7 +225,13 @@ type CursorAfterAgentThoughtPayload struct {
 	AssistantMessage string `json:"assistant_message"`
 }
 
-func cursorToolFields(base rules.FieldSet, toolName string, toolUseID string, input CursorToolInput, cwd string) rules.FieldSet {
+func cursorToolFields(
+	base rules.FieldSet,
+	toolName string,
+	toolUseID string,
+	input CursorToolInput,
+	cwd string,
+) rules.FieldSet {
 	base.ToolName = toolName
 	base.ToolUseID = toolUseID
 	base.CWD = cwd
@@ -238,6 +245,7 @@ func cursorToolFields(base rules.FieldSet, toolName string, toolUseID string, in
 	base.ToolInputWorkingDir = input.WorkingDirectory
 	base.ToolInputDirectory = input.Directory
 	base.ToolInputCWD = input.CWD
+
 	return base
 }
 
@@ -248,6 +256,7 @@ func cursorEditStrings(edits []Edit, extract func(Edit) string) []string {
 			values = append(values, value)
 		}
 	}
+
 	return values
 }
 
@@ -258,6 +267,7 @@ func cursorAttachmentStrings(attachments []Attachment, extract func(Attachment) 
 			values = append(values, value)
 		}
 	}
+
 	return values
 }
 
@@ -269,6 +279,7 @@ func (p CursorSessionEndPayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.Reason = p.Reason
 	fields.Status = p.FinalStatus
+
 	return fields
 }
 
@@ -281,6 +292,7 @@ func (p CursorPreToolUsePayload) Fields() rules.FieldSet {
 func (p CursorPostToolUsePayload) Fields() rules.FieldSet {
 	fields := cursorToolFields(p.baseFields(), p.ToolName, p.ToolUseID, p.ToolInput, p.Cwd)
 	fields.ToolOutput = p.ToolOutput
+
 	return fields
 }
 
@@ -290,6 +302,7 @@ func (p CursorPostToolUseFailurePayload) Fields() rules.FieldSet {
 	fields.ErrorMessage = p.ErrorMessage
 	fields.FailureType = p.FailureType
 	fields.IsInterrupt = boolString(p.IsInterrupt)
+
 	return fields
 }
 
@@ -298,6 +311,7 @@ func (p CursorBeforeShellExecutionPayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.Command = p.Command
 	fields.CWD = p.Cwd
+
 	return fields
 }
 
@@ -307,6 +321,7 @@ func (p CursorAfterShellExecutionPayload) Fields() rules.FieldSet {
 	fields.Command = p.Command
 	fields.CWD = p.Cwd
 	fields.Output = p.Output
+
 	return fields
 }
 
@@ -319,6 +334,7 @@ func (p CursorBeforeMCPExecutionPayload) Fields() rules.FieldSet {
 func (p CursorAfterMCPExecutionPayload) Fields() rules.FieldSet {
 	fields := cursorToolFields(p.baseFields(), p.ToolName, p.ToolUseID, p.ToolInput, p.Cwd)
 	fields.ToolOutput = p.ToolOutput
+
 	return fields
 }
 
@@ -327,6 +343,7 @@ func (p CursorBeforeReadFilePayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.FilePath = p.FilePath
 	fields.CWD = p.Cwd
+
 	return fields
 }
 
@@ -335,6 +352,7 @@ func (p CursorBeforeTabFileReadPayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.FilePath = p.FilePath
 	fields.CWD = p.Cwd
+
 	return fields
 }
 
@@ -342,10 +360,17 @@ func (p CursorBeforeTabFileReadPayload) Fields() rules.FieldSet {
 func (p CursorAfterFileEditPayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.FilePath = p.FilePath
-	fields.EditsOldString = cursorEditStrings(p.Edits, func(edit Edit) string { return edit.OldString })
-	fields.EditsNewString = cursorEditStrings(p.Edits, func(edit Edit) string { return edit.NewString })
+	fields.EditsOldString = cursorEditStrings(
+		p.Edits,
+		func(edit Edit) string { return edit.OldString },
+	)
+	fields.EditsNewString = cursorEditStrings(
+		p.Edits,
+		func(edit Edit) string { return edit.NewString },
+	)
 	fields.EditsOldLine = cursorEditStrings(p.Edits, func(edit Edit) string { return edit.OldLine })
 	fields.EditsNewLine = cursorEditStrings(p.Edits, func(edit Edit) string { return edit.NewLine })
+
 	return fields
 }
 
@@ -360,8 +385,15 @@ func (p CursorBeforeSubmitPromptPayload) Fields() rules.FieldSet {
 	fields.Prompt = p.Prompt
 	fields.Text = p.Text
 	fields.CWD = p.Cwd
-	fields.AttachmentsFilePath = cursorAttachmentStrings(p.Attachments, func(attachment Attachment) string { return attachment.FilePath })
-	fields.AttachmentsType = cursorAttachmentStrings(p.Attachments, func(attachment Attachment) string { return attachment.Type })
+	fields.AttachmentsFilePath = cursorAttachmentStrings(
+		p.Attachments,
+		func(attachment Attachment) string { return attachment.FilePath },
+	)
+	fields.AttachmentsType = cursorAttachmentStrings(
+		p.Attachments,
+		func(attachment Attachment) string { return attachment.Type },
+	)
+
 	return fields
 }
 
@@ -371,6 +403,7 @@ func (p CursorSubagentStartPayload) Fields() rules.FieldSet {
 	fields.TaskID = p.SubagentID
 	fields.TaskSubject = p.Task
 	fields.AgentType = p.SubagentType
+
 	return fields
 }
 
@@ -382,6 +415,7 @@ func (p CursorSubagentStopPayload) Fields() rules.FieldSet {
 	fields.TaskDescription = p.Description
 	fields.AgentType = p.SubagentType
 	fields.AgentTranscriptPath = p.AgentTranscriptPath.String()
+
 	return fields
 }
 
@@ -389,6 +423,7 @@ func (p CursorSubagentStopPayload) Fields() rules.FieldSet {
 func (p CursorPreCompactPayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.Trigger = p.Trigger
+
 	return fields
 }
 
@@ -397,6 +432,7 @@ func (p CursorStopPayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.Status = p.Status
 	fields.LoopCount = p.LoopCount
+
 	return fields
 }
 
@@ -405,6 +441,7 @@ func (p CursorAfterAgentResponsePayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.Text = p.Text
 	fields.AssistantMessage = p.AssistantMessage
+
 	return fields
 }
 
@@ -413,5 +450,6 @@ func (p CursorAfterAgentThoughtPayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.Text = p.Text
 	fields.AssistantMessage = p.AssistantMessage
+
 	return fields
 }

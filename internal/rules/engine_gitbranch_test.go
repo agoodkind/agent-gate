@@ -18,20 +18,30 @@ func makeGitRepo(t *testing.T, onDefaultBranch bool) string {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git binary not available")
 	}
+
 	dir := filepath.Join(t.TempDir(), "repo")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
+
 	run := func(args ...string) {
-		full := append([]string{
-			"-c", "user.email=test@example.com",
-			"-c", "user.name=Test",
-			"-c", "commit.gpgsign=false",
-			"-c", "init.defaultBranch=main",
-		}, args...)
+		full := append(
+			[]string{
+				"-c",
+				"user.email=test@example.com",
+				"-c",
+				"user.name=Test",
+				"-c",
+				"commit.gpgsign=false",
+				"-c",
+				"init.defaultBranch=main",
+			},
+			args...,
+		)
 		cmd := exec.Command("git", full...)
 		cmd.Dir = dir
-		cmd.Env = append(os.Environ(),
+		cmd.Env = append(
+			os.Environ(),
 			"GIT_CONFIG_GLOBAL="+os.DevNull,
 			"GIT_CONFIG_SYSTEM="+os.DevNull,
 			"GIT_TERMINAL_PROMPT=0",
@@ -44,11 +54,13 @@ func makeGitRepo(t *testing.T, onDefaultBranch bool) string {
 	if err := os.WriteFile(filepath.Join(dir, "f.txt"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+
 	run("add", "f.txt")
 	run("commit", "-qm", "init")
 	if !onDefaultBranch {
 		run("checkout", "-q", "-b", "feature")
 	}
+
 	return dir
 }
 
@@ -84,24 +96,40 @@ field_paths = ["tool_input.file_path"]
 	}{
 		{name: "edit file in repo on default branch", repo: onMain, blocked: true},
 		{name: "edit file in repo on feature branch", repo: onFeature, blocked: false},
-		{name: "relative file_path resolved against cwd on default", repo: onMain, relative: true, blocked: true},
+		{
+			name:     "relative file_path resolved against cwd on default",
+			repo:     onMain,
+			relative: true,
+			blocked:  true,
+		},
 	}
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			filePath := filepath.Join(tc.repo, "f.txt")
-			if tc.relative {
-				filePath = "f.txt"
-			}
-			fields := rules.FieldSet{
-				ToolName:          "Edit",
-				ToolInputFilePath: filePath,
-				CWD:               tc.repo,
-			}
-			got := rules.EvaluateAll(context.Background(), "claude", "PreToolUse", fields, cfg.Rules, nil)
-			if (len(got) > 0) != tc.blocked {
-				t.Fatalf("blocked=%v, got %d violations: %#v", tc.blocked, len(got), got)
-			}
-		})
+		t.Run(
+			tc.name,
+			func(t *testing.T) {
+				filePath := filepath.Join(tc.repo, "f.txt")
+				if tc.relative {
+					filePath = "f.txt"
+				}
+
+				fields := rules.FieldSet{
+					ToolName:          "Edit",
+					ToolInputFilePath: filePath,
+					CWD:               tc.repo,
+				}
+				got := rules.EvaluateAll(
+					context.Background(),
+					"claude",
+					"PreToolUse",
+					fields,
+					cfg.Rules,
+					nil,
+				)
+				if (len(got) > 0) != tc.blocked {
+					t.Fatalf("blocked=%v, got %d violations: %#v", tc.blocked, len(got), got)
+				}
+			},
+		)
 	}
 }
 
@@ -139,17 +167,27 @@ field_paths = ["cmd_write_targets"]
 		{name: "bash -c redirect into feature-branch repo", repo: onFeature, blocked: false},
 	}
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			fields := rules.FieldSet{
-				ToolName:         "Bash",
-				ToolInputCommand: "bash -c \"cd " + tc.repo + " && echo x > f.txt\"",
-				CWD:              t.TempDir(),
-			}
-			got := rules.EvaluateAll(context.Background(), "claude", "PreToolUse", fields, cfg.Rules, nil)
-			if (len(got) > 0) != tc.blocked {
-				t.Fatalf("blocked=%v, got %d violations: %#v", tc.blocked, len(got), got)
-			}
-		})
+		t.Run(
+			tc.name,
+			func(t *testing.T) {
+				fields := rules.FieldSet{
+					ToolName:         "Bash",
+					ToolInputCommand: "bash -c \"cd " + tc.repo + " && echo x > f.txt\"",
+					CWD:              t.TempDir(),
+				}
+				got := rules.EvaluateAll(
+					context.Background(),
+					"claude",
+					"PreToolUse",
+					fields,
+					cfg.Rules,
+					nil,
+				)
+				if (len(got) > 0) != tc.blocked {
+					t.Fatalf("blocked=%v, got %d violations: %#v", tc.blocked, len(got), got)
+				}
+			},
+		)
 	}
 }
 
@@ -180,6 +218,7 @@ target_mode = "all_operands"
 	if len(got) == 0 {
 		t.Fatal("declared writer target did not reach git_default_branch condition")
 	}
+
 	wantTarget := filepath.Join(onMain, "f.txt")
 	if got[0].FieldPath != "cmd_write_targets" || got[0].Value != wantTarget {
 		t.Fatalf("fallback violation = %#v, want declared target %q", got[0], wantTarget)
@@ -217,25 +256,55 @@ kind = "git_default_branch"
 		command string
 		blocked bool
 	}{
-		{name: "git -C repo-on-default commit", command: "git -C " + onMain + " commit --allow-empty -m x", blocked: true},
-		{name: "git -C repo-on-feature commit", command: "git -C " + onFeature + " commit --allow-empty -m x", blocked: false},
+		{
+			name:    "git -C repo-on-default commit",
+			command: "git -C " + onMain + " commit --allow-empty -m x",
+			blocked: true,
+		},
+		{
+			name:    "git -C repo-on-feature commit",
+			command: "git -C " + onFeature + " commit --allow-empty -m x",
+			blocked: false,
+		},
 		// Global -c flags before the subcommand must not hide the verb: the
 		// subcommand is interpreted, not read positionally.
-		{name: "git -c k=v -C default commit", command: "git -c user.email=a@a -c user.name=a -C " + onMain + " commit --allow-empty -m x", blocked: true},
-		{name: "git -c k=v -C feature commit", command: "git -c user.email=a@a -C " + onFeature + " commit --allow-empty -m x", blocked: false},
-		{name: "git --no-pager -C default add", command: "git --no-pager -C " + onMain + " add .", blocked: true},
+		{
+			name:    "git -c k=v -C default commit",
+			command: "git -c user.email=a@a -c user.name=a -C " + onMain + " commit --allow-empty -m x",
+			blocked: true,
+		},
+		{
+			name:    "git -c k=v -C feature commit",
+			command: "git -c user.email=a@a -C " + onFeature + " commit --allow-empty -m x",
+			blocked: false,
+		},
+		{
+			name:    "git --no-pager -C default add",
+			command: "git --no-pager -C " + onMain + " add .",
+			blocked: true,
+		},
 	}
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			fields := rules.FieldSet{
-				ToolName:         "Bash",
-				ToolInputCommand: tc.command,
-				CWD:              t.TempDir(),
-			}
-			got := rules.EvaluateAll(context.Background(), "claude", "PreToolUse", fields, cfg.Rules, nil)
-			if (len(got) > 0) != tc.blocked {
-				t.Fatalf("blocked=%v, got %d violations: %#v", tc.blocked, len(got), got)
-			}
-		})
+		t.Run(
+			tc.name,
+			func(t *testing.T) {
+				fields := rules.FieldSet{
+					ToolName:         "Bash",
+					ToolInputCommand: tc.command,
+					CWD:              t.TempDir(),
+				}
+				got := rules.EvaluateAll(
+					context.Background(),
+					"claude",
+					"PreToolUse",
+					fields,
+					cfg.Rules,
+					nil,
+				)
+				if (len(got) > 0) != tc.blocked {
+					t.Fatalf("blocked=%v, got %d violations: %#v", tc.blocked, len(got), got)
+				}
+			},
+		)
 	}
 }

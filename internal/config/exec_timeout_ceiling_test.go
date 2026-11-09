@@ -21,6 +21,7 @@ func TestExecTimeoutCeilingFitsHookDeadline(t *testing.T) {
 			config.DefaultHookEvaluateMs,
 		)
 	}
+
 	if config.DefaultExecTimeoutMs > config.DefaultMaxExecTimeoutMs {
 		t.Fatalf(
 			"DefaultExecTimeoutMs %d exceeds the ceiling %d",
@@ -47,6 +48,7 @@ func TestExecConditionAcceptsCeilingAndRejectsAbove(t *testing.T) {
 	if err != nil {
 		t.Fatalf("timeout_ms at the ceiling should load: %v", err)
 	}
+
 	if got := cfg.Rules[0].Conditions[1].TimeoutMs; got != config.DefaultMaxExecTimeoutMs {
 		t.Fatalf("timeout_ms = %d, want %d", got, config.DefaultMaxExecTimeoutMs)
 	}
@@ -66,9 +68,11 @@ func TestConfigRaisesItsOwnExecCeiling(t *testing.T) {
 	if err != nil {
 		t.Fatalf("config raising its own ceiling should load: %v", err)
 	}
+
 	if got := cfg.Rules[0].Conditions[1].TimeoutMs; got != 9000 {
 		t.Fatalf("timeout_ms = %d, want 9000", got)
 	}
+
 	if got := cfg.ExecMaxTimeoutMs(); got != 9000 {
 		t.Fatalf("ExecMaxTimeoutMs = %d, want 9000", got)
 	}
@@ -83,6 +87,7 @@ func TestExecCeilingMustStayUnderHookDeadline(t *testing.T) {
 	if err == nil {
 		t.Fatal("exec_max_ms equal to hook_evaluate_ms should be rejected")
 	}
+
 	if !strings.Contains(err.Error(), "must stay under hook_evaluate_ms") {
 		t.Fatalf("error = %v, want the hook-deadline relationship", err)
 	}
@@ -106,12 +111,15 @@ func TestLimitsAndIntervalsAreConfigurable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadExisting: %v", err)
 	}
+
 	if got := cfg.RegexMatchLimit(); got != 123 {
 		t.Fatalf("RegexMatchLimit = %d, want 123", got)
 	}
+
 	if got := cfg.AuditQueueLimit(); got != 456 {
 		t.Fatalf("AuditQueueLimit = %d, want 456", got)
 	}
+
 	if got := cfg.OverloadLogInterval().Milliseconds(); got != 789 {
 		t.Fatalf("OverloadLogInterval = %dms, want 789ms", got)
 	}
@@ -143,12 +151,19 @@ func TestEveryDeclaredKnobReachesAConsumer(t *testing.T) {
 			field := section.fields.Field(index)
 			key := strings.Split(field.Tag.Get("toml"), ",")[0]
 			if key == "" {
-				t.Fatalf("%s.%s has no toml tag, so it cannot be configured",
-					section.table, field.Name)
+				t.Fatalf(
+					"%s.%s has no toml tag, so it cannot be configured",
+					section.table,
+					field.Name,
+				)
 			}
-			t.Run(section.table+"."+key, func(t *testing.T) {
-				assertKnobIsRead(t, section.table, key)
-			})
+
+			t.Run(
+				section.table+"."+key,
+				func(t *testing.T) {
+					assertKnobIsRead(t, section.table, key)
+				},
+			)
 		}
 	}
 }
@@ -170,6 +185,7 @@ func probeValueFor(key string) int {
 	if key == "deferred_claim_lease_ms" {
 		return largeKnobProbeValue
 	}
+
 	return knobProbeValue
 }
 
@@ -194,6 +210,7 @@ func assertKnobIsRead(t *testing.T, table string, key string) {
 		if method.Type.NumIn() != 1 || method.Type.NumOut() != 1 {
 			continue
 		}
+
 		switch returned := value.Method(index).Call(nil)[0].Interface().(type) {
 		case int:
 			if returned == probe {
@@ -207,9 +224,13 @@ func assertKnobIsRead(t *testing.T, table string, key string) {
 			}
 		}
 	}
-	t.Fatalf("performance.%s.%s decodes but no accessor returns it, so setting "+
-		"it changes nothing. Wire it to the code that enforces it, or drop the key.",
-		table, key)
+
+	t.Fatalf(
+		"performance.%s.%s decodes but no accessor returns it, so setting "+
+			"it changes nothing. Wire it to the code that enforces it, or drop the key.",
+		table,
+		key,
+	)
 }
 
 // TestUnsetKnobsTakeDefaults covers that an empty section still produces every
@@ -219,6 +240,7 @@ func TestUnsetKnobsTakeDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadExisting: %v", err)
 	}
+
 	checks := []struct {
 		name string
 		got  int
@@ -236,6 +258,7 @@ func TestUnsetKnobsTakeDefaults(t *testing.T) {
 			t.Fatalf("%s = %d, want default %d", check.name, check.got, check.want)
 		}
 	}
+
 	// hook_evaluate_ms has no Config accessor, because the hook reads it through
 	// HookEvaluateTimeoutFromFile without loading rules. Its other role is the
 	// bound the per-condition ceilings are validated against, covered by

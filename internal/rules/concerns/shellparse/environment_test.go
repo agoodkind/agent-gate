@@ -10,6 +10,7 @@ func TestExpandEnvironmentVariables(t *testing.T) {
 	getenv := func(name string) string {
 		return values[name]
 	}
+
 	tests := []struct {
 		name    string
 		command string
@@ -24,11 +25,19 @@ func TestExpandEnvironmentVariables(t *testing.T) {
 		{name: "command substitution", command: `cat "$(printf x)"`, want: `cat "$(printf x)"`},
 	}
 	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			if got := ExpandEnvironmentVariables(test.command, getenv); got != test.want {
-				t.Fatalf("ExpandEnvironmentVariables(%q) = %q, want %q", test.command, got, test.want)
-			}
-		})
+		t.Run(
+			test.name,
+			func(t *testing.T) {
+				if got := ExpandEnvironmentVariables(test.command, getenv); got != test.want {
+					t.Fatalf(
+						"ExpandEnvironmentVariables(%q) = %q, want %q",
+						test.command,
+						got,
+						test.want,
+					)
+				}
+			},
+		)
 	}
 }
 

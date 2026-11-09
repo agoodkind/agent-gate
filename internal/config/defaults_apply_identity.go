@@ -25,13 +25,10 @@ func beginDefaultsTargetReplacement(
 ) (*defaultsTargetReplacement, bool, error) {
 	directoryDescriptor := int(directory.Fd())
 	if expected == nil {
-		if err := renameDefaultsNoReplace(
-			directoryDescriptor,
-			tempName,
-			targetName,
-		); err != nil {
+		if err := renameDefaultsNoReplace(directoryDescriptor, tempName, targetName); err != nil {
 			return nil, true, reportDefaultsApplyError("replace config", err)
 		}
+
 		return &defaultsTargetReplacement{
 			directory:  directory,
 			tempName:   tempName,
@@ -39,13 +36,11 @@ func beginDefaultsTargetReplacement(
 			hadTarget:  false,
 		}, false, nil
 	}
-	if err := exchangeDefaultsNames(
-		directoryDescriptor,
-		tempName,
-		targetName,
-	); err != nil {
+
+	if err := exchangeDefaultsNames(directoryDescriptor, tempName, targetName); err != nil {
 		return nil, true, reportDefaultsApplyError("replace config", err)
 	}
+
 	displaced, err := openDefaultsDirectoryEntry(directoryDescriptor, tempName)
 	if err == nil {
 		defer func() { _ = displaced.Close() }()
@@ -53,16 +48,15 @@ func beginDefaultsTargetReplacement(
 		displacedInfo, err = displaced.Stat()
 		var displacedBirthTime defaultsBirthTime
 		if err == nil {
-			displacedBirthTime, err = captureDefaultsBirthTimeAt(
-				directoryDescriptor,
-				tempName,
-			)
+			displacedBirthTime, err = captureDefaultsBirthTimeAt(directoryDescriptor, tempName)
 		}
+
 		if err == nil && (!os.SameFile(expected.info, displacedInfo) ||
 			!sameDefaultsBirthTime(expected.birthTime, displacedBirthTime)) {
 			err = errors.New("config target identity changed before replacement")
 		}
 	}
+
 	if err != nil {
 		if rollbackErr := exchangeDefaultsNames(
 			directoryDescriptor,
@@ -74,13 +68,16 @@ func beginDefaultsTargetReplacement(
 				errors.Join(err, rollbackErr),
 			)
 		}
+
 		cleanupErr := unix.Unlinkat(directoryDescriptor, tempName, 0)
 		syncErr := directory.Sync()
+
 		return nil, false, reportDefaultsApplyError(
 			"replace config",
 			errors.Join(err, cleanupErr, syncErr),
 		)
 	}
+
 	return &defaultsTargetReplacement{
 		directory:  directory,
 		tempName:   tempName,
@@ -93,13 +90,11 @@ func (replacement *defaultsTargetReplacement) commit() error {
 	if replacement == nil || !replacement.hadTarget {
 		return nil
 	}
-	if err := unix.Unlinkat(
-		int(replacement.directory.Fd()),
-		replacement.tempName,
-		0,
-	); err != nil {
+
+	if err := unix.Unlinkat(int(replacement.directory.Fd()), replacement.tempName, 0); err != nil {
 		return reportDefaultsApplyError("remove replaced config", err)
 	}
+
 	return nil
 }
 
@@ -107,6 +102,7 @@ func (replacement *defaultsTargetReplacement) rollback() error {
 	if replacement == nil {
 		return nil
 	}
+
 	directoryDescriptor := int(replacement.directory.Fd())
 	if replacement.hadTarget {
 		if err := exchangeDefaultsNames(
@@ -116,19 +112,18 @@ func (replacement *defaultsTargetReplacement) rollback() error {
 		); err != nil {
 			return reportDefaultsApplyError("restore config target", err)
 		}
+
 		if err := unix.Unlinkat(directoryDescriptor, replacement.tempName, 0); err != nil {
 			return reportDefaultsApplyError("remove rejected config", err)
 		}
-	} else if err := unix.Unlinkat(
-		directoryDescriptor,
-		replacement.targetName,
-		0,
-	); err != nil {
+	} else if err := unix.Unlinkat(directoryDescriptor, replacement.targetName, 0); err != nil {
 		return reportDefaultsApplyError("remove rejected config", err)
 	}
+
 	if err := replacement.directory.Sync(); err != nil {
 		return reportDefaultsApplyError("synchronize restored config directory", err)
 	}
+
 	return nil
 }
 
@@ -142,8 +137,10 @@ func openDefaultsDirectoryEntry(directoryDescriptor int, name string) (*os.File,
 	if err != nil {
 		wrappedErr := fmt.Errorf("open displaced config target: %w", err)
 		slog.Warn("open displaced config target failed", "err", wrappedErr)
+
 		return nil, wrappedErr
 	}
+
 	return os.NewFile(uintptr(fileDescriptor), name), nil
 }
 
@@ -152,6 +149,7 @@ func defaultsApplyFileMode(pathState defaultsPathState) os.FileMode {
 	if component == nil {
 		return configFileMode
 	}
+
 	return component.info.Mode().Perm()
 }
 
@@ -165,6 +163,7 @@ func defaultsPathInfo(
 			return &matched
 		}
 	}
+
 	return nil
 }
 
@@ -174,6 +173,7 @@ func retainDefaultsPathHandles(pathState *defaultsPathState) error {
 		if !component.exists || pathState.handles[component.path] != nil {
 			continue
 		}
+
 		handle, err := openDefaultsIdentityHandle(
 			component.path,
 			component.info.Mode()&os.ModeSymlink != 0,
@@ -182,6 +182,7 @@ func retainDefaultsPathHandles(pathState *defaultsPathState) error {
 			pathState.closeHandles()
 			return reportDefaultsPreparationError("retain config path identity", err)
 		}
+
 		handleInfo, err := handle.Stat()
 		if err != nil || !os.SameFile(component.info, handleInfo) {
 			_ = handle.Close()
@@ -189,10 +190,13 @@ func retainDefaultsPathHandles(pathState *defaultsPathState) error {
 			if err == nil {
 				err = errors.New("config path identity changed while retaining it")
 			}
+
 			return reportDefaultsPreparationError("retain config path identity", err)
 		}
+
 		pathState.handles[component.path] = handle
 	}
+
 	return nil
 }
 
@@ -206,5 +210,6 @@ func (pathState *defaultsPathState) closeHandles() {
 			slog.Warn("close config identity handle failed", "path", path, "err", err)
 		}
 	}
+
 	pathState.handles = nil
 }

@@ -33,18 +33,30 @@ func (r *ExecRuntime) ObserveUserPrompt(
 	receiptID int64,
 	value string,
 ) bool {
-	return r.ObserveUserPromptOrdered(system, fields, hotkv.ObservationOrder{Generation: 0, ReceiptID: receiptID}, value)
+	return r.ObserveUserPromptOrdered(
+		system,
+		fields,
+		hotkv.ObservationOrder{Generation: 0, ReceiptID: receiptID},
+		value,
+	)
 }
 
 // ObserveUserPromptOrdered records a typed prompt with its original assignment.
-func (r *ExecRuntime) ObserveUserPromptOrdered(system string, fields FieldSet, order hotkv.ObservationOrder, value string) bool {
+func (r *ExecRuntime) ObserveUserPromptOrdered(
+	system string,
+	fields FieldSet,
+	order hotkv.ObservationOrder,
+	value string,
+) bool {
 	if r == nil || r.temporal == nil || value == "" {
 		return false
 	}
+
 	identity := temporalConversationIdentity(system, fields)
 	if identity == "" {
 		return false
 	}
+
 	return r.temporal.store(temporalKey("prompt", identity), order, value)
 }
 
@@ -60,19 +72,36 @@ func (r *ExecRuntime) ObserveResponseOutput(
 	receiptID int64,
 	value string,
 ) bool {
-	return r.ObserveResponseOutputOrdered(system, fields, eventName, target, hotkv.ObservationOrder{Generation: 0, ReceiptID: receiptID}, value)
+	return r.ObserveResponseOutputOrdered(
+		system,
+		fields,
+		eventName,
+		target,
+		hotkv.ObservationOrder{Generation: 0, ReceiptID: receiptID},
+		value,
+	)
 }
 
 // ObserveResponseOutputOrdered records a response with its original assignment.
-func (r *ExecRuntime) ObserveResponseOutputOrdered(system string, fields FieldSet, eventName, target string, order hotkv.ObservationOrder, value string) bool {
+func (r *ExecRuntime) ObserveResponseOutputOrdered(
+	system string,
+	fields FieldSet,
+	eventName string,
+	target string,
+	order hotkv.ObservationOrder,
+	value string,
+) bool {
 	if r == nil || r.temporal == nil || value == "" {
 		return false
 	}
+
 	identity := temporalConversationIdentity(system, fields)
 	if identity == "" || eventName == "" || target == "" {
 		return false
 	}
+
 	key := temporalKey("response", identity, eventName, target)
+
 	return r.temporal.store(key, order, value)
 }
 
@@ -81,20 +110,24 @@ func temporalConversationIdentity(system string, fields FieldSet) string {
 	if conversationID == "" {
 		conversationID = fields.SessionID
 	}
+
 	if system == "" || conversationID == "" {
 		return ""
 	}
+
 	return temporalKey(system, conversationID)
 }
 
 func temporalKey(parts ...string) string {
 	hash := sha256.New()
 	var lengthBytes [8]byte
+
 	for _, part := range parts {
 		binary.BigEndian.PutUint64(lengthBytes[:], uint64(len(part)))
 		_, _ = hash.Write(lengthBytes[:])
 		_, _ = hash.Write([]byte(part))
 	}
+
 	return hex.EncodeToString(hash.Sum(nil))
 }
 
@@ -102,6 +135,8 @@ func (s *execTemporalStore) store(key string, order hotkv.ObservationOrder, valu
 	if s == nil || s.cache == nil || key == "" || order.ReceiptID <= 0 {
 		return false
 	}
+
 	stored, err := s.cache.Observe(execTemporalNamespace, key, order, value)
+
 	return err == nil && stored
 }

@@ -18,8 +18,13 @@ func CaptureCancellationForTest(t testing.TB) {
 	t.Cleanup(func() {
 		slog.SetDefault(original)
 		log.SetOutput(output)
+
 		for _, line := range strings.Split(strings.TrimSpace(captured.String()), "\n") {
-			if line != "" && (t.Failed() || !strings.Contains(line, `err="context canceled"`) && !strings.Contains(line, `: context canceled"`)) {
+			if line != "" &&
+				(t.Failed() || !strings.Contains(
+					line,
+					`err="context canceled"`,
+				) && !strings.Contains(line, `: context canceled"`)) {
 				fmt.Fprintln(output, line)
 			}
 		}

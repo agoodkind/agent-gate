@@ -20,8 +20,12 @@ func TestTemporalRemovalPreservesOtherConversationThroughValidator(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	capture := filepath.Join(t.TempDir(), "input.json")
-	rule := loadExecRule(t, fmt.Sprintf(`
+	rule := loadExecRule(
+		t,
+		fmt.Sprintf(
+			`
 [[rules]]
 name = "temporal-context"
 events = ["stop"]
@@ -33,7 +37,11 @@ command = [%q, %q]
 block_on = "zero"
 field_paths = ["last_user_message", "last_response_output"]
 cache_ttl_ms = 0
-`, tee, capture))
+`,
+			tee,
+			capture,
+		),
+	)
 	store := hotkv.New(hotkv.Options{MaxEntries: 4})
 	defer store.Close()
 	runtime := rules.NewExecRuntimeWithCache(nil, nil, store)
@@ -44,24 +52,50 @@ cache_ttl_ms = 0
 	}
 	if !runtime.ObserveUserPromptOrdered("cursor", alpha, order(1), "alpha prompt") ||
 		!runtime.ObserveUserPromptOrdered("cursor", beta, order(2), "beta prompt") ||
-		!runtime.ObserveResponseOutputOrdered("cursor", beta, "stop", "context", order(2), "beta response") {
+		!runtime.ObserveResponseOutputOrdered(
+			"cursor",
+			beta,
+			"stop",
+			"context",
+			order(2),
+			"beta response",
+		) {
 		t.Fatal("initial temporal publication failed")
 	}
+
 	store.RegisterObservation(order(10))
+
 	for _, key := range []string{"first", "second"} {
-		if _, stored, err := store.Set("capacity-pressure", key, []byte("value"), hotkv.SetOptions{}); err != nil || !stored {
+		if _, stored, err := store.Set(
+			"capacity-pressure",
+			key,
+			[]byte("value"),
+			hotkv.SetOptions{},
+		); err != nil ||
+			!stored {
 			t.Fatalf("create cache pressure: stored=%v, err=%v", stored, err)
 		}
 	}
+
 	if runtime.ObserveUserPromptOrdered("cursor", alpha, order(4), "delayed alpha") {
 		t.Fatal("removed conversation accepted delayed context")
 	}
+
 	if !runtime.ObserveUserPromptOrdered("cursor", beta, order(3), "new beta prompt") ||
-		!runtime.ObserveResponseOutputOrdered("cursor", beta, "stop", "context", order(4), "new beta response") {
+		!runtime.ObserveResponseOutputOrdered(
+			"cursor",
+			beta,
+			"stop",
+			"context",
+			order(4),
+			"new beta response",
+		) {
 		t.Fatal("unrelated retained conversation lost its ordering")
 	}
+
 	ctx := rules.WithExecRuntime(context.Background(), runtime)
 	ctx = rules.WithExecResponseTargetResolver(ctx, func(string) string { return "context" })
+
 	for _, example := range []struct {
 		fields    rules.FieldSet
 		prompt    string
@@ -76,14 +110,29 @@ cache_ttl_ms = 0
 		if err != nil {
 			t.Fatal(err)
 		}
+
 		var input execconcern.Input
 		if err := json.Unmarshal(data, &input); err != nil {
 			t.Fatal(err)
 		}
+
 		if len(input.Matched) != 2 {
 			t.Fatalf("matched fields: %+v", input.Matched)
 		}
-		assertTemporalField(t, input.Matched[0], "last_user_message", example.prompt, example.available)
-		assertTemporalField(t, input.Matched[1], "last_response_output", example.response, example.available)
+
+		assertTemporalField(
+			t,
+			input.Matched[0],
+			"last_user_message",
+			example.prompt,
+			example.available,
+		)
+		assertTemporalField(
+			t,
+			input.Matched[1],
+			"last_response_output",
+			example.response,
+			example.available,
+		)
 	}
 }

@@ -35,7 +35,11 @@ action = "audit"
 violation_message = "m"
 pattern = '''(unclosed'''
 `
-	if err := os.WriteFile(filepath.Join(configDirectory, "config.toml"), []byte(body), 0o600); err != nil {
+	if err := os.WriteFile(
+		filepath.Join(configDirectory, "config.toml"),
+		[]byte(body),
+		0o600,
+	); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 

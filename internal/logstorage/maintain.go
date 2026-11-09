@@ -15,10 +15,13 @@ func Maintain(stateDir string) (result error) {
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
+
 	if err != nil {
 		return err
 	}
+
 	defer func() { result = errors.Join(result, closeFile(directory)) }()
+
 	for _, entry := range []struct {
 		name  string
 		prune func(*os.File) error
@@ -31,6 +34,7 @@ func Maintain(stateDir string) (result error) {
 			result = errors.Join(result, wrapError("maintain "+entry.name, err))
 		}
 	}
+
 	return result
 }
 
@@ -39,18 +43,21 @@ func readTail(file *os.File, limit int64) ([]byte, error) {
 	if err != nil {
 		return nil, wrapError("stat log tail", err)
 	}
+
 	start := max(int64(0), info.Size()-limit)
 	data := make([]byte, info.Size()-start)
 	count, err := file.ReadAt(data, start)
 	if err != nil && !errors.Is(err, io.EOF) {
 		return nil, wrapError("read log tail", err)
 	}
+
 	data = data[:count]
 	if start > 0 {
 		if newline := bytes.IndexByte(data, '\n'); newline >= 0 && newline+1 < len(data) {
 			data = data[newline+1:]
 		}
 	}
+
 	return data, nil
 }
 
@@ -59,16 +66,20 @@ func keepTail(file *os.File, limit int64) error {
 	if err != nil {
 		return wrapError("stat supervisor log", err)
 	}
+
 	if info.Size() <= limit {
 		return nil
 	}
+
 	data, err := readTail(file, limit)
 	if err != nil {
 		return err
 	}
+
 	if _, err := file.WriteAt(data, 0); err != nil {
 		return wrapError("write retained supervisor output", err)
 	}
+
 	return wrapError("truncate supervisor output", file.Truncate(int64(len(data))))
 }
 
@@ -77,6 +88,7 @@ func markFailOpenTruncated(directory *os.File) error {
 	if err != nil {
 		return err
 	}
+
 	return closeFile(file)
 }
 
@@ -85,18 +97,23 @@ func pruneFailOpen(directory *os.File, file *os.File) error {
 	if err != nil {
 		return wrapError("stat fail-open evidence", err)
 	}
+
 	if info.Size() <= FailOpenMaxBytes {
 		return nil
 	}
+
 	if err := markFailOpenTruncated(directory); err != nil {
 		return err
 	}
+
 	data := make([]byte, FailOpenMaxBytes)
 	count, err := file.ReadAt(data, 0)
 	if err != nil && !errors.Is(err, io.EOF) {
 		return wrapError("read earliest fail-open evidence", err)
 	}
+
 	end := bytes.LastIndexByte(data[:count], '\n') + 1
+
 	return wrapError("truncate fail-open evidence", file.Truncate(int64(end)))
 }
 
@@ -105,25 +122,37 @@ func AppendFailOpen(stateDir string, line []byte) (result error) {
 	if err := os.MkdirAll(stateDir, 0o700); err != nil {
 		return wrapError("create fail-open directory", err)
 	}
+
 	directory, err := openDirectory(stateDir)
 	if err != nil {
 		return err
 	}
+
 	defer func() { result = errors.Join(result, closeFile(directory)) }()
-	return withLockedFile(directory, FailOpenName, unix.O_RDWR|unix.O_CREAT, func(file *os.File) error {
-		if err := pruneFailOpen(directory, file); err != nil {
-			return err
-		}
-		info, err := file.Stat()
-		if err != nil {
-			return wrapError("stat fail-open evidence before append", err)
-		}
-		if info.Size()+int64(len(line)) > FailOpenMaxBytes {
-			return markFailOpenTruncated(directory)
-		}
-		_, err = file.WriteAt(line, info.Size())
-		return wrapError("append fail-open evidence", err)
-	})
+
+	return withLockedFile(
+		directory,
+		FailOpenName,
+		unix.O_RDWR|unix.O_CREAT,
+		func(file *os.File) error {
+			if err := pruneFailOpen(directory, file); err != nil {
+				return err
+			}
+
+			info, err := file.Stat()
+			if err != nil {
+				return wrapError("stat fail-open evidence before append", err)
+			}
+
+			if info.Size()+int64(len(line)) > FailOpenMaxBytes {
+				return markFailOpenTruncated(directory)
+			}
+
+			_, err = file.WriteAt(line, info.Size())
+
+			return wrapError("append fail-open evidence", err)
+		},
+	)
 }
 
 // ReadFailOpen reads a bounded snapshot after pruning oversized evidence.
@@ -132,14 +161,23 @@ func ReadFailOpen(stateDir string) (data []byte, result error) {
 	if err != nil {
 		return nil, err
 	}
+
 	defer func() { result = errors.Join(result, closeFile(directory)) }()
-	result = withLockedFile(directory, FailOpenName, unix.O_RDWR, func(file *os.File) error {
-		if err := pruneFailOpen(directory, file); err != nil {
-			return err
-		}
-		var err error
-		data, err = io.ReadAll(io.LimitReader(file, FailOpenMaxBytes))
-		return wrapError("read retained fail-open evidence", err)
-	})
+	result = withLockedFile(
+		directory,
+		FailOpenName,
+		unix.O_RDWR,
+		func(file *os.File) error {
+			if err := pruneFailOpen(directory, file); err != nil {
+				return err
+			}
+
+			var err error
+			data, err = io.ReadAll(io.LimitReader(file, FailOpenMaxBytes))
+
+			return wrapError("read retained fail-open evidence", err)
+		},
+	)
+
 	return data, result
 }

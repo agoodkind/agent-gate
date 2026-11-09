@@ -14,18 +14,27 @@ func retainedQueryDatabase(t *testing.T, cfg *config.Config) *sql.DB {
 	if err := cfg.PrepareAuditStorage(); err != nil {
 		t.Fatal(err)
 	}
+
 	catalog, err := auditstorage.NewCatalog(cfg.AuditCatalogOptions())
 	if err != nil {
 		t.Fatal(err)
 	}
-	bucket, err := catalog.EnsureCurrent(t.Context(), cfg.AuditStoragePolicy().Rotation(), time.Now())
+
+	bucket, err := catalog.EnsureCurrent(
+		t.Context(),
+		cfg.AuditStoragePolicy().Rotation(),
+		time.Now(),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	handle, err := catalog.OpenWriter(t.Context(), bucket)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	t.Cleanup(func() { _ = handle.Close() })
+
 	return handle.Database
 }

@@ -33,30 +33,94 @@ const (
 func ValidateEnumerationSpecs(ruleName string, index int, specs []EnumerationSpec) error {
 	for specIndex, spec := range specs {
 		if !enumerationExecutablesValid(spec.Argv0) {
-			return fmt.Errorf("rule %q condition %d enumeration_specs %d: argv0 requires non-empty executable names", ruleName, index, specIndex)
+			return fmt.Errorf(
+				"rule %q condition %d enumeration_specs %d: argv0 requires non-empty executable names",
+				ruleName,
+				index,
+				specIndex,
+			)
 		}
-		if spec.TargetMode != EnumerationTargetAllOperands && spec.TargetMode != EnumerationTargetCWD {
-			return fmt.Errorf("rule %q condition %d enumeration_specs %d: unknown target_mode %q", ruleName, index, specIndex, spec.TargetMode)
+
+		if spec.TargetMode != EnumerationTargetAllOperands &&
+			spec.TargetMode != EnumerationTargetCWD {
+			return fmt.Errorf(
+				"rule %q condition %d enumeration_specs %d: unknown target_mode %q",
+				ruleName,
+				index,
+				specIndex,
+				spec.TargetMode,
+			)
 		}
+
 		if err := ValidateArgumentSpec(&spec.Arguments); err != nil {
-			slog.Warn("invalid enumeration arguments", "rule", ruleName, "condition", index, "spec", specIndex, "error", err)
-			return fmt.Errorf("rule %q condition %d enumeration_specs %d: %w", ruleName, index, specIndex, err)
+			slog.Warn(
+				"invalid enumeration arguments",
+				"rule",
+				ruleName,
+				"condition",
+				index,
+				"spec",
+				specIndex,
+				"error",
+				err,
+			)
+			return fmt.Errorf(
+				"rule %q condition %d enumeration_specs %d: %w",
+				ruleName,
+				index,
+				specIndex,
+				err,
+			)
 		}
+
 		for _, flag := range spec.ConsumerFlags {
 			if !strings.HasPrefix(flag, "-") {
-				return fmt.Errorf("rule %q condition %d enumeration_specs %d: consumer_flags entries must start with '-'", ruleName, index, specIndex)
+				return fmt.Errorf(
+					"rule %q condition %d enumeration_specs %d: consumer_flags entries must start with '-'",
+					ruleName,
+					index,
+					specIndex,
+				)
 			}
 		}
+
 		for wrapperIndex, wrapper := range spec.ConsumerWrappers {
 			if !enumerationExecutablesValid(wrapper.Argv0) {
-				return fmt.Errorf("rule %q condition %d enumeration_specs %d consumer_wrappers %d: argv0 requires non-empty executable names", ruleName, index, specIndex, wrapperIndex)
+				return fmt.Errorf(
+					"rule %q condition %d enumeration_specs %d consumer_wrappers %d: argv0 requires non-empty executable names",
+					ruleName,
+					index,
+					specIndex,
+					wrapperIndex,
+				)
 			}
+
 			if err := ValidateArgumentSpec(&wrapper.Arguments); err != nil {
-				slog.Warn("invalid enumeration consumer arguments", "rule", ruleName, "condition", index, "spec", specIndex, "wrapper", wrapperIndex, "error", err)
-				return fmt.Errorf("rule %q condition %d enumeration_specs %d consumer_wrappers %d: %w", ruleName, index, specIndex, wrapperIndex, err)
+				slog.Warn(
+					"invalid enumeration consumer arguments",
+					"rule",
+					ruleName,
+					"condition",
+					index,
+					"spec",
+					specIndex,
+					"wrapper",
+					wrapperIndex,
+					"error",
+					err,
+				)
+				return fmt.Errorf(
+					"rule %q condition %d enumeration_specs %d consumer_wrappers %d: %w",
+					ruleName,
+					index,
+					specIndex,
+					wrapperIndex,
+					err,
+				)
 			}
 		}
 	}
+
 	return nil
 }
 
@@ -64,10 +128,12 @@ func enumerationExecutablesValid(names []string) bool {
 	if len(names) == 0 {
 		return false
 	}
+
 	for _, name := range names {
 		if strings.TrimSpace(name) == "" {
 			return false
 		}
 	}
+
 	return true
 }

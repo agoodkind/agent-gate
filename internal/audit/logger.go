@@ -131,6 +131,7 @@ func (v AttrValue) String() string {
 	if v.Kind != AttrValueKindString {
 		return ""
 	}
+
 	return v.StringValue
 }
 
@@ -140,6 +141,7 @@ func (v AttrValue) Strings() []string {
 	if v.Kind != AttrValueKindStringSlice {
 		return nil
 	}
+
 	return append([]string(nil), v.StringList...)
 }
 
@@ -156,18 +158,21 @@ func (v AttrValue) JSONBytes() []byte {
 		if err != nil {
 			return []byte(nullLiteral)
 		}
+
 		return bytes
 	case AttrValueKindBool:
 		bytes, err := json.Marshal(v.BoolValue)
 		if err != nil {
 			return []byte(nullLiteral)
 		}
+
 		return bytes
 	case AttrValueKindInt:
 		bytes, err := json.Marshal(v.IntValue)
 		if err != nil {
 			return []byte(nullLiteral)
 		}
+
 		return bytes
 	case AttrValueKindFloat:
 		// json.Marshal rejects NaN/Inf; map those to a JSON null literal.
@@ -175,22 +180,26 @@ func (v AttrValue) JSONBytes() []byte {
 		if f != f || f > 1e308 || f < -1e308 {
 			return []byte(nullLiteral)
 		}
+
 		bytes, err := json.Marshal(f)
 		if err != nil {
 			return []byte(nullLiteral)
 		}
+
 		return bytes
 	case AttrValueKindStringSlice:
 		bytes, err := json.Marshal(v.StringList)
 		if err != nil {
 			return []byte(nullLiteral)
 		}
+
 		return bytes
 	case AttrValueKindViolationSlice:
 		bytes, err := json.Marshal(v.ViolationList)
 		if err != nil {
 			return []byte(nullLiteral)
 		}
+
 		return bytes
 	default:
 		return []byte(nullLiteral)
@@ -215,7 +224,15 @@ type Sink interface {
 // intake receipts are marked complete.
 type DurableSink interface {
 	Sink
-	LogDurable(ctx context.Context, system, sessionID, eventName, level, msg string, attrs Attrs) error
+	LogDurable(
+		ctx context.Context,
+		system string,
+		sessionID string,
+		eventName string,
+		level string,
+		msg string,
+		attrs Attrs,
+	) error
 }
 
 // ReplayableDurableSink captures and writes immutable normalized audit entries.
@@ -236,18 +253,36 @@ func NewLocalSink(logger *EventLogger) *LocalSink {
 }
 
 // Log forwards to the underlying [EventLogger].
-func (s *LocalSink) Log(_ context.Context, system, sessionID, eventName, level, msg string, attrs Attrs) {
+func (s *LocalSink) Log(
+	_ context.Context,
+	system string,
+	sessionID string,
+	eventName string,
+	level string,
+	msg string,
+	attrs Attrs,
+) {
 	if s == nil || s.logger == nil {
 		return
 	}
+
 	s.logger.Log(system, sessionID, eventName, level, msg, attrs)
 }
 
 // LogDurable writes through the underlying logger before returning.
-func (s *LocalSink) LogDurable(ctx context.Context, system, sessionID, eventName, level, msg string, attrs Attrs) error {
+func (s *LocalSink) LogDurable(
+	ctx context.Context,
+	system string,
+	sessionID string,
+	eventName string,
+	level string,
+	msg string,
+	attrs Attrs,
+) error {
 	if s == nil || s.logger == nil {
 		return errors.New("audit sink logger is unavailable")
 	}
+
 	return s.logger.LogDurable(ctx, system, sessionID, eventName, level, msg, attrs)
 }
 
@@ -263,6 +298,7 @@ func (s *LocalSink) Normalize(
 	if s == nil || s.logger == nil {
 		return emptyNormalizedEntry()
 	}
+
 	return s.logger.Normalize(system, sessionID, eventName, level, msg, attrs)
 }
 
@@ -271,6 +307,7 @@ func (s *LocalSink) LogNormalizedDurable(ctx context.Context, entry NormalizedEn
 	if s == nil || s.logger == nil {
 		return errors.New("audit sink logger is unavailable")
 	}
+
 	return s.logger.LogNormalizedDurable(ctx, entry)
 }
 
@@ -279,5 +316,6 @@ func (s *LocalSink) Close() error {
 	if s == nil || s.logger == nil {
 		return nil
 	}
+
 	return s.logger.Close()
 }

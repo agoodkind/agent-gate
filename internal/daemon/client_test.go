@@ -25,7 +25,9 @@ func (client *deadlineRecordingAgentGateClient) EvaluateHook(
 	if !ok {
 		return &daemonpb.EvaluateHookResponse{}, nil
 	}
+
 	client.remaining = time.Until(deadline)
+
 	return &daemonpb.EvaluateHookResponse{}, nil
 }
 
@@ -34,10 +36,16 @@ func TestClientEvaluateHookUsesTwelveSecondDeadline(t *testing.T) {
 	client := &Client{rpc: rpc}
 
 	if _, err := client.EvaluateHook(
-		nil, "codex", "", nil, nil, hook.InvocationContext{},
+		nil,
+		"codex",
+		"",
+		nil,
+		nil,
+		hook.InvocationContext{},
 	); err != nil {
 		t.Fatalf("EvaluateHook returned error: %v", err)
 	}
+
 	if rpc.remaining < 11*time.Second || rpc.remaining > 12*time.Second {
 		t.Fatalf("EvaluateHook deadline remaining = %s, want between 11s and 12s", rpc.remaining)
 	}

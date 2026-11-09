@@ -10,14 +10,16 @@ import (
 )
 
 func TestEvaluateAllCollectsConcreteMatches(t *testing.T) {
-	ruleA := loadRule(t,
+	ruleA := loadRule(
+		t,
 		"no-x",
 		`x+`,
 		[]string{"Stop"},
 		[]string{"assistant_message"},
 		"letter x is blocked.",
 	)
-	ruleB := loadRule(t,
+	ruleB := loadRule(
+		t,
 		"no-dev-null",
 		`>/dev/null`,
 		[]string{"Stop"},
@@ -28,13 +30,22 @@ func TestEvaluateAllCollectsConcreteMatches(t *testing.T) {
 		AssistantMessage: "alpha xx\nrun tests >/dev/null\nx marks",
 	}
 
-	got := rules.EvaluateAll(context.Background(), "codex", "Stop", payload, []config.Rule{ruleA, ruleB}, nil)
+	got := rules.EvaluateAll(
+		context.Background(),
+		"codex",
+		"Stop",
+		payload,
+		[]config.Rule{ruleA, ruleB},
+		nil,
+	)
 	if len(got) != 3 {
 		t.Fatalf("EvaluateAll returned %d matches, want 3: %#v", len(got), got)
 	}
+
 	if got[0].RuleName != "no-x" || got[0].Start != 6 || got[0].End != 8 {
 		t.Fatalf("first match = %#v", got[0])
 	}
+
 	if got[1].RuleName != "no-x" || got[2].RuleName != "no-dev-null" {
 		t.Fatalf("unexpected rule order: %#v", got)
 	}
@@ -71,6 +82,7 @@ func TestFormatViolationsLineNumberedLegend(t *testing.T) {
 	}
 
 	got := rules.FormatViolations(violations)
+
 	for _, want := range []string{
 		"agent-gate blocked 3 violations:",
 		"Rules:\n- A = no-x\n  message: letter x is blocked.",
@@ -84,6 +96,7 @@ func TestFormatViolationsLineNumberedLegend(t *testing.T) {
 			t.Fatalf("diagnostic missing %q:\n%s", want, got)
 		}
 	}
+
 	for _, blocked := range []string{"```", "^A", "^B", "occurrences:"} {
 		if strings.Contains(got, blocked) {
 			t.Fatalf("diagnostic contains width-dependent marker %q:\n%s", blocked, got)
@@ -118,6 +131,7 @@ func TestFormatViolationsMessageOnlyOmitsSourceDetails(t *testing.T) {
 	if got != message {
 		t.Fatalf("FormatViolations() = %q, want %q", got, message)
 	}
+
 	for _, blocked := range []string{
 		"agent-gate blocked",
 		"Rules:",
@@ -164,12 +178,15 @@ func TestFormatViolationsMixedMessageOnlyAndDetailed(t *testing.T) {
 	if messageIndex != 0 {
 		t.Fatalf("message-only diagnostic did not render first:\n%s", got)
 	}
+
 	if detailedIndex < 0 || detailedIndex <= messageIndex {
 		t.Fatalf("detailed diagnostic did not render after message-only diagnostic:\n%s", got)
 	}
+
 	if strings.Contains(got[:detailedIndex], "no-fused-thoughts") {
 		t.Fatalf("message-only prefix leaked rule name:\n%s", got)
 	}
+
 	for _, want := range []string{
 		"A = no-bad-token",
 		"line: 2",
@@ -200,6 +217,7 @@ func TestFormatViolationsReportsCaptureGroupSpan(t *testing.T) {
 			End:       start + len("bad"),
 		},
 	})
+
 	for _, want := range []string{
 		"match: \"bad\"",
 		"text: \"prefix bad suffix\"",
@@ -239,6 +257,7 @@ func TestFormatViolationsRedactsSensitiveMatches(t *testing.T) {
 			t.Fatalf("diagnostic missing %q:\n%s", want, got)
 		}
 	}
+
 	for _, leaked := range []string{"PRIVATE KEY", "body-sensitive-value"} {
 		if strings.Contains(got, leaked) {
 			t.Fatalf("diagnostic leaked %q:\n%s", leaked, got)
@@ -294,6 +313,7 @@ func TestFormatViolationsQuotesBacktickRunsWithoutFence(t *testing.T) {
 			End:       start + len("```"),
 		},
 	})
+
 	for _, want := range []string{
 		"match: \"```\"",
 		"text: \"blocked ``` value\"",
@@ -302,6 +322,7 @@ func TestFormatViolationsQuotesBacktickRunsWithoutFence(t *testing.T) {
 			t.Fatalf("diagnostic missing %q:\n%s", want, got)
 		}
 	}
+
 	if strings.Contains(got, "```text") {
 		t.Fatalf("diagnostic contains markdown fence:\n%s", got)
 	}

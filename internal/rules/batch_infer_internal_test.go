@@ -36,18 +36,21 @@ func (client *fakeInferenceClient) Infer(
 	if client.err != nil {
 		return nil, client.err
 	}
+
 	return client.reply, nil
 }
 
 func (client *fakeInferenceClient) count() int {
 	client.mu.Lock()
 	defer client.mu.Unlock()
+
 	return client.calls
 }
 
 func (client *fakeInferenceClient) request() *inferencepb.InferRequest {
 	client.mu.Lock()
 	defer client.mu.Unlock()
+
 	return client.lastRequest
 }
 
@@ -75,18 +78,21 @@ func (client *spyClydeClient) StreamExportTranscript(
 	if client.streamErr != nil {
 		return nil, client.streamErr
 	}
+
 	return &fakeExportStream{chunks: []*clydev1.ExportChunk{chunk(client.body)}}, nil
 }
 
 func (client *spyClydeClient) count() int {
 	client.mu.Lock()
 	defer client.mu.Unlock()
+
 	return client.calls
 }
 
 func (client *spyClydeClient) sawDeadline() bool {
 	client.mu.Lock()
 	defer client.mu.Unlock()
+
 	return client.hadDeadline
 }
 
@@ -113,9 +119,11 @@ func TestBuildBatchPromptListsRulesBlocksOnly(t *testing.T) {
 	if !strings.Contains(prompt, `{"block":`) {
 		t.Fatalf("prompt does not describe blocks-only output: %q", prompt)
 	}
+
 	if strings.Contains(prompt, "exactly") || strings.Contains(prompt, "decisions") {
 		t.Fatalf("prompt still demands a decision per rule: %q", prompt)
 	}
+
 	for _, participant := range participants {
 		if !strings.Contains(prompt, "rule_id: "+participant.ruleName) {
 			t.Fatalf("prompt omits rule_id %q: %q", participant.ruleName, prompt)
@@ -139,10 +147,16 @@ func TestBuildBatchPromptIncludesDescription(t *testing.T) {
 	if !strings.Contains(prompt, "Allows reading one file.") {
 		t.Fatalf("prompt omits the description: %q", prompt)
 	}
+
 	intentIndex := strings.Index(prompt, "block a bulk source scan")
 	descIndex := strings.Index(prompt, "Blocks reading many source files")
 	if intentIndex < 0 || descIndex < 0 || descIndex < intentIndex {
-		t.Fatalf("description must follow the intent: intent@%d desc@%d in %q", intentIndex, descIndex, prompt)
+		t.Fatalf(
+			"description must follow the intent: intent@%d desc@%d in %q",
+			intentIndex,
+			descIndex,
+			prompt,
+		)
 	}
 }
 
@@ -156,23 +170,29 @@ func TestParseBlockList(t *testing.T) {
 	if !ok {
 		t.Fatal("expected ok for well-formed reply")
 	}
+
 	if !blockSet["a"] || !blockSet["c"] || blockSet["b"] {
 		t.Fatalf("blockSet = %+v, want a and c only", blockSet)
 	}
+
 	single, ok := parseBlockList(`{"block":["rule-a"]}`)
 	if !ok || !single["rule-a"] || len(single) != 1 {
 		t.Fatalf("single block list = %+v ok=%v, want {rule-a} ok=true", single, ok)
 	}
+
 	empty, ok := parseBlockList(`{"block":[]}`)
 	if !ok || len(empty) != 0 {
 		t.Fatalf("empty block list = %+v ok=%v, want empty set ok=true", empty, ok)
 	}
+
 	if _, ok := parseBlockList("not json"); ok {
 		t.Fatal("expected failure for non-JSON reply")
 	}
+
 	if _, ok := parseBlockList(`{}`); ok {
 		t.Fatal("expected failure for a reply that omits the block key")
 	}
+
 	if _, ok := parseBlockList(`{"blocked":["x"]}`); ok {
 		t.Fatal("expected failure for a reply carrying a wrong key")
 	}
@@ -188,9 +208,11 @@ func TestBatchDecisionsFromBlockList(t *testing.T) {
 	if !decisions["a"].block || decisions["a"].errored {
 		t.Fatalf("rule a = %+v, want block, not errored", decisions["a"])
 	}
+
 	if decisions["b"].block || decisions["b"].errored {
 		t.Fatalf("rule b = %+v, want allow, not errored", decisions["b"])
 	}
+
 	if _, present := decisions["stray"]; present {
 		t.Fatalf("non-participant block id leaked into decisions: %+v", decisions)
 	}
@@ -204,6 +226,7 @@ func TestBatchVerdictForFallsBackWhenAbsent(t *testing.T) {
 	if _, found := nilMemo.verdictFor(pointForTest(), "a"); found {
 		t.Fatal("nil memo should report no verdict")
 	}
+
 	empty := &batchInferenceMemo{groups: map[config.InferencePoint]*batchGroupResult{}}
 	if _, found := empty.verdictFor(pointForTest(), "a"); found {
 		t.Fatal("empty memo should report no verdict")
@@ -221,9 +244,12 @@ func TestEvaluateBatchGroupSendsJudgeInputBlocksOnly(t *testing.T) {
 	runtime.inferenceClients["infer"] = fake
 
 	plan := &batchGroupPlan{
-		point:        config.InferencePoint{Endpoint: "infer", Model: "m"},
-		participants: []batchParticipant{{ruleName: "a", intent: "block a"}, {ruleName: "b", intent: "block b"}},
-		seen:         map[string]bool{"a": true, "b": true},
+		point: config.InferencePoint{Endpoint: "infer", Model: "m"},
+		participants: []batchParticipant{
+			{ruleName: "a", intent: "block a"},
+			{ruleName: "b", intent: "block b"},
+		},
+		seen: map[string]bool{"a": true, "b": true},
 	}
 	judgeInput := "chat working directory: /repo\n\ntool call:\nrm -rf /\n\nstructure:\n..."
 
@@ -233,18 +259,24 @@ func TestEvaluateBatchGroupSendsJudgeInputBlocksOnly(t *testing.T) {
 	if req.GetInput() != judgeInput {
 		t.Fatalf("Input = %q, want the judge-input panel %q", req.GetInput(), judgeInput)
 	}
+
 	if req.GetContext() != "" {
 		t.Fatalf("Context = %q, want empty", req.GetContext())
 	}
+
 	if req.GetOutputSchema() != blocksOnlyOutputSchema {
 		t.Fatalf("OutputSchema = %q, want blocks-only schema", req.GetOutputSchema())
 	}
-	if !strings.HasPrefix(req.GetPrompt(), "You are a security guard") || !strings.Contains(req.GetPrompt(), "rule_id: a") {
+
+	if !strings.HasPrefix(req.GetPrompt(), "You are a security guard") ||
+		!strings.Contains(req.GetPrompt(), "rule_id: a") {
 		t.Fatalf("Prompt does not lead with the rule intents: %q", req.GetPrompt())
 	}
+
 	if !result.decisions["a"].block || result.decisions["a"].errored {
 		t.Fatalf("rule a = %+v, want block", result.decisions["a"])
 	}
+
 	if result.decisions["b"].block || result.decisions["b"].errored {
 		t.Fatalf("rule b = %+v, want allow", result.decisions["b"])
 	}
@@ -266,8 +298,10 @@ func TestEvaluateBatchGroupInvalidReplyErrorsAll(t *testing.T) {
 	}
 
 	errored := runtime.evaluateBatchGroup(context.Background(), plan, "input")
+
 	for _, name := range []string{"a", "b"} {
-		if !errored.decisions[name].errored || errored.decisions[name].errorCode != "invalid_response" {
+		if !errored.decisions[name].errored ||
+			errored.decisions[name].errorCode != "invalid_response" {
 			t.Fatalf("rule %s = %+v, want errored invalid_response", name, errored.decisions[name])
 		}
 	}
@@ -276,14 +310,21 @@ func TestEvaluateBatchGroupInvalidReplyErrorsAll(t *testing.T) {
 	// must error every participant rather than read as a silent allow-all.
 	fake.reply = completeReply(`{}`)
 	missingKey := runtime.evaluateBatchGroup(context.Background(), plan, "input")
+
 	for _, name := range []string{"a", "b"} {
-		if !missingKey.decisions[name].errored || missingKey.decisions[name].errorCode != "invalid_response" {
-			t.Fatalf("rule %s = %+v, want errored invalid_response for a missing block key", name, missingKey.decisions[name])
+		if !missingKey.decisions[name].errored ||
+			missingKey.decisions[name].errorCode != "invalid_response" {
+			t.Fatalf(
+				"rule %s = %+v, want errored invalid_response for a missing block key",
+				name,
+				missingKey.decisions[name],
+			)
 		}
 	}
 
 	fake.reply = completeReply(`{"block":[]}`)
 	allowed := runtime.evaluateBatchGroup(context.Background(), plan, "input")
+
 	for _, name := range []string{"a", "b"} {
 		if allowed.decisions[name].block || allowed.decisions[name].errored {
 			t.Fatalf("rule %s = %+v, want allow", name, allowed.decisions[name])
@@ -297,7 +338,12 @@ func batchRule(name, use string, point config.InferencePoint) config.Rule {
 		Intent:    "block " + name,
 		AllEvents: true,
 		Eval: []config.RuleEval{
-			{Kind: config.EvalKindInfer, Role: config.RoleEnforce, Use: use, Fanout: config.FanoutBatch},
+			{
+				Kind:   config.EvalKindInfer,
+				Role:   config.RoleEnforce,
+				Use:    use,
+				Fanout: config.FanoutBatch,
+			},
 		},
 		EvalInference: map[string]config.InferencePoint{use: point},
 	}
@@ -331,16 +377,26 @@ func TestRunBatchInferenceFetchesTranscriptOnce(t *testing.T) {
 		batchRule("b", "p2", config.InferencePoint{Endpoint: "infer", Model: "m2"}),
 	}
 
-	memo := runBatchInference(batchRuntimeContext(t, runtime), fields, rules, "claude", "PreToolUse", nil)
+	memo := runBatchInference(
+		batchRuntimeContext(t, runtime),
+		fields,
+		rules,
+		"claude",
+		"PreToolUse",
+		nil,
+	)
 	if memo == nil {
 		t.Fatal("memo is nil, want a batch result")
 	}
+
 	if clyde.count() != 1 {
 		t.Fatalf("transcript fetches = %d, want 1", clyde.count())
 	}
+
 	if infer.count() != 2 {
 		t.Fatalf("inference calls = %d, want 2 (one per point)", infer.count())
 	}
+
 	if !clyde.sawDeadline() {
 		t.Fatal("transcript fetch context had no deadline, want a bounded context")
 	}
@@ -368,21 +424,39 @@ func TestRunBatchInferenceContextUnavailableSkipsJudge(t *testing.T) {
 		ToolName:         "Bash",
 		ToolInputCommand: "ls",
 	}
-	rules := []config.Rule{batchRule("a", "p1", config.InferencePoint{Endpoint: "infer", Model: "m1"})}
+	rules := []config.Rule{
+		batchRule("a", "p1", config.InferencePoint{Endpoint: "infer", Model: "m1"}),
+	}
 
-	memo := runBatchInference(batchRuntimeContext(t, runtime), fields, rules, "claude", "PreToolUse", nil)
+	memo := runBatchInference(
+		batchRuntimeContext(t, runtime),
+		fields,
+		rules,
+		"claude",
+		"PreToolUse",
+		nil,
+	)
 	if memo == nil {
 		t.Fatal("memo is nil, want an errored memo that routes to the deterministic fallback")
 	}
+
 	if infer.count() != 0 {
-		t.Fatalf("inference calls = %d, want 0 (the judge must not enforce without its conversation context)", infer.count())
+		t.Fatalf(
+			"inference calls = %d, want 0 (the judge must not enforce without its conversation context)",
+			infer.count(),
+		)
 	}
+
 	verdict, found := memo.verdictFor(config.InferencePoint{Endpoint: "infer", Model: "m1"}, "a")
 	if !found {
 		t.Fatal("no verdict recorded for rule a")
 	}
+
 	if !verdict.errored || verdict.errorCode != "context_unavailable" {
-		t.Fatalf("verdict = %+v, want errored context_unavailable so the eval matrix uses the deterministic fallback", verdict)
+		t.Fatalf(
+			"verdict = %+v, want errored context_unavailable so the eval matrix uses the deterministic fallback",
+			verdict,
+		)
 	}
 }
 
@@ -404,20 +478,38 @@ func TestRunBatchInferenceNoEndpointJudgesContextless(t *testing.T) {
 		ToolName:         "Bash",
 		ToolInputCommand: "ls",
 	}
-	rules := []config.Rule{batchRule("a", "p1", config.InferencePoint{Endpoint: "infer", Model: "m1"})}
+	rules := []config.Rule{
+		batchRule("a", "p1", config.InferencePoint{Endpoint: "infer", Model: "m1"}),
+	}
 
-	memo := runBatchInference(batchRuntimeContext(t, runtime), fields, rules, "claude", "PreToolUse", nil)
+	memo := runBatchInference(
+		batchRuntimeContext(t, runtime),
+		fields,
+		rules,
+		"claude",
+		"PreToolUse",
+		nil,
+	)
 	if memo == nil {
 		t.Fatal("memo is nil, want the judge to run contextless when no endpoint is configured")
 	}
+
 	if infer.count() != 1 {
-		t.Fatalf("inference calls = %d, want 1 (contextless judging is intended when no endpoint is set)", infer.count())
+		t.Fatalf(
+			"inference calls = %d, want 1 (contextless judging is intended when no endpoint is set)",
+			infer.count(),
+		)
 	}
+
 	verdict, found := memo.verdictFor(config.InferencePoint{Endpoint: "infer", Model: "m1"}, "a")
 	if !found || verdict.errored || verdict.block {
 		t.Fatalf("verdict = %+v found=%v, want a clean non-errored allow", verdict, found)
 	}
+
 	if strings.Contains(infer.request().GetInput(), "recent conversation") {
-		t.Fatalf("Input carries a conversation panel despite no configured endpoint: %q", infer.request().GetInput())
+		t.Fatalf(
+			"Input carries a conversation panel despite no configured endpoint: %q",
+			infer.request().GetInput(),
+		)
 	}
 }

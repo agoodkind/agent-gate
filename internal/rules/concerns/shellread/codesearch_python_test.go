@@ -19,6 +19,7 @@ func fakeShellReadResolver(files map[string]string) shelldecomp.FileResolver {
 		if !ok {
 			return nil, false
 		}
+
 		return []byte(content), true
 	}
 }
@@ -44,12 +45,15 @@ func TestExtractCodeSearchTargetsPythonInline(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := targetPaths(ExtractCodeSearchTargets(tc.command, cwd, pythonTestTools, nil))
-			if !slices.Equal(got, tc.want) {
-				t.Fatalf("ExtractCodeSearchTargets(%q) = %v, want %v", tc.command, got, tc.want)
-			}
-		})
+		t.Run(
+			tc.name,
+			func(t *testing.T) {
+				got := targetPaths(ExtractCodeSearchTargets(tc.command, cwd, pythonTestTools, nil))
+				if !slices.Equal(got, tc.want) {
+					t.Fatalf("ExtractCodeSearchTargets(%q) = %v, want %v", tc.command, got, tc.want)
+				}
+			},
+		)
 	}
 }
 
@@ -63,12 +67,16 @@ func TestExtractCodeSearchTargetsPythonOffDisk(t *testing.T) {
 		"/repo/s.py": `open("/repo/y.go")`,
 	})
 
-	withResolver := targetPaths(ExtractCodeSearchTargets(`python /repo/s.py`, cwd, pythonTestTools, resolver))
+	withResolver := targetPaths(
+		ExtractCodeSearchTargets(`python /repo/s.py`, cwd, pythonTestTools, resolver),
+	)
 	if !slices.Equal(withResolver, []string{"/repo/y.go"}) {
 		t.Fatalf("with resolver = %v, want [/repo/y.go]", withResolver)
 	}
 
-	withoutResolver := targetPaths(ExtractCodeSearchTargets(`python /repo/s.py`, cwd, pythonTestTools, nil))
+	withoutResolver := targetPaths(
+		ExtractCodeSearchTargets(`python /repo/s.py`, cwd, pythonTestTools, nil),
+	)
 	if len(withoutResolver) != 0 {
 		t.Fatalf("without resolver = %v, want none (script body unread)", withoutResolver)
 	}
@@ -86,7 +94,9 @@ func TestExtractCodeSearchTargetsPythonToolGate(t *testing.T) {
 		t.Fatalf("with python tool = %v, want [/repo/x.go]", withPython)
 	}
 
-	withoutPython := targetPaths(ExtractCodeSearchTargets(command, cwd, []string{"grep", "rg"}, nil))
+	withoutPython := targetPaths(
+		ExtractCodeSearchTargets(command, cwd, []string{"grep", "rg"}, nil),
+	)
 	if len(withoutPython) != 0 {
 		t.Fatalf("without python tool = %v, want none", withoutPython)
 	}
@@ -105,7 +115,12 @@ func TestExtractCodeSearchTargetsPythonTraversal(t *testing.T) {
 		"for p in sorted(root.rglob(\"*\")):\n" +
 		"    text = p.read_text()\n" +
 		"PY\n"
-	if got := targetPaths(ExtractCodeSearchTargets(rglob, cwd, pythonTestTools, nil)); !slices.Equal(got, []string{"/repo"}) {
+	if got := targetPaths(
+		ExtractCodeSearchTargets(rglob, cwd, pythonTestTools, nil),
+	); !slices.Equal(
+		got,
+		[]string{"/repo"},
+	) {
 		t.Fatalf("rglob read fold = %v, want [/repo]", got)
 	}
 
@@ -115,7 +130,10 @@ func TestExtractCodeSearchTargetsPythonTraversal(t *testing.T) {
 		"    for f in files:\n" +
 		"        open(os.path.join(d, f)).read()\n" +
 		"PY\n"
-	if got := targetPaths(ExtractCodeSearchTargets(walk, cwd, pythonTestTools, nil)); !slices.Equal(got, []string{"/abs/repo"}) {
+	if got := targetPaths(ExtractCodeSearchTargets(walk, cwd, pythonTestTools, nil)); !slices.Equal(
+		got,
+		[]string{"/abs/repo"},
+	) {
 		t.Fatalf("os.walk read fold = %v, want [/abs/repo]", got)
 	}
 
@@ -124,7 +142,9 @@ func TestExtractCodeSearchTargetsPythonTraversal(t *testing.T) {
 		"for p in pathlib.Path(\".\").iterdir():\n" +
 		"    print(p.name)\n" +
 		"PY\n"
-	if got := targetPaths(ExtractCodeSearchTargets(namesOnly, cwd, pythonTestTools, nil)); len(got) != 0 {
+	if got := targetPaths(ExtractCodeSearchTargets(namesOnly, cwd, pythonTestTools, nil)); len(
+		got,
+	) != 0 {
 		t.Fatalf("names-only listing = %v, want none", got)
 	}
 }

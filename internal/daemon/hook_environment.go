@@ -39,12 +39,11 @@ func referencedHookEnvironment(request *daemonpb.ResolveHookEnvironmentRequest) 
 			return nil
 		}
 	}
-	payload, err := hook.ParseHookPayload(
-		classification.ResolvedSystem(),
-		normalizedJSON,
-	)
+
+	payload, err := hook.ParseHookPayload(classification.ResolvedSystem(), normalizedJSON)
 	if err != nil {
 		return nil
 	}
+
 	return shellparse.ReferencedEnvironmentVariables(payload.Fields().CommandValue())
 }

@@ -23,17 +23,20 @@ func TestPatchWriteTargetsNormalizesTraversal(t *testing.T) {
 		{"nested traversal", "*** Add File: /repo/sub/../../etc/hosts", "/etc/hosts"},
 	}
 	for _, testCase := range cases {
-		t.Run(testCase.name, func(t *testing.T) {
-			fields := rules.FieldSet{
-				ToolName: "apply_patch",
-				ToolInputCommand: "*** Begin Patch\n" + testCase.directive +
-					"\n*** End Patch\n",
-				CWD: "/repo",
-			}
-			if got := fields.PatchWriteTargets(); got != testCase.want {
-				t.Fatalf("PatchWriteTargets() = %q, want %q", got, testCase.want)
-			}
-		})
+		t.Run(
+			testCase.name,
+			func(t *testing.T) {
+				fields := rules.FieldSet{
+					ToolName: "apply_patch",
+					ToolInputCommand: "*** Begin Patch\n" + testCase.directive +
+						"\n*** End Patch\n",
+					CWD: "/repo",
+				}
+				if got := fields.PatchWriteTargets(); got != testCase.want {
+					t.Fatalf("PatchWriteTargets() = %q, want %q", got, testCase.want)
+				}
+			},
+		)
 	}
 }
 

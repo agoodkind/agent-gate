@@ -121,6 +121,7 @@ func renderClaudeResponse(request ResponseRequest) Response {
 			ExitCode: 2,
 		}
 	}
+
 	// An allow that agent-gate never evaluated says so. Without this the hook
 	// exits 0 with an empty body, which is indistinguishable from a call that
 	// passed every rule, so a daemon outage looks exactly like compliance.
@@ -131,10 +132,12 @@ func renderClaudeResponse(request ResponseRequest) Response {
 			ExitCode: 0,
 		}
 	}
+
 	capability := LookupResponseCapability(SystemClaude, request.EventName)
 	if request.ContextText == "" && request.MutationText == "" {
 		return Response{Stdout: ClaudeAllow(), Stderr: nil, ExitCode: 0}
 	}
+
 	output := claudeHookSpecificOutput{
 		HookEventName:      request.EventName,
 		PermissionDecision: "",
@@ -145,16 +148,24 @@ func renderClaudeResponse(request ResponseRequest) Response {
 	if capability.Supports(ResponseCapabilityInject) {
 		output.AdditionalContext = request.ContextText
 	}
+
 	applyClaudeMutation(&output, capability, request.MutationText)
-	if output.AdditionalContext == "" && len(output.UpdatedInput) == 0 && len(output.UpdatedToolOutput) == 0 {
+	if output.AdditionalContext == "" && len(output.UpdatedInput) == 0 &&
+		len(output.UpdatedToolOutput) == 0 {
 		return Response{Stdout: ClaudeAllow(), Stderr: nil, ExitCode: 0}
 	}
-	encoded, err := json.Marshal(struct {
-		HookSpecificOutput claudeHookSpecificOutput `json:"hookSpecificOutput"`
-	}{HookSpecificOutput: output})
+
+	encoded, err := json.Marshal(
+		struct {
+			HookSpecificOutput claudeHookSpecificOutput `json:"hookSpecificOutput"`
+		}{
+			HookSpecificOutput: output,
+		},
+	)
 	if err != nil {
 		return Response{Stdout: ClaudeAllow(), Stderr: nil, ExitCode: 0}
 	}
+
 	return Response{Stdout: append(encoded, '\n'), Stderr: nil, ExitCode: 0}
 }
 
@@ -166,14 +177,17 @@ func applyClaudeMutation(
 	if mutationText == "" {
 		return
 	}
+
 	mutation, ok := validStructuredMutation(mutationText)
 	if !ok {
 		return
 	}
+
 	if capability.Supports(ResponseCapabilityToolInputMutation) {
 		output.UpdatedInput = mutation
 		output.PermissionDecision = "allow"
 	}
+
 	if capability.Supports(ResponseCapabilityToolOutputMutation) {
 		output.UpdatedToolOutput = mutation
 	}
@@ -184,8 +198,10 @@ func validStructuredMutation(value string) (json.RawMessage, bool) {
 	if json.Unmarshal([]byte(value), &decoded) != nil {
 		return nil, false
 	}
+
 	if len(decoded) == 0 || !json.Valid(decoded) {
 		return nil, false
 	}
+
 	return decoded, true
 }

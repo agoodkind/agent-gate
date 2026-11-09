@@ -11,20 +11,22 @@ import (
 // shelldecomp gives diff no reading command kind, so declaring "diff" in
 // search_tools resolves nothing; this is the config-only route to the same
 // targets.
-var diffReadSpec = []config.ShellReadSpec{{
-	Name:                        "diff",
-	Argv0:                       []string{"diff"},
-	PathArgStart:                1,
-	PathArgStartIfFlags:         nil,
-	PathArgStartIfFlagsValue:    0,
-	SkipPositionals:             0,
-	SkipFlagsWithValues:         nil,
-	SkipFlagValuesAsPositionals: nil,
-	NestedCommand:               false,
-	NestedCommandFlag:           "",
-	NestedRemote:                false,
-	RemoteSources:               false,
-}}
+var diffReadSpec = []config.ShellReadSpec{
+	{
+		Name:                        "diff",
+		Argv0:                       []string{"diff"},
+		PathArgStart:                1,
+		PathArgStartIfFlags:         nil,
+		PathArgStartIfFlagsValue:    0,
+		SkipPositionals:             0,
+		SkipFlagsWithValues:         nil,
+		SkipFlagValuesAsPositionals: nil,
+		NestedCommand:               false,
+		NestedCommandFlag:           "",
+		NestedRemote:                false,
+		RemoteSources:               false,
+	},
+}
 
 // TestSearchToolsAloneMissDiff records why read_specs is needed at all: no
 // entry in search_tools makes diff resolve a target, because the miss is in
@@ -42,6 +44,7 @@ func TestSearchToolsAloneMissDiff(t *testing.T) {
 func TestReadSpecsResolveDiffTargets(t *testing.T) {
 	fields := FieldSet{ToolInputCommand: "diff a.go b.go", CWD: "/repo"}
 	got := fields.CmdReadTargets(nil, diffReadSpec, nil)
+
 	want := []string{"/repo/a.go", "/repo/b.go"}
 	for _, path := range want {
 		if !strings.Contains(got, path) {
@@ -58,11 +61,13 @@ func TestReadSpecsUnionWithSearchTools(t *testing.T) {
 		CWD:              "/repo",
 	}
 	got := fields.CmdReadTargets([]string{"grep"}, diffReadSpec, nil)
+
 	for _, path := range []string{"/repo/one.go", "/repo/two.go"} {
 		if !strings.Contains(got, path) {
 			t.Fatalf("union targets = %q, want to contain %q", got, path)
 		}
 	}
+
 	if strings.Count(got, "/repo/one.go") != 1 {
 		t.Fatalf("union targets = %q, want /repo/one.go exactly once", got)
 	}

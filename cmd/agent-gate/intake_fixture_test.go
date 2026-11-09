@@ -11,7 +11,10 @@ import (
 	"goodkind.io/agent-gate/internal/intake"
 )
 
-func openFixtureIntake(t testing.TB, ctx context.Context, path string, log *slog.Logger) (*intake.Store, error) {
+func openFixtureIntake(t testing.TB, ctx context.Context, path string, log *slog.Logger) (
+	*intake.Store,
+	error,
+) {
 	t.Helper()
 	var cfg config.Config
 	cfg.Audit.Outputs.SQLite.Path = path

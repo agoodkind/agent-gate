@@ -55,37 +55,52 @@ type Dependencies struct {
 }
 
 // Prepare validates every setup layer without writing.
-func Prepare(ctx context.Context, options Options, dependencies Dependencies) (_ *Plan, resultErr error) {
+func Prepare(
+	ctx context.Context,
+	options Options,
+	dependencies Dependencies,
+) (_ *Plan, resultErr error) {
 	if len(options.Providers) == 0 {
 		return nil, errors.New("at least one provider is required")
 	}
+
 	canonicalBinPath, err := installer.CanonicalExecutablePath(options.BinPath)
 	if err != nil {
 		return nil, fmt.Errorf("resolve executable: %w", err)
 	}
+
 	dependencies = setupDependenciesWithDefaults(dependencies)
 	setupID, err := dependencies.NewSetupID()
 	if err != nil {
 		wrappedErr := fmt.Errorf("create setup ID: %w", err)
 		slog.WarnContext(ctx, "setup ID creation failed", "err", wrappedErr)
+
 		return nil, wrappedErr
 	}
+
 	if setupID == "" {
 		return nil, errors.New("created setup ID is empty")
 	}
+
 	hooks := installer.DefaultHooksOptions(canonicalBinPath)
 	hooks.HomeDir = dependencies.HomeDir
 	hooks.TemplatesDir = dependencies.HookTemplatesDir
 	hooks.Stdout = dependencies.Stdout
 	hooks.Providers = append([]installer.Provider(nil), options.Providers...)
 	service := installer.ServiceOptions{
-		BinPath: canonicalBinPath, ServiceTemplatesDir: dependencies.ServiceTemplatesDir,
-		HomeDir: dependencies.HomeDir, ConfigHome: "", StateHome: "",
-		Stdout: dependencies.Stdout, Runner: nil, Ready: nil,
+		BinPath:             canonicalBinPath,
+		ServiceTemplatesDir: dependencies.ServiceTemplatesDir,
+		HomeDir:             dependencies.HomeDir,
+		ConfigHome:          "",
+		StateHome:           "",
+		Stdout:              dependencies.Stdout,
+		Runner:              nil,
+		Ready:               nil,
 	}
 	if dependencies.ServiceReady != nil {
 		service.Ready = func() error { return dependencies.ServiceReady(canonicalBinPath) }
 	}
+
 	installation, err := dependencies.PrepareInstallation(installer.InstallationOptions{
 		Config: &config.EnsureDefaultsOptions{
 			AutoUpdateMode: options.AutoUpdate,
@@ -97,16 +112,21 @@ func Prepare(ctx context.Context, options Options, dependencies Dependencies) (_
 	if err != nil {
 		return nil, err
 	}
+
 	defer func() {
 		if resultErr != nil {
 			if closeErr := installation.Close(); closeErr != nil {
-				resultErr = errors.Join(resultErr, fmt.Errorf("close installation plan: %w", closeErr))
+				resultErr = errors.Join(
+					resultErr,
+					fmt.Errorf("close installation plan: %w", closeErr),
+				)
 			}
 		}
 	}()
 	if installation.Config == nil || installation.Config.Config == nil {
 		return nil, errors.New("prepared installation is missing configuration")
 	}
+
 	preparedConfig := installation.Config.Config
 	policy := preparedConfig.AuditStoragePolicy()
 	databasePath := preparedConfig.AuditSQLitePath()
@@ -124,6 +144,7 @@ func Prepare(ctx context.Context, options Options, dependencies Dependencies) (_
 		prepared:        true,
 		setupID:         setupID,
 	}
+
 	return plan, nil
 }
 
@@ -133,21 +154,31 @@ func Apply(ctx context.Context, plan *Plan, dependencies Dependencies) (Result, 
 	if installation == nil {
 		return Result{}, errors.New("setup plan is required")
 	}
+
 	dependencies = setupDependenciesWithDefaults(dependencies)
 	if _, err := dependencies.ApplyInstallation(installation); err != nil {
 		return Result{}, err
 	}
+
 	if plan.setupID == "" {
 		return Result{}, errors.New("setup plan is missing a verification ID")
 	}
-	probes, err := dependencies.VerifyInstalledHooks(ctx, ProbeRequest{
-		SetupID: plan.setupID, Providers: providers,
-		HomeDir: plan.homeDir, BinPath: plan.binPath, Config: plan.probeConfig,
-		Timeout: 0,
-	})
+
+	probes, err := dependencies.VerifyInstalledHooks(
+		ctx,
+		ProbeRequest{
+			SetupID:   plan.setupID,
+			Providers: providers,
+			HomeDir:   plan.homeDir,
+			BinPath:   plan.binPath,
+			Config:    plan.probeConfig,
+			Timeout:   0,
+		},
+	)
 	if err != nil {
 		return Result{}, err
 	}
+
 	return Result{SetupID: plan.setupID, Probes: probes}, nil
 }
 
@@ -157,11 +188,14 @@ func (plan *Plan) Close() error {
 	if installation == nil {
 		return nil
 	}
+
 	if err := installation.Close(); err != nil {
 		wrappedErr := fmt.Errorf("close installation plan: %w", err)
 		slog.Warn("setup plan close failed", "err", wrappedErr)
+
 		return wrappedErr
 	}
+
 	return nil
 }
 
@@ -169,18 +203,23 @@ func setupDependenciesWithDefaults(dependencies Dependencies) Dependencies {
 	if dependencies.PrepareInstallation == nil {
 		dependencies.PrepareInstallation = installer.PrepareInstallation
 	}
+
 	if dependencies.ApplyInstallation == nil {
 		dependencies.ApplyInstallation = installer.ApplyInstallation
 	}
+
 	if dependencies.VerifyInstalledHooks == nil {
 		dependencies.VerifyInstalledHooks = VerifyInstalledHooks
 	}
+
 	if dependencies.NewSetupID == nil {
 		dependencies.NewSetupID = newSetupID
 	}
+
 	if dependencies.Stdout == nil {
 		dependencies.Stdout = io.Discard
 	}
+
 	return dependencies
 }
 
@@ -188,9 +227,11 @@ func setupPlanComponents(plan *Plan) (*installer.InstallationPlan, []installer.P
 	if plan == nil {
 		return nil, nil
 	}
+
 	if plan.prepared {
 		return plan.installation, append([]installer.Provider(nil), plan.providers...)
 	}
+
 	return plan.Installation, append([]installer.Provider(nil), plan.Providers...)
 }
 
@@ -199,7 +240,9 @@ func newSetupID() (string, error) {
 	if _, err := rand.Read(value[:]); err != nil {
 		wrappedErr := fmt.Errorf("read random setup ID: %w", err)
 		slog.Warn("setup ID random source failed", "err", wrappedErr)
+
 		return "", wrappedErr
 	}
+
 	return "setup-" + hex.EncodeToString(value[:]), nil
 }

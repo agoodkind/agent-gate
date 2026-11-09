@@ -16,22 +16,20 @@ func TestTemporalRecordsUseInternalNamespace(t *testing.T) {
 		t.Fatal("ObserveUserPrompt did not store the prompt")
 	}
 
-	internalEntries, err := store.List(
-		hotkv.InternalNamespacePrefix+"exec-temporal",
-		"",
-		0,
-		true,
-	)
+	internalEntries, err := store.List(hotkv.InternalNamespacePrefix+"exec-temporal", "", 0, true)
 	if err != nil {
 		t.Fatalf("List internal temporal namespace: %v", err)
 	}
+
 	if len(internalEntries) != 1 {
 		t.Fatalf("internal temporal entries = %d, want 1", len(internalEntries))
 	}
+
 	publicEntries, err := store.List("exec-temporal", "", 0, true)
 	if err != nil {
 		t.Fatalf("List legacy public temporal namespace: %v", err)
 	}
+
 	if len(publicEntries) != 0 {
 		t.Fatalf("legacy public temporal entries = %d, want 0", len(publicEntries))
 	}
@@ -65,47 +63,70 @@ func TestTemporalResponseLookupIsActionIndependentAndTargetScoped(t *testing.T) 
 		wantOK    bool
 	}{
 		{
-			name: "different action", system: "copilot", fields: fields,
-			eventName: "userPromptTransformed", action: "mutate", target: "prompt",
-			wantValue: "final prompt", wantOK: true,
+			name:      "different action",
+			system:    "copilot",
+			fields:    fields,
+			eventName: "userPromptTransformed",
+			action:    "mutate",
+			target:    "prompt",
+			wantValue: "final prompt",
+			wantOK:    true,
 		},
 		{
-			name: "different provider", system: "cursor", fields: fields,
-			eventName: "userPromptTransformed", action: "mutate", target: "prompt",
+			name:      "different provider",
+			system:    "cursor",
+			fields:    fields,
+			eventName: "userPromptTransformed",
+			action:    "mutate",
+			target:    "prompt",
 		},
 		{
-			name: "different conversation", system: "copilot",
+			name:      "different conversation",
+			system:    "copilot",
 			fields:    FieldSet{ConversationID: "conversation-2"},
-			eventName: "userPromptTransformed", action: "mutate", target: "prompt",
+			eventName: "userPromptTransformed",
+			action:    "mutate",
+			target:    "prompt",
 		},
 		{
-			name: "different event", system: "copilot", fields: fields,
-			eventName: "postToolUse", action: "mutate", target: "prompt",
+			name:      "different event",
+			system:    "copilot",
+			fields:    fields,
+			eventName: "postToolUse",
+			action:    "mutate",
+			target:    "prompt",
 		},
 		{
-			name: "different target", system: "copilot", fields: fields,
-			eventName: "userPromptTransformed", action: "mutate", target: "context",
+			name:      "different target",
+			system:    "copilot",
+			fields:    fields,
+			eventName: "userPromptTransformed",
+			action:    "mutate",
+			target:    "context",
 		},
 	}
 
 	for _, testCase := range tests {
-		t.Run(testCase.name, func(t *testing.T) {
-			value, ok := runtime.lastResponseOutput(
-				testCase.system,
-				testCase.fields,
-				testCase.eventName,
-				testCase.action,
-				testCase.target,
-			)
-			if value != testCase.wantValue || ok != testCase.wantOK {
-				t.Fatalf(
-					"lastResponseOutput() = (%q, %v), want (%q, %v)",
-					value,
-					ok,
-					testCase.wantValue,
-					testCase.wantOK,
+		t.Run(
+			testCase.name,
+			func(t *testing.T) {
+				value, ok := runtime.lastResponseOutput(
+					testCase.system,
+					testCase.fields,
+					testCase.eventName,
+					testCase.action,
+					testCase.target,
 				)
-			}
-		})
+				if value != testCase.wantValue || ok != testCase.wantOK {
+					t.Fatalf(
+						"lastResponseOutput() = (%q, %v), want (%q, %v)",
+						value,
+						ok,
+						testCase.wantValue,
+						testCase.wantOK,
+					)
+				}
+			},
+		)
 	}
 }

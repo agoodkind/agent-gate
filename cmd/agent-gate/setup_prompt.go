@@ -45,7 +45,10 @@ func NewSetupPrompter(reader io.Reader, writer io.Writer) Prompter {
 	return &setupPrompter{reader: bufio.NewReader(reader), writer: writer}
 }
 
-func (prompter *setupPrompter) SelectProviders(states []setup.ProviderState) ([]installer.Provider, error) {
+func (prompter *setupPrompter) SelectProviders(states []setup.ProviderState) (
+	[]installer.Provider,
+	error,
+) {
 	defaults := make([]installer.Provider, 0, len(states))
 	for _, state := range states {
 		status := "not detected"
@@ -108,7 +111,10 @@ func (prompter *setupPrompter) SelectAuditProfile(
 			config.AuditStorageProfileMinimal:
 			return profile, nil
 		default:
-			if _, writeErr := fmt.Fprintln(prompter.writer, "select full or minimal"); writeErr != nil {
+			if _, writeErr := fmt.Fprintln(
+				prompter.writer,
+				"select full or minimal",
+			); writeErr != nil {
 				wrappedErr := fmt.Errorf("write audit profile error: %w", writeErr)
 				slog.Warn("setup audit profile output failed", "err", wrappedErr)
 				return "", wrappedErr
@@ -120,7 +126,10 @@ func (prompter *setupPrompter) SelectAuditProfile(
 func (prompter *setupPrompter) Confirm(summary PlanSummary) (bool, error) {
 	providerNames := joinProviders(summary.Providers)
 	for {
-		value, err := prompter.readChoice("Apply setup for "+providerNames+"? Enter yes or no", "no")
+		value, err := prompter.readChoice(
+			"Apply setup for "+providerNames+"? Enter yes or no",
+			"no",
+		)
 		if err != nil {
 			wrappedErr := fmt.Errorf("read confirmation: %w", err)
 			slog.Warn("setup confirmation input failed", "err", wrappedErr)

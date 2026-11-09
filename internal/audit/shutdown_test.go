@@ -17,15 +17,23 @@ func TestLoggerShutdownBoundsBlockedBorrowedWriter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	t.Cleanup(func() { _ = database.Close() })
-	logger, err := audit.NewEventLoggerWithOptions(t.Context(), cfg, nil, audit.LoggerOptions{SharedDB: database})
+	logger, err := audit.NewEventLoggerWithOptions(
+		t.Context(),
+		cfg,
+		nil,
+		audit.LoggerOptions{SharedDB: database},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	connection, err := database.Conn(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	logger.Log("codex", "shutdown", "Stop", "info", "hook.allowed", nil)
 	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
 	defer cancel()
@@ -39,9 +47,11 @@ func TestLoggerShutdownBoundsBlockedBorrowedWriter(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Error("shutdown failed to cancel blocked database acquisition")
 	}
+
 	if err := connection.Close(); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := database.PingContext(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -51,10 +61,16 @@ func TestLoggerShutdownDrainsAfterOwnerCancellation(t *testing.T) {
 	audit.CaptureCancellationForTest(t)
 	cfg := testConfig(t)
 	owner, cancelOwner := context.WithCancel(t.Context())
-	logger, err := audit.NewEventLoggerWithOptions(owner, cfg, nil, audit.LoggerOptions{SharedDB: retainedQueryDatabase(t, cfg)})
+	logger, err := audit.NewEventLoggerWithOptions(
+		owner,
+		cfg,
+		nil,
+		audit.LoggerOptions{SharedDB: retainedQueryDatabase(t, cfg)},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	logger.Log("codex", "shutdown", "Stop", "info", "hook.allowed", nil)
 	cancelOwner()
 	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
@@ -62,6 +78,7 @@ func TestLoggerShutdownDrainsAfterOwnerCancellation(t *testing.T) {
 	if err := logger.CloseContext(ctx); err != nil {
 		t.Fatal(err)
 	}
+
 	events, _, err := audit.QueryReadOnly(t.Context(), cfg, audit.QueryFilter{})
 	if err != nil || len(events) != 1 {
 		t.Fatalf("accepted events = %v, %v", events, err)

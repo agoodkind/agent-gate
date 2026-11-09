@@ -33,10 +33,12 @@ func Run(log *slog.Logger, cfg *config.Config) error {
 		log.InfoContext(ctx, "daemon already running")
 		return nil
 	}
+
 	if err != nil {
 		log.ErrorContext(ctx, "open daemon process lock failed", "err", err)
 		return fmt.Errorf("open daemon process lock: %w", err)
 	}
+
 	defer func() { _ = processLock.Release() }()
 
 	socketPath := config.DaemonSocketPath()
@@ -44,6 +46,7 @@ func Run(log *slog.Logger, cfg *config.Config) error {
 	if err != nil {
 		return err
 	}
+
 	defer func() { _ = listener.Close() }()
 
 	srv, err := New(ctx, log, cfg)
@@ -51,22 +54,31 @@ func Run(log *slog.Logger, cfg *config.Config) error {
 		log.ErrorContext(ctx, "create daemon server failed", "err", err)
 		return fmt.Errorf("create daemon server: %w", err)
 	}
+
 	defer func() { srv.Close() }()
 
 	grpcServer := srv.GRPCServer()
 	stopOnCancel := context.AfterFunc(ctx, grpcServer.GracefulStop)
 	defer stopOnCancel()
-	srv.StartUpdateScheduler(ctx, func() {
-		grpcServer.GracefulStop()
-	})
+	srv.StartUpdateScheduler(
+		ctx,
+		func() {
+			grpcServer.GracefulStop()
+		},
+	)
 
-	if err := serveAfterReadiness(grpcServer, listener, func() {
-		log.InfoContext(ctx, "daemon listening", "socket", socketPath)
-		srv.StartAuditScheduler(ctx)
-	}); err != nil {
+	if err := serveAfterReadiness(
+		grpcServer,
+		listener,
+		func() {
+			log.InfoContext(ctx, "daemon listening", "socket", socketPath)
+			srv.StartAuditScheduler(ctx)
+		},
+	); err != nil {
 		log.ErrorContext(ctx, "grpc serve failed", "err", err)
 		return fmt.Errorf("grpc serve: %w", err)
 	}
+
 	return nil
 }
 
@@ -111,6 +123,7 @@ func (listener *readinessListener) Accept() (net.Conn, error) {
 	if err != nil {
 		return nil, &listenerAcceptError{err: err}
 	}
+
 	return connection, nil
 }
 
@@ -129,6 +142,7 @@ func serveAsync(server *grpc.Server, listener net.Listener) <-chan error {
 		}()
 		result <- server.Serve(listener)
 	}()
+
 	return result
 }
 
@@ -144,8 +158,10 @@ func serveAfterReadiness(server *grpc.Server, listener net.Listener, ready func(
 			ready()
 		default:
 		}
+
 		return normalizeServeError(err)
 	}
+
 	return normalizeServeError(<-serveResult)
 }
 
@@ -153,6 +169,7 @@ func normalizeServeError(err error) error {
 	if errors.Is(err, grpc.ErrServerStopped) {
 		return nil
 	}
+
 	return err
 }
 
@@ -162,11 +179,13 @@ func daemonListener(ctx context.Context, socketPath string) (net.Listener, error
 		log.ErrorContext(ctx, "remove stale daemon socket failed", "socket", socketPath, "err", err)
 		return nil, fmt.Errorf("remove stale socket: %w", err)
 	}
+
 	var lc net.ListenConfig
 	listener, err := lc.Listen(ctx, "unix", socketPath)
 	if err != nil {
 		log.ErrorContext(ctx, "listen on daemon socket failed", "socket", socketPath, "err", err)
 		return nil, fmt.Errorf("listen on %s: %w", socketPath, err)
 	}
+
 	return listener, nil
 }

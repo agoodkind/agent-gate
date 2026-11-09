@@ -32,12 +32,14 @@ func (server *stagedInferenceFake) Infer(
 	server.mu.Lock()
 	server.models = append(server.models, request.GetModel())
 	server.mu.Unlock()
+
 	return server.handler(ctx, request)
 }
 
 func (server *stagedInferenceFake) calledModels() []string {
 	server.mu.Lock()
 	defer server.mu.Unlock()
+
 	return append([]string(nil), server.models...)
 }
 
@@ -47,12 +49,14 @@ func startStagedInferenceServer(t *testing.T, fake *stagedInferenceFake) string 
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	server := grpc.NewServer()
 	inferencepb.RegisterInferenceServer(server, fake)
 	go func() {
 		_ = server.Serve(listener)
 	}()
 	t.Cleanup(server.Stop)
+
 	return listener.Addr().String()
 }
 
@@ -63,10 +67,12 @@ func loadStagedHookConfig(t *testing.T, endpoint string, body string) *config.Co
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
+
 	cfg, err := config.LoadExisting(path)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	return cfg
 }
 
@@ -75,6 +81,7 @@ func stagedContext(t *testing.T) context.Context {
 	runtime := rules.NewInferRuntimeWithCache(nil, nil)
 	t.Cleanup(runtime.Close)
 	ctx := rules.WithInferRuntime(context.Background(), runtime)
+
 	return ctx
 }
 
@@ -88,11 +95,16 @@ func completeStagedReply(decision string) *inferencepb.InferReply {
 const stagedPreToolPayload = `{"hook_event_name":"PreToolUse","session_id":"s1","tool_name":"Shell","tool_input":{"command":"blocked command"}}`
 
 func TestEvaluateHotDeterministicBlockSkipsInferencePhase(t *testing.T) {
-	fake := &stagedInferenceFake{handler: func(context.Context, *inferencepb.InferRequest) (*inferencepb.InferReply, error) {
-		return completeStagedReply("block"), nil
-	}}
+	fake := &stagedInferenceFake{
+		handler: func(context.Context, *inferencepb.InferRequest) (*inferencepb.InferReply, error) {
+			return completeStagedReply("block"), nil
+		},
+	}
 	endpoint := startStagedInferenceServer(t, fake)
-	cfg := loadStagedHookConfig(t, endpoint, `
+	cfg := loadStagedHookConfig(
+		t,
+		endpoint,
+		`
 [[rules]]
 name = "inference-first-in-config"
 events = ["PreToolUse"]
@@ -116,7 +128,8 @@ action = "block"
 violation_message = "deterministic blocked"
 field_paths = ["tool_input.command"]
 pattern = "blocked"
-`)
+`,
+	)
 
 	evaluation := evaluateHot(
 		stagedContext(t),
@@ -129,27 +142,38 @@ pattern = "blocked"
 	if evaluation.Deferred.Decision != hook.ResponseDecisionBlock {
 		t.Fatalf("decision = %q, want block", evaluation.Deferred.Decision)
 	}
+
 	if models := fake.calledModels(); len(models) != 0 {
 		t.Fatalf("inference models = %v, want none", models)
 	}
+
 	if traces := attemptedStagedInference(evaluation.Trace); len(traces) != 0 {
 		t.Fatalf("inference traces = %+v, want none", traces)
 	}
 }
 
 func TestEvaluateHotDeterministicAllowRunsInferencePhase(t *testing.T) {
-	fake := &stagedInferenceFake{handler: func(_ context.Context, request *inferencepb.InferRequest) (*inferencepb.InferReply, error) {
-		if request.GetModel() == "gpt-5.4-mini" {
-			options := request.GetGenerationOptions()
-			if options == nil ||
-				options.GetReasoningEffort() != inferencepb.ReasoningEffort_REASONING_EFFORT_HIGH {
-				t.Fatalf("mini generation options = %+v, want HIGH", options)
+	fake := &stagedInferenceFake{
+		handler: func(_ context.Context, request *inferencepb.InferRequest) (
+			*inferencepb.InferReply,
+			error,
+		) {
+			if request.GetModel() == "gpt-5.4-mini" {
+				options := request.GetGenerationOptions()
+				if options == nil ||
+					options.GetReasoningEffort() != inferencepb.ReasoningEffort_REASONING_EFFORT_HIGH {
+					t.Fatalf("mini generation options = %+v, want HIGH", options)
+				}
 			}
-		}
-		return completeStagedReply("block"), nil
-	}}
+
+			return completeStagedReply("block"), nil
+		},
+	}
 	endpoint := startStagedInferenceServer(t, fake)
-	cfg := loadStagedHookConfig(t, endpoint, `
+	cfg := loadStagedHookConfig(
+		t,
+		endpoint,
+		`
 [[rules]]
 name = "deterministic-allow"
 events = ["PreToolUse"]
@@ -185,7 +209,8 @@ response_json_field = "decision"
 response_json_equals = "block"
 model = "gpt-5.4-mini"
 reasoning_effort = "high"
-`)
+`,
+	)
 
 	evaluation := evaluateHot(
 		stagedContext(t),
@@ -198,20 +223,27 @@ reasoning_effort = "high"
 	if evaluation.Deferred.Decision != hook.ResponseDecisionBlock {
 		t.Fatalf("decision = %q, want block", evaluation.Deferred.Decision)
 	}
+
 	if models := fake.calledModels(); strings.Join(models, ",") != "v4,gpt-5.4-mini" {
 		t.Fatalf("inference models = %v", models)
 	}
+
 	if traces := attemptedStagedInference(evaluation.Trace); len(traces) != 2 {
 		t.Fatalf("inference traces = %+v, want two", traces)
 	}
 }
 
 func TestEvaluateHotObserveOnlyDeterministicBlockSkipsInferenceAndAudits(t *testing.T) {
-	fake := &stagedInferenceFake{handler: func(context.Context, *inferencepb.InferRequest) (*inferencepb.InferReply, error) {
-		return completeStagedReply("block"), nil
-	}}
+	fake := &stagedInferenceFake{
+		handler: func(context.Context, *inferencepb.InferRequest) (*inferencepb.InferReply, error) {
+			return completeStagedReply("block"), nil
+		},
+	}
 	endpoint := startStagedInferenceServer(t, fake)
-	cfg := loadStagedHookConfig(t, endpoint, `
+	cfg := loadStagedHookConfig(
+		t,
+		endpoint,
+		`
 [[rules]]
 name = "inference-first-in-config"
 events = ["Stop"]
@@ -235,8 +267,11 @@ action = "block"
 violation_message = "deterministic blocked"
 field_paths = ["last_assistant_message"]
 pattern = "blocked"
-`)
-	rawPayload := []byte(`{"hook_event_name":"Stop","session_id":"s1","turn_id":"t1","stop_hook_active":false,"last_assistant_message":"blocked"}`)
+`,
+	)
+	rawPayload := []byte(
+		`{"hook_event_name":"Stop","session_id":"s1","turn_id":"t1","stop_hook_active":false,"last_assistant_message":"blocked"}`,
+	)
 
 	evaluation := evaluateHot(
 		stagedContext(t),
@@ -249,29 +284,45 @@ pattern = "blocked"
 	if evaluation.Deferred.Decision != hook.ResponseDecisionAllow {
 		t.Fatalf("decision = %q, want allow", evaluation.Deferred.Decision)
 	}
+
 	if len(evaluation.Deferred.BlockingViolations) != 0 ||
 		len(evaluation.Deferred.AuditOnlyViolations) != 1 ||
 		evaluation.Deferred.AuditOnlyViolations[0].RuleName != "deterministic-block" {
-		t.Fatalf("blocking/audit violations = %+v/%+v", evaluation.Deferred.BlockingViolations, evaluation.Deferred.AuditOnlyViolations)
+		t.Fatalf(
+			"blocking/audit violations = %+v/%+v",
+			evaluation.Deferred.BlockingViolations,
+			evaluation.Deferred.AuditOnlyViolations,
+		)
 	}
+
 	if models := fake.calledModels(); len(models) != 0 {
 		t.Fatalf("inference models = %v, want none", models)
 	}
+
 	if traces := attemptedStagedInference(evaluation.Trace); len(traces) != 0 {
 		t.Fatalf("inference traces = %+v, want none", traces)
 	}
 }
 
 func TestEvaluateHotInferencePhaseUsesOneSharedBudget(t *testing.T) {
-	fake := &stagedInferenceFake{handler: func(ctx context.Context, request *inferencepb.InferRequest) (*inferencepb.InferReply, error) {
-		if request.GetModel() == "slow-model" {
-			<-ctx.Done()
-			return nil, ctx.Err()
-		}
-		return completeStagedReply("block"), nil
-	}}
+	fake := &stagedInferenceFake{
+		handler: func(ctx context.Context, request *inferencepb.InferRequest) (
+			*inferencepb.InferReply,
+			error,
+		) {
+			if request.GetModel() == "slow-model" {
+				<-ctx.Done()
+				return nil, ctx.Err()
+			}
+
+			return completeStagedReply("block"), nil
+		},
+	}
 	endpoint := startStagedInferenceServer(t, fake)
-	cfg := loadStagedHookConfig(t, endpoint, `
+	cfg := loadStagedHookConfig(
+		t,
+		endpoint,
+		`
 [performance.hook]
 inference_phase_timeout_ms = 30
 
@@ -308,7 +359,8 @@ output_schema = '{"type":"object"}'
 response_json_field = "decision"
 response_json_equals = "block"
 model = "later-model"
-`)
+`,
+	)
 	started := time.Now()
 
 	evaluation := evaluateHot(
@@ -322,29 +374,39 @@ model = "later-model"
 	if elapsed := time.Since(started); elapsed > 250*time.Millisecond {
 		t.Fatalf("elapsed = %s, want shared 30ms budget", elapsed)
 	}
+
 	if evaluation.Deferred.Decision != hook.ResponseDecisionAllow {
 		t.Fatalf("decision = %q, want fail-open allow", evaluation.Deferred.Decision)
 	}
+
 	if models := fake.calledModels(); strings.Join(models, ",") != "slow-model" {
 		t.Fatalf("inference models = %v, want only slow-model", models)
 	}
+
 	traces := attemptedStagedInference(evaluation.Trace)
 	if len(traces) != 1 || traces[0].ErrorCode != "deadline_exceeded" {
 		t.Fatalf("inference traces = %+v", traces)
 	}
+
 	if len(evaluation.Trace.Layers) != 2 {
-		t.Fatalf("rich trace layers = %+v, want attempted and skipped inference", evaluation.Trace.Layers)
+		t.Fatalf(
+			"rich trace layers = %+v, want attempted and skipped inference",
+			evaluation.Trace.Layers,
+		)
 	}
+
 	if evaluation.Trace.Layers[0].LayerName != "slow" ||
 		evaluation.Trace.Layers[0].Status != "error" ||
 		evaluation.Trace.Layers[0].ErrorCode != "deadline_exceeded" {
 		t.Fatalf("attempted inference layer = %+v", evaluation.Trace.Layers[0])
 	}
+
 	if evaluation.Trace.Layers[1].LayerName != "later" ||
 		evaluation.Trace.Layers[1].Status != "skipped" ||
 		evaluation.Trace.Layers[1].SkipReason != "inference_phase_timeout" {
 		t.Fatalf("skipped inference layer = %+v", evaluation.Trace.Layers[1])
 	}
+
 	for _, decision := range evaluation.Trace.Deterministic.CheckedRules {
 		if decision.RuleName == "later-inference" &&
 			decision.SkipReason != "inference_phase_timeout" {
@@ -354,11 +416,16 @@ model = "later-model"
 }
 
 func TestEvaluateHotCombinesViolationsInPhaseOrder(t *testing.T) {
-	fake := &stagedInferenceFake{handler: func(context.Context, *inferencepb.InferRequest) (*inferencepb.InferReply, error) {
-		return completeStagedReply("block"), nil
-	}}
+	fake := &stagedInferenceFake{
+		handler: func(context.Context, *inferencepb.InferRequest) (*inferencepb.InferReply, error) {
+			return completeStagedReply("block"), nil
+		},
+	}
 	endpoint := startStagedInferenceServer(t, fake)
-	cfg := loadStagedHookConfig(t, endpoint, `
+	cfg := loadStagedHookConfig(
+		t,
+		endpoint,
+		`
 [[rules]]
 name = "inference-one"
 events = ["PreToolUse"]
@@ -406,7 +473,8 @@ action = "audit"
 violation_message = "deterministic two"
 field_paths = ["tool_input.command"]
 pattern = "command"
-`)
+`,
+	)
 
 	evaluation := evaluateHot(
 		stagedContext(t),
@@ -417,12 +485,18 @@ pattern = "command"
 	)
 
 	var names []string
+
 	for _, violation := range evaluation.Deferred.AuditOnlyViolations {
 		names = append(names, violation.RuleName)
 	}
-	if strings.Join(names, ",") != "deterministic-one,deterministic-two,inference-one,inference-two" {
+
+	if strings.Join(
+		names,
+		",",
+	) != "deterministic-one,deterministic-two,inference-one,inference-two" {
 		t.Fatalf("violation order = %v", names)
 	}
+
 	if models := fake.calledModels(); strings.Join(models, ",") != "model-one,model-two" {
 		t.Fatalf("inference model order = %v", models)
 	}
@@ -430,10 +504,12 @@ pattern = "command"
 
 func attemptedStagedInference(trace rules.DecisionTrace) []rules.LayerTrace {
 	var attempted []rules.LayerTrace
+
 	for _, layer := range trace.Layers {
 		if layer.Kind == "inference" && layer.Status != "skipped" {
 			attempted = append(attempted, layer)
 		}
 	}
+
 	return attempted
 }

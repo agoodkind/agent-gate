@@ -28,10 +28,12 @@ func TestStoreRoundTripsCompletedEvaluation(t *testing.T) {
 	if err := store.RecordCompleted(context.Background(), record); err != nil {
 		t.Fatalf("RecordCompleted: %v", err)
 	}
+
 	got, err := store.Get(context.Background(), record.Evaluation.EvaluationID)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
+
 	if !reflect.DeepEqual(got, record) {
 		t.Fatalf("round trip mismatch\ngot:  %#v\nwant: %#v", got, record)
 	}
@@ -46,6 +48,7 @@ func TestStoreRollsBackCompleteRecordOnLateFailure(t *testing.T) {
 	if err == nil {
 		t.Fatal("RecordCompleted succeeded with duplicate label identity")
 	}
+
 	_, err = store.Get(context.Background(), record.Evaluation.EvaluationID)
 	if !errors.Is(err, evaluation.ErrNotFound) {
 		t.Fatalf("Get error = %v, want ErrNotFound", err)
@@ -54,6 +57,7 @@ func TestStoreRollsBackCompleteRecordOnLateFailure(t *testing.T) {
 
 func TestStoreRejectsInvalidJSONBeforeWriting(t *testing.T) {
 	store, receipt := newEvaluationStore(t)
+
 	tests := []struct {
 		name   string
 		mutate func(*evaluation.Record)
@@ -84,23 +88,28 @@ func TestStoreRejectsInvalidJSONBeforeWriting(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			record := completeRecord(receipt)
-			record.Evaluation.EvaluationID = "invalid-" + test.name
-			test.mutate(&record)
-			if err := store.RecordCompleted(context.Background(), record); err == nil {
-				t.Fatal("RecordCompleted accepted invalid JSON")
-			}
-			_, err := store.Get(context.Background(), record.Evaluation.EvaluationID)
-			if !errors.Is(err, evaluation.ErrNotFound) {
-				t.Fatalf("Get error = %v, want ErrNotFound", err)
-			}
-		})
+		t.Run(
+			test.name,
+			func(t *testing.T) {
+				record := completeRecord(receipt)
+				record.Evaluation.EvaluationID = "invalid-" + test.name
+				test.mutate(&record)
+				if err := store.RecordCompleted(context.Background(), record); err == nil {
+					t.Fatal("RecordCompleted accepted invalid JSON")
+				}
+
+				_, err := store.Get(context.Background(), record.Evaluation.EvaluationID)
+				if !errors.Is(err, evaluation.ErrNotFound) {
+					t.Fatalf("Get error = %v, want ErrNotFound", err)
+				}
+			},
+		)
 	}
 }
 
 func TestStoreRejectsInvalidLabelConfidence(t *testing.T) {
 	store, receipt := newEvaluationStore(t)
+
 	for _, confidence := range []float64{-0.01, 1.01, math.NaN(), math.Inf(1)} {
 		record := completeRecord(receipt)
 		record.Evaluation.EvaluationID = "invalid-confidence"
@@ -113,6 +122,7 @@ func TestStoreRejectsInvalidLabelConfidence(t *testing.T) {
 
 func TestStoreRejectsInvalidLayerOutcomeSemantics(t *testing.T) {
 	store, receipt := newEvaluationStore(t)
+
 	tests := []struct {
 		name   string
 		mutate func(*evaluation.Layer)
@@ -159,19 +169,23 @@ func TestStoreRejectsInvalidLayerOutcomeSemantics(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			record := completeRecord(receipt)
-			record.Evaluation.EvaluationID = "invalid-outcome-" + test.name
-			test.mutate(&record.Layers[1])
-			if err := store.RecordCompleted(context.Background(), record); err == nil {
-				t.Fatal("RecordCompleted accepted invalid layer outcome semantics")
-			}
-		})
+		t.Run(
+			test.name,
+			func(t *testing.T) {
+				record := completeRecord(receipt)
+				record.Evaluation.EvaluationID = "invalid-outcome-" + test.name
+				test.mutate(&record.Layers[1])
+				if err := store.RecordCompleted(context.Background(), record); err == nil {
+					t.Fatal("RecordCompleted accepted invalid layer outcome semantics")
+				}
+			},
+		)
 	}
 }
 
 func TestStoreRejectsInvalidLayerOutputHash(t *testing.T) {
 	store, receipt := newEvaluationStore(t)
+
 	tests := []struct {
 		name       string
 		outputHash string
@@ -180,89 +194,108 @@ func TestStoreRejectsInvalidLayerOutputHash(t *testing.T) {
 		{name: "mismatch", outputHash: testOutputHash(json.RawMessage(`{"other":true}`))},
 	}
 	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			record := completeRecord(receipt)
-			record.Evaluation.EvaluationID = "invalid-output-hash-" + test.name
-			record.Layers[1].OutputHash = test.outputHash
-			if err := store.RecordCompleted(context.Background(), record); err == nil {
-				t.Fatal("RecordCompleted accepted invalid output hash")
-			}
-		})
+		t.Run(
+			test.name,
+			func(t *testing.T) {
+				record := completeRecord(receipt)
+				record.Evaluation.EvaluationID = "invalid-output-hash-" + test.name
+				record.Layers[1].OutputHash = test.outputHash
+				if err := store.RecordCompleted(context.Background(), record); err == nil {
+					t.Fatal("RecordCompleted accepted invalid output hash")
+				}
+			},
+		)
 	}
 }
 
 func TestStoreRejectsUnsafeV2Metadata(t *testing.T) {
 	store, receipt := newEvaluationStore(t)
+
 	tests := []struct {
 		name     string
 		metadata json.RawMessage
 	}{
 		{
 			name: "unknown envelope field",
-			metadata: json.RawMessage(`{
+			metadata: json.RawMessage(
+				`{
 				"schema_version":2,
 				"verified_provenance":{"reported_prompt_hash_status":"absent","reported_schema_hash_status":"absent"},
 				"upstream_metadata":{"source":"inference_reply","trust":"untrusted","status":"absent"},
 				"prompt":"prohibited"
-			}`),
+			}`,
+			),
 		},
 		{
 			name: "unknown verified provenance field",
-			metadata: json.RawMessage(`{
+			metadata: json.RawMessage(
+				`{
 				"schema_version":2,
 				"verified_provenance":{"requested_model":"model","reported_prompt_hash_status":"absent","reported_schema_hash_status":"absent","input":"prohibited"},
 				"upstream_metadata":{"source":"inference_reply","trust":"untrusted","status":"absent"}
-			}`),
+			}`,
+			),
 		},
 		{
 			name: "unknown upstream claim",
-			metadata: json.RawMessage(`{
+			metadata: json.RawMessage(
+				`{
 				"schema_version":2,
 				"verified_provenance":{"reported_prompt_hash_status":"absent","reported_schema_hash_status":"absent"},
 				"upstream_metadata":{
 					"source":"inference_reply","trust":"untrusted","status":"present",
 					"raw":{"prompt_tokens":"0","authorization":"prohibited"}
 				}
-			}`),
+			}`,
+			),
 		},
 		{
 			name: "present without raw",
-			metadata: json.RawMessage(`{
+			metadata: json.RawMessage(
+				`{
 				"schema_version":2,
 				"verified_provenance":{"reported_prompt_hash_status":"absent","reported_schema_hash_status":"absent"},
 				"upstream_metadata":{"source":"inference_reply","trust":"untrusted","status":"present"}
-			}`),
+			}`,
+			),
 		},
 		{
 			name: "absent with raw",
-			metadata: json.RawMessage(`{
+			metadata: json.RawMessage(
+				`{
 				"schema_version":2,
 				"verified_provenance":{"reported_prompt_hash_status":"absent","reported_schema_hash_status":"absent"},
 				"upstream_metadata":{
 					"source":"inference_reply","trust":"untrusted","status":"absent",
 					"raw":{"prompt_tokens":"0"}
 				}
-			}`),
+			}`,
+			),
 		},
 		{
 			name: "oversized metadata",
-			metadata: json.RawMessage(`{
+			metadata: json.RawMessage(
+				`{
 				"schema_version":2,
 				"rule_name":"` + strings.Repeat("x", 20_000) + `",
 				"verified_provenance":{"reported_prompt_hash_status":"absent","reported_schema_hash_status":"absent"},
 				"upstream_metadata":{"source":"inference_reply","trust":"untrusted","status":"absent"}
-			}`),
+			}`,
+			),
 		},
 	}
 	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			record := completeRecord(receipt)
-			record.Evaluation.EvaluationID = "unsafe-v2-" + test.name
-			record.Layers[1].MetadataJSON = test.metadata
-			if err := store.RecordCompleted(context.Background(), record); err == nil {
-				t.Fatal("RecordCompleted accepted unsafe v2 metadata")
-			}
-		})
+		t.Run(
+			test.name,
+			func(t *testing.T) {
+				record := completeRecord(receipt)
+				record.Evaluation.EvaluationID = "unsafe-v2-" + test.name
+				record.Layers[1].MetadataJSON = test.metadata
+				if err := store.RecordCompleted(context.Background(), record); err == nil {
+					t.Fatal("RecordCompleted accepted unsafe v2 metadata")
+				}
+			},
+		)
 	}
 }
 
@@ -272,6 +305,7 @@ func TestNewStoreEnablesForeignKeyEnforcement(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open database: %v", err)
 	}
+
 	database.SetMaxOpenConns(1)
 	t.Cleanup(func() {
 		if err := database.Close(); err != nil {
@@ -281,10 +315,14 @@ func TestNewStoreEnablesForeignKeyEnforcement(t *testing.T) {
 	if _, err := evaluation.NewStore(context.Background(), path, database); err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
+
 	var enabled int
-	if err := database.QueryRowContext(context.Background(), "pragma foreign_keys").Scan(&enabled); err != nil {
+	if err := database.QueryRowContext(context.Background(), "pragma foreign_keys").Scan(
+		&enabled,
+	); err != nil {
 		t.Fatalf("query foreign_keys: %v", err)
 	}
+
 	if enabled != 1 {
 		t.Fatalf("foreign_keys = %d, want 1", enabled)
 	}
@@ -298,6 +336,7 @@ func TestStoreRejectsMismatchedReceiptEvent(t *testing.T) {
 	if err := store.RecordCompleted(context.Background(), record); err == nil {
 		t.Fatal("RecordCompleted accepted a receipt from a different event")
 	}
+
 	_, err := store.Get(context.Background(), record.Evaluation.EvaluationID)
 	if !errors.Is(err, evaluation.ErrNotFound) {
 		t.Fatalf("Get error = %v, want ErrNotFound", err)
@@ -310,6 +349,7 @@ func TestStoreSchemaHasForeignKeysAndIndices(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenSQLite: %v", err)
 	}
+
 	t.Cleanup(func() {
 		if err := intakeStore.Handle().Close(); err != nil {
 			t.Fatalf("Close: %v", err)
@@ -340,34 +380,47 @@ func TestStorePersistsLayerVerdict(t *testing.T) {
 	if err := store.RecordCompleted(context.Background(), record); err != nil {
 		t.Fatalf("RecordCompleted: %v", err)
 	}
+
 	got, err := store.Get(context.Background(), record.Evaluation.EvaluationID)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
+
 	if got.Layers[0].Verdict != "allow" {
 		t.Fatalf("layer 0 verdict = %q, want %q", got.Layers[0].Verdict, "allow")
 	}
+
 	if got.Layers[1].Verdict != "block" {
 		t.Fatalf("layer 1 verdict = %q, want %q", got.Layers[1].Verdict, "block")
 	}
 
-	exported, err := store.List(context.Background(), evaluation.QueryFilter{
-		EvaluationID: record.Evaluation.EvaluationID,
-	})
+	exported, err := store.List(
+		context.Background(),
+		evaluation.QueryFilter{
+			EvaluationID: record.Evaluation.EvaluationID,
+		},
+	)
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
+
 	if len(exported) != 1 {
 		t.Fatalf("exported records = %d, want 1", len(exported))
 	}
+
 	if exported[0].Layers[0].Verdict != "allow" || exported[0].Layers[1].Verdict != "block" {
-		t.Fatalf("exported layer verdicts = %q, %q; want allow, block",
-			exported[0].Layers[0].Verdict, exported[0].Layers[1].Verdict)
+		t.Fatalf(
+			"exported layer verdicts = %q, %q; want allow, block",
+			exported[0].Layers[0].Verdict,
+			exported[0].Layers[1].Verdict,
+		)
 	}
+
 	encoded, err := json.Marshal(exported[0])
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
 	}
+
 	if !strings.Contains(string(encoded), `"verdict":"block"`) {
 		t.Fatalf("training export missing layer verdict: %s", encoded)
 	}
@@ -380,26 +433,31 @@ func newEvaluationStore(t *testing.T) (*evaluation.Store, intake.AppendResult) {
 	if err != nil {
 		t.Fatalf("OpenSQLite: %v", err)
 	}
+
 	t.Cleanup(func() {
 		if err := intakeStore.Handle().Close(); err != nil {
 			t.Fatalf("Close: %v", err)
 		}
 	})
-	receipt, err := intakeStore.Append(context.Background(), intake.Record{
-		EventID:        "evt-evaluation",
-		RecordedAt:     time.Date(2026, 7, 10, 1, 2, 3, 4, time.UTC),
-		System:         "codex",
-		SessionID:      "session-1",
-		TurnID:         "turn-2",
-		EventName:      "PreToolUse",
-		ToolName:       "exec_command",
-		ToolUseID:      "tool-3",
-		RawPayload:     []byte(`{"command":"make check"}`),
-		NormalizedJSON: json.RawMessage(`{"command":"make check"}`),
-	})
+	receipt, err := intakeStore.Append(
+		context.Background(),
+		intake.Record{
+			EventID:        "evt-evaluation",
+			RecordedAt:     time.Date(2026, 7, 10, 1, 2, 3, 4, time.UTC),
+			System:         "codex",
+			SessionID:      "session-1",
+			TurnID:         "turn-2",
+			EventName:      "PreToolUse",
+			ToolName:       "exec_command",
+			ToolUseID:      "tool-3",
+			RawPayload:     []byte(`{"command":"make check"}`),
+			NormalizedJSON: json.RawMessage(`{"command":"make check"}`),
+		},
+	)
 	if err != nil {
 		t.Fatalf("Append: %v", err)
 	}
+
 	return intakeStore.Evaluations(), receipt
 }
 
@@ -408,6 +466,7 @@ func completeRecord(receipt intake.AppendResult) evaluation.Record {
 	parentIndex := 0
 	cacheVersion := int64(7)
 	cacheExpiry := time.Date(2026, 7, 10, 2, 30, 0, 0, time.UTC)
+
 	return evaluation.Record{
 		Evaluation: evaluation.Evaluation{
 			EvaluationID:      "eval-1",
@@ -450,16 +509,18 @@ func completeRecord(receipt intake.AppendResult) evaluation.Record {
 				RetryCount:     0,
 			},
 			{
-				LayerIndex:        1,
-				ParentLayerIndex:  &parentIndex,
-				Kind:              "inference",
-				Name:              "lm-review",
-				Status:            "complete",
-				Outcome:           "match",
-				InputReference:    "layer:0.output",
-				InputJSON:         json.RawMessage(`{"command":"make check","oracle":"allow"}`),
-				InputHash:         "sha256:layer-input-1",
-				OutputHash:        testOutputHash(json.RawMessage(`{"verdict":"block","confidence":0.875}`)),
+				LayerIndex:       1,
+				ParentLayerIndex: &parentIndex,
+				Kind:             "inference",
+				Name:             "lm-review",
+				Status:           "complete",
+				Outcome:          "match",
+				InputReference:   "layer:0.output",
+				InputJSON:        json.RawMessage(`{"command":"make check","oracle":"allow"}`),
+				InputHash:        "sha256:layer-input-1",
+				OutputHash: testOutputHash(
+					json.RawMessage(`{"verdict":"block","confidence":0.875}`),
+				),
 				OutputJSON:        json.RawMessage(`{"verdict":"block","confidence":0.875}`),
 				MetadataJSON:      json.RawMessage(`{"schema_version":1,"request_id":"request-1"}`),
 				StartedAt:         time.Date(2026, 7, 10, 1, 2, 4, 200_000_000, time.UTC),
@@ -505,10 +566,12 @@ func assertForeignKey(t *testing.T, database *sql.DB, table string, referencedTa
 	if err != nil {
 		t.Fatalf("foreign keys for %s: %v", table, err)
 	}
+
 	defer func() {
 		_ = rows.Close()
 	}()
 	found := false
+
 	for rows.Next() {
 		var id int
 		var sequence int
@@ -518,16 +581,28 @@ func assertForeignKey(t *testing.T, database *sql.DB, table string, referencedTa
 		var onUpdate string
 		var onDelete string
 		var match string
-		if err := rows.Scan(&id, &sequence, &target, &from, &to, &onUpdate, &onDelete, &match); err != nil {
+		if err := rows.Scan(
+			&id,
+			&sequence,
+			&target,
+			&from,
+			&to,
+			&onUpdate,
+			&onDelete,
+			&match,
+		); err != nil {
 			t.Fatalf("scan foreign key for %s: %v", table, err)
 		}
+
 		if target == referencedTable {
 			found = true
 		}
 	}
+
 	if err := rows.Err(); err != nil {
 		t.Fatalf("iterate foreign keys for %s: %v", table, err)
 	}
+
 	if !found {
 		t.Fatalf("%s has no foreign key to %s", table, referencedTable)
 	}
@@ -539,10 +614,12 @@ func assertIndex(t *testing.T, database *sql.DB, table string, index string) {
 	if err != nil {
 		t.Fatalf("indices for %s: %v", table, err)
 	}
+
 	defer func() {
 		_ = rows.Close()
 	}()
 	found := false
+
 	for rows.Next() {
 		var sequence int
 		var name string
@@ -552,13 +629,16 @@ func assertIndex(t *testing.T, database *sql.DB, table string, index string) {
 		if err := rows.Scan(&sequence, &name, &unique, &origin, &partial); err != nil {
 			t.Fatalf("scan index for %s: %v", table, err)
 		}
+
 		if name == index {
 			found = true
 		}
 	}
+
 	if err := rows.Err(); err != nil {
 		t.Fatalf("iterate indices for %s: %v", table, err)
 	}
+
 	if !found {
 		t.Fatalf("%s has no %s index", table, index)
 	}

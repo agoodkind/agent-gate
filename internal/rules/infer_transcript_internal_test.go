@@ -25,11 +25,14 @@ func (stream *fakeExportStream) Recv() (*clydev1.ExportChunk, error) {
 	if stream.recvErr != nil {
 		return nil, stream.recvErr
 	}
+
 	if stream.index >= len(stream.chunks) {
 		return nil, io.EOF
 	}
+
 	chunk := stream.chunks[stream.index]
 	stream.index++
+
 	return chunk, nil
 }
 
@@ -51,6 +54,7 @@ func (client *fakeClydeServiceClient) StreamExportTranscript(
 	if client.streamErr != nil {
 		return nil, client.streamErr
 	}
+
 	return client.stream, nil
 }
 
@@ -66,31 +70,50 @@ func TestFetchTranscriptTailConcatenatesChunks(t *testing.T) {
 	}
 	runtime.clydeServiceClients["/socket"] = client
 
-	text, errClass := runtime.fetchTranscriptTail(context.Background(), transcriptParams{
-		endpoint:       "/socket",
-		conversationID: "b2b01aab",
-		maxTokens:      2000,
-	})
+	text, errClass := runtime.fetchTranscriptTail(
+		context.Background(),
+		transcriptParams{
+			endpoint:       "/socket",
+			conversationID: "b2b01aab",
+			maxTokens:      2000,
+		},
+	)
 
 	if errClass != "" {
 		t.Fatalf("error class = %q, want empty", errClass)
 	}
+
 	if text != "first second" {
 		t.Fatalf("text = %q, want %q", text, "first second")
 	}
+
 	if client.lastRequest.GetConversationId() != "b2b01aab" {
-		t.Fatalf("conversation id = %q, want %q", client.lastRequest.GetConversationId(), "b2b01aab")
+		t.Fatalf(
+			"conversation id = %q, want %q",
+			client.lastRequest.GetConversationId(),
+			"b2b01aab",
+		)
 	}
+
 	if client.lastRequest.GetMaxTokens() != "2000" {
 		t.Fatalf("max tokens = %q, want %q", client.lastRequest.GetMaxTokens(), "2000")
 	}
+
 	if !client.lastRequest.GetIncludeChat() || !client.lastRequest.GetIncludeToolCalls() {
-		t.Fatalf("include_chat/include_tool_calls = %v/%v, want true/true",
-			client.lastRequest.GetIncludeChat(), client.lastRequest.GetIncludeToolCalls())
+		t.Fatalf(
+			"include_chat/include_tool_calls = %v/%v, want true/true",
+			client.lastRequest.GetIncludeChat(),
+			client.lastRequest.GetIncludeToolCalls(),
+		)
 	}
-	if client.lastRequest.GetFormat() != "plain_text" || client.lastRequest.GetWhitespace() != "compact" {
-		t.Fatalf("format/whitespace = %q/%q, want plain_text/compact",
-			client.lastRequest.GetFormat(), client.lastRequest.GetWhitespace())
+
+	if client.lastRequest.GetFormat() != "plain_text" ||
+		client.lastRequest.GetWhitespace() != "compact" {
+		t.Fatalf(
+			"format/whitespace = %q/%q, want plain_text/compact",
+			client.lastRequest.GetFormat(),
+			client.lastRequest.GetWhitespace(),
+		)
 	}
 }
 
@@ -111,18 +134,22 @@ func TestTranscriptClientReusesContextConnection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build sentinel connection: %v", err)
 	}
+
 	runtime.contextConnections["/socket"] = sentinel
 
 	client, err := runtime.transcriptClient("/socket")
 	if err != nil {
 		t.Fatalf("transcriptClient error: %v", err)
 	}
+
 	if client == nil {
 		t.Fatal("transcriptClient returned a nil client")
 	}
+
 	if runtime.contextConnections["/socket"] != sentinel {
 		t.Fatal("transcriptClient replaced the cached connection, want the reused sentinel")
 	}
+
 	if runtime.clydeServiceClients["/socket"] == nil {
 		t.Fatal("transcriptClient did not cache a ClydeService client over the reused connection")
 	}
@@ -134,15 +161,19 @@ func TestFetchTranscriptTailStreamErrorYieldsErrorClass(t *testing.T) {
 	client := &fakeClydeServiceClient{streamErr: errors.New("stream open failed")}
 	runtime.clydeServiceClients["/socket"] = client
 
-	text, errClass := runtime.fetchTranscriptTail(context.Background(), transcriptParams{
-		endpoint:       "/socket",
-		conversationID: "b2b01aab",
-		maxTokens:      2000,
-	})
+	text, errClass := runtime.fetchTranscriptTail(
+		context.Background(),
+		transcriptParams{
+			endpoint:       "/socket",
+			conversationID: "b2b01aab",
+			maxTokens:      2000,
+		},
+	)
 
 	if text != "" {
 		t.Fatalf("text = %q, want empty on stream error", text)
 	}
+
 	if errClass == "" {
 		t.Fatalf("error class empty, want non-empty on stream error")
 	}
@@ -156,15 +187,19 @@ func TestFetchTranscriptTailRecvErrorYieldsErrorClass(t *testing.T) {
 	}
 	runtime.clydeServiceClients["/socket"] = client
 
-	text, errClass := runtime.fetchTranscriptTail(context.Background(), transcriptParams{
-		endpoint:       "/socket",
-		conversationID: "b2b01aab",
-		maxTokens:      2000,
-	})
+	text, errClass := runtime.fetchTranscriptTail(
+		context.Background(),
+		transcriptParams{
+			endpoint:       "/socket",
+			conversationID: "b2b01aab",
+			maxTokens:      2000,
+		},
+	)
 
 	if text != "" {
 		t.Fatalf("text = %q, want empty on recv error", text)
 	}
+
 	if errClass == "" {
 		t.Fatalf("error class empty, want non-empty on recv error")
 	}
@@ -178,15 +213,19 @@ func TestFetchTranscriptTailInvalidBudgetYieldsErrorClass(t *testing.T) {
 	}
 	runtime.clydeServiceClients["/socket"] = client
 
-	text, errClass := runtime.fetchTranscriptTail(context.Background(), transcriptParams{
-		endpoint:       "/socket",
-		conversationID: "b2b01aab",
-		maxTokens:      0,
-	})
+	text, errClass := runtime.fetchTranscriptTail(
+		context.Background(),
+		transcriptParams{
+			endpoint:       "/socket",
+			conversationID: "b2b01aab",
+			maxTokens:      0,
+		},
+	)
 
 	if text != "" {
 		t.Fatalf("text = %q, want empty on invalid budget", text)
 	}
+
 	if errClass == "" {
 		t.Fatalf("error class empty, want non-empty on invalid budget")
 	}

@@ -20,6 +20,7 @@ func testConfig(t *testing.T) *config.Config {
 	dir := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
 	t.Setenv("XDG_RUNTIME_DIR", filepath.Join(dir, "runtime"))
+
 	return &config.Config{
 		Audit: config.Audit{
 			Enabled: boolp(true),
@@ -35,7 +36,12 @@ func testConfig(t *testing.T) *config.Config {
 
 func TestEventLogger_WritesSQLiteAndDedups(t *testing.T) {
 	cfg := testConfig(t)
-	logger, err := audit.NewEventLoggerWithOptions(context.Background(), cfg, nil, audit.LoggerOptions{QueueLimit: 0})
+	logger, err := audit.NewEventLoggerWithOptions(
+		context.Background(),
+		cfg,
+		nil,
+		audit.LoggerOptions{QueueLimit: 0},
+	)
 	if err != nil {
 		t.Fatalf("NewEventLogger: %v", err)
 	}
@@ -60,17 +66,25 @@ func TestEventLogger_WritesSQLiteAndDedups(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
+
 	defer func() { _ = db.Close() }()
 	var count int
 	if err := db.QueryRow("select count(*) from events").Scan(&count); err != nil {
 		t.Fatalf("count events: %v", err)
 	}
+
 	if count != 1 {
 		t.Fatalf("sqlite events = %d, want 1 (dedup)", count)
 	}
-	if err := db.QueryRow("select count(*) from violations where rule = 'use-make-not-go-direct'").Scan(&count); err != nil {
+
+	if err := db.QueryRow(
+		"select count(*) from violations where rule = 'use-make-not-go-direct'",
+	).Scan(
+		&count,
+	); err != nil {
 		t.Fatalf("count violations: %v", err)
 	}
+
 	if count != 1 {
 		t.Fatalf("sqlite violations = %d, want 1", count)
 	}
@@ -88,17 +102,27 @@ func TestEventLogger_DurableReplayDoesNotDuplicateViolations(t *testing.T) {
 
 	for range 2 {
 		logger, err := audit.NewEventLoggerWithOptions(
-			context.Background(), cfg, nil, audit.LoggerOptions{QueueLimit: 0},
+			context.Background(),
+			cfg,
+			nil,
+			audit.LoggerOptions{QueueLimit: 0},
 		)
 		if err != nil {
 			t.Fatalf("NewEventLogger: %v", err)
 		}
+
 		if err := logger.LogDurable(
-			context.Background(), "codex", "session-1", "PreToolUse", "info",
-			"hook.blocked", attrs,
+			context.Background(),
+			"codex",
+			"session-1",
+			"PreToolUse",
+			"info",
+			"hook.blocked",
+			attrs,
 		); err != nil {
 			t.Fatalf("LogDurable: %v", err)
 		}
+
 		if err := logger.Close(); err != nil {
 			t.Fatalf("Close: %v", err)
 		}
@@ -108,13 +132,15 @@ func TestEventLogger_DurableReplayDoesNotDuplicateViolations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
+
 	defer func() { _ = database.Close() }()
 	var count int
-	if err := database.QueryRow(
-		"select count(*) from violations where rule = 'durable-rule'",
-	).Scan(&count); err != nil {
+	if err := database.QueryRow("select count(*) from violations where rule = 'durable-rule'").Scan(
+		&count,
+	); err != nil {
 		t.Fatalf("count violations: %v", err)
 	}
+
 	if count != 1 {
 		t.Fatalf("sqlite violations = %d, want 1 after durable replay", count)
 	}
@@ -123,12 +149,20 @@ func TestEventLogger_DurableReplayDoesNotDuplicateViolations(t *testing.T) {
 func TestLocalSinkDurableWritesRejectNilLogger(t *testing.T) {
 	sink := audit.NewLocalSink(nil)
 	if err := sink.LogDurable(
-		context.Background(), "codex", "session", "PreToolUse", "info", "hook.allowed", nil,
+		context.Background(),
+		"codex",
+		"session",
+		"PreToolUse",
+		"info",
+		"hook.allowed",
+		nil,
 	); err == nil {
 		t.Fatal("LogDurable error = nil, want unavailable logger error")
 	}
+
 	if err := sink.LogNormalizedDurable(
-		context.Background(), audit.NormalizedEntry{},
+		context.Background(),
+		audit.NormalizedEntry{},
 	); err == nil {
 		t.Fatal("LogNormalizedDurable error = nil, want unavailable logger error")
 	}
@@ -144,33 +178,49 @@ func TestEventLogger_NormalizedReplayPreservesIdentityAndDoesNotDuplicate(t *tes
 		"blocking_rules": audit.NewStringSliceValue([]string{"normalized-rule"}),
 	}
 	logger, err := audit.NewEventLoggerWithOptions(
-		context.Background(), cfg, nil, audit.LoggerOptions{QueueLimit: 0},
+		context.Background(),
+		cfg,
+		nil,
+		audit.LoggerOptions{QueueLimit: 0},
 	)
 	if err != nil {
 		t.Fatalf("NewEventLogger: %v", err)
 	}
+
 	entry := logger.Normalize(
-		"codex", "session-normalized", "PreToolUse", "info", "hook.blocked", attrs,
+		"codex",
+		"session-normalized",
+		"PreToolUse",
+		"info",
+		"hook.blocked",
+		attrs,
 	)
 	if entry.Event.EventID == "" || entry.Event.Time == "" {
 		t.Fatalf("normalized entry identity = %+v", entry.Event)
 	}
+
 	if err := logger.LogNormalizedDurable(context.Background(), entry); err != nil {
 		t.Fatalf("LogNormalizedDurable: %v", err)
 	}
+
 	if err := logger.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 
 	replayLogger, err := audit.NewEventLoggerWithOptions(
-		context.Background(), cfg, nil, audit.LoggerOptions{QueueLimit: 0},
+		context.Background(),
+		cfg,
+		nil,
+		audit.LoggerOptions{QueueLimit: 0},
 	)
 	if err != nil {
 		t.Fatalf("NewEventLogger replay: %v", err)
 	}
+
 	if err := replayLogger.LogNormalizedDurable(context.Background(), entry); err != nil {
 		t.Fatalf("LogNormalizedDurable replay: %v", err)
 	}
+
 	if err := replayLogger.Close(); err != nil {
 		t.Fatalf("Close replay: %v", err)
 	}
@@ -179,50 +229,82 @@ func TestEventLogger_NormalizedReplayPreservesIdentityAndDoesNotDuplicate(t *tes
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
+
 	defer func() { _ = database.Close() }()
 	var count int
 	var storedTime string
 	if err := database.QueryRow(
-		"select count(*), min(time) from events where event_id = ?", entry.Event.EventID,
-	).Scan(&count, &storedTime); err != nil {
+		"select count(*), min(time) from events where event_id = ?",
+		entry.Event.EventID,
+	).Scan(
+		&count,
+		&storedTime,
+	); err != nil {
 		t.Fatalf("query normalized event: %v", err)
 	}
+
 	if count != 1 || storedTime != entry.Event.Time {
-		t.Fatalf("normalized event count/time = %d/%q, want 1/%q", count, storedTime, entry.Event.Time)
+		t.Fatalf(
+			"normalized event count/time = %d/%q, want 1/%q",
+			count,
+			storedTime,
+			entry.Event.Time,
+		)
 	}
 }
 
 func TestQuery_SQLite(t *testing.T) {
 	cfg := testConfig(t)
-	logger, err := audit.NewEventLoggerWithOptions(context.Background(), cfg, nil, audit.LoggerOptions{QueueLimit: 0, SharedDB: retainedQueryDatabase(t, cfg)})
+	logger, err := audit.NewEventLoggerWithOptions(
+		context.Background(),
+		cfg,
+		nil,
+		audit.LoggerOptions{QueueLimit: 0, SharedDB: retainedQueryDatabase(t, cfg)},
+	)
 	if err != nil {
 		t.Fatalf("NewEventLogger: %v", err)
 	}
-	logger.Log("claude", "session-1", "PreToolUse", "info", "hook.blocked", audit.Attrs{
-		"system":         audit.NewStringValue("claude"),
-		"session_id":     audit.NewStringValue("session-1"),
-		"event":          audit.NewStringValue("PreToolUse"),
-		"tool_name":      audit.NewStringValue("Bash"),
-		"decision":       audit.NewStringValue("block"),
-		"blocking_rules": audit.NewStringSliceValue([]string{"use-make-not-go-direct"}),
-	})
+
+	logger.Log(
+		"claude",
+		"session-1",
+		"PreToolUse",
+		"info",
+		"hook.blocked",
+		audit.Attrs{
+			"system":         audit.NewStringValue("claude"),
+			"session_id":     audit.NewStringValue("session-1"),
+			"event":          audit.NewStringValue("PreToolUse"),
+			"tool_name":      audit.NewStringValue("Bash"),
+			"decision":       audit.NewStringValue("block"),
+			"blocking_rules": audit.NewStringSliceValue([]string{"use-make-not-go-direct"}),
+		},
+	)
 	if err := logger.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 
-	events, source, err := audit.QueryReadOnly(t.Context(), cfg, audit.QueryFilter{Decision: "block", Rule: "use-make-not-go-direct"})
+	events, source, err := audit.QueryReadOnly(
+		t.Context(),
+		cfg,
+		audit.QueryFilter{Decision: "block", Rule: "use-make-not-go-direct"},
+	)
 	if err != nil {
 		t.Fatalf("Query: %v", err)
 	}
+
 	if source != "sqlite" {
 		t.Fatalf("source = %q, want sqlite", source)
 	}
+
 	if len(events) != 1 {
 		t.Fatalf("events = %d, want 1", len(events))
 	}
+
 	if got := events[0].Decision.RulesMatched; len(got) != 1 || got[0] != "use-make-not-go-direct" {
 		t.Fatalf("rules matched = %#v", got)
 	}
+
 	if events[0].Detail.State != auditstorage.DetailStateAvailable {
 		t.Fatalf("detail state = %q, want available", events[0].Detail.State)
 	}
@@ -239,22 +321,37 @@ func TestQueryReadOnlyReturnsExistingAuditEvents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewEventLogger: %v", err)
 	}
-	logger.Log("codex", "setup-read-only", "SessionStart", "info", "hook.allowed", audit.Attrs{
-		"system":     audit.NewStringValue("codex"),
-		"session_id": audit.NewStringValue("setup-read-only"),
-		"event":      audit.NewStringValue("SessionStart"),
-		"decision":   audit.NewStringValue("allow"),
-	})
+
+	logger.Log(
+		"codex",
+		"setup-read-only",
+		"SessionStart",
+		"info",
+		"hook.allowed",
+		audit.Attrs{
+			"system":     audit.NewStringValue("codex"),
+			"session_id": audit.NewStringValue("setup-read-only"),
+			"event":      audit.NewStringValue("SessionStart"),
+			"decision":   audit.NewStringValue("allow"),
+		},
+	)
 	if err := logger.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 
-	events, source, err := audit.QueryReadOnly(context.Background(), cfg, audit.QueryFilter{
-		System: "codex", SessionID: "setup-read-only", Decision: "allow",
-	})
+	events, source, err := audit.QueryReadOnly(
+		context.Background(),
+		cfg,
+		audit.QueryFilter{
+			System:    "codex",
+			SessionID: "setup-read-only",
+			Decision:  "allow",
+		},
+	)
 	if err != nil {
 		t.Fatalf("QueryReadOnly: %v", err)
 	}
+
 	if source != "sqlite" || len(events) != 1 {
 		t.Fatalf("source/events = %q/%d, want sqlite/1", source, len(events))
 	}

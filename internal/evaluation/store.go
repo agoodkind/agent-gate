@@ -26,16 +26,23 @@ type Store struct {
 
 // NewStore uses an initialized database owned by its caller.
 func NewStore(ctx context.Context, databasePath string, database *sql.DB) (*Store, error) {
-	store := &Store{database: database, policy: config.AuditStoragePolicy{
-		Profile:          config.AuditStorageProfileFull,
-		BucketInterval:   24 * time.Hour,
-		RetentionBuckets: 7,
-		MaxBytes:         0,
-		Detail: config.AuditStorageDetailPolicy{
-			WireInput: true, NormalizedInput: true, ProviderEvidence: true,
-			EnvironmentEvidence: true, EvaluationContent: true,
+	store := &Store{
+		database: database,
+		policy: config.AuditStoragePolicy{
+			Profile:          config.AuditStorageProfileFull,
+			BucketInterval:   24 * time.Hour,
+			RetentionBuckets: 7,
+			MaxBytes:         0,
+			Detail: config.AuditStorageDetailPolicy{
+				WireInput:           true,
+				NormalizedInput:     true,
+				ProviderEvidence:    true,
+				EnvironmentEvidence: true,
+				EvaluationContent:   true,
+			},
 		},
-	}}
+	}
+
 	return store, nil
 }
 
@@ -50,7 +57,9 @@ func NewStoreWithPolicy(
 	if err != nil {
 		return nil, err
 	}
+
 	store.policy = policy
+
 	return store, nil
 }
 
@@ -60,6 +69,7 @@ func (s *Store) RecordCompleted(ctx context.Context, record Record) error {
 	if err != nil {
 		return wrapError("begin evaluation transaction", err)
 	}
+
 	defer func() {
 		_ = transaction.Rollback()
 	}()
@@ -67,9 +77,11 @@ func (s *Store) RecordCompleted(ctx context.Context, record Record) error {
 	if err := s.RecordCompletedInTx(ctx, transaction, record); err != nil {
 		return err
 	}
+
 	if err := transaction.Commit(); err != nil {
 		return wrapError("commit evaluation transaction", err)
 	}
+
 	return nil
 }
 
@@ -83,20 +95,24 @@ func (s *Store) RecordCompletedInTx(
 	if transaction == nil {
 		return errors.New("evaluation transaction is required")
 	}
+
 	if err := validateRecord(record); err != nil {
 		return err
 	}
+
 	projections := make([]layerSummaryProjection, len(record.Layers))
 	for index, layer := range record.Layers {
 		projection, err := projectLayerSummary(layer)
 		if err != nil {
-			return wrapError(fmt.Sprintf(
-				"project evaluation layer %d summary",
-				layer.LayerIndex,
-			), err)
+			return wrapError(
+				fmt.Sprintf("project evaluation layer %d summary", layer.LayerIndex),
+				err,
+			)
 		}
+
 		projections[index] = projection
 	}
+
 	contentRecorded := s.policy.Detail.EvaluationContent
 	if err := insertEvaluation(
 		ctx,
@@ -108,6 +124,7 @@ func (s *Store) RecordCompletedInTx(
 	); err != nil {
 		return err
 	}
+
 	for index, layer := range record.Layers {
 		if err := insertLayer(
 			ctx,
@@ -120,11 +137,19 @@ func (s *Store) RecordCompletedInTx(
 			return err
 		}
 	}
+
 	for _, label := range record.Labels {
-		if err := insertLabel(ctx, transaction, record.Evaluation.EvaluationID, label, contentRecorded); err != nil {
+		if err := insertLabel(
+			ctx,
+			transaction,
+			record.Evaluation.EvaluationID,
+			label,
+			contentRecorded,
+		); err != nil {
 			return err
 		}
 	}
+
 	return nil
 }
 
@@ -134,14 +159,17 @@ func (s *Store) Get(ctx context.Context, evaluationID string) (Record, error) {
 	if err != nil {
 		return Record{}, err
 	}
+
 	layers, err := s.getLayers(ctx, evaluationID)
 	if err != nil {
 		return Record{}, err
 	}
+
 	labels, err := s.getLabels(ctx, evaluationID)
 	if err != nil {
 		return Record{}, err
 	}
+
 	return Record{Evaluation: evaluation, Layers: layers, Labels: labels}, nil
 }
 
@@ -149,25 +177,31 @@ func validateRecord(record Record) error {
 	if record.Evaluation.EvaluationID == "" {
 		return errors.New("evaluation id is required")
 	}
+
 	if len(record.Evaluation.ErrorJSON) > 0 && !json.Valid(record.Evaluation.ErrorJSON) {
 		return errors.New("evaluation error JSON is invalid")
 	}
+
 	for index, layer := range record.Layers {
 		if err := validateStoredLayer(layer, index); err != nil {
 			return err
 		}
 	}
+
 	for _, label := range record.Labels {
 		if label.Confidence == nil {
 			continue
 		}
+
 		if math.IsNaN(*label.Confidence) || math.IsInf(*label.Confidence, 0) {
 			return fmt.Errorf("label %q confidence must be finite", label.Namespace)
 		}
+
 		if *label.Confidence < 0 || *label.Confidence > 1 {
 			return fmt.Errorf("label %q confidence must be between 0 and 1", label.Namespace)
 		}
 	}
+
 	return nil
 }
 
@@ -175,27 +209,35 @@ func validateStoredLayer(layer Layer, index int) error {
 	if layer.LayerIndex != index {
 		return fmt.Errorf("layer index %d is not ordered position %d", layer.LayerIndex, index)
 	}
+
 	if !json.Valid(layer.InputJSON) {
 		return fmt.Errorf("layer index %d input JSON is invalid", layer.LayerIndex)
 	}
+
 	if !json.Valid(layer.OutputJSON) {
 		return fmt.Errorf("layer index %d output JSON is invalid", layer.LayerIndex)
 	}
+
 	if !json.Valid(layer.MetadataJSON) {
 		return fmt.Errorf("layer index %d metadata JSON is invalid", layer.LayerIndex)
 	}
+
 	if _, err := UnmarshalLayerMetadata(layer.MetadataJSON); err != nil {
 		return fmt.Errorf("layer index %d metadata is invalid: %s", layer.LayerIndex, err.Error())
 	}
+
 	if err := validateLayerSemantics(layer.Kind, layer.Status, layer.Outcome); err != nil {
 		return fmt.Errorf("layer index %d semantics are invalid: %s", layer.LayerIndex, err.Error())
 	}
+
 	if err := validateLayerOutputHash(layer.OutputJSON, layer.OutputHash); err != nil {
 		return fmt.Errorf("layer index %d output is invalid: %s", layer.LayerIndex, err.Error())
 	}
+
 	if layer.ParentLayerIndex == nil {
 		return nil
 	}
+
 	if *layer.ParentLayerIndex < 0 || *layer.ParentLayerIndex >= index {
 		return fmt.Errorf(
 			"layer index %d has invalid parent index %d",
@@ -203,6 +245,7 @@ func validateStoredLayer(layer Layer, index int) error {
 			*layer.ParentLayerIndex,
 		)
 	}
+
 	return nil
 }
 
@@ -214,7 +257,9 @@ func insertEvaluation(
 	labelCount int,
 	contentRecorded bool,
 ) error {
-	_, err := transaction.ExecContext(ctx, storeSQL1,
+	_, err := transaction.ExecContext(
+		ctx,
+		storeSQL1,
 		value.EvaluationID,
 		value.ReceiptID,
 		value.EventID,
@@ -240,6 +285,7 @@ func insertEvaluation(
 	if err != nil {
 		return wrapError("insert evaluation", err)
 	}
+
 	return nil
 }
 
@@ -254,14 +300,19 @@ func projectLayerSummary(value Layer) (layerSummaryProjection, error) {
 	if err != nil {
 		return layerSummaryProjection{}, err
 	}
+
 	ruleName, checkedRules, err := projectRuleFilters(value.MetadataJSON)
 	if err != nil {
 		return layerSummaryProjection{}, err
 	}
+
 	cost.CacheStatus = value.CacheStatus
 	cost.CacheKeyHash = value.CacheKeyHash
+
 	return layerSummaryProjection{
-		cost: cost, ruleName: ruleName, checkedRules: checkedRules,
+		cost:         cost,
+		ruleName:     ruleName,
+		checkedRules: checkedRules,
 	}, nil
 }
 
@@ -273,7 +324,9 @@ func insertLayer(
 	projection layerSummaryProjection,
 	contentRecorded bool,
 ) error {
-	_, err := transaction.ExecContext(ctx, storeSQL2,
+	_, err := transaction.ExecContext(
+		ctx,
+		storeSQL2,
 		evaluationID,
 		value.LayerIndex,
 		value.ParentLayerIndex,
@@ -316,6 +369,7 @@ func insertLayer(
 	if err != nil {
 		return wrapError(fmt.Sprintf("insert evaluation layer %d", value.LayerIndex), err)
 	}
+
 	return nil
 }
 
@@ -326,7 +380,9 @@ func insertLabel(
 	value Label,
 	contentRecorded bool,
 ) error {
-	_, err := transaction.ExecContext(ctx, storeSQL3,
+	_, err := transaction.ExecContext(
+		ctx,
+		storeSQL3,
 		evaluationID,
 		value.Namespace,
 		value.LabelVersion,
@@ -342,8 +398,10 @@ func insertLabel(
 			value.Namespace,
 			value.LabelVersion,
 		)
+
 		return wrapError(message, err)
 	}
+
 	return nil
 }
 
@@ -375,18 +433,22 @@ func (s *Store) getEvaluation(ctx context.Context, evaluationID string) (Evaluat
 	if errors.Is(err, sql.ErrNoRows) {
 		return Evaluation{}, ErrNotFound
 	}
+
 	if err != nil {
 		return Evaluation{}, wrapError("read evaluation", err)
 	}
+
 	value.ErrorJSON = json.RawMessage(errorJSON)
 	value.StartedAt, err = parseTime(startedAt)
 	if err != nil {
 		return Evaluation{}, err
 	}
+
 	value.CompletedAt, err = parseTime(completedAt)
 	if err != nil {
 		return Evaluation{}, err
 	}
+
 	return value, nil
 }
 
@@ -395,20 +457,25 @@ func (s *Store) getLayers(ctx context.Context, evaluationID string) ([]Layer, er
 	if err != nil {
 		return nil, wrapError("query evaluation layers", err)
 	}
+
 	defer func() {
 		_ = rows.Close()
 	}()
 	layers := make([]Layer, 0)
+
 	for rows.Next() {
 		layer, err := scanLayer(rows)
 		if err != nil {
 			return nil, err
 		}
+
 		layers = append(layers, layer)
 	}
+
 	if err := rows.Err(); err != nil {
 		return nil, wrapError("iterate evaluation layers", err)
 	}
+
 	return layers, nil
 }
 
@@ -456,10 +523,12 @@ func scanLayer(rows *sql.Rows) (Layer, error) {
 	if err != nil {
 		return Layer{}, wrapError("scan evaluation layer", err)
 	}
+
 	if parentIndex.Valid {
 		converted := int(parentIndex.Int64)
 		value.ParentLayerIndex = &converted
 	}
+
 	value.InputJSON = json.RawMessage(inputJSON)
 	value.OutputJSON = json.RawMessage(outputJSON)
 	value.ErrorMessage = errorMessage.String
@@ -467,21 +536,26 @@ func scanLayer(rows *sql.Rows) (Layer, error) {
 	if cacheVersion.Valid {
 		value.CacheEntryVersion = &cacheVersion.Int64
 	}
+
 	value.StartedAt, err = parseTime(startedAt)
 	if err != nil {
 		return Layer{}, err
 	}
+
 	value.CompletedAt, err = parseTime(completedAt)
 	if err != nil {
 		return Layer{}, err
 	}
+
 	if cacheExpiry.Valid {
 		parsed, err := parseTime(cacheExpiry.String)
 		if err != nil {
 			return Layer{}, err
 		}
+
 		value.CacheExpiresAt = &parsed
 	}
+
 	return value, nil
 }
 
@@ -490,10 +564,12 @@ func (s *Store) getLabels(ctx context.Context, evaluationID string) ([]Label, er
 	if err != nil {
 		return nil, wrapError("query evaluation labels", err)
 	}
+
 	defer func() {
 		_ = rows.Close()
 	}()
 	labels := make([]Label, 0)
+
 	for rows.Next() {
 		var label Label
 		var confidence sql.NullFloat64
@@ -510,19 +586,24 @@ func (s *Store) getLabels(ctx context.Context, evaluationID string) ([]Label, er
 		); err != nil {
 			return nil, wrapError("scan evaluation label", err)
 		}
+
 		if confidence.Valid {
 			label.Confidence = &confidence.Float64
 		}
+
 		label.Rationale = rationale.String
 		label.CreatedAt, err = parseTime(createdAt)
 		if err != nil {
 			return nil, err
 		}
+
 		labels = append(labels, label)
 	}
+
 	if err := rows.Err(); err != nil {
 		return nil, wrapError("iterate evaluation labels", err)
 	}
+
 	return labels, nil
 }
 
@@ -534,6 +615,7 @@ func formatOptionalTime(value *time.Time) sql.NullString {
 	if value == nil {
 		return sql.NullString{}
 	}
+
 	return sql.NullString{String: formatTime(*value), Valid: true}
 }
 
@@ -542,6 +624,7 @@ func parseTime(value string) (time.Time, error) {
 	if err != nil {
 		return time.Time{}, wrapError("parse evaluation time", err)
 	}
+
 	return parsed, nil
 }
 
@@ -549,6 +632,7 @@ func wrapError(message string, err error) error {
 	if !auditstorage.CancellationOnly(err) {
 		slog.Warn(message+" failed", "err", err)
 	}
+
 	return fmt.Errorf("%s: %w", message, err)
 }
 
@@ -556,9 +640,11 @@ func retainedBytes(value []byte, recorded bool) []byte {
 	if !recorded {
 		return nil
 	}
+
 	if value == nil {
 		return []byte{}
 	}
+
 	return value
 }
 

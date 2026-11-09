@@ -31,6 +31,7 @@ func writeConfig(t *testing.T, body string) string {
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
+
 	return path
 }
 
@@ -55,9 +56,11 @@ func TestRegexMatchLimitReachesCompiledRulePatterns(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load with default limits: %v", err)
 	}
+
 	if generous.Rules[0].Compiled() == nil {
 		t.Fatal("rule pattern did not compile under default limits")
 	}
+
 	underDefault := generous.Rules[0].Compiled().MatchString(backtrackingSubject)
 
 	tiny := "[performance.limits]\nregex_match_limit = 1\n" + backtrackingRule
@@ -65,9 +68,11 @@ func TestRegexMatchLimitReachesCompiledRulePatterns(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load with regex_match_limit = 1: %v", err)
 	}
+
 	if limited.Rules[0].Compiled() == nil {
 		t.Fatal("rule pattern did not compile under a tiny match limit")
 	}
+
 	underTiny := limited.Rules[0].Compiled().MatchString(backtrackingSubject)
 
 	// Neither run should report a match on this subject, but the tiny limit
@@ -76,10 +81,15 @@ func TestRegexMatchLimitReachesCompiledRulePatterns(t *testing.T) {
 	if limited.RegexMatchLimit() != 1 {
 		t.Fatalf("RegexMatchLimit() = %d, want 1", limited.RegexMatchLimit())
 	}
+
 	if generous.RegexMatchLimit() != config.DefaultRegexMatchLimit {
-		t.Fatalf("RegexMatchLimit() = %d, want the default %d",
-			generous.RegexMatchLimit(), config.DefaultRegexMatchLimit)
+		t.Fatalf(
+			"RegexMatchLimit() = %d, want the default %d",
+			generous.RegexMatchLimit(),
+			config.DefaultRegexMatchLimit,
+		)
 	}
+
 	if underDefault || underTiny {
 		t.Fatalf("subject unexpectedly matched (default=%v tiny=%v)", underDefault, underTiny)
 	}
@@ -96,19 +106,28 @@ func TestRegexLimitsApplyOnEveryLoad(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first load: %v", err)
 	}
+
 	if loaded.RegexMatchLimit() != 4242 || loaded.RegexDepthLimit() != 77 {
-		t.Fatalf("first load limits = %d/%d, want 4242/77",
-			loaded.RegexMatchLimit(), loaded.RegexDepthLimit())
+		t.Fatalf(
+			"first load limits = %d/%d, want 4242/77",
+			loaded.RegexMatchLimit(),
+			loaded.RegexDepthLimit(),
+		)
 	}
 
 	second, err := config.LoadExisting(writeConfig(t, backtrackingRule))
 	if err != nil {
 		t.Fatalf("second load: %v", err)
 	}
+
 	if second.RegexMatchLimit() != config.DefaultRegexMatchLimit {
-		t.Fatalf("second load match limit = %d, want the default %d",
-			second.RegexMatchLimit(), config.DefaultRegexMatchLimit)
+		t.Fatalf(
+			"second load match limit = %d, want the default %d",
+			second.RegexMatchLimit(),
+			config.DefaultRegexMatchLimit,
+		)
 	}
+
 	if second.Rules[0].Compiled() == nil {
 		t.Fatal("second load did not compile the rule pattern")
 	}
@@ -122,16 +141,20 @@ func TestRegexLimitsRejectValuesPCRE2CannotHold(t *testing.T) {
 	restoreRegexDefaults(t)
 
 	for _, key := range []string{"regex_match_limit", "regex_depth_limit"} {
-		t.Run(key, func(t *testing.T) {
-			body := "[performance.limits]\n" + key + " = 4294967296\n" + backtrackingRule
-			_, err := config.LoadExisting(writeConfig(t, body))
-			if err == nil {
-				t.Fatalf("%s above uint32 should be rejected", key)
-			}
-			if !strings.Contains(err.Error(), "largest value PCRE2 accepts") {
-				t.Fatalf("error = %v, want the PCRE2 range complaint", err)
-			}
-		})
+		t.Run(
+			key,
+			func(t *testing.T) {
+				body := "[performance.limits]\n" + key + " = 4294967296\n" + backtrackingRule
+				_, err := config.LoadExisting(writeConfig(t, body))
+				if err == nil {
+					t.Fatalf("%s above uint32 should be rejected", key)
+				}
+
+				if !strings.Contains(err.Error(), "largest value PCRE2 accepts") {
+					t.Fatalf("error = %v, want the PCRE2 range complaint", err)
+				}
+			},
+		)
 	}
 
 	// The largest accepted value must still load, so the check bounds a high
@@ -141,6 +164,7 @@ func TestRegexLimitsRejectValuesPCRE2CannotHold(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the maximum accepted value should load: %v", err)
 	}
+
 	if loaded.RegexMatchLimit() != 4294967295 {
 		t.Fatalf("RegexMatchLimit = %d, want 4294967295", loaded.RegexMatchLimit())
 	}
@@ -155,6 +179,7 @@ func TestRegexLimitsRejectNegative(t *testing.T) {
 	if err == nil {
 		t.Fatal("negative regex_match_limit should be rejected")
 	}
+
 	if !strings.Contains(err.Error(), "must be non-negative") {
 		t.Fatalf("error = %v, want a non-negative complaint", err)
 	}

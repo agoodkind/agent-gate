@@ -38,19 +38,30 @@ var dashCFlagRe = regexp.MustCompile(`^-[a-zA-Z]*c$`)
 // yields no declared-tool commands and therefore no targets, and a relative
 // path inside the body resolves against the outer cwd because the body's
 // execution-time cwd is unknowable statically.
-func extractEmbeddedCodeSearchInto(decomposition *shelldecomp.Decomposition, cwd, home string, policy codeSearchPolicy, add func(string), depth int, resolver shelldecomp.FileResolver) {
+func extractEmbeddedCodeSearchInto(
+	decomposition *shelldecomp.Decomposition,
+	cwd string,
+	home string,
+	policy codeSearchPolicy,
+	add func(string),
+	depth int,
+	resolver shelldecomp.FileResolver,
+) {
 	for _, cmd := range decomposition.Commands() {
 		if !localWrapperShells[cmd.Argv0] {
 			continue
 		}
+
 		script, ok := dashCOperand(cmd)
 		if !ok {
 			continue
 		}
+
 		innerCwd := cmd.Cwd
 		if innerCwd == "" || innerCwd == shelldecomp.Unresolvable {
 			innerCwd = cwd
 		}
+
 		extractCodeSearchInto(script, innerCwd, home, policy, add, depth-1, resolver)
 	}
 
@@ -59,9 +70,11 @@ func extractEmbeddedCodeSearchInto(decomposition *shelldecomp.Decomposition, cwd
 			foldRegionReads(region, policy.tools, add)
 			continue
 		}
+
 		if region.Lang != shelldecomp.LangOpaque {
 			continue
 		}
+
 		extractCodeSearchInto(region.Text, cwd, home, policy, add, depth-1, resolver)
 	}
 }
@@ -93,17 +106,22 @@ func foldRegionReads(region shelldecomp.EmbeddedRegion, tools map[string]bool, a
 	if !regionFoldEnabled(region.Lang, tools) {
 		return
 	}
+
 	written := make(map[string]struct{})
+
 	for _, target := range region.Parsed.WriteTargets() {
 		written[target.Path] = struct{}{}
 	}
+
 	for _, target := range region.Parsed.ReadTargets() {
 		if _, isWrite := written[target.Path]; isWrite {
 			continue
 		}
+
 		if !target.Resolvable || target.Path == shelldecomp.Unresolvable {
 			continue
 		}
+
 		add(target.Path)
 	}
 }
@@ -115,11 +133,13 @@ func regionFoldEnabled(lang shelldecomp.Lang, tools map[string]bool) bool {
 	if !found {
 		return false
 	}
+
 	for _, name := range toolNames {
 		if tools[name] {
 			return true
 		}
 	}
+
 	return false
 }
 
@@ -131,14 +151,18 @@ func dashCOperand(cmd shelldecomp.Command) (string, bool) {
 		if !dashCFlagRe.MatchString(arg.Text) {
 			continue
 		}
+
 		if index+1 >= len(cmd.Args) {
 			return "", false
 		}
+
 		script := cmd.Args[index+1]
 		if !script.Resolvable {
 			return "", false
 		}
+
 		return script.Value, true
 	}
+
 	return "", false
 }

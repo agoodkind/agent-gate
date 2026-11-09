@@ -52,7 +52,13 @@ func TestEvalFieldMatches_Match(t *testing.T) {
 		},
 	}
 
-	matches := regexconcern.EvalFieldMatches(fields, selectors, re, 0, concernlimit.MaxCollectedMatchesPerEvaluation)
+	matches := regexconcern.EvalFieldMatches(
+		fields,
+		selectors,
+		re,
+		0,
+		concernlimit.MaxCollectedMatchesPerEvaluation,
+	)
 
 	if len(matches) != 1 {
 		t.Fatalf("expected 1 match, got %d: %#v", len(matches), matches)
@@ -62,6 +68,7 @@ func TestEvalFieldMatches_Match(t *testing.T) {
 	if m.FieldPath != "tool_input.content" {
 		t.Errorf("FieldPath = %q, want %q", m.FieldPath, "tool_input.content")
 	}
+
 	matchText := m.Value[m.Start:m.End]
 	if matchText != "AKIAIOSFODNN7EXAMPLE" {
 		t.Errorf("matched text = %q, want %q", matchText, "AKIAIOSFODNN7EXAMPLE")
@@ -82,7 +89,13 @@ func TestEvalFieldMatches_NoMatch(t *testing.T) {
 		},
 	}
 
-	matches := regexconcern.EvalFieldMatches(fields, selectors, re, 0, concernlimit.MaxCollectedMatchesPerEvaluation)
+	matches := regexconcern.EvalFieldMatches(
+		fields,
+		selectors,
+		re,
+		0,
+		concernlimit.MaxCollectedMatchesPerEvaluation,
+	)
 
 	if len(matches) != 0 {
 		t.Errorf("expected 0 matches, got %d", len(matches))
@@ -101,7 +114,13 @@ func TestEvalFieldMatches_EmptyField(t *testing.T) {
 		values: map[string]string{},
 	}
 
-	matches := regexconcern.EvalFieldMatches(fields, selectors, re, 0, concernlimit.MaxCollectedMatchesPerEvaluation)
+	matches := regexconcern.EvalFieldMatches(
+		fields,
+		selectors,
+		re,
+		0,
+		concernlimit.MaxCollectedMatchesPerEvaluation,
+	)
 
 	if len(matches) != 0 {
 		t.Errorf("expected 0 matches for empty field, got %d", len(matches))
@@ -113,6 +132,7 @@ func TestConditionMatch_Passes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewCondition: %v", err)
 	}
+
 	fields := &testFields{
 		values: map[string]string{
 			"tool_input.content": "contains secret value",
@@ -128,6 +148,7 @@ func TestConditionMatch_FailsOnPattern(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewCondition: %v", err)
 	}
+
 	fields := &testFields{
 		values: map[string]string{
 			"tool_input.content": "clean value",
@@ -143,6 +164,7 @@ func TestConditionMatch_FailsOnNotPattern(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewCondition: %v", err)
 	}
+
 	fields := &testFields{
 		values: map[string]string{
 			"tool_name": "Task",

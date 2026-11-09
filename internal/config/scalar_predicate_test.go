@@ -29,10 +29,12 @@ stdout_json_equals = ` + predicate + `
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
+
 	cfg, err := config.LoadExisting(path)
 	if err != nil {
 		t.Fatalf("LoadExisting(%s): %v", predicate, err)
 	}
+
 	return cfg
 }
 
@@ -56,16 +58,20 @@ func TestScalarPredicateKinds(t *testing.T) {
 		{"word with spaces", `"not ready yet"`, config.TOMLScalarString},
 	}
 	for _, testCase := range cases {
-		t.Run(testCase.name, func(t *testing.T) {
-			cfg := predicateRule(t, testCase.predicate)
-			value := cfg.Rules[0].Conditions[0].StdoutJSONEqualsValue()
-			if value.Kind() != testCase.wantKind {
-				t.Fatalf("kind = %q, want %q", value.Kind(), testCase.wantKind)
-			}
-			if !value.IsSet() {
-				t.Fatal("value reports unset")
-			}
-		})
+		t.Run(
+			testCase.name,
+			func(t *testing.T) {
+				cfg := predicateRule(t, testCase.predicate)
+				value := cfg.Rules[0].Conditions[0].StdoutJSONEqualsValue()
+				if value.Kind() != testCase.wantKind {
+					t.Fatalf("kind = %q, want %q", value.Kind(), testCase.wantKind)
+				}
+
+				if !value.IsSet() {
+					t.Fatal("value reports unset")
+				}
+			},
+		)
 	}
 }
 
@@ -78,6 +84,7 @@ func TestPlainWordPredicateKeepsItsText(t *testing.T) {
 	if value.Kind() != config.TOMLScalarString {
 		t.Fatalf("kind = %q, want string", value.Kind())
 	}
+
 	if got := value.StringValue(); !strings.Contains(got, "block") {
 		t.Fatalf("value = %q, want it to carry block", got)
 	}
@@ -105,6 +112,7 @@ stdout_json_equals = true
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
+
 	if _, err := config.LoadExisting(path); err == nil {
 		t.Fatal("an unquoted predicate was accepted; it must be quoted now")
 	}

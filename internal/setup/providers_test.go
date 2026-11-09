@@ -16,6 +16,7 @@ func TestDetectProvidersSeparatesClientsAndManagedRegistrations(t *testing.T) {
 	if err := os.WriteFile(binPath, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
 		t.Fatalf("write executable: %v", err)
 	}
+
 	hooks := installer.DefaultHooksOptions(binPath)
 	hooks.HomeDir = homeDir
 	hooks.Providers = []installer.Provider{installer.ProviderCursor}
@@ -23,9 +24,11 @@ func TestDetectProvidersSeparatesClientsAndManagedRegistrations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PrepareHookInstallation: %v", err)
 	}
+
 	if err := installer.ApplyHookInstallation(plan); err != nil {
 		t.Fatalf("ApplyHookInstallation: %v", err)
 	}
+
 	if err := os.Remove(binPath); err != nil {
 		t.Fatalf("remove old executable: %v", err)
 	}
@@ -67,9 +70,15 @@ func TestDetectProvidersDoesNotInferRegistrationFromUnrelatedFile(t *testing.T) 
 	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o700); err != nil {
 		t.Fatalf("create settings directory: %v", err)
 	}
-	if err := os.WriteFile(settingsPath, []byte(`{"hooks":{"FutureStart":[]}}`), 0o600); err != nil {
+
+	if err := os.WriteFile(
+		settingsPath,
+		[]byte(`{"hooks":{"FutureStart":[]}}`),
+		0o600,
+	); err != nil {
 		t.Fatalf("write unrelated settings: %v", err)
 	}
+
 	states, err := DetectProviders(DetectOptions{
 		HomeDir: homeDir,
 		LookPath: func(string) (string, error) {
@@ -79,6 +88,7 @@ func TestDetectProvidersDoesNotInferRegistrationFromUnrelatedFile(t *testing.T) 
 	if err != nil {
 		t.Fatalf("DetectProviders: %v", err)
 	}
+
 	if states[0].ManagedRegistration {
 		t.Fatal("unrelated Claude hook was detected as managed")
 	}

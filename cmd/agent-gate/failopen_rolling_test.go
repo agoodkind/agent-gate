@@ -27,8 +27,14 @@ func TestReportFailOpenHistoryRollingWindows(t *testing.T) {
 		},
 		{
 			name: "recent and expired records",
-			ages: []time.Duration{time.Minute, 2 * time.Hour, 2 * 24 * time.Hour,
-				10 * 24 * time.Hour, 91 * 24 * time.Hour, -time.Hour},
+			ages: []time.Duration{
+				time.Minute,
+				2 * time.Hour,
+				2 * 24 * time.Hour,
+				10 * 24 * time.Hour,
+				91 * 24 * time.Hour,
+				-time.Hour,
+			},
 			want: "1hr: 1, 24hr: 2, 7day: 3, 90day: 4",
 		},
 		{
@@ -42,46 +48,57 @@ func TestReportFailOpenHistoryRollingWindows(t *testing.T) {
 			want:      "1hr: at least 0, 24hr: at least 0, 7day: at least 0, 90day: at least 0",
 		},
 	} {
-		t.Run(test.name, func(t *testing.T) {
-			t.Setenv("XDG_STATE_HOME", t.TempDir())
-			path := daemon.FailOpenRecordPath()
-			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-				t.Fatal(err)
-			}
-			var records bytes.Buffer
-			encoder := json.NewEncoder(&records)
-			for _, age := range test.ages {
-				record := daemon.FailOpenRecord{
-					At:     time.Now().Add(-age).In(time.FixedZone("offset", -7*60*60)).Format(time.RFC3339Nano),
-					Reason: "daemon_unavailable",
-				}
-				if err := encoder.Encode(record); err != nil {
+		t.Run(
+			test.name,
+			func(t *testing.T) {
+				t.Setenv("XDG_STATE_HOME", t.TempDir())
+				path := daemon.FailOpenRecordPath()
+				if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 					t.Fatal(err)
 				}
-			}
-			if len(test.ages) > 0 {
-				if err := os.WriteFile(path, records.Bytes(), 0o600); err != nil {
-					t.Fatal(err)
+				var records bytes.Buffer
+				encoder := json.NewEncoder(&records)
+				for _, age := range test.ages {
+					record := daemon.FailOpenRecord{
+						At: time.Now().Add(-age).In(time.FixedZone("offset", -7*60*60)).Format(
+							time.RFC3339Nano,
+						),
+						Reason: "daemon_unavailable",
+					}
+					if err := encoder.Encode(record); err != nil {
+						t.Fatal(err)
+					}
 				}
-			}
-			if test.truncated {
-				marker := filepath.Join(filepath.Dir(path), "fail-open.truncated")
-				if err := os.WriteFile(marker, nil, 0o600); err != nil {
-					t.Fatal(err)
+				if len(test.ages) > 0 {
+					if err := os.WriteFile(path, records.Bytes(), 0o600); err != nil {
+						t.Fatal(err)
+					}
 				}
-			}
-			command := exec.CommandContext(t.Context(), binaryPath, "daemon", "status")
-			output, err := command.CombinedOutput()
-			if err != nil {
-				t.Fatalf("daemon status: %v\n%s", err, output)
-			}
-			if !strings.Contains(string(output), "unevaluated:      "+test.want+" calls allowed without enforcement\n") {
-				t.Fatalf("status output = %q, want counts %q", output, test.want)
-			}
-			if test.truncated && !strings.Contains(string(output), "later calls went unrecorded") {
-				t.Fatalf("status output omits the truncation warning: %q", output)
-			}
-		})
+				if test.truncated {
+					marker := filepath.Join(filepath.Dir(path), "fail-open.truncated")
+					if err := os.WriteFile(marker, nil, 0o600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				command := exec.CommandContext(t.Context(), binaryPath, "daemon", "status")
+				output, err := command.CombinedOutput()
+				if err != nil {
+					t.Fatalf("daemon status: %v\n%s", err, output)
+				}
+				if !strings.Contains(
+					string(output),
+					"unevaluated:      "+test.want+" calls allowed without enforcement\n",
+				) {
+					t.Fatalf("status output = %q, want counts %q", output, test.want)
+				}
+				if test.truncated && !strings.Contains(
+					string(output),
+					"later calls went unrecorded",
+				) {
+					t.Fatalf("status output omits the truncation warning: %q", output)
+				}
+			},
+		)
 	}
 }
 
@@ -104,8 +121,11 @@ func startStatusTestDaemon(t *testing.T) string {
 	if err := os.MkdirAll(configurationDirectory, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(configurationDirectory, "config.toml"),
-		[]byte("[log]\nlevel = \"error\"\n[update]\nenabled = false\n"), 0o600); err != nil {
+	if err := os.WriteFile(
+		filepath.Join(configurationDirectory, "config.toml"),
+		[]byte("[log]\nlevel = \"error\"\n[update]\nenabled = false\n"),
+		0o600,
+	); err != nil {
 		t.Fatal(err)
 	}
 	process := exec.CommandContext(t.Context(), binaryPath, "daemon")

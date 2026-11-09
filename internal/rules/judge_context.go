@@ -28,23 +28,35 @@ type judgeContextFact struct {
 // builder.
 func resolveJudgeContext(ctx context.Context, fields FieldSet, keys []string) []judgeContextFact {
 	facts := make([]judgeContextFact, 0, len(keys))
+
 	seen := make(map[string]bool, len(keys))
 	for _, key := range keys {
 		trimmed := strings.TrimSpace(key)
 		if trimmed == "" || seen[trimmed] {
 			continue
 		}
+
 		seen[trimmed] = true
 		if trimmed == config.JudgeContextCheckoutStatus {
 			facts = append(facts, resolveCheckoutStatus(ctx, fields)...)
 			continue
 		}
+
 		selector := config.CompileFieldSelector(trimmed)
 		if selector == config.FieldSelectorInvalid {
 			continue
 		}
-		facts = append(facts, judgeContextFact{Label: trimmed, Value: fields.String(selector), FromCheckoutStatus: false})
+
+		facts = append(
+			facts,
+			judgeContextFact{
+				Label:              trimmed,
+				Value:              fields.String(selector),
+				FromCheckoutStatus: false,
+			},
+		)
 	}
+
 	return facts
 }
 
@@ -57,20 +69,25 @@ func resolveCheckoutStatus(ctx context.Context, fields FieldSet) []judgeContextF
 
 	effective := strings.TrimSpace(fields.effectiveCWD())
 	if effective != "" {
-		facts = append(facts, judgeContextFact{
-			Label:              "checkout_status effective_cwd",
-			Value:              checkoutLabel(read, effective),
-			FromCheckoutStatus: true,
-		})
+		facts = append(
+			facts,
+			judgeContextFact{
+				Label:              "checkout_status effective_cwd",
+				Value:              checkoutLabel(read, effective),
+				FromCheckoutStatus: true,
+			},
+		)
 	}
 
 	writeTargets := splitNonEmptyLines(fields.CmdWriteTargets())
+
 	underPrimary := make([]string, 0, len(writeTargets))
 	for _, target := range writeTargets {
 		if pathIsPrimaryCheckout(read, target) {
 			underPrimary = append(underPrimary, target)
 		}
 	}
+
 	var value string
 	switch {
 	case len(writeTargets) == 0:
@@ -80,11 +97,16 @@ func resolveCheckoutStatus(ctx context.Context, fields FieldSet) []judgeContextF
 	default:
 		value = strings.Join(underPrimary, ", ")
 	}
-	facts = append(facts, judgeContextFact{
-		Label:              "write targets under the primary checkout",
-		Value:              value,
-		FromCheckoutStatus: true,
-	})
+
+	facts = append(
+		facts,
+		judgeContextFact{
+			Label:              "write targets under the primary checkout",
+			Value:              value,
+			FromCheckoutStatus: true,
+		},
+	)
+
 	return facts
 }
 
@@ -96,9 +118,11 @@ func checkoutLabel(read gitStateReader, path string) string {
 	if err != nil {
 		return "not in a git repository"
 	}
+
 	if gitbranch.IsPrimaryCheckout(state, path) {
 		return "the primary checkout"
 	}
+
 	return "a linked worktree, not the primary checkout"
 }
 
@@ -110,6 +134,7 @@ func pathIsPrimaryCheckout(read gitStateReader, path string) bool {
 	if err != nil {
 		return false
 	}
+
 	return gitbranch.IsPrimaryCheckout(state, path)
 }
 
@@ -117,6 +142,7 @@ func pathIsPrimaryCheckout(read gitStateReader, path string) bool {
 // lines.
 func splitNonEmptyLines(value string) []string {
 	lines := strings.Split(value, "\n")
+
 	out := make([]string, 0, len(lines))
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
@@ -124,5 +150,6 @@ func splitNonEmptyLines(value string) []string {
 			out = append(out, trimmed)
 		}
 	}
+
 	return out
 }

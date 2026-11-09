@@ -19,21 +19,27 @@ func testEnumerationPolicy(t *testing.T) config.Condition {
 	if err != nil {
 		t.Fatalf("load configured enumeration policy: %v", err)
 	}
+
 	for _, rule := range cfg.Rules {
 		if rule.Name != "guard-search-indexed-target" {
 			continue
 		}
+
 		for _, condition := range rule.Conditions {
 			if condition.Kind != "exec" || condition.ForEach != "cmd_read_targets" {
 				continue
 			}
+
 			if len(condition.EnumerationSpecs) == 0 {
 				t.Fatal("guard-search-indexed-target requires enumeration_specs")
 			}
+
 			return condition
 		}
 	}
+
 	t.Fatal("guard-search-indexed-target requires an exec condition over cmd_read_targets")
+
 	return config.Condition{}
 }
 
@@ -42,6 +48,7 @@ func targetPaths(targets []ReadTarget) []string {
 	for _, target := range targets {
 		paths = append(paths, target.Path)
 	}
+
 	return paths
 }
 
@@ -55,24 +62,45 @@ func targetPaths(targets []ReadTarget) []string {
 func TestExtractCodeSearchTargetsShelldecompSanity(t *testing.T) {
 	const cwd = "/repo"
 	policy := testEnumerationPolicy(t)
+
 	cases := []struct {
 		name    string
 		command string
 		want    []string
 	}{
-		{"extensionless code grep over repo path", `grep -rn ServeHTTP internal`, []string{"/repo/internal"}},
+		{
+			"extensionless code grep over repo path",
+			`grep -rn ServeHTTP internal`,
+			[]string{"/repo/internal"},
+		},
 		{"tmp log grep resolves outside repo", `grep -n ERROR /tmp/x.log`, []string{"/tmp/x.log"}},
 		{"git grep with pathspec", `git grep ServeHTTP internal`, []string{"/repo/internal"}},
-		{"find piped to stdin grep enumerates its dir", `find Tests | grep -iE x`, []string{"/repo/Tests"}},
+		{
+			"find piped to stdin grep enumerates its dir",
+			`find Tests | grep -iE x`,
+			[]string{"/repo/Tests"},
+		},
 		{"cd to unresolvable var drops recursive target", `cd "$VAR" && grep -rn X .`, nil},
 	}
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := targetPaths(ExtractCodeSearchTargetsWithPolicy(tc.command, cwd, testSearchTools, policy.EnumerationSpecs, policy.RecursiveGlobs, nil))
-			if !slices.Equal(got, tc.want) {
-				t.Fatalf("ExtractCodeSearchTargets(%q) = %v, want %v", tc.command, got, tc.want)
-			}
-		})
+		t.Run(
+			tc.name,
+			func(t *testing.T) {
+				got := targetPaths(
+					ExtractCodeSearchTargetsWithPolicy(
+						tc.command,
+						cwd,
+						testSearchTools,
+						policy.EnumerationSpecs,
+						policy.RecursiveGlobs,
+						nil,
+					),
+				)
+				if !slices.Equal(got, tc.want) {
+					t.Fatalf("ExtractCodeSearchTargets(%q) = %v, want %v", tc.command, got, tc.want)
+				}
+			},
+		)
 	}
 }
 
@@ -87,17 +115,41 @@ func TestExtractCodeSearchTargets(t *testing.T) {
 	}{
 		// False positives under the old cwd-only check: the real target is
 		// outside the indexed repo or there is no file target at all.
-		{"tmp log via pattern", `grep -nE "x" /tmp/swiftmk_check.log`, []string{"/tmp/swiftmk_check.log"}},
+		{
+			"tmp log via pattern",
+			`grep -nE "x" /tmp/swiftmk_check.log`,
+			[]string{"/tmp/swiftmk_check.log"},
+		},
 		{"tmp swift extract", `rg -n "x" /tmp/main-head.swift`, []string{"/tmp/main-head.swift"}},
 		{"unexpanded var operands", `grep -n "x" "$tea_dir/tea.go" "$tea_dir/commands.go"`, nil},
-		{"command prefix env assignment does not resolve sibling expansion", "E=/repo/internal rg -n x " + `"$E"`, nil},
-		{"other repo absolute", `grep -rn "x" /other/SwiftLM/Sources/InferenceEngine.swift`, []string{"/other/SwiftLM/Sources/InferenceEngine.swift"}},
+		{
+			"command prefix env assignment does not resolve sibling expansion",
+			"E=/repo/internal rg -n x " + `"$E"`,
+			nil,
+		},
+		{
+			"other repo absolute",
+			`grep -rn "x" /other/SwiftLM/Sources/InferenceEngine.swift`,
+			[]string{"/other/SwiftLM/Sources/InferenceEngine.swift"},
+		},
 
 		// Correct blocks: the operand resolves inside the working tree.
-		{"standalone assignment then grep", "E=/repo/internal\ngrep -rn x " + `"$E"`, []string{"/repo/internal"}},
+		{
+			"standalone assignment then grep",
+			"E=/repo/internal\ngrep -rn x " + `"$E"`,
+			[]string{"/repo/internal"},
+		},
 		{"assignment then rg", `E=/repo/internal` + "\n" + `rg x $E`, []string{"/repo/internal"}},
-		{"recursive with relative dir", `grep -rl "x" Sources --include=*.swift`, []string{"/repo/Sources"}},
-		{"explicit repo file", `grep -n "x" Sources/lmd-serve/SwiftLMD.swift`, []string{"/repo/Sources/lmd-serve/SwiftLMD.swift"}},
+		{
+			"recursive with relative dir",
+			`grep -rl "x" Sources --include=*.swift`,
+			[]string{"/repo/Sources"},
+		},
+		{
+			"explicit repo file",
+			`grep -n "x" Sources/lmd-serve/SwiftLMD.swift`,
+			[]string{"/repo/Sources/lmd-serve/SwiftLMD.swift"},
+		},
 		{"repo package file", `grep -nE "x" Package.swift`, []string{"/repo/Package.swift"}},
 
 		// Parser edge cases.
@@ -110,12 +162,24 @@ func TestExtractCodeSearchTargets(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := targetPaths(ExtractCodeSearchTargetsWithPolicy(tc.command, cwd, testSearchTools, policy.EnumerationSpecs, policy.RecursiveGlobs, nil))
-			if !slices.Equal(got, tc.want) {
-				t.Fatalf("ExtractCodeSearchTargets(%q) = %v, want %v", tc.command, got, tc.want)
-			}
-		})
+		t.Run(
+			tc.name,
+			func(t *testing.T) {
+				got := targetPaths(
+					ExtractCodeSearchTargetsWithPolicy(
+						tc.command,
+						cwd,
+						testSearchTools,
+						policy.EnumerationSpecs,
+						policy.RecursiveGlobs,
+						nil,
+					),
+				)
+				if !slices.Equal(got, tc.want) {
+					t.Fatalf("ExtractCodeSearchTargets(%q) = %v, want %v", tc.command, got, tc.want)
+				}
+			},
+		)
 	}
 }
 
@@ -137,12 +201,24 @@ func TestExtractCodeSearchTargetsAwk(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := targetPaths(ExtractCodeSearchTargetsWithPolicy(tc.command, cwd, []string{"awk", "gawk"}, policy.EnumerationSpecs, policy.RecursiveGlobs, nil))
-			if !slices.Equal(got, tc.want) {
-				t.Fatalf("ExtractCodeSearchTargets(%q) = %v, want %v", tc.command, got, tc.want)
-			}
-		})
+		t.Run(
+			tc.name,
+			func(t *testing.T) {
+				got := targetPaths(
+					ExtractCodeSearchTargetsWithPolicy(
+						tc.command,
+						cwd,
+						[]string{"awk", "gawk"},
+						policy.EnumerationSpecs,
+						policy.RecursiveGlobs,
+						nil,
+					),
+				)
+				if !slices.Equal(got, tc.want) {
+					t.Fatalf("ExtractCodeSearchTargets(%q) = %v, want %v", tc.command, got, tc.want)
+				}
+			},
+		)
 	}
 }
 
@@ -162,22 +238,50 @@ func TestExtractCodeSearchTargetsEmbedded(t *testing.T) {
 		{"bash -c grep", `bash -c "grep -rn needle /repo/internal"`, []string{"/repo/internal"}},
 		{"bash -lc rg", `bash -lc "rg -n needle /repo/internal"`, []string{"/repo/internal"}},
 		{"sh -c with cd chain", `sh -c 'cd /other && grep -rn needle .'`, []string{"/other"}},
-		{"zsh -c relative operand", `zsh -c 'grep -rn needle internal'`, []string{"/repo/internal"}},
-		{"heredoc temp script then exec", "cat > /tmp/s.sh <<'EOF'\nrg -n needle /repo/internal\nEOF\nbash /tmp/s.sh", []string{"/repo/internal"}},
-		{"mktemp var script then exec", "S=$(mktemp); cat >\"$S\" <<'EOF'\nrg -n needle /repo/internal\nEOF\nbash \"$S\"", []string{"/repo/internal"}},
-		{"prose heredoc is not a search", "cat > /tmp/notes.md <<'EOF'\nsome notes about the rg tool\nEOF\n", nil},
+		{
+			"zsh -c relative operand",
+			`zsh -c 'grep -rn needle internal'`,
+			[]string{"/repo/internal"},
+		},
+		{
+			"heredoc temp script then exec",
+			"cat > /tmp/s.sh <<'EOF'\nrg -n needle /repo/internal\nEOF\nbash /tmp/s.sh",
+			[]string{"/repo/internal"},
+		},
+		{
+			"mktemp var script then exec",
+			"S=$(mktemp); cat >\"$S\" <<'EOF'\nrg -n needle /repo/internal\nEOF\nbash \"$S\"",
+			[]string{"/repo/internal"},
+		},
+		{
+			"prose heredoc is not a search",
+			"cat > /tmp/notes.md <<'EOF'\nsome notes about the rg tool\nEOF\n",
+			nil,
+		},
 		{"ssh remote grep is not local", `ssh host 'grep -rn needle /repo/internal'`, nil},
 		{"docker run grep is not local", `docker run img grep -rn needle /repo/internal`, nil},
 		{"bash script file alone", `bash /tmp/s.sh`, nil},
 	}
 
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := targetPaths(ExtractCodeSearchTargetsWithPolicy(tc.command, cwd, testSearchTools, policy.EnumerationSpecs, policy.RecursiveGlobs, nil))
-			if !slices.Equal(got, tc.want) {
-				t.Fatalf("ExtractCodeSearchTargets(%q) = %v, want %v", tc.command, got, tc.want)
-			}
-		})
+		t.Run(
+			tc.name,
+			func(t *testing.T) {
+				got := targetPaths(
+					ExtractCodeSearchTargetsWithPolicy(
+						tc.command,
+						cwd,
+						testSearchTools,
+						policy.EnumerationSpecs,
+						policy.RecursiveGlobs,
+						nil,
+					),
+				)
+				if !slices.Equal(got, tc.want) {
+					t.Fatalf("ExtractCodeSearchTargets(%q) = %v, want %v", tc.command, got, tc.want)
+				}
+			},
+		)
 	}
 }
 
@@ -202,12 +306,24 @@ func TestExtractCodeSearchTargetsSed(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := targetPaths(ExtractCodeSearchTargetsWithPolicy(tc.command, cwd, testSearchTools, policy.EnumerationSpecs, policy.RecursiveGlobs, nil))
-			if !slices.Equal(got, tc.want) {
-				t.Fatalf("ExtractCodeSearchTargets(%q) = %v, want %v", tc.command, got, tc.want)
-			}
-		})
+		t.Run(
+			tc.name,
+			func(t *testing.T) {
+				got := targetPaths(
+					ExtractCodeSearchTargetsWithPolicy(
+						tc.command,
+						cwd,
+						testSearchTools,
+						policy.EnumerationSpecs,
+						policy.RecursiveGlobs,
+						nil,
+					),
+				)
+				if !slices.Equal(got, tc.want) {
+					t.Fatalf("ExtractCodeSearchTargets(%q) = %v, want %v", tc.command, got, tc.want)
+				}
+			},
+		)
 	}
 }
 
@@ -226,22 +342,54 @@ func TestExtractCodeSearchTargetsEnumerator(t *testing.T) {
 		want    []string
 	}{
 		// Content search over file contents through xargs or -exec: in scope.
-		{"find name piped to xargs grep", `find . -name '*.swift' | xargs grep -l toolchain`, []string{"/repo"}},
-		{"find dir piped to xargs grep", `find Sources | xargs grep -nE x`, []string{"/repo/Sources"}},
-		{"find prune then name piped to xargs grep", `find . -path ./.build -prune -o -name '*.swift' -print | xargs grep -l x`, []string{"/repo"}},
-		{"find exec grep", `find . -name '*.swift' -exec grep -l toolchain {} +`, []string{"/repo"}},
+		{
+			"find name piped to xargs grep",
+			`find . -name '*.swift' | xargs grep -l toolchain`,
+			[]string{"/repo"},
+		},
+		{
+			"find dir piped to xargs grep",
+			`find Sources | xargs grep -nE x`,
+			[]string{"/repo/Sources"},
+		},
+		{
+			"find prune then name piped to xargs grep",
+			`find . -path ./.build -prune -o -name '*.swift' -print | xargs grep -l x`,
+			[]string{"/repo"},
+		},
+		{
+			"find exec grep",
+			`find . -name '*.swift' -exec grep -l toolchain {} +`,
+			[]string{"/repo"},
+		},
 		{"git ls-files piped to xargs rg", `git ls-files | xargs rg toolchain`, []string{"/repo"}},
 		{"fd piped to xargs rg", `fd -e swift | xargs rg toolchain`, []string{"/repo"}},
-		{"multiple find paths piped to xargs grep", `find Sources Tests | xargs grep x`, []string{"/repo/Sources", "/repo/Tests"}},
+		{
+			"multiple find paths piped to xargs grep",
+			`find Sources Tests | xargs grep x`,
+			[]string{"/repo/Sources", "/repo/Tests"},
+		},
 
 		// Recursive structure discovery with no content searcher: in scope. A
 		// find without a shallow -maxdepth walks a tree and git ls-files lists
 		// the whole working tree, so the enumerated directory is the target even
 		// when the output is only filtered by name.
-		{"find piped to bare grep enumerates dir", `find Tests | grep -iE "x"`, []string{"/repo/Tests"}},
-		{"git ls-files piped to bare grep enumerates cwd", `git ls-files | grep '\.go$'`, []string{"/repo"}},
+		{
+			"find piped to bare grep enumerates dir",
+			`find Tests | grep -iE "x"`,
+			[]string{"/repo/Tests"},
+		},
+		{
+			"git ls-files piped to bare grep enumerates cwd",
+			`git ls-files | grep '\.go$'`,
+			[]string{"/repo"},
+		},
 		{"bare find name code ext", `find . -name '*.go'`, []string{"/repo"}},
-		{"bare find iname code ext", `find Sources -iname '*.swift' -print`, []string{"/repo/Sources"}},
+		{
+			"bare find iname code ext",
+			`find Sources -iname '*.swift' -print`,
+			[]string{"/repo/Sources"},
+		},
 		{"bare find non-code ext", `find . -name '*.json' -print`, []string{"/repo"}},
 		{"bare find no name filter", `find Tests -type f`, []string{"/repo/Tests"}},
 		{"git ls-files alone enumerates cwd", `git ls-files`, []string{"/repo"}},
@@ -249,21 +397,41 @@ func TestExtractCodeSearchTargetsEnumerator(t *testing.T) {
 
 		// Operand-bearing stages resolve through the operand parser; a recursive
 		// find in another pipeline then also names its enumerated directory.
-		{"enumerator and grep in separate pipelines", `find Sources ; grep x other.txt`, []string{"/repo/other.txt", "/repo/Sources"}},
+		{
+			"enumerator and grep in separate pipelines",
+			`find Sources ; grep x other.txt`,
+			[]string{"/repo/other.txt", "/repo/Sources"},
+		},
 
 		// Unresolvable enumerator directory is dropped.
 		{"find var dir piped to xargs grep", `find "$dir" -name '*.go' | xargs grep x`, nil},
 
 		// Non-cwd absolute directory resolves; the validator gates on index.
-		{"find absolute data dir piped to xargs grep", `find /data -name '*.json' | xargs grep x`, []string{"/data"}},
+		{
+			"find absolute data dir piped to xargs grep",
+			`find /data -name '*.json' | xargs grep x`,
+			[]string{"/data"},
+		},
 	}
 
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := targetPaths(ExtractCodeSearchTargetsWithPolicy(tc.command, cwd, testSearchTools, policy.EnumerationSpecs, policy.RecursiveGlobs, nil))
-			if !slices.Equal(got, tc.want) {
-				t.Fatalf("ExtractCodeSearchTargets(%q) = %v, want %v", tc.command, got, tc.want)
-			}
-		})
+		t.Run(
+			tc.name,
+			func(t *testing.T) {
+				got := targetPaths(
+					ExtractCodeSearchTargetsWithPolicy(
+						tc.command,
+						cwd,
+						testSearchTools,
+						policy.EnumerationSpecs,
+						policy.RecursiveGlobs,
+						nil,
+					),
+				)
+				if !slices.Equal(got, tc.want) {
+					t.Fatalf("ExtractCodeSearchTargets(%q) = %v, want %v", tc.command, got, tc.want)
+				}
+			},
+		)
 	}
 }

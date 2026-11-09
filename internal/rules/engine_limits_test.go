@@ -12,7 +12,8 @@ import (
 )
 
 func TestEvaluateAllCapsConcreteMatchesPerRule(t *testing.T) {
-	rule := loadRule(t,
+	rule := loadRule(
+		t,
 		"no-bad-token",
 		`bad-\d+`,
 		[]string{"Stop"},
@@ -21,10 +22,12 @@ func TestEvaluateAllCapsConcreteMatchesPerRule(t *testing.T) {
 	)
 
 	var builder strings.Builder
+
 	for i := range concernlimit.MaxCollectedMatchesPerEvaluation + 32 {
 		if i > 0 {
 			builder.WriteByte(' ')
 		}
+
 		builder.WriteString("bad-")
 		builder.WriteString(strconv.Itoa(i))
 	}
@@ -39,7 +42,11 @@ func TestEvaluateAllCapsConcreteMatchesPerRule(t *testing.T) {
 	)
 
 	if len(got) != concernlimit.MaxCollectedMatchesPerEvaluation {
-		t.Fatalf("EvaluateAll returned %d matches, want %d", len(got), concernlimit.MaxCollectedMatchesPerEvaluation)
+		t.Fatalf(
+			"EvaluateAll returned %d matches, want %d",
+			len(got),
+			concernlimit.MaxCollectedMatchesPerEvaluation,
+		)
 	}
 
 	lastWant := "bad-" + strconv.Itoa(concernlimit.MaxCollectedMatchesPerEvaluation-1)
@@ -54,6 +61,7 @@ func TestEvaluateAllCapsConcreteMatchesAcrossRegexConditions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewCondition: %v", err)
 	}
+
 	condOne.Kind = string(config.ConditionKindRegex)
 	condTwo := condOne
 
@@ -66,10 +74,12 @@ func TestEvaluateAllCapsConcreteMatchesAcrossRegexConditions(t *testing.T) {
 	}
 
 	var builder strings.Builder
+
 	for i := range concernlimit.MaxCollectedMatchesPerEvaluation + 32 {
 		if i > 0 {
 			builder.WriteByte(' ')
 		}
+
 		builder.WriteString("bad-")
 		builder.WriteString(strconv.Itoa(i))
 	}
@@ -84,7 +94,11 @@ func TestEvaluateAllCapsConcreteMatchesAcrossRegexConditions(t *testing.T) {
 	)
 
 	if len(got) != concernlimit.MaxCollectedMatchesPerEvaluation {
-		t.Fatalf("EvaluateAll returned %d matches, want %d", len(got), concernlimit.MaxCollectedMatchesPerEvaluation)
+		t.Fatalf(
+			"EvaluateAll returned %d matches, want %d",
+			len(got),
+			concernlimit.MaxCollectedMatchesPerEvaluation,
+		)
 	}
 
 	lastWant := "bad-" + strconv.Itoa(concernlimit.MaxCollectedMatchesPerEvaluation-1)
@@ -118,20 +132,24 @@ pattern = '''bad-\d+'''
 	}
 
 	var toolInputBuilder strings.Builder
+
 	for i := range concernlimit.MaxCollectedMatchesPerEvaluation + 32 {
 		if i > 0 {
 			toolInputBuilder.WriteByte(' ')
 		}
+
 		toolInputBuilder.WriteString("bad-")
 		toolInputBuilder.WriteString(strconv.Itoa(i))
 	}
 
 	var assistantBuilder strings.Builder
+
 	start := concernlimit.MaxCollectedMatchesPerEvaluation + 1000
 	for i := range concernlimit.MaxCollectedMatchesPerEvaluation + 32 {
 		if i > 0 {
 			assistantBuilder.WriteByte(' ')
 		}
+
 		assistantBuilder.WriteString("bad-")
 		assistantBuilder.WriteString(strconv.Itoa(start + i))
 	}
@@ -145,7 +163,11 @@ pattern = '''bad-\d+'''
 
 	got := rules.EvaluateAll(context.Background(), "claude", "PreToolUse", fields, cfg.Rules, nil)
 	if len(got) != concernlimit.MaxCollectedMatchesPerEvaluation {
-		t.Fatalf("EvaluateAll returned %d matches, want %d", len(got), concernlimit.MaxCollectedMatchesPerEvaluation)
+		t.Fatalf(
+			"EvaluateAll returned %d matches, want %d",
+			len(got),
+			concernlimit.MaxCollectedMatchesPerEvaluation,
+		)
 	}
 
 	lastWant := "bad-" + strconv.Itoa(concernlimit.MaxCollectedMatchesPerEvaluation-1)

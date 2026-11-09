@@ -14,9 +14,8 @@ func withCommandEnvironment(ctx context.Context, getenv func(string) string) con
 
 func structuralCommandFields(ctx context.Context, fields FieldSet) FieldSet {
 	getenv, _ := ctx.Value(commandEnvironmentContextKey{}).(func(string) string)
-	fields.ToolInputCommand = shellparse.ExpandEnvironmentVariables(
-		fields.ToolInputCommand, getenv,
-	)
+	fields.ToolInputCommand = shellparse.ExpandEnvironmentVariables(fields.ToolInputCommand, getenv)
 	fields.Command = shellparse.ExpandEnvironmentVariables(fields.Command, getenv)
+
 	return fields
 }

@@ -64,6 +64,7 @@ func (err *ApplyError) Error() string {
 	if err == nil {
 		return ""
 	}
+
 	return fmt.Sprintf("%s: %v; repair with: %s", err.Stage, err.Err, err.RepairCommand)
 }
 
@@ -72,6 +73,7 @@ func (err *ApplyError) Unwrap() error {
 	if err == nil {
 		return nil
 	}
+
 	return err.Err
 }
 
@@ -79,9 +81,12 @@ func (err *ApplyError) Unwrap() error {
 func PrepareInstallation(options InstallationOptions) (_ *InstallationPlan, resultErr error) {
 	slog.Info(
 		"prepare installation",
-		"config", options.Config != nil,
-		"service", options.Service != nil,
-		"hooks", options.Hooks != nil,
+		"config",
+		options.Config != nil,
+		"service",
+		options.Service != nil,
+		"hooks",
+		options.Hooks != nil,
 	)
 	plan := &InstallationPlan{
 		Config:         nil,
@@ -103,6 +108,7 @@ func PrepareInstallation(options InstallationOptions) (_ *InstallationPlan, resu
 		if err != nil {
 			return nil, reportPreparationError(StageConfig, err)
 		}
+
 		plan.config = configPlan
 		if configPlan.Config == nil {
 			return nil, reportPreparationError(
@@ -110,30 +116,37 @@ func PrepareInstallation(options InstallationOptions) (_ *InstallationPlan, resu
 				errors.New("prepared configuration is missing validation"),
 			)
 		}
+
 		if validationErrors := hook.ValidateConfig(configPlan.Config); len(validationErrors) > 0 {
 			return nil, reportPreparationError(
 				StageConfig,
 				fmt.Errorf("hook schema: %w", validationErrors[0]),
 			)
 		}
+
 		plan.Config = configPlan
 	}
+
 	if options.Service != nil {
 		servicePlan, err := PrepareServiceInstallation(*options.Service)
 		if err != nil {
 			return nil, reportPreparationError(StageService, err)
 		}
+
 		plan.Service = servicePlan
 		plan.service = servicePlan
 	}
+
 	if options.Hooks != nil {
 		hookPlan, err := PrepareHookInstallation(*options.Hooks)
 		if err != nil {
 			return nil, reportPreparationError(StageHooks, err)
 		}
+
 		plan.Hooks = hookPlan
 		plan.hooks = hookPlan
 	}
+
 	return plan, nil
 }
 
@@ -142,15 +155,19 @@ func (plan *InstallationPlan) Close() error {
 	if plan == nil {
 		return nil
 	}
+
 	configPlan, _, _ := planComponents(plan)
 	if configPlan == nil {
 		return nil
 	}
+
 	if err := configPlan.Close(); err != nil {
 		wrappedErr := fmt.Errorf("close prepared configuration: %w", err)
 		slog.Warn("close installation plan failed", "err", wrappedErr)
+
 		return wrappedErr
 	}
+
 	return nil
 }
 
@@ -160,25 +177,32 @@ func ApplyInstallation(plan *InstallationPlan) (ApplyResult, error) {
 	if plan == nil {
 		return result, errors.New("installation plan is required")
 	}
+
 	configPlan, servicePlan, hookPlan := planComponents(plan)
 	if configPlan != nil {
 		if _, err := config.ApplyDefaults(configPlan); err != nil {
 			return result, newApplyError(plan, StageConfig, err)
 		}
+
 		result.Completed = append(result.Completed, StageConfig)
 	}
+
 	if servicePlan != nil {
 		if err := ApplyServiceInstallation(servicePlan); err != nil {
 			return result, newApplyError(plan, StageService, err)
 		}
+
 		result.Completed = append(result.Completed, StageService)
 	}
+
 	if hookPlan != nil {
 		if err := ApplyHookInstallation(hookPlan); err != nil {
 			return result, newApplyError(plan, StageHooks, err)
 		}
+
 		result.Completed = append(result.Completed, StageHooks)
 	}
+
 	return result, nil
 }
 
@@ -188,12 +212,14 @@ func planComponents(
 	if plan.prepared {
 		return plan.config, plan.service, plan.hooks
 	}
+
 	return plan.Config, plan.Service, plan.Hooks
 }
 
 func reportPreparationError(stage Stage, err error) error {
 	wrappedErr := fmt.Errorf("%s: %w", stage, err)
 	slog.Warn("prepare installation failed", "stage", stage, "err", wrappedErr)
+
 	return wrappedErr
 }
 
@@ -207,9 +233,11 @@ func newApplyError(plan *InstallationPlan, stage Stage, err error) *ApplyError {
 	case StageHooks:
 		repairCommand = hooksRepairCommand
 	}
+
 	if plan != nil && plan.repairCommands[stage] != "" {
 		repairCommand = plan.repairCommands[stage]
 	}
+
 	return &ApplyError{Stage: stage, RepairCommand: repairCommand, Err: err}
 }
 
@@ -222,19 +250,35 @@ func installationRepairCommands(options InstallationOptions) map[Stage]string {
 	if options.Config != nil {
 		parts := []string{configRepairCommand}
 		if options.Config.AutoUpdateMode != "" {
-			parts = append(parts, "--auto-update", shellCommandArgument(options.Config.AutoUpdateMode))
+			parts = append(
+				parts,
+				"--auto-update",
+				shellCommandArgument(options.Config.AutoUpdateMode),
+			)
 		}
+
 		if options.Config.AuditProfile != "" {
-			parts = append(parts, "--audit-profile", shellCommandArgument(string(options.Config.AuditProfile)))
+			parts = append(
+				parts,
+				"--audit-profile",
+				shellCommandArgument(string(options.Config.AuditProfile)),
+			)
 		}
+
 		commands[StageConfig] = strings.Join(parts, " ")
 	}
+
 	if options.Service != nil {
 		parts := []string{serviceRepairCommand}
 		parts = appendCommandOption(parts, "--bin-path", options.Service.BinPath)
-		parts = appendCommandOption(parts, "--service-templates", options.Service.ServiceTemplatesDir)
+		parts = appendCommandOption(
+			parts,
+			"--service-templates",
+			options.Service.ServiceTemplatesDir,
+		)
 		commands[StageService] = strings.Join(parts, " ")
 	}
+
 	if options.Hooks != nil {
 		parts := []string{hooksRepairCommand}
 		parts = appendCommandOption(parts, "--bin-path", options.Hooks.BinPath)
@@ -242,6 +286,7 @@ func installationRepairCommands(options InstallationOptions) map[Stage]string {
 		parts = appendHookSelection(parts, *options.Hooks)
 		commands[StageHooks] = strings.Join(parts, " ")
 	}
+
 	return commands
 }
 
@@ -249,6 +294,7 @@ func appendCommandOption(parts []string, name string, value string) []string {
 	if value == "" {
 		return parts
 	}
+
 	return append(parts, name, shellCommandArgument(value))
 }
 
@@ -257,21 +303,27 @@ func appendHookSelection(parts []string, options HooksOptions) []string {
 	if err != nil {
 		providers = options.Providers
 	}
+
 	names := make([]string, 0, len(providers))
 	for _, provider := range providers {
 		names = append(names, string(provider))
 	}
+
 	return append(parts, "--providers", shellCommandArgument(strings.Join(names, ",")))
 }
 
 func shellCommandArgument(value string) string {
-	if value != "" && strings.IndexFunc(value, func(character rune) bool {
-		return !strings.ContainsRune(
-			"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_./:-",
-			character,
-		)
-	}) < 0 {
+	if value != "" && strings.IndexFunc(
+		value,
+		func(character rune) bool {
+			return !strings.ContainsRune(
+				"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_./:-",
+				character,
+			)
+		},
+	) < 0 {
 		return value
 	}
+
 	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
 }

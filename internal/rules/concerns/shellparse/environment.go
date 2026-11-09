@@ -11,8 +11,10 @@ func ExpandEnvironmentVariables(command string, getenv func(string) string) stri
 	if command == "" || getenv == nil {
 		return command
 	}
+
 	var builder strings.Builder
 	quote := byte(0)
+
 	for index := 0; index < len(command); {
 		character := command[index]
 		switch character {
@@ -30,16 +32,22 @@ func ExpandEnvironmentVariables(command string, getenv func(string) string) stri
 		case '$':
 			if quote != '\'' {
 				if nextIndex, written := writeEnvironmentReference(
-					&builder, command, index, quote, getenv,
+					&builder,
+					command,
+					index,
+					quote,
+					getenv,
 				); written {
 					index = nextIndex
 					continue
 				}
 			}
 		}
+
 		builder.WriteByte(character)
 		index++
 	}
+
 	return builder.String()
 }
 
@@ -48,17 +56,20 @@ func ExpandEnvironmentVariables(command string, getenv func(string) string) stri
 func ReferencedEnvironmentVariables(command string) []string {
 	names := make(map[string]bool)
 	quote := byte(0)
+
 	for index := 0; index < len(command); {
 		character := command[index]
 		if character == '\\' && quote != '\'' {
 			index += min(2, len(command)-index)
 			continue
 		}
+
 		if character == '\'' || character == '"' && quote != '\'' {
 			quote = transitionEnvironmentQuote(quote, character)
 			index++
 			continue
 		}
+
 		if character == '$' && quote == '"' {
 			name, nextIndex, found := environmentReference(command, index)
 			if found {
@@ -67,13 +78,17 @@ func ReferencedEnvironmentVariables(command string) []string {
 				continue
 			}
 		}
+
 		index++
 	}
+
 	result := make([]string, 0, len(names))
 	for name := range names {
 		result = append(result, name)
 	}
+
 	slices.Sort(result)
+
 	return result
 }
 
@@ -88,6 +103,7 @@ func writeEscapedEnvironmentCharacter(
 		builder.WriteByte(command[index])
 		index++
 	}
+
 	return index
 }
 
@@ -112,16 +128,20 @@ func writeEnvironmentReference(
 	if quote != '"' {
 		return index, false
 	}
+
 	name, nextIndex, found := environmentReference(command, index)
 	if !found {
 		return index, false
 	}
+
 	value := getenv(name)
 	if value == "" {
 		builder.WriteString(command[index:nextIndex])
 		return nextIndex, true
 	}
+
 	builder.WriteString(escapeDoubleQuotedEnvironment(value))
+
 	return nextIndex, true
 }
 
@@ -130,33 +150,36 @@ func environmentReference(command string, index int) (string, int, bool) {
 	if len(command) <= nameStart {
 		return "", index, false
 	}
+
 	if command[nameStart] == '{' {
 		nameStart++
+
 		nameEnd := nameStart
 		for nameEnd < len(command) && literalAssignmentNamePart(command[nameEnd]) {
 			nameEnd++
 		}
+
 		if nameEnd == nameStart || len(command) <= nameEnd || command[nameEnd] != '}' {
 			return "", index, false
 		}
+
 		return command[nameStart:nameEnd], nameEnd + 1, true
 	}
+
 	if !literalAssignmentNameStart(command[nameStart]) {
 		return "", index, false
 	}
+
 	nameEnd := nameStart + 1
 	for nameEnd < len(command) && literalAssignmentNamePart(command[nameEnd]) {
 		nameEnd++
 	}
+
 	return command[nameStart:nameEnd], nameEnd, true
 }
 
 func escapeDoubleQuotedEnvironment(value string) string {
-	replacer := strings.NewReplacer(
-		`\`, `\\`,
-		`"`, `\"`,
-		`$`, `\$`,
-		"`", "\\`",
-	)
+	replacer := strings.NewReplacer(`\`, `\\`, `"`, `\"`, `$`, `\$`, "`", "\\`")
+
 	return replacer.Replace(value)
 }

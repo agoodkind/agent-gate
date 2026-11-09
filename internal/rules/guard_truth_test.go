@@ -59,6 +59,7 @@ func TestGuardTruthSetSchemaAndCoverage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open guard truth set: %v", err)
 	}
+
 	t.Cleanup(func() {
 		if err := file.Close(); err != nil {
 			t.Errorf("close guard truth set: %v", err)
@@ -69,6 +70,7 @@ func TestGuardTruthSetSchemaAndCoverage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load guard truth set: %v", err)
 	}
+
 	if len(cases) == 0 {
 		t.Fatal("guard truth set is empty")
 	}
@@ -113,12 +115,15 @@ func TestGuardTruthSetSchemaAndCoverage(t *testing.T) {
 		"worktree/allow/benign-text":                    {},
 	}
 	legacyCases := make(map[string]struct{})
+
 	for i := 1; i <= 19; i++ {
 		legacyCases[fmt.Sprintf("search:g%02d", i)] = struct{}{}
 	}
+
 	for i := 1; i <= 15; i++ {
 		legacyCases[fmt.Sprintf("worktree:w%02d", i)] = struct{}{}
 	}
+
 	for _, legacyCase := range []string{
 		"search:literal-assignment-indexed",
 		"worktree:literal-outside",
@@ -129,43 +134,60 @@ func TestGuardTruthSetSchemaAndCoverage(t *testing.T) {
 	} {
 		legacyCases[legacyCase] = struct{}{}
 	}
+
 	counts := make(map[string]int)
 	seenLegacyCases := make(map[string]struct{})
 	foundProtectedEnvironmentCase := false
 	foundTemporaryEnvironmentCase := false
+
 	for _, truthCase := range cases {
 		delete(requiredCategories, truthCase.Category)
 		if truthCase.LegacyCase != "" {
 			if _, ok := legacyCases[truthCase.LegacyCase]; !ok {
-				t.Errorf("case %q has unexpected legacy_case %q", truthCase.ID, truthCase.LegacyCase)
+				t.Errorf(
+					"case %q has unexpected legacy_case %q",
+					truthCase.ID,
+					truthCase.LegacyCase,
+				)
 			}
+
 			if _, ok := seenLegacyCases[truthCase.LegacyCase]; ok {
 				t.Errorf("case %q duplicates legacy_case %q", truthCase.ID, truthCase.LegacyCase)
 			}
+
 			seenLegacyCases[truthCase.LegacyCase] = struct{}{}
 			delete(legacyCases, truthCase.LegacyCase)
 		}
+
 		if truthCase.LegacyCase == "worktree:w14" {
-			foundProtectedEnvironmentCase = truthCase.Environment["TARGET"] == "/repo/main/f.txt" && truthCase.Expected == expectedBlock
+			foundProtectedEnvironmentCase = truthCase.Environment["TARGET"] == "/repo/main/f.txt" &&
+				truthCase.Expected == expectedBlock
 		}
+
 		if truthCase.ID == "worktree-env-target-tmp" {
-			foundTemporaryEnvironmentCase = truthCase.Environment["TARGET"] == "/tmp/f.txt" && truthCase.Expected == expectedAllow
+			foundTemporaryEnvironmentCase = truthCase.Environment["TARGET"] == "/tmp/f.txt" &&
+				truthCase.Expected == expectedAllow
 		}
+
 		counts[string(truthCase.Guard)+"/"+string(truthCase.Expected)]++
 	}
 
 	if len(requiredCategories) != 0 {
 		t.Errorf("missing required categories: %v", sortedKeys(requiredCategories))
 	}
+
 	if len(legacyCases) != 0 {
 		t.Errorf("missing re-adjudicated legacy cases: %v", sortedKeys(legacyCases))
 	}
+
 	if !foundProtectedEnvironmentCase {
 		t.Error("legacy worktree:w14 must define TARGET=/repo/main/f.txt and block")
 	}
+
 	if !foundTemporaryEnvironmentCase {
 		t.Error("truth set must allow the same TARGET command when TARGET=/tmp/f.txt")
 	}
+
 	for _, key := range []string{"search/block", "search/allow", "worktree/block", "worktree/allow"} {
 		if counts[key] == 0 {
 			t.Errorf("truth set has no %s cases", key)
@@ -183,30 +205,99 @@ func TestLoadGuardTruthSetRejectsInvalidRecords(t *testing.T) {
 		want    string
 	}{
 		{"malformed JSON", `{`, "decode line 1"},
-		{"unknown field", strings.Replace(validSearch, `"expected"`, `"extra":true,"expected"`, 1), "unknown field"},
+		{
+			"unknown field",
+			strings.Replace(validSearch, `"expected"`, `"extra":true,"expected"`, 1),
+			"unknown field",
+		},
 		{"trailing JSON", validSearch + `{}`, "trailing JSON"},
 		{"duplicate id", validSearch + "\n" + validSearch, `duplicate id "search-valid"`},
-		{"invalid guard", strings.Replace(validSearch, `"search"`, `"network"`, 1), `invalid guard "network"`},
-		{"invalid expected", strings.Replace(validSearch, `"allow"`, `"unknown"`, 1), `invalid expected "unknown"`},
-		{"missing indexed roots", strings.Replace(validSearch, `,"indexed_roots":["/repo/main"]`, "", 1), "requires indexed_roots"},
-		{"missing git state", strings.Replace(validWorktree, `,"git_state":{`+gitFixtureBody()+`}`, "", 1), "requires git_state"},
-		{"cross-guard legacy case", strings.Replace(validSearch, `"rationale":"The target is outside the indexed root."`, `"rationale":"The target is outside the indexed root.","legacy_case":"worktree:w01"`, 1), "does not match guard"},
-		{"duplicate worktree path", strings.Replace(validWorktree, `]}`, `,{"path":"/worktrees/feature","branch":"other","is_primary":false}]}`, 1), "duplicate worktree path"},
-		{"secondary default category requires secondary default worktree", strings.Replace(strings.Replace(validWorktree, `"worktree/allow/tmp-redirect"`, `"worktree/block/file-write-default-secondary"`, 1), `"expected":"allow"`, `"expected":"block"`, 1), "requires a non-primary default-branch worktree"},
-		{"non-portable environment path", strings.Replace(validWorktree, `"cwd":"/worktrees/feature"`, `"cwd":"/worktrees/feature","environment":{"TARGET":"/Users/alice/file"}`, 1), "environment TARGET"},
-		{"private path", strings.Replace(validSearch, "/repo/main", "/Users/alice/repo", 1), "not a portable absolute path"},
+		{
+			"invalid guard",
+			strings.Replace(validSearch, `"search"`, `"network"`, 1),
+			`invalid guard "network"`,
+		},
+		{
+			"invalid expected",
+			strings.Replace(validSearch, `"allow"`, `"unknown"`, 1),
+			`invalid expected "unknown"`,
+		},
+		{
+			"missing indexed roots",
+			strings.Replace(validSearch, `,"indexed_roots":["/repo/main"]`, "", 1),
+			"requires indexed_roots",
+		},
+		{
+			"missing git state",
+			strings.Replace(validWorktree, `,"git_state":{`+gitFixtureBody()+`}`, "", 1),
+			"requires git_state",
+		},
+		{
+			"cross-guard legacy case",
+			strings.Replace(
+				validSearch,
+				`"rationale":"The target is outside the indexed root."`,
+				`"rationale":"The target is outside the indexed root.","legacy_case":"worktree:w01"`,
+				1,
+			),
+			"does not match guard",
+		},
+		{
+			"duplicate worktree path",
+			strings.Replace(
+				validWorktree,
+				`]}`,
+				`,{"path":"/worktrees/feature","branch":"other","is_primary":false}]}`,
+				1,
+			),
+			"duplicate worktree path",
+		},
+		{
+			"secondary default category requires secondary default worktree",
+			strings.Replace(
+				strings.Replace(
+					validWorktree,
+					`"worktree/allow/tmp-redirect"`,
+					`"worktree/block/file-write-default-secondary"`,
+					1,
+				),
+				`"expected":"allow"`,
+				`"expected":"block"`,
+				1,
+			),
+			"requires a non-primary default-branch worktree",
+		},
+		{
+			"non-portable environment path",
+			strings.Replace(
+				validWorktree,
+				`"cwd":"/worktrees/feature"`,
+				`"cwd":"/worktrees/feature","environment":{"TARGET":"/Users/alice/file"}`,
+				1,
+			),
+			"environment TARGET",
+		},
+		{
+			"private path",
+			strings.Replace(validSearch, "/repo/main", "/Users/alice/repo", 1),
+			"not a portable absolute path",
+		},
 	}
 
 	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			_, err := loadGuardTruthSet(strings.NewReader(test.content))
-			if err == nil {
-				t.Fatal("loadGuardTruthSet() returned nil error")
-			}
-			if !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("loadGuardTruthSet() error = %v, want substring %q", err, test.want)
-			}
-		})
+		t.Run(
+			test.name,
+			func(t *testing.T) {
+				_, err := loadGuardTruthSet(strings.NewReader(test.content))
+				if err == nil {
+					t.Fatal("loadGuardTruthSet() returned nil error")
+				}
+
+				if !strings.Contains(err.Error(), test.want) {
+					t.Fatalf("loadGuardTruthSet() error = %v, want substring %q", err, test.want)
+				}
+			},
+		)
 	}
 }
 
@@ -215,95 +306,130 @@ func loadGuardTruthSet(reader io.Reader) ([]guardTruthCase, error) {
 	lineNumber := 0
 	seenIDs := make(map[string]struct{})
 	var cases []guardTruthCase
+
 	for scanner.Scan() {
 		lineNumber++
 		line := scanner.Bytes()
 		if len(strings.TrimSpace(string(line))) == 0 {
 			return nil, fmt.Errorf("line %d is blank", lineNumber)
 		}
+
 		var truthCase guardTruthCase
 		decoder := json.NewDecoder(strings.NewReader(string(line)))
 		decoder.DisallowUnknownFields()
 		if err := decoder.Decode(&truthCase); err != nil {
 			return nil, fmt.Errorf("decode line %d: %w", lineNumber, err)
 		}
+
 		var trailing json.RawMessage
 		if err := decoder.Decode(&trailing); err != io.EOF {
 			if err == nil {
 				return nil, fmt.Errorf("decode line %d: trailing JSON value", lineNumber)
 			}
+
 			return nil, fmt.Errorf("decode line %d: trailing JSON: %w", lineNumber, err)
 		}
+
 		if err := validateGuardTruthCase(truthCase); err != nil {
 			return nil, fmt.Errorf("validate line %d: %w", lineNumber, err)
 		}
+
 		if _, ok := seenIDs[truthCase.ID]; ok {
 			return nil, fmt.Errorf("line %d has duplicate id %q", lineNumber, truthCase.ID)
 		}
+
 		seenIDs[truthCase.ID] = struct{}{}
 		cases = append(cases, truthCase)
 	}
+
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("scan truth set: %w", err)
 	}
+
 	return cases, nil
 }
 
 func validateGuardTruthCase(truthCase guardTruthCase) error {
-	if truthCase.ID == "" || truthCase.Category == "" || truthCase.Command == "" || truthCase.CWD == "" || truthCase.Rationale == "" {
+	if truthCase.ID == "" || truthCase.Category == "" || truthCase.Command == "" ||
+		truthCase.CWD == "" ||
+		truthCase.Rationale == "" {
 		return fmt.Errorf("id, category, command, cwd, and rationale are required")
 	}
+
 	if truthCase.Guard != guardAreaSearch && truthCase.Guard != guardAreaWorktree {
 		return fmt.Errorf("invalid guard %q", truthCase.Guard)
 	}
+
 	if truthCase.Expected != expectedAllow && truthCase.Expected != expectedBlock {
 		return fmt.Errorf("invalid expected %q", truthCase.Expected)
 	}
+
 	wantCategoryPrefix := string(truthCase.Guard) + "/" + string(truthCase.Expected) + "/"
 	if !strings.HasPrefix(truthCase.Category, wantCategoryPrefix) {
 		return fmt.Errorf("category %q must start with %q", truthCase.Category, wantCategoryPrefix)
 	}
-	if truthCase.LegacyCase != "" && !strings.HasPrefix(truthCase.LegacyCase, string(truthCase.Guard)+":") {
-		return fmt.Errorf("legacy_case %q does not match guard %q", truthCase.LegacyCase, truthCase.Guard)
+
+	if truthCase.LegacyCase != "" &&
+		!strings.HasPrefix(truthCase.LegacyCase, string(truthCase.Guard)+":") {
+		return fmt.Errorf(
+			"legacy_case %q does not match guard %q",
+			truthCase.LegacyCase,
+			truthCase.Guard,
+		)
 	}
+
 	if !portableAbsolutePath(truthCase.CWD) {
 		return fmt.Errorf("cwd %q is not a portable absolute path", truthCase.CWD)
 	}
+
 	if len(truthCase.Rationale) > 160 || strings.Contains(truthCase.Rationale, "\n") {
 		return fmt.Errorf("rationale must be one concise line of at most 160 characters")
 	}
+
 	for name, value := range truthCase.Environment {
 		if name == "" || !portableAbsolutePath(value) {
-			return fmt.Errorf("environment %s value %q is not a portable absolute path", name, value)
+			return fmt.Errorf(
+				"environment %s value %q is not a portable absolute path",
+				name,
+				value,
+			)
 		}
 	}
+
 	if truthCase.Guard == guardAreaSearch {
 		if len(truthCase.IndexedRoots) == 0 {
 			return fmt.Errorf("search case %q requires indexed_roots", truthCase.ID)
 		}
+
 		if truthCase.GitState != nil {
 			return fmt.Errorf("search case %q must not include git_state", truthCase.ID)
 		}
+
 		for _, root := range truthCase.IndexedRoots {
 			if !portableAbsolutePath(root) {
 				return fmt.Errorf("indexed root %q is not a portable absolute path", root)
 			}
 		}
+
 		return nil
 	}
 
 	if len(truthCase.IndexedRoots) != 0 {
 		return fmt.Errorf("worktree case %q must not include indexed_roots", truthCase.ID)
 	}
+
 	if truthCase.GitState == nil {
 		return fmt.Errorf("worktree case %q requires git_state", truthCase.ID)
 	}
+
 	if err := validateGitState(*truthCase.GitState); err != nil {
 		return err
 	}
+
 	if strings.HasSuffix(truthCase.Category, "-default-secondary") {
 		return validateSecondaryDefaultWorktreeTarget(truthCase)
 	}
+
 	return nil
 }
 
@@ -312,30 +438,41 @@ func validateSecondaryDefaultWorktreeTarget(truthCase guardTruthCase) error {
 		if worktree.IsPrimary || worktree.Branch != truthCase.GitState.DefaultBranch {
 			continue
 		}
+
 		if truthCase.CWD == worktree.Path || strings.Contains(truthCase.Command, worktree.Path) {
 			return nil
 		}
 	}
-	return fmt.Errorf("category %q requires a non-primary default-branch worktree target", truthCase.Category)
+
+	return fmt.Errorf(
+		"category %q requires a non-primary default-branch worktree target",
+		truthCase.Category,
+	)
 }
 
 func validateGitState(state guardGitStateFixture) error {
-	if !portableAbsolutePath(state.PrimaryCheckout) || !portableAbsolutePath(state.CurrentWorktree) {
+	if !portableAbsolutePath(state.PrimaryCheckout) ||
+		!portableAbsolutePath(state.CurrentWorktree) {
 		return fmt.Errorf("git state checkout paths must be portable absolute paths")
 	}
+
 	if state.DefaultBranch == "" || state.CurrentBranch == "" || len(state.Worktrees) == 0 {
 		return fmt.Errorf("git state default_branch, current_branch, and worktrees are required")
 	}
+
 	primaryCount := 0
 	foundCurrent := false
 	seenPaths := make(map[string]struct{})
+
 	for _, worktree := range state.Worktrees {
 		if !portableAbsolutePath(worktree.Path) || worktree.Branch == "" {
 			return fmt.Errorf("worktree path and branch are required")
 		}
+
 		if _, ok := seenPaths[worktree.Path]; ok {
 			return fmt.Errorf("duplicate worktree path %q", worktree.Path)
 		}
+
 		seenPaths[worktree.Path] = struct{}{}
 		if worktree.IsPrimary {
 			primaryCount++
@@ -343,13 +480,16 @@ func validateGitState(state guardGitStateFixture) error {
 				return fmt.Errorf("primary worktree path must match primary_checkout")
 			}
 		}
+
 		if worktree.Path == state.CurrentWorktree && worktree.Branch == state.CurrentBranch {
 			foundCurrent = true
 		}
 	}
+
 	if primaryCount != 1 || !foundCurrent {
 		return fmt.Errorf("git state worktrees must identify the primary and current worktrees")
 	}
+
 	return nil
 }
 
@@ -357,6 +497,7 @@ func portableAbsolutePath(path string) bool {
 	if !filepath.IsAbs(path) {
 		return false
 	}
+
 	return !strings.HasPrefix(path, "/Users/")
 }
 
@@ -365,7 +506,9 @@ func sortedKeys(values map[string]struct{}) []string {
 	for key := range values {
 		keys = append(keys, key)
 	}
+
 	slices.Sort(keys)
+
 	return keys
 }
 

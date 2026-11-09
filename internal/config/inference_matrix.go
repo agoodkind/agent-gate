@@ -101,9 +101,12 @@ func validateInferencePoints(log *slog.Logger, points map[string]InferencePoint)
 		if problem == "" {
 			continue
 		}
+
 		log.Warn("invalid inference point", "name", name, "problem", problem)
+
 		return fmt.Errorf("inference point %q: %s", name, problem)
 	}
+
 	return nil
 }
 
@@ -118,7 +121,9 @@ func inferencePointProblem(point InferencePoint) string {
 	case !validConfidenceSource(point.ConfidenceSource):
 		return fmt.Sprintf(
 			"confidence_source %q must be %q, %q, or empty",
-			point.ConfidenceSource, ConfidenceOutputField, ConfidenceLogprob,
+			point.ConfidenceSource,
+			ConfidenceOutputField,
+			ConfidenceLogprob,
 		)
 	case point.ConfidenceSource == ConfidenceOutputField && point.ConfidenceField == "":
 		return "confidence_field is required when confidence_source is output_field"
@@ -130,11 +135,16 @@ func inferencePointProblem(point InferencePoint) string {
 	case point.ContextTurnBudget < 0:
 		return fmt.Sprintf("context_turn_budget %d must be non-negative", point.ContextTurnBudget)
 	case point.ContextMaxCharsPerTurn < 0:
-		return fmt.Sprintf("context_max_chars_per_turn %d must be non-negative", point.ContextMaxCharsPerTurn)
+		return fmt.Sprintf(
+			"context_max_chars_per_turn %d must be non-negative",
+			point.ContextMaxCharsPerTurn,
+		)
 	case !validContextOnError(point.ContextOnError):
 		return fmt.Sprintf(
 			"context_on_error %q must be %q, %q, or empty",
-			point.ContextOnError, OnErrorOpen, OnErrorClosed,
+			point.ContextOnError,
+			OnErrorOpen,
+			OnErrorClosed,
 		)
 	case point.ContextEndpoint == "" && point.ContextWorkspaceField != "":
 		return "context_workspace_field is set without context_endpoint"
@@ -167,20 +177,25 @@ func compileRuleEvalInference(rule *Rule, points map[string]InferencePoint) erro
 	rule.EvalInference = nil
 	hasInfer := false
 	resolved := map[string]InferencePoint{}
+
 	for index := range rule.Eval {
 		eval := rule.Eval[index]
 		if eval.Kind != EvalKindInfer {
 			continue
 		}
+
 		hasInfer = true
 		resolved[eval.Use] = points[eval.Use]
 	}
+
 	if hasInfer && rule.Intent == "" {
 		return fmt.Errorf("rule %q: an infer evaluator requires intent", rule.Name)
 	}
+
 	if len(resolved) > 0 {
 		rule.EvalInference = resolved
 	}
+
 	return nil
 }
 
@@ -199,9 +214,12 @@ func validateRuleEval(
 		if problem == "" {
 			continue
 		}
+
 		log.Warn("invalid rule eval", "rule", ruleName, "index", index, "problem", problem)
+
 		return fmt.Errorf("rule %q eval %d: %s", ruleName, index, problem)
 	}
+
 	return nil
 }
 
@@ -220,16 +238,21 @@ func validateRuleEvalConditions(
 	if conditionCount > 0 {
 		return nil
 	}
+
 	for index := range evals {
 		if evals[index].Kind != EvalKindDeterministic {
 			continue
 		}
+
 		log.Warn("deterministic evaluator without conditions", "rule", ruleName, "index", index)
+
 		return fmt.Errorf(
 			"rule %q eval %d: a deterministic evaluator requires the rule to declare conditions",
-			ruleName, index,
+			ruleName,
+			index,
 		)
 	}
+
 	return nil
 }
 
@@ -239,12 +262,15 @@ func evalEntryProblem(eval RuleEval, points map[string]InferencePoint) string {
 	if problem := evalEntryShapeProblem(eval); problem != "" {
 		return problem
 	}
+
 	if eval.Kind == EvalKindDeterministic {
 		if eval.Use != "" || eval.Fanout != "" || eval.OnError != "" {
 			return "deterministic evaluator does not accept use, fanout, or on_error"
 		}
+
 		return ""
 	}
+
 	return inferEntryReferenceProblem(eval, points)
 }
 
@@ -252,23 +278,51 @@ func evalEntryProblem(eval RuleEval, points map[string]InferencePoint) string {
 // evaluator entry.
 func evalEntryShapeProblem(eval RuleEval) string {
 	if eval.Kind != EvalKindDeterministic && eval.Kind != EvalKindInfer {
-		return fmt.Sprintf("kind %q must be %q or %q", eval.Kind, EvalKindDeterministic, EvalKindInfer)
+		return fmt.Sprintf(
+			"kind %q must be %q or %q",
+			eval.Kind,
+			EvalKindDeterministic,
+			EvalKindInfer,
+		)
 	}
+
 	if eval.Role != RoleEnforce && eval.Role != RoleVerify && eval.Role != RoleFallback {
 		return fmt.Sprintf(
 			"role %q must be %q, %q, or %q",
-			eval.Role, RoleEnforce, RoleVerify, RoleFallback,
+			eval.Role,
+			RoleEnforce,
+			RoleVerify,
+			RoleFallback,
 		)
 	}
+
 	if eval.Fanout != "" && eval.Fanout != FanoutBatch && eval.Fanout != FanoutIndividual {
-		return fmt.Sprintf("fanout %q must be %q, %q, or empty", eval.Fanout, FanoutBatch, FanoutIndividual)
+		return fmt.Sprintf(
+			"fanout %q must be %q, %q, or empty",
+			eval.Fanout,
+			FanoutBatch,
+			FanoutIndividual,
+		)
 	}
+
 	if eval.Combine != "" && eval.Combine != CombineAnd && eval.Combine != CombineUnion {
-		return fmt.Sprintf("combine %q must be %q, %q, or empty", eval.Combine, CombineAnd, CombineUnion)
+		return fmt.Sprintf(
+			"combine %q must be %q, %q, or empty",
+			eval.Combine,
+			CombineAnd,
+			CombineUnion,
+		)
 	}
+
 	if eval.OnError != "" && eval.OnError != OnErrorOpen && eval.OnError != OnErrorClosed {
-		return fmt.Sprintf("on_error %q must be %q, %q, or empty", eval.OnError, OnErrorOpen, OnErrorClosed)
+		return fmt.Sprintf(
+			"on_error %q must be %q, %q, or empty",
+			eval.OnError,
+			OnErrorOpen,
+			OnErrorClosed,
+		)
 	}
+
 	return ""
 }
 
@@ -278,8 +332,10 @@ func inferEntryReferenceProblem(eval RuleEval, points map[string]InferencePoint)
 	if eval.Use == "" {
 		return "infer evaluator requires use"
 	}
+
 	if _, ok := points[eval.Use]; !ok {
 		return fmt.Sprintf("use %q is not a declared inference point", eval.Use)
 	}
+
 	return ""
 }

@@ -88,9 +88,13 @@ func BenchmarkAuditIdleQualification(b *testing.B) {
 		b.Fatal("qualification requires -benchtime=1x and one process per repetition")
 	}
 	result := qualificationIdleResult{
-		Version: qualificationIdleVersion, Source: os.Getenv("QUALIFICATION_SOURCE"),
-		Scenario: "idle", History: os.Getenv("QUALIFICATION_HISTORY"), Repetition: os.Getenv("QUALIFICATION_REPETITION"),
-		PID: os.Getpid(), MetricScope: "test process with real in-process daemon and audit scheduler; process counters exclude child processes",
+		Version:     qualificationIdleVersion,
+		Source:      os.Getenv("QUALIFICATION_SOURCE"),
+		Scenario:    "idle",
+		History:     os.Getenv("QUALIFICATION_HISTORY"),
+		Repetition:  os.Getenv("QUALIFICATION_REPETITION"),
+		PID:         os.Getpid(),
+		MetricScope: "test process with real in-process daemon and audit scheduler; process counters exclude child processes",
 		Limitations: []string{
 			"The process includes the Go test harness, fixture residue, and resource sampling overhead; it does not run the daemon RPC listener, supervisor, update scheduler, or production log sink.",
 			"One-second memory samples report observed peaks rather than an exact lifetime maximum; settled memory is the final idle sample without forced garbage collection.",
@@ -126,7 +130,10 @@ func BenchmarkAuditIdleQualification(b *testing.B) {
 	result.CompletedHistoryFiles = qualificationSeedIdleHistory(b, cfg, result.History, now)
 	count := result.CompletedHistoryFiles
 	if result.History == "80" || result.History == "160" {
-		result.Limitations = append(result.Limitations, "Historical files contain one real 1 KiB receipt and completed hot evaluation each, with sparse trailing bytes outside SQLite's populated pages. This fixture tests file cardinality and logical byte accounting rather than densely populated history.")
+		result.Limitations = append(
+			result.Limitations,
+			"Historical files contain one real 1 KiB receipt and completed hot evaluation each, with sparse trailing bytes outside SQLite's populated pages. This fixture tests file cardinality and logical byte accounting rather than densely populated history.",
+		)
 	}
 	result.BeforeStartup = qualificationInspectIdleHistory(b, cfg, now, count, count)
 	server, err := daemon.New(b.Context(), qualificationIdleLogger(), cfg)
@@ -137,7 +144,15 @@ func BenchmarkAuditIdleQualification(b *testing.B) {
 	server.StartAuditScheduler(b.Context())
 	result.AfterStartup = qualificationInspectIdleHistory(b, cfg, now, count+1, count)
 	time.Sleep(qualificationIdleSettling)
-	digestInput := fmt.Appendf(nil, "%s\nhistory=%s\nduration=%s\nsettle=%s\nconfig=%s", qualificationIdleVersion, result.History, duration, qualificationIdleSettling, qualificationReadFixture(b, "qualification_idle.toml"))
+	digestInput := fmt.Appendf(
+		nil,
+		"%s\nhistory=%s\nduration=%s\nsettle=%s\nconfig=%s",
+		qualificationIdleVersion,
+		result.History,
+		duration,
+		qualificationIdleSettling,
+		qualificationReadFixture(b, "qualification_idle.toml"),
+	)
 	for index := range count {
 		digestInput = append(digestInput, qualificationIdlePayload(uint64(index+1))...)
 		digestInput = append(digestInput, '\n')
@@ -146,7 +161,10 @@ func BenchmarkAuditIdleQualification(b *testing.B) {
 	result.WorkloadDigest = hex.EncodeToString(digest[:])
 	begin := qualificationReadUsage(b)
 	result.StartedAt = time.Now()
-	result.Samples = append(result.Samples, qualificationIdleSample{Memory: qualificationReadMemory(begin)})
+	result.Samples = append(
+		result.Samples,
+		qualificationIdleSample{Memory: qualificationReadMemory(begin)},
+	)
 	ticker := time.NewTicker(samplePeriod)
 	defer ticker.Stop()
 	deadline := time.NewTimer(duration)
@@ -162,29 +180,58 @@ func BenchmarkAuditIdleQualification(b *testing.B) {
 			measuring = false
 		}
 		finish = qualificationReadUsage(b)
-		result.Samples = append(result.Samples, qualificationIdleSample{AtNS: time.Since(result.StartedAt).Nanoseconds(), CPUNS: finish.CPUNanoseconds - begin.CPUNanoseconds, DiskBytes: finish.DiskBytesWritten - begin.DiskBytesWritten, Memory: qualificationReadMemory(finish)})
+		result.Samples = append(
+			result.Samples,
+			qualificationIdleSample{
+				AtNS:      time.Since(result.StartedAt).Nanoseconds(),
+				CPUNS:     finish.CPUNanoseconds - begin.CPUNanoseconds,
+				DiskBytes: finish.DiskBytesWritten - begin.DiskBytesWritten,
+				Memory:    qualificationReadMemory(finish),
+			},
+		)
 	}
 	b.StopTimer()
-	result.Idle = qualificationIdlePhase{ElapsedNS: time.Since(result.StartedAt).Nanoseconds(), CPUNS: finish.CPUNanoseconds - begin.CPUNanoseconds, DiskBytes: finish.DiskBytesWritten - begin.DiskBytesWritten}
+	result.Idle = qualificationIdlePhase{
+		ElapsedNS: time.Since(result.StartedAt).Nanoseconds(),
+		CPUNS:     finish.CPUNanoseconds - begin.CPUNanoseconds,
+		DiskBytes: finish.DiskBytesWritten - begin.DiskBytesWritten,
+	}
 	result.TimebaseNumer, result.TimebaseDenom = finish.TimebaseNumer, finish.TimebaseDenom
 	shutdownStarted := time.Now()
 	shutdownBegin := qualificationReadUsage(b)
 	server.Close()
 	shutdownFinish := qualificationReadUsage(b)
-	result.Shutdown = qualificationIdlePhase{ElapsedNS: time.Since(shutdownStarted).Nanoseconds(), CPUNS: shutdownFinish.CPUNanoseconds - shutdownBegin.CPUNanoseconds, DiskBytes: shutdownFinish.DiskBytesWritten - shutdownBegin.DiskBytesWritten}
+	result.Shutdown = qualificationIdlePhase{
+		ElapsedNS: time.Since(shutdownStarted).Nanoseconds(),
+		CPUNS:     shutdownFinish.CPUNanoseconds - shutdownBegin.CPUNanoseconds,
+		DiskBytes: shutdownFinish.DiskBytesWritten - shutdownBegin.DiskBytesWritten,
+	}
 	result.AfterShutdown = qualificationInspectIdleHistory(b, cfg, now, count+1, count)
 	for _, sample := range result.Samples {
 		result.Peak.ResidentBytes = max(result.Peak.ResidentBytes, sample.Memory.ResidentBytes)
-		result.Peak.PhysicalFootprintBytes = max(result.Peak.PhysicalFootprintBytes, sample.Memory.PhysicalFootprintBytes)
-		result.Peak.GoHeapAllocBytes = max(result.Peak.GoHeapAllocBytes, sample.Memory.GoHeapAllocBytes)
-		result.Peak.GoHeapInuseBytes = max(result.Peak.GoHeapInuseBytes, sample.Memory.GoHeapInuseBytes)
+		result.Peak.PhysicalFootprintBytes = max(
+			result.Peak.PhysicalFootprintBytes,
+			sample.Memory.PhysicalFootprintBytes,
+		)
+		result.Peak.GoHeapAllocBytes = max(
+			result.Peak.GoHeapAllocBytes,
+			sample.Memory.GoHeapAllocBytes,
+		)
+		result.Peak.GoHeapInuseBytes = max(
+			result.Peak.GoHeapInuseBytes,
+			sample.Memory.GoHeapInuseBytes,
+		)
 	}
 	result.Settled = result.Samples[len(result.Samples)-1].Memory
 	body, err := json.MarshalIndent(result, "", "  ")
 	if err != nil {
 		b.Fatal(err)
 	}
-	if err := os.WriteFile(os.Getenv("QUALIFICATION_OUTPUT"), append(body, '\n'), 0o600); err != nil {
+	if err := os.WriteFile(
+		os.Getenv("QUALIFICATION_OUTPUT"),
+		append(body, '\n'),
+		0o600,
+	); err != nil {
 		b.Fatal(err)
 	}
 	b.ReportMetric(float64(result.Idle.DiskBytes)/duration.Seconds(), "disk-bytes/s")
@@ -204,7 +251,12 @@ func qualificationReadUsage(t testing.TB) processusage.Snapshot {
 func qualificationReadMemory(usage processusage.Snapshot) qualificationMemory {
 	var memory runtime.MemStats
 	runtime.ReadMemStats(&memory)
-	return qualificationMemory{ResidentBytes: usage.ResidentBytes, PhysicalFootprintBytes: usage.PhysicalFootprintBytes, GoHeapAllocBytes: memory.HeapAlloc, GoHeapInuseBytes: memory.HeapInuse}
+	return qualificationMemory{
+		ResidentBytes:          usage.ResidentBytes,
+		PhysicalFootprintBytes: usage.PhysicalFootprintBytes,
+		GoHeapAllocBytes:       memory.HeapAlloc,
+		GoHeapInuseBytes:       memory.HeapInuse,
+	}
 }
 
 type qualificationFile struct {
@@ -265,7 +317,12 @@ func qualificationIdleHistoryCount(t testing.TB, history string) int {
 	}
 }
 
-func qualificationSeedIdleHistory(t testing.TB, cfg *config.Config, history string, now time.Time) int {
+func qualificationSeedIdleHistory(
+	t testing.TB,
+	cfg *config.Config,
+	history string,
+	now time.Time,
+) int {
 	t.Helper()
 	count := qualificationIdleHistoryCount(t, history)
 	catalog := qualificationIdleCatalog(t, cfg)
@@ -283,17 +340,43 @@ func qualificationSeedIdleHistory(t testing.TB, cfg *config.Config, history stri
 		if err != nil {
 			t.Fatal(err)
 		}
-		store, err := intake.NewStore(context.Background(), handle.Database, cfg.AuditStoragePolicy(), qualificationIdleLogger())
+		store, err := intake.NewStore(
+			context.Background(),
+			handle.Database,
+			cfg.AuditStoragePolicy(),
+			qualificationIdleLogger(),
+		)
 		if err != nil {
 			t.Fatal(err)
 		}
 		payload := qualificationIdlePayload(uint64(index + 1))
-		record := intake.Record{EventID: fmt.Sprintf("idle-history-%d", index), RecordedAt: recordedAt, System: "codex", SessionID: "idle-history", EventName: "PreToolUse", RawPayload: payload, NormalizedJSON: payload}
+		record := intake.Record{
+			EventID:        fmt.Sprintf("idle-history-%d", index),
+			RecordedAt:     recordedAt,
+			System:         "codex",
+			SessionID:      "idle-history",
+			EventName:      "PreToolUse",
+			RawPayload:     payload,
+			NormalizedJSON: payload,
+		}
 		appended, err := store.Append(context.Background(), record)
 		if err != nil {
 			t.Fatal(err)
 		}
-		completed := evaluation.Record{Evaluation: evaluation.Evaluation{EvaluationID: "hot-" + record.EventID, ReceiptID: appended.ReceiptID, EventID: appended.EventID, Attempt: 1, Mode: "hot", StartedAt: recordedAt, CompletedAt: recordedAt, FinalVerdict: "allow", FinalSource: "deterministic", EnforcementAction: "allow"}}
+		completed := evaluation.Record{
+			Evaluation: evaluation.Evaluation{
+				EvaluationID:      "hot-" + record.EventID,
+				ReceiptID:         appended.ReceiptID,
+				EventID:           appended.EventID,
+				Attempt:           1,
+				Mode:              "hot",
+				StartedAt:         recordedAt,
+				CompletedAt:       recordedAt,
+				FinalVerdict:      "allow",
+				FinalSource:       "deterministic",
+				EnforcementAction: "allow",
+			},
+		}
 		if err := store.Evaluations().RecordCompleted(context.Background(), completed); err != nil {
 			t.Fatal(err)
 		}
@@ -313,7 +396,13 @@ func qualificationSeedIdleHistory(t testing.TB, cfg *config.Config, history stri
 	return count
 }
 
-func qualificationInspectIdleHistory(t testing.TB, cfg *config.Config, now time.Time, wantFiles, wantReceipts int) qualificationHistory {
+func qualificationInspectIdleHistory(
+	t testing.TB,
+	cfg *config.Config,
+	now time.Time,
+	wantFiles int,
+	wantReceipts int,
+) qualificationHistory {
 	t.Helper()
 	catalog := qualificationIdleCatalog(t, cfg)
 	policy := cfg.AuditStoragePolicy().Rotation()
@@ -334,18 +423,32 @@ func qualificationInspectIdleHistory(t testing.TB, cfg *config.Config, now time.
 	var result qualificationHistory
 	for _, handle := range readers.Handles {
 		var integrity string
-		if err := handle.Database.QueryRowContext(context.Background(), integritySQL).Scan(&integrity); err != nil {
+		if err := handle.Database.QueryRowContext(context.Background(), integritySQL).Scan(
+			&integrity,
+		); err != nil {
 			t.Fatal(err)
 		}
 		if integrity != "ok" {
 			t.Fatalf("SQLite integrity for %s: %s", handle.Bucket.ID, integrity)
 		}
 		var receipts, completed, pending, evaluations int
-		if err := handle.Database.QueryRowContext(context.Background(), completedSQL).Scan(&receipts, &completed, &pending, &evaluations); err != nil {
+		if err := handle.Database.QueryRowContext(context.Background(), completedSQL).Scan(
+			&receipts,
+			&completed,
+			&pending,
+			&evaluations,
+		); err != nil {
 			t.Fatal(err)
 		}
 		if pending != 0 || receipts != completed || receipts != evaluations {
-			t.Fatalf("incomplete fixture %s: receipts=%d completed=%d pending=%d evaluations=%d", handle.Bucket.ID, receipts, completed, pending, evaluations)
+			t.Fatalf(
+				"incomplete fixture %s: receipts=%d completed=%d pending=%d evaluations=%d",
+				handle.Bucket.ID,
+				receipts,
+				completed,
+				pending,
+				evaluations,
+			)
 		}
 		result.Receipts += receipts
 		result.Completed += completed
@@ -375,12 +478,24 @@ func qualificationInspectIdleHistory(t testing.TB, cfg *config.Config, now time.
 				t.Fatal("Darwin file allocation statistics are unavailable")
 			}
 			const statBlockBytes = 512
-			result.Files = append(result.Files, qualificationFile{Name: filepath.Base(bucket.Path + suffix), LogicalBytes: info.Size(), AllocatedBytes: stat.Blocks * statBlockBytes})
+			result.Files = append(
+				result.Files,
+				qualificationFile{
+					Name:           filepath.Base(bucket.Path + suffix),
+					LogicalBytes:   info.Size(),
+					AllocatedBytes: stat.Blocks * statBlockBytes,
+				},
+			)
 			logicalBytes += info.Size()
 		}
 	}
 	if logicalBytes != status.TotalBytes || status.ExcessBytes != 0 {
-		t.Fatalf("catalog accounting=%d, file accounting=%d, excess=%d", status.TotalBytes, logicalBytes, status.ExcessBytes)
+		t.Fatalf(
+			"catalog accounting=%d, file accounting=%d, excess=%d",
+			status.TotalBytes,
+			logicalBytes,
+			status.ExcessBytes,
+		)
 	}
 	return result
 }
@@ -396,21 +511,24 @@ func qualificationReadFixture(t testing.TB, name string) string {
 
 func TestQualificationIdleHistory(t *testing.T) {
 	for _, history := range []string{"empty", "seven", "80", "160"} {
-		t.Run(history, func(t *testing.T) {
-			cfg := qualificationIdleConfig(t)
-			now := time.Now()
-			count := qualificationSeedIdleHistory(t, cfg, history, now)
-			qualificationInspectIdleHistory(t, cfg, now, count, count)
-			server, err := daemon.New(t.Context(), qualificationIdleLogger(), cfg)
-			if err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(server.Close)
-			server.StartAuditScheduler(t.Context())
-			qualificationInspectIdleHistory(t, cfg, now, count+1, count)
-			server.Close()
-			qualificationInspectIdleHistory(t, cfg, now, count+1, count)
-		})
+		t.Run(
+			history,
+			func(t *testing.T) {
+				cfg := qualificationIdleConfig(t)
+				now := time.Now()
+				count := qualificationSeedIdleHistory(t, cfg, history, now)
+				qualificationInspectIdleHistory(t, cfg, now, count, count)
+				server, err := daemon.New(t.Context(), qualificationIdleLogger(), cfg)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(server.Close)
+				server.StartAuditScheduler(t.Context())
+				qualificationInspectIdleHistory(t, cfg, now, count+1, count)
+				server.Close()
+				qualificationInspectIdleHistory(t, cfg, now, count+1, count)
+			},
+		)
 	}
 }
 
@@ -422,7 +540,12 @@ func qualificationIdlePayload(sequence uint64) []byte {
 	const payloadBytes = 1024
 	const marker = "idle-history"
 	format := func(command string) []byte {
-		return fmt.Appendf(nil, `{"session_id":"performance","tool_use_id":"%d","hook_event_name":"PreToolUse","tool_name":"Shell","tool_input":{"command":%q}}`, sequence, command)
+		return fmt.Appendf(
+			nil,
+			`{"session_id":"performance","tool_use_id":"%d","hook_event_name":"PreToolUse","tool_name":"Shell","tool_input":{"command":%q}}`,
+			sequence,
+			command,
+		)
 	}
 	envelopeBytes := len(format(marker))
 	return format(marker + strings.Repeat("x", payloadBytes-envelopeBytes))

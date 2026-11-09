@@ -11,6 +11,7 @@ func TestParseProvidersReturnsCanonicalOrder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseProviders: %v", err)
 	}
+
 	if want := AllProviders(); !reflect.DeepEqual(providers, want) {
 		t.Fatalf("providers = %v, want %v", providers, want)
 	}
@@ -30,15 +31,19 @@ func TestParseProvidersRejectsUnknownAndDuplicateNames(t *testing.T) {
 		{name: "unknown", value: "claude,other", want: "unknown provider"},
 		{name: "duplicate", value: "cursor,claude,cursor", want: "duplicate provider"},
 	} {
-		t.Run(test.name, func(t *testing.T) {
-			_, err := ParseProviders(test.value)
-			if err == nil {
-				t.Fatal("ParseProviders returned nil error")
-			}
-			if !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("error = %q, want %q", err, test.want)
-			}
-		})
+		t.Run(
+			test.name,
+			func(t *testing.T) {
+				_, err := ParseProviders(test.value)
+				if err == nil {
+					t.Fatal("ParseProviders returned nil error")
+				}
+
+				if !strings.Contains(err.Error(), test.want) {
+					t.Fatalf("error = %q, want %q", err, test.want)
+				}
+			},
+		)
 	}
 }
 
@@ -47,6 +52,7 @@ func TestParseProvidersEmptyReturnsExplicitNone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseProviders: %v", err)
 	}
+
 	if providers == nil || len(providers) != 0 {
 		t.Fatalf("providers = %#v, want nonnil empty selection", providers)
 	}

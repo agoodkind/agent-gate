@@ -36,45 +36,63 @@ type pointVerdict struct {
 // evaluatePoint asks one inference point to judge input against prompt, returning
 // its decision plus the model's invocation metadata. A transport, status, or parse
 // failure returns errored so the caller can apply the entry's on-error policy.
-func (runtime *InferRuntime) evaluatePoint(ctx context.Context, point config.InferencePoint, prompt, input string) pointVerdict {
+func (runtime *InferRuntime) evaluatePoint(
+	ctx context.Context,
+	point config.InferencePoint,
+	prompt string,
+	input string,
+) pointVerdict {
 	startedAt := runtime.now()
 	inputJSON := marshalPointInput(prompt, input, point.Model)
 	fail := func(code string) pointVerdict {
 		return pointVerdict{
-			block: false, errored: true,
-			inputJSON: inputJSON, outputJSON: "{}", errorCode: code, model: point.Model,
-			upstream:  boundedUpstreamMetadata(nil),
-			startedAt: startedAt, completedAt: runtime.now(),
+			block:       false,
+			errored:     true,
+			inputJSON:   inputJSON,
+			outputJSON:  "{}",
+			errorCode:   code,
+			model:       point.Model,
+			upstream:    boundedUpstreamMetadata(nil),
+			startedAt:   startedAt,
+			completedAt: runtime.now(),
 		}
 	}
 	timeout := time.Duration(point.TimeoutMs) * time.Millisecond
 	if timeout <= 0 {
 		timeout = defaultPointTimeout
 	}
+
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	client, err := runtime.inferenceClient(point.Endpoint)
 	if err != nil {
 		return fail("invalid_endpoint")
 	}
-	reply, err := client.Infer(callCtx, &inferencepb.InferRequest{
-		Prompt:            prompt,
-		Input:             input,
-		OutputSchema:      decisionOutputSchema,
-		Context:           "",
-		Model:             point.Model,
-		GenerationOptions: pointGenerationOptions(point),
-	})
+
+	reply, err := client.Infer(
+		callCtx,
+		&inferencepb.InferRequest{
+			Prompt:            prompt,
+			Input:             input,
+			OutputSchema:      decisionOutputSchema,
+			Context:           "",
+			Model:             point.Model,
+			GenerationOptions: pointGenerationOptions(point),
+		},
+	)
 	if err != nil {
 		return fail(grpcErrorClass(err))
 	}
+
 	if reply == nil || reply.GetStatus() != inferencepb.InferenceStatus_INFERENCE_STATUS_COMPLETE {
 		return fail("non_complete")
 	}
+
 	decision, ok := parsePointDecision(reply.GetOutputJson())
 	if !ok {
 		return fail("invalid_response")
 	}
+
 	return pointVerdict{
 		block:       decision == "block",
 		errored:     false,
@@ -92,14 +110,21 @@ func (runtime *InferRuntime) evaluatePoint(ctx context.Context, point config.Inf
 // JSON object, so the recorded inference layer carries a valid, self-describing
 // input rather than an empty blob the evaluation store would reject.
 func marshalPointInput(prompt, input, model string) string {
-	encoded, err := json.Marshal(struct {
-		Prompt string `json:"prompt"`
-		Input  string `json:"input"`
-		Model  string `json:"model"`
-	}{Prompt: prompt, Input: input, Model: model})
+	encoded, err := json.Marshal(
+		struct {
+			Prompt string `json:"prompt"`
+			Input  string `json:"input"`
+			Model  string `json:"model"`
+		}{
+			Prompt: prompt,
+			Input:  input,
+			Model:  model,
+		},
+	)
 	if err != nil {
 		return "{}"
 	}
+
 	return string(encoded)
 }
 
@@ -113,23 +138,28 @@ func recordPointLayer(ctx context.Context, ruleName string, traceIndex int, verd
 	if collector == nil {
 		return
 	}
+
 	status := traceStatusComplete
 	outcome := "nonmatch"
 	if verdict.block {
 		outcome = "match"
 	}
+
 	if verdict.errored {
 		status = traceStatusError
 		outcome = ""
 	}
+
 	output := json.RawMessage(verdict.outputJSON)
 	if len(output) == 0 {
 		output = json.RawMessage(`{}`)
 	}
+
 	input := json.RawMessage(verdict.inputJSON)
 	if len(input) == 0 || !json.Valid(input) {
 		input = json.RawMessage(`{}`)
 	}
+
 	layer := newLayerTrace(ruleName, traceIndex, verdict.model, "inference")
 	layer.Status = status
 	layer.Outcome = outcome
@@ -151,6 +181,7 @@ func pointGenerationOptions(point config.InferencePoint) *inferencepb.Generation
 	if point.ReasoningEffort == "" {
 		return nil
 	}
+
 	return &inferencepb.GenerationOptions{
 		ReasoningEffort:     reasoningEffortValue(config.ReasoningEffort(point.ReasoningEffort)),
 		MaxCompletionTokens: nil,
@@ -165,8 +196,10 @@ func parsePointDecision(outputJSON string) (string, bool) {
 	if err := json.Unmarshal([]byte(outputJSON), &decoded); err != nil {
 		return "", false
 	}
+
 	if decoded.Decision != "allow" && decoded.Decision != "block" {
 		return "", false
 	}
+
 	return decoded.Decision, true
 }

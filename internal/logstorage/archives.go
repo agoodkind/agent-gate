@@ -27,15 +27,19 @@ func diagnosticArchiveDate(entry os.DirEntry) (time.Time, bool, error) {
 		if err != nil {
 			return time.Time{}, false, wrapError("stat diagnostic backup", err)
 		}
+
 		return info.ModTime(), true, nil
 	}
+
 	timestamp := strings.TrimSuffix(name, ".gz")
 	if !strings.HasPrefix(timestamp, "agent-gate-") || !strings.HasSuffix(timestamp, ".jsonl") {
 		return time.Time{}, false, nil
 	}
+
 	timestamp = strings.TrimSuffix(strings.TrimPrefix(timestamp, "agent-gate-"), ".jsonl")
 	// Timestamp archives omit a zone. UTC preserves their relative order.
 	at, err := time.Parse(diagnosticTimestampFormat, timestamp)
+
 	return at, err == nil, nil
 }
 
@@ -44,17 +48,25 @@ func (writer *DiagnosticWriter) findArchives() ([]diagnosticArchive, error) {
 	if err != nil {
 		return nil, wrapError("read diagnostic archives", err)
 	}
+
 	archives := make([]diagnosticArchive, 0)
+
 	for _, entry := range entries {
-		at, owned, err := diagnosticArchiveDate(entry)
+		archiveTime, owned, err := diagnosticArchiveDate(entry)
 		if err != nil {
 			return nil, err
 		}
+
 		if owned {
-			archives = append(archives, diagnosticArchive{entry.Name(), at})
+			archives = append(archives, diagnosticArchive{entry.Name(), archiveTime})
 		}
 	}
-	slices.SortFunc(archives, func(left, right diagnosticArchive) int { return right.at.Compare(left.at) })
+
+	slices.SortFunc(
+		archives,
+		func(left, right diagnosticArchive) int { return right.at.Compare(left.at) },
+	)
+
 	return archives, nil
 }
 
@@ -63,6 +75,7 @@ func (writer *DiagnosticWriter) validateArchive(name string) error {
 	if err != nil {
 		return err
 	}
+
 	return closeFile(file)
 }
 
@@ -71,9 +84,14 @@ func (writer *DiagnosticWriter) importCompressedArchive(file *os.File) (result e
 	if err != nil {
 		return wrapError("read compressed diagnostic archive", err)
 	}
+
 	defer func() {
-		result = errors.Join(result, wrapError("close compressed diagnostic archive", compressed.Close()))
+		result = errors.Join(
+			result,
+			wrapError("close compressed diagnostic archive", compressed.Close()),
+		)
 	}()
+
 	return writer.compress(compressed)
 }
 
@@ -81,18 +99,22 @@ func (writer *DiagnosticWriter) importArchive(name string) (result error) {
 	if name == DiagnosticArchiveName {
 		return nil
 	}
+
 	file, err := openFile(writer.directory, name, unix.O_RDONLY)
 	if err != nil {
 		return err
 	}
+
 	defer func() { result = errors.Join(result, closeFile(file)) }()
 	if strings.HasSuffix(name, ".gz") {
 		return writer.importCompressedArchive(file)
 	}
+
 	data, err := readTail(file, DiagnosticMaxBytes)
 	if err != nil {
 		return err
 	}
+
 	return writer.compress(bytes.NewReader(data))
 }
 
@@ -101,24 +123,30 @@ func (writer *DiagnosticWriter) pruneArchives() error {
 	if err != nil {
 		return err
 	}
+
 	if len(archives) == 0 {
 		return nil
 	}
+
 	for _, archive := range archives {
 		if err := writer.validateArchive(archive.name); err != nil {
 			return err
 		}
 	}
+
 	if err := writer.importArchive(archives[0].name); err != nil {
 		return err
 	}
+
 	for _, archive := range archives {
 		if archive.name == DiagnosticArchiveName {
 			continue
 		}
+
 		if err := unix.Unlinkat(int(writer.directory.Fd()), archive.name, 0); err != nil {
 			return wrapError("remove diagnostic archive "+archive.name, err)
 		}
 	}
+
 	return nil
 }

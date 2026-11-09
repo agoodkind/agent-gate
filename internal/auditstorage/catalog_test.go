@@ -28,18 +28,23 @@ func TestBucketStartBoundaries(t *testing.T) {
 		{"fall", "2026-11-01T01:30:00-08:00", 24 * time.Hour, "2026-11-01T00:00:00Z"},
 		{"non day interval", "1970-01-01T06:59:59Z", 7 * time.Hour, "1970-01-01T00:00:00Z"},
 	} {
-		t.Run(test.name, func(t *testing.T) {
-			now, err := time.Parse(time.RFC3339, test.now)
-			if err != nil {
-				t.Fatal(err)
-			}
-			want, err := time.Parse(time.RFC3339, test.want)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got := bucketStart(now, test.interval); !got.Equal(want) {
-				t.Fatalf("start = %v, want %v", got, want)
-			}
-		})
+		t.Run(
+			test.name,
+			func(t *testing.T) {
+				now, err := time.Parse(time.RFC3339, test.now)
+				if err != nil {
+					t.Fatal(err)
+				}
+
+				want, err := time.Parse(time.RFC3339, test.want)
+				if err != nil {
+					t.Fatal(err)
+				}
+
+				if got := bucketStart(now, test.interval); !got.Equal(want) {
+					t.Fatalf("start = %v, want %v", got, want)
+				}
+			},
+		)
 	}
 }

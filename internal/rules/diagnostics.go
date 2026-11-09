@@ -45,43 +45,58 @@ func FormatViolations(violations []Violation) string {
 		if b.Len() > 0 {
 			b.WriteString("\n\n")
 		}
+
 		writeDetailedDiagnostics(&b, detailed)
 	}
+
 	if omitted > 0 && len(detailed) > 0 {
-		fmt.Fprintf(&b, "\n\n... %d more %s omitted\n", omitted, plural(omitted, "violation", "violations"))
+		fmt.Fprintf(
+			&b,
+			"\n\n... %d more %s omitted\n",
+			omitted,
+			plural(omitted, "violation", "violations"),
+		)
 	}
+
 	return strings.TrimRight(b.String(), "\n")
 }
 
 func splitDiagnosticFormats(violations []Violation) ([]Violation, []Violation) {
 	var messageOnly []Violation
 	var detailed []Violation
+
 	for _, violation := range violations {
 		if violation.DiagnosticFormat == config.DiagnosticFormatMessageOnly {
 			messageOnly = append(messageOnly, violation)
 			continue
 		}
+
 		detailed = append(detailed, violation)
 	}
+
 	return messageOnly, detailed
 }
 
 func writeMessageOnlyDiagnostics(b *strings.Builder, violations []Violation) {
 	seen := make(map[string]bool)
+
 	for _, violation := range violations {
 		if violation.Message == "" || seen[violation.Message] {
 			continue
 		}
+
 		seen[violation.Message] = true
 		if b.Len() > 0 {
 			b.WriteString("\n")
 		}
+
 		b.WriteString(violation.Message)
 	}
 }
 
 func writeDetailedDiagnostics(b *strings.Builder, violations []Violation) {
 	keys := legendKeys(violations)
+
 	occurrences := make([]diagnosticOccurrence, 0, len(violations))
 	for _, v := range violations {
 		occ := occurrenceFor(v)
@@ -89,7 +104,12 @@ func writeDetailedDiagnostics(b *strings.Builder, violations []Violation) {
 		occurrences = append(occurrences, occ)
 	}
 
-	fmt.Fprintf(b, "agent-gate blocked %d %s:\n", len(violations), plural(len(violations), "violation", "violations"))
+	fmt.Fprintf(
+		b,
+		"agent-gate blocked %d %s:\n",
+		len(violations),
+		plural(len(violations), "violation", "violations"),
+	)
 	writeLegend(b, occurrences)
 	writeSourceDiagnostics(b, occurrences)
 }
@@ -97,10 +117,12 @@ func writeDetailedDiagnostics(b *strings.Builder, violations []Violation) {
 func writeSourceDiagnostics(b *strings.Builder, occurrences []diagnosticOccurrence) {
 	byField := make(map[string][]diagnosticOccurrence)
 	var fields []string
+
 	for _, occ := range occurrences {
 		if _, ok := byField[occ.FieldPath]; !ok {
 			fields = append(fields, occ.FieldPath)
 		}
+
 		byField[occ.FieldPath] = append(byField[occ.FieldPath], occ)
 	}
 
@@ -109,15 +131,20 @@ func writeSourceDiagnostics(b *strings.Builder, occurrences []diagnosticOccurren
 	}
 
 	fmt.Fprintf(b, "\nMatches:\n")
+
 	for _, field := range fields {
 		fmt.Fprintf(b, "- field: %s\n", field)
 		lines := byField[field]
-		sort.SliceStable(lines, func(i, j int) bool {
-			if lines[i].Line != lines[j].Line {
-				return lines[i].Line < lines[j].Line
-			}
-			return lines[i].Column < lines[j].Column
-		})
+		sort.SliceStable(
+			lines,
+			func(i, j int) bool {
+				if lines[i].Line != lines[j].Line {
+					return lines[i].Line < lines[j].Line
+				}
+
+				return lines[i].Column < lines[j].Column
+			},
+		)
 
 		for _, occ := range lines {
 			writeOccurrence(b, occ)
@@ -130,13 +157,16 @@ func writeOccurrence(b *strings.Builder, occ diagnosticOccurrence) {
 	if occ.FilePath != "" {
 		fmt.Fprintf(b, "    file: %s\n", occ.FilePath)
 	}
+
 	fmt.Fprintf(b, "    line: %d\n", occ.Line)
 	fmt.Fprintf(b, "    column: %d\n", occ.Column)
 	if occ.Redact {
 		fmt.Fprintf(b, "    match: %s\n", strconv.Quote("<redacted>"))
 		fmt.Fprintf(b, "    text: %s\n", strconv.Quote("<redacted>"))
+
 		return
 	}
+
 	fmt.Fprintf(b, "    match: %s\n", strconv.Quote(occ.Match))
 	fmt.Fprintf(b, "    text: %s\n", strconv.Quote(occ.LineText))
 }
@@ -144,11 +174,13 @@ func writeOccurrence(b *strings.Builder, occ diagnosticOccurrence) {
 func writeLegend(b *strings.Builder, occurrences []diagnosticOccurrence) {
 	seen := make(map[string]bool)
 	var order []diagnosticOccurrence
+
 	for _, occ := range occurrences {
 		id := legendID(occ.Violation)
 		if seen[id] {
 			continue
 		}
+
 		seen[id] = true
 		order = append(order, occ)
 	}
@@ -158,6 +190,7 @@ func writeLegend(b *strings.Builder, occurrences []diagnosticOccurrence) {
 	}
 
 	fmt.Fprintf(b, "\nRules:\n")
+
 	for _, occ := range order {
 		fmt.Fprintf(b, "- %s = %s\n", occ.Key, occ.RuleName)
 		fmt.Fprintf(b, "  message: %s\n", occ.Message)
@@ -178,8 +211,12 @@ func occurrenceFor(v Violation) diagnosticOccurrence {
 		Key:       "",
 		Line:      line,
 		Column:    utf8.RuneCountInString(prefix) + 1,
-		LineText:  clippedLineText(visibleText(lineText), utf8.RuneCountInString(prefix), visibleWidth(match)),
-		Match:     visibleText(match),
+		LineText: clippedLineText(
+			visibleText(lineText),
+			utf8.RuneCountInString(prefix),
+			visibleWidth(match),
+		),
+		Match: visibleText(match),
 	}
 }
 
@@ -187,16 +224,19 @@ func lineForOffset(value string, offset int) (line int, lineStart int, text stri
 	if offset < 0 {
 		offset = 0
 	}
+
 	if offset > len(value) {
 		offset = len(value)
 	}
 
 	line = 1
 	lineStart = 0
+
 	for i, r := range value {
 		if i >= offset {
 			break
 		}
+
 		if r == '\n' {
 			line++
 			lineStart = i + 1
@@ -207,6 +247,7 @@ func lineForOffset(value string, offset int) (line int, lineStart int, text stri
 	if next := strings.IndexByte(value[lineStart:], '\n'); next >= 0 {
 		lineEnd = lineStart + next
 	}
+
 	return line, lineStart, value[lineStart:lineEnd]
 }
 
@@ -220,30 +261,36 @@ func clippedLineText(line string, matchStart int, matchWidth int) string {
 	if matchWidth < 1 {
 		matchWidth = 1
 	}
+
 	start := max(matchStart-30, 0)
 	end := min(matchStart+matchWidth+30, len(lineRunes))
 	prefix := ""
 	if start > 0 {
 		prefix = "..."
 	}
+
 	suffix := ""
 	if end < len(lineRunes) {
 		suffix = "..."
 	}
+
 	return prefix + string(lineRunes[start:end]) + suffix
 }
 
 func legendKeys(violations []Violation) map[string]string {
 	keys := make(map[string]string)
 	next := 0
+
 	for _, v := range violations {
 		id := legendID(v)
 		if _, ok := keys[id]; ok {
 			continue
 		}
+
 		keys[id] = legendKey(next)
 		next++
 	}
+
 	return keys
 }
 
@@ -254,17 +301,20 @@ func legendID(v Violation) string {
 func legendKey(i int) string {
 	i++
 	var out []byte
+
 	for i > 0 {
 		i--
 		out = append([]byte{byte('A' + i%26)}, out...)
 		i /= 26
 	}
+
 	return string(out)
 }
 
 func visibleText(s string) string {
 	s = strings.ReplaceAll(s, "\t", "<TAB>")
 	s = strings.ReplaceAll(s, "\r", "<CR>")
+
 	return s
 }
 
@@ -276,5 +326,6 @@ func plural(n int, one, many string) string {
 	if n == 1 {
 		return one
 	}
+
 	return many
 }

@@ -59,6 +59,7 @@ func withBatchInferenceMemo(ctx context.Context, memo *batchInferenceMemo) conte
 	if memo == nil {
 		return ctx
 	}
+
 	return context.WithValue(ctx, batchInferenceMemoKey{}, memo)
 }
 
@@ -70,18 +71,24 @@ func batchInferenceMemoFromContext(ctx context.Context) *batchInferenceMemo {
 // verdictFor returns the recorded verdict for a rule at an inference point, plus
 // whether the batch memo carries one. A false result tells the caller to fall back
 // to an individual call.
-func (memo *batchInferenceMemo) verdictFor(point config.InferencePoint, ruleName string) (*pointVerdict, bool) {
+func (memo *batchInferenceMemo) verdictFor(
+	point config.InferencePoint,
+	ruleName string,
+) (*pointVerdict, bool) {
 	if memo == nil {
 		return nil, false
 	}
-	group, ok := memo.groups[point]
-	if !ok {
+
+	group, found := memo.groups[point]
+	if !found {
 		return nil, false
 	}
-	decision, ok := group.decisions[ruleName]
-	if !ok {
+
+	decision, found := group.decisions[ruleName]
+	if !found {
 		return nil, false
 	}
+
 	verdict := pointVerdict{
 		block:       decision.block,
 		errored:     decision.errored,
@@ -93,6 +100,7 @@ func (memo *batchInferenceMemo) verdictFor(point config.InferencePoint, ruleName
 		startedAt:   group.startedAt,
 		completedAt: group.completedAt,
 	}
+
 	return &verdict, true
 }
 
@@ -132,19 +140,25 @@ func runBatchInference(
 	if runtime == nil {
 		return nil
 	}
+
 	groups, order := collectBatchGroups(ctx, fields, rulesSlice, system, eventName, getenv)
 	if len(groups) == 0 {
 		return nil
 	}
+
 	judgeTail, contextStatus := runtime.fetchJudgeTranscript(ctx, fields)
 	if contextStatus == contextUnavailable {
 		return runtime.contextUnavailableMemo(groups, order)
 	}
+
 	facts := resolveJudgeContext(ctx, *fields, unionJudgeContextKeys(groups))
 	judgeInput := buildJudgeInput(*fields, judgeTail, facts)
-	memo := &batchInferenceMemo{groups: make(map[config.InferencePoint]*batchGroupResult, len(groups))}
+	memo := &batchInferenceMemo{
+		groups: make(map[config.InferencePoint]*batchGroupResult, len(groups)),
+	}
 	var mu sync.Mutex
 	var wg sync.WaitGroup
+
 	for _, point := range order {
 		plan := groups[point]
 		wg.Add(1)
@@ -155,8 +169,10 @@ func runBatchInference(
 					slog.ErrorContext(
 						ctx,
 						"batch inference goroutine panicked",
-						"err", fmt.Errorf("panic: %v", recovered),
-						"model", point.Model,
+						"err",
+						fmt.Errorf("panic: %v", recovered),
+						"model",
+						point.Model,
 					)
 				}
 			}()
@@ -164,9 +180,14 @@ func runBatchInference(
 			mu.Lock()
 			memo.groups[point] = result
 			mu.Unlock()
-		}(point, plan)
+		}(
+			point,
+			plan,
+		)
 	}
+
 	wg.Wait()
+
 	return memo
 }
 
@@ -192,32 +213,56 @@ const (
 // endpoint is configured but the hook carries no conversation id or the fetch
 // errors, so the judge does not enforce without the conversation that is its source
 // of intent. It reports contextReady with the tail on success.
-func (runtime *InferRuntime) fetchJudgeTranscript(ctx context.Context, fields *FieldSet) (string, judgeContextStatus) {
+func (runtime *InferRuntime) fetchJudgeTranscript(
+	ctx context.Context,
+	fields *FieldSet,
+) (string, judgeContextStatus) {
 	settings := runtime.judgeTranscriptConfig()
 	if settings.endpoint == "" || settings.maxTokens <= 0 {
 		return "", contextDisabled
 	}
+
 	conversationID := strings.TrimSpace(fields.ConversationID)
 	if conversationID == "" {
-		slog.WarnContext(ctx, "judge transcript unavailable: hook carried no conversation id", "endpoint", settings.endpoint)
+		slog.WarnContext(
+			ctx,
+			"judge transcript unavailable: hook carried no conversation id",
+			"endpoint",
+			settings.endpoint,
+		)
+
 		return "", contextUnavailable
 	}
+
 	timeout := settings.timeout
 	if timeout <= 0 {
 		timeout = defaultJudgeTranscriptTimeout
 	}
+
 	fetchCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	tail, errClass := runtime.fetchTranscriptTail(fetchCtx, transcriptParams{
-		endpoint:       settings.endpoint,
-		conversationID: conversationID,
-		tokenModel:     settings.tokenModel,
-		maxTokens:      settings.maxTokens,
-	})
+	tail, errClass := runtime.fetchTranscriptTail(
+		fetchCtx,
+		transcriptParams{
+			endpoint:       settings.endpoint,
+			conversationID: conversationID,
+			tokenModel:     settings.tokenModel,
+			maxTokens:      settings.maxTokens,
+		},
+	)
 	if errClass != "" {
-		slog.WarnContext(ctx, "judge transcript fetch failed", "endpoint", settings.endpoint, "err_class", errClass)
+		slog.WarnContext(
+			ctx,
+			"judge transcript fetch failed",
+			"endpoint",
+			settings.endpoint,
+			"err_class",
+			errClass,
+		)
+
 		return "", contextUnavailable
 	}
+
 	return tail, contextReady
 }
 
@@ -231,13 +276,22 @@ func (runtime *InferRuntime) contextUnavailableMemo(
 	order []config.InferencePoint,
 ) *batchInferenceMemo {
 	stamp := runtime.now()
-	memo := &batchInferenceMemo{groups: make(map[config.InferencePoint]*batchGroupResult, len(order))}
+
+	memo := &batchInferenceMemo{
+		groups: make(map[config.InferencePoint]*batchGroupResult, len(order)),
+	}
 	for _, point := range order {
 		plan := groups[point]
+
 		decisions := make(map[string]batchRuleDecision, len(plan.participants))
 		for _, participant := range plan.participants {
-			decisions[participant.ruleName] = batchRuleDecision{block: false, errored: true, errorCode: "context_unavailable"}
+			decisions[participant.ruleName] = batchRuleDecision{
+				block:     false,
+				errored:   true,
+				errorCode: "context_unavailable",
+			}
 		}
+
 		memo.groups[point] = &batchGroupResult{
 			model:       point.Model,
 			inputJSON:   "",
@@ -247,6 +301,7 @@ func (runtime *InferRuntime) contextUnavailableMemo(
 			decisions:   decisions,
 		}
 	}
+
 	return memo
 }
 
@@ -265,42 +320,53 @@ func collectBatchGroups(
 ) (map[config.InferencePoint]*batchGroupPlan, []config.InferencePoint) {
 	groups := map[config.InferencePoint]*batchGroupPlan{}
 	var order []config.InferencePoint
+
 	for i := range rulesSlice {
 		rule := &rulesSlice[i]
 		if !appliesToEvent(rule, system, eventName) {
 			continue
 		}
+
 		if envGuardFires(getenv, rule.DisableIfEnv) {
 			continue
 		}
+
 		if !allConditionsMatch(ctx, *fields, rule, rule.Conditions) {
 			continue
 		}
+
 		for _, eval := range rule.Eval {
 			if eval.Kind != config.EvalKindInfer || eval.Fanout != config.FanoutBatch {
 				continue
 			}
+
 			point, ok := rule.EvalInference[eval.Use]
 			if !ok {
 				continue
 			}
+
 			plan := groups[point]
 			if plan == nil {
 				plan = &batchGroupPlan{point: point, participants: nil, seen: map[string]bool{}}
 				groups[point] = plan
 				order = append(order, point)
 			}
+
 			if !plan.seen[rule.Name] {
 				plan.seen[rule.Name] = true
-				plan.participants = append(plan.participants, batchParticipant{
-					ruleName:     rule.Name,
-					intent:       rule.Intent,
-					description:  rule.Description,
-					judgeContext: rule.JudgeContext,
-				})
+				plan.participants = append(
+					plan.participants,
+					batchParticipant{
+						ruleName:     rule.Name,
+						intent:       rule.Intent,
+						description:  rule.Description,
+						judgeContext: rule.JudgeContext,
+					},
+				)
 			}
 		}
 	}
+
 	return groups, order
 }
 
@@ -311,17 +377,20 @@ func collectBatchGroups(
 func unionJudgeContextKeys(groups map[config.InferencePoint]*batchGroupPlan) []string {
 	seen := map[string]bool{}
 	var keys []string
+
 	for _, plan := range groups {
 		for _, participant := range plan.participants {
 			for _, key := range participant.judgeContext {
 				if key == "" || seen[key] {
 					continue
 				}
+
 				seen[key] = true
 				keys = append(keys, key)
 			}
 		}
 	}
+
 	return keys
 }
 
@@ -342,8 +411,13 @@ func (runtime *InferRuntime) evaluateBatchGroup(
 	fail := func(code string) *batchGroupResult {
 		decisions := make(map[string]batchRuleDecision, len(plan.participants))
 		for _, participant := range plan.participants {
-			decisions[participant.ruleName] = batchRuleDecision{block: false, errored: true, errorCode: code}
+			decisions[participant.ruleName] = batchRuleDecision{
+				block:     false,
+				errored:   true,
+				errorCode: code,
+			}
 		}
+
 		return &batchGroupResult{
 			model:       plan.point.Model,
 			inputJSON:   inputJSON,
@@ -357,30 +431,38 @@ func (runtime *InferRuntime) evaluateBatchGroup(
 	if timeout <= 0 {
 		timeout = defaultPointTimeout
 	}
+
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	client, err := runtime.inferenceClient(plan.point.Endpoint)
 	if err != nil {
 		return fail("invalid_endpoint")
 	}
-	reply, err := client.Infer(callCtx, &inferencepb.InferRequest{
-		Prompt:            prompt,
-		Input:             judgeInput,
-		OutputSchema:      blocksOnlyOutputSchema,
-		Context:           "",
-		Model:             plan.point.Model,
-		GenerationOptions: pointGenerationOptions(plan.point),
-	})
+
+	reply, err := client.Infer(
+		callCtx,
+		&inferencepb.InferRequest{
+			Prompt:            prompt,
+			Input:             judgeInput,
+			OutputSchema:      blocksOnlyOutputSchema,
+			Context:           "",
+			Model:             plan.point.Model,
+			GenerationOptions: pointGenerationOptions(plan.point),
+		},
+	)
 	if err != nil {
 		return fail(grpcErrorClass(err))
 	}
+
 	if reply == nil || reply.GetStatus() != inferencepb.InferenceStatus_INFERENCE_STATUS_COMPLETE {
 		return fail("non_complete")
 	}
+
 	blockSet, ok := parseBlockList(reply.GetOutputJson())
 	if !ok {
 		return fail("invalid_response")
 	}
+
 	return &batchGroupResult{
 		model:       plan.point.Model,
 		inputJSON:   inputJSON,
@@ -395,7 +477,10 @@ func (runtime *InferRuntime) evaluateBatchGroup(
 // in the block set blocks, and a rule absent from the set allows. Absence means
 // allow now, so an omitted rule is never errored. Rule ids in the set that are not
 // participants are ignored, since only participants are iterated.
-func batchDecisionsFromBlockList(participants []batchParticipant, blockSet map[string]bool) map[string]batchRuleDecision {
+func batchDecisionsFromBlockList(
+	participants []batchParticipant,
+	blockSet map[string]bool,
+) map[string]batchRuleDecision {
 	decisions := make(map[string]batchRuleDecision, len(participants))
 	for _, participant := range participants {
 		decisions[participant.ruleName] = batchRuleDecision{
@@ -404,6 +489,7 @@ func batchDecisionsFromBlockList(participants []batchParticipant, blockSet map[s
 			errorCode: "",
 		}
 	}
+
 	return decisions
 }
 
@@ -417,8 +503,12 @@ func buildBatchPrompt(participants []batchParticipant) string {
 	var builder strings.Builder
 	builder.WriteString("You are a security guard reviewing one tool call. ")
 	builder.WriteString("Judge the tool call independently against each rule below. ")
-	builder.WriteString(`Return a JSON object {"block":["<rule_id>",...]} listing only the rule_id values you decide to block, and an empty list when nothing should be blocked. `)
+	builder.WriteString(
+		`Return a JSON object {"block":["<rule_id>",...]} listing only the rule_id values you decide to block, ` +
+			`and an empty list when nothing should be blocked. `,
+	)
 	builder.WriteString("Use the exact rule_id values given.\n\nRules:\n")
+
 	for _, participant := range participants {
 		builder.WriteString("- rule_id: ")
 		builder.WriteString(participant.ruleName)
@@ -431,6 +521,7 @@ func buildBatchPrompt(participants []batchParticipant) string {
 			builder.WriteString("\n")
 		}
 	}
+
 	return builder.String()
 }
 
@@ -439,14 +530,21 @@ func buildBatchPrompt(participants []batchParticipant) string {
 // conversation now rides inside the judge-input panel, so there is no separate
 // context field.
 func marshalBatchInput(prompt, input, model string) string {
-	encoded, err := json.Marshal(struct {
-		Prompt string `json:"prompt"`
-		Input  string `json:"input"`
-		Model  string `json:"model"`
-	}{Prompt: prompt, Input: input, Model: model})
+	encoded, err := json.Marshal(
+		struct {
+			Prompt string `json:"prompt"`
+			Input  string `json:"input"`
+			Model  string `json:"model"`
+		}{
+			Prompt: prompt,
+			Input:  input,
+			Model:  model,
+		},
+	)
 	if err != nil {
 		return "{}"
 	}
+
 	return string(encoded)
 }
 
@@ -456,9 +554,11 @@ func batchRuleOutputJSON(decision batchRuleDecision) string {
 	if decision.errored {
 		return "{}"
 	}
+
 	if decision.block {
 		return `{"decision":"block"}`
 	}
+
 	return `{"decision":"allow"}`
 }
 
@@ -477,12 +577,15 @@ func parseBlockList(outputJSON string) (map[string]bool, bool) {
 	if err := json.Unmarshal([]byte(outputJSON), &decoded); err != nil {
 		return nil, false
 	}
+
 	if decoded.Block == nil {
 		return nil, false
 	}
+
 	blockSet := make(map[string]bool, len(*decoded.Block))
 	for _, ruleID := range *decoded.Block {
 		blockSet[ruleID] = true
 	}
+
 	return blockSet, true
 }

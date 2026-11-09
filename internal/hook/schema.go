@@ -1,12 +1,15 @@
 package hook
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
 
 	"goodkind.io/agent-gate/internal/config"
 )
+
+var errUnknownConditionKind = errors.New("unknown kind")
 
 // EventSchema is the set of valid dot-path field names for a single event.
 // Virtual fields are handled separately and are always considered valid; they
@@ -19,22 +22,27 @@ func makeSchema(base []string, extra ...string) EventSchema {
 	for _, p := range base {
 		s[p] = true
 	}
+
 	for _, p := range extra {
 		s[p] = true
 	}
+
 	return s
 }
 
 func combinePaths(parts ...[]string) []string {
 	total := 0
+
 	for _, part := range parts {
 		total += len(part)
 	}
 
 	paths := make([]string, 0, total)
+
 	for _, part := range parts {
 		paths = append(paths, part...)
 	}
+
 	return paths
 }
 
@@ -191,6 +199,7 @@ var (
 func buildCopilotSchema() map[string]EventSchema {
 	envelope := []string{"hook_event_name", "session_id", "transcript_path", "cwd"}
 	toolEvent := combinePaths(envelope, toolInputPaths, []string{"tool_name", "tool_use_id"})
+
 	return map[string]EventSchema{
 		"sessionStart":          makeSchema(envelope),
 		"subagentStart":         makeSchema(envelope),
@@ -209,10 +218,14 @@ func buildCopilotSchema() map[string]EventSchema {
 }
 
 func buildClaudeSchema() map[ClaudeEvent]EventSchema {
-	claudeToolUseBase := combinePaths(claudeEnvelope, claudeToolInputPaths, []string{
-		"tool_name",
-		"tool_use_id",
-	})
+	claudeToolUseBase := combinePaths(
+		claudeEnvelope,
+		claudeToolInputPaths,
+		[]string{
+			"tool_name",
+			"tool_use_id",
+		},
+	)
 
 	return map[ClaudeEvent]EventSchema{
 		// source: startup | resume | clear | compact; model present on subagent starts.
@@ -222,33 +235,48 @@ func buildClaudeSchema() map[ClaudeEvent]EventSchema {
 		// trigger: init | maintenance
 		ClaudeSetup: makeSchema(claudeEnvelope, "trigger"),
 
-		ClaudePreToolUse:         makeSchema(claudeToolUseBase),
-		ClaudePostToolUse:        makeSchema(claudeToolUseBase, "tool_response"),
-		ClaudePostToolUseFailure: makeSchema(claudeToolUseBase, "error", "error_type", "is_interrupt"),
-		ClaudePermissionRequest:  makeSchema(claudeToolUseBase, "permission_suggestions"),
-		ClaudePermissionDenied:   makeSchema(claudeToolUseBase, "reason"),
+		ClaudePreToolUse:  makeSchema(claudeToolUseBase),
+		ClaudePostToolUse: makeSchema(claudeToolUseBase, "tool_response"),
+		ClaudePostToolUseFailure: makeSchema(
+			claudeToolUseBase,
+			"error",
+			"error_type",
+			"is_interrupt",
+		),
+		ClaudePermissionRequest: makeSchema(claudeToolUseBase, "permission_suggestions"),
+		ClaudePermissionDenied:  makeSchema(claudeToolUseBase, "reason"),
 
 		ClaudeUserPromptSubmit: makeSchema(claudeEnvelope, "prompt", "session_title"),
 
 		// stop_hook_active distinguishes whether a Stop hook is already running.
-		ClaudeStop:        makeSchema(claudeEnvelope, "stop_hook_active", "last_assistant_message"),
-		ClaudeStopFailure: makeSchema(claudeEnvelope, "error", "error_details", "last_assistant_message"),
+		ClaudeStop: makeSchema(
+			claudeEnvelope,
+			"stop_hook_active",
+			"last_assistant_message",
+		),
+		ClaudeStopFailure: makeSchema(
+			claudeEnvelope,
+			"error",
+			"error_details",
+			"last_assistant_message",
+		),
 
 		ClaudeSubagentStart: makeSchema(claudeEnvelope),
 		ClaudeSubagentStop: makeSchema(
 			claudeEnvelope,
-			"stop_hook_active", "agent_transcript_path", "last_assistant_message",
+			"stop_hook_active",
+			"agent_transcript_path",
+			"last_assistant_message",
 		),
-		ClaudeTaskCreated: makeSchema(
-			claudeEnvelope,
-			"task_id", "task_subject", "task_description", "teammate_name", "team_name",
-		),
-		ClaudeTaskCompleted: makeSchema(
-			claudeEnvelope,
-			"task_id", "task_subject", "task_description", "teammate_name", "team_name",
-		),
+		ClaudeTaskCreated:   claudeTaskEventSchema(),
+		ClaudeTaskCompleted: claudeTaskEventSchema(),
 
-		ClaudeNotification: makeSchema(claudeEnvelope, "notification_type", "message", "title"),
+		ClaudeNotification: makeSchema(
+			claudeEnvelope,
+			"notification_type",
+			"message",
+			"title",
+		),
 
 		// trigger: manual | auto
 		ClaudePreCompact:  makeSchema(claudeEnvelope, "trigger", "custom_instructions"),
@@ -258,8 +286,12 @@ func buildClaudeSchema() map[ClaudeEvent]EventSchema {
 		// load_reason: session_start | nested_traversal | path_glob_match | include | compact
 		ClaudeInstructionsLoaded: makeSchema(
 			claudeEnvelope,
-			"file_path", "memory_type", "load_reason",
-			"globs", "trigger_file_path", "parent_file_path",
+			"file_path",
+			"memory_type",
+			"load_reason",
+			"globs",
+			"trigger_file_path",
+			"parent_file_path",
 		),
 		// source: user_settings | project_settings | local_settings | policy_settings | skills
 		ClaudeConfigChange: makeSchema(claudeEnvelope, "source", "file_path"),
@@ -277,11 +309,18 @@ func buildClaudeSchema() map[ClaudeEvent]EventSchema {
 		// Elicitation is an MCP server requesting structured input from the user.
 		ClaudeElicitation: makeSchema(
 			claudeEnvelope,
-			"mcp_server_name", "message", "mode", "url", "elicitation_id",
+			"mcp_server_name",
+			"message",
+			"mode",
+			"url",
+			"elicitation_id",
 		),
 		ClaudeElicitationResult: makeSchema(
 			claudeEnvelope,
-			"mcp_server_name", "elicitation_id", "mode", "action",
+			"mcp_server_name",
+			"elicitation_id",
+			"mode",
+			"action",
 		),
 
 		ClaudeTeammateIdle: makeSchema(claudeEnvelope, "teammate_name", "team_name"),
@@ -293,6 +332,17 @@ func buildClaudeSchema() map[ClaudeEvent]EventSchema {
 		ClaudeUserPromptExpansion: makeSchema(claudeEnvelope, "prompt"),
 		ClaudeMessageDisplay:      makeSchema(claudeEnvelope, "text", "assistant_message"),
 	}
+}
+
+func claudeTaskEventSchema() EventSchema {
+	return makeSchema(
+		claudeEnvelope,
+		"task_id",
+		"task_subject",
+		"task_description",
+		"teammate_name",
+		"team_name",
+	)
 }
 
 func buildCodexSchema() map[CodexEvent]EventSchema {
@@ -315,11 +365,15 @@ func buildCodexSchema() map[CodexEvent]EventSchema {
 		"tool_input.query",
 		"tool_input.pattern",
 	}
-	codexToolBase := combinePaths(codexEnvelope, codexToolInputPaths, []string{
-		"turn_id",
-		"tool_name",
-		"tool_use_id",
-	})
+	codexToolBase := combinePaths(
+		codexEnvelope,
+		codexToolInputPaths,
+		[]string{
+			"turn_id",
+			"tool_name",
+			"tool_use_id",
+		},
+	)
 
 	return map[CodexEvent]EventSchema{
 		CodexSessionStart:      makeSchema(codexEnvelope, "source"),
@@ -327,17 +381,33 @@ func buildCodexSchema() map[CodexEvent]EventSchema {
 		CodexPermissionRequest: makeSchema(codexToolBase, "tool_input.description"),
 		CodexPostToolUse:       makeSchema(codexToolBase, "tool_response"),
 		CodexUserPromptSubmit:  makeSchema(codexEnvelope, "turn_id", "prompt"),
-		CodexStop:              makeSchema(codexEnvelope, "turn_id", "stop_hook_active", "last_assistant_message"),
+		CodexStop: makeSchema(
+			codexEnvelope,
+			"turn_id",
+			"stop_hook_active",
+			"last_assistant_message",
+		),
 
 		// Paths from live codex-native samples (PreCompact/PostCompact/
 		// SubagentStart); SubagentStop mirrors Claude pending a verified sample.
-		CodexPreCompact:    makeSchema(codexEnvelope, "turn_id", "trigger"),
-		CodexPostCompact:   makeSchema(codexEnvelope, "turn_id", "trigger"),
-		CodexSubagentStart: makeSchema(codexEnvelope, "turn_id", "permission_mode", "agent_id", "agent_type"),
+		CodexPreCompact:  makeSchema(codexEnvelope, "turn_id", "trigger"),
+		CodexPostCompact: makeSchema(codexEnvelope, "turn_id", "trigger"),
+		CodexSubagentStart: makeSchema(
+			codexEnvelope,
+			"turn_id",
+			"permission_mode",
+			"agent_id",
+			"agent_type",
+		),
 		CodexSubagentStop: makeSchema(
 			codexEnvelope,
-			"turn_id", "permission_mode", "agent_id", "agent_type",
-			"stop_hook_active", "agent_transcript_path", "last_assistant_message",
+			"turn_id",
+			"permission_mode",
+			"agent_id",
+			"agent_type",
+			"stop_hook_active",
+			"agent_transcript_path",
+			"last_assistant_message",
 		),
 	}
 }
@@ -362,24 +432,38 @@ func buildGeminiSchema() map[GeminiEvent]EventSchema {
 		"tool_input.query",
 		"tool_input.description",
 	}
-	geminiToolBase := combinePaths(geminiEnvelope, geminiToolInputPaths, []string{
-		"tool_name",
-		"mcp_context",
-		"original_request_name",
-	})
+	geminiToolBase := combinePaths(
+		geminiEnvelope,
+		geminiToolInputPaths,
+		[]string{
+			"tool_name",
+			"mcp_context",
+			"original_request_name",
+		},
+	)
 
 	return map[GeminiEvent]EventSchema{
-		GeminiBeforeTool:          makeSchema(geminiToolBase),
-		GeminiAfterTool:           makeSchema(geminiToolBase, "tool_response"),
-		GeminiBeforeAgent:         makeSchema(geminiEnvelope, "prompt"),
-		GeminiAfterAgent:          makeSchema(geminiEnvelope, "prompt", "prompt_response", "stop_hook_active"),
+		GeminiBeforeTool:  makeSchema(geminiToolBase),
+		GeminiAfterTool:   makeSchema(geminiToolBase, "tool_response"),
+		GeminiBeforeAgent: makeSchema(geminiEnvelope, "prompt"),
+		GeminiAfterAgent: makeSchema(
+			geminiEnvelope,
+			"prompt",
+			"prompt_response",
+			"stop_hook_active",
+		),
 		GeminiBeforeModel:         makeSchema(geminiEnvelope, "llm_request"),
 		GeminiBeforeToolSelection: makeSchema(geminiEnvelope, "llm_request"),
 		GeminiAfterModel:          makeSchema(geminiEnvelope, "llm_request", "llm_response"),
 		GeminiSessionStart:        makeSchema(geminiEnvelope, "source"),
 		GeminiSessionEnd:          makeSchema(geminiEnvelope, "reason"),
-		GeminiNotification:        makeSchema(geminiEnvelope, "notification_type", "message", "details"),
-		GeminiPreCompress:         makeSchema(geminiEnvelope, "trigger"),
+		GeminiNotification: makeSchema(
+			geminiEnvelope,
+			"notification_type",
+			"message",
+			"details",
+		),
+		GeminiPreCompress: makeSchema(geminiEnvelope, "trigger"),
 	}
 }
 
@@ -410,6 +494,7 @@ func ValidPaths(system, eventName string) EventSchema {
 // applicable events. Returns a (possibly empty) slice of validation errors.
 func ValidateConfig(cfg *config.Config) []error {
 	var errs []error
+
 	seenRuleNames := make(map[string]bool, len(cfg.Rules))
 	for i := range cfg.Rules {
 		ruleName := cfg.Rules[i].Name
@@ -418,8 +503,10 @@ func ValidateConfig(cfg *config.Config) []error {
 		} else {
 			seenRuleNames[ruleName] = true
 		}
+
 		errs = append(errs, validateRuleConfig(&cfg.Rules[i])...)
 	}
+
 	return errs
 }
 
@@ -433,58 +520,70 @@ func validateRuleConfig(r *config.Rule) []error {
 	}
 
 	applicable := applicableEventPairs(r)
+
 	for _, fieldPath := range allPaths {
 		errs = append(errs, validateFieldPathForRule(r, fieldPath, applicable)...)
 	}
+
 	return errs
 }
 
 func validateTemporalSelectorScope(r *config.Rule) []error {
 	var errs []error
+
 	for _, fieldPath := range r.FieldPaths {
 		if isTemporalSelector(fieldPath) {
-			errs = append(errs, fmt.Errorf(
-				"rule %q: field_path %q is valid only in exec condition field_paths",
-				r.Name,
-				fieldPath,
-			))
+			errs = append(
+				errs,
+				fmt.Errorf(
+					"rule %q: field_path %q is valid only in exec condition field_paths",
+					r.Name,
+					fieldPath,
+				),
+			)
 		}
 	}
+
 	for _, fieldPath := range r.JudgeContext {
-		errs = appendTemporalSelectorScopeError(
-			errs,
-			r.Name,
-			"judge_context",
-			fieldPath,
-		)
+		errs = appendTemporalSelectorScopeError(errs, r.Name, "judge_context", fieldPath)
 	}
+
 	for conditionIndex := range r.Conditions {
 		condition := &r.Conditions[conditionIndex]
 		for _, fieldPath := range condition.FieldPaths {
 			if !isTemporalSelector(fieldPath) {
 				continue
 			}
+
 			if config.ConditionKind(condition.Kind) != config.ConditionKindExec {
-				errs = append(errs, fmt.Errorf(
-					"rule %q: condition %d field_path %q is valid only for exec conditions",
-					r.Name,
-					conditionIndex,
-					fieldPath,
-				))
+				errs = append(
+					errs,
+					fmt.Errorf(
+						"rule %q: condition %d field_path %q is valid only for exec conditions",
+						r.Name,
+						conditionIndex,
+						fieldPath,
+					),
+				)
 				continue
 			}
+
 			if (fieldPath == "last_response_output" || fieldPath == "response_output") &&
 				!r.IsResponseAction() {
-				errs = append(errs, fmt.Errorf(
-					"rule %q: condition %d field_path %q requires action=%q or action=%q",
-					r.Name,
-					conditionIndex,
-					fieldPath,
-					config.ActionInject,
-					config.ActionMutate,
-				))
+				errs = append(
+					errs,
+					fmt.Errorf(
+						"rule %q: condition %d field_path %q requires action=%q or action=%q",
+						r.Name,
+						conditionIndex,
+						fieldPath,
+						config.ActionInject,
+						config.ActionMutate,
+					),
+				)
 			}
 		}
+
 		if config.ConditionKind(condition.Kind) == config.ConditionKindInfer {
 			inferSelectors := []struct {
 				name string
@@ -497,46 +596,42 @@ func validateTemporalSelectorScope(r *config.Rule) []error {
 			}
 			for _, selector := range inferSelectors {
 				location := fmt.Sprintf("condition %d %s", conditionIndex, selector.name)
-				errs = appendTemporalSelectorScopeError(
-					errs,
-					r.Name,
-					location,
-					selector.path,
-				)
+				errs = appendTemporalSelectorScopeError(errs, r.Name, location, selector.path)
 			}
 		}
+
 		if config.ConditionKind(condition.Kind) == config.ConditionKindDiff {
 			pair, err := config.ParseFieldPair(condition.FieldPair)
 			if err == nil {
 				location := fmt.Sprintf("condition %d field_pair", conditionIndex)
-				errs = appendTemporalSelectorScopeError(
-					errs,
-					r.Name,
-					location,
-					pair.OldPath,
-				)
-				errs = appendTemporalSelectorScopeError(
-					errs,
-					r.Name,
-					location,
-					pair.NewPath,
-				)
+				errs = appendTemporalSelectorScopeError(errs, r.Name, location, pair.OldPath)
+				errs = appendTemporalSelectorScopeError(errs, r.Name, location, pair.NewPath)
 			}
 		}
 	}
+
 	return errs
 }
 
-func appendTemporalSelectorScopeError(errs []error, ruleName string, location string, fieldPath string) []error {
+func appendTemporalSelectorScopeError(
+	errs []error,
+	ruleName string,
+	location string,
+	fieldPath string,
+) []error {
 	if !isTemporalSelector(fieldPath) {
 		return errs
 	}
-	return append(errs, fmt.Errorf(
-		"rule %q: %s %q is valid only in exec condition field_paths",
-		ruleName,
-		location,
-		fieldPath,
-	))
+
+	return append(
+		errs,
+		fmt.Errorf(
+			"rule %q: %s %q is valid only in exec condition field_paths",
+			ruleName,
+			location,
+			fieldPath,
+		),
+	)
 }
 
 func isTemporalSelector(fieldPath string) bool {
@@ -548,10 +643,13 @@ func validateResponseRuleConfig(r *config.Rule) []error {
 	if !r.IsResponseAction() || r.Action != config.ActionMutate || ruleHasExecCondition(r) {
 		return nil
 	}
+
 	if r.OutputText() == "" {
 		return nil
 	}
+
 	var errs []error
+
 	for _, pair := range applicableEventPairs(r) {
 		system := SystemFromString(pair.system)
 		capability := LookupResponseCapability(system, pair.event)
@@ -559,17 +657,23 @@ func validateResponseRuleConfig(r *config.Rule) []error {
 		if !structured {
 			continue
 		}
+
 		if validResponseMutation(system, target, r.OutputText()) {
 			continue
 		}
-		errs = append(errs, fmt.Errorf(
-			"rule %q: mutate output for %s %s is invalid for %s",
-			r.Name,
-			pair.system,
-			pair.event,
-			target,
-		))
+
+		errs = append(
+			errs,
+			fmt.Errorf(
+				"rule %q: mutate output for %s %s is invalid for %s",
+				r.Name,
+				pair.system,
+				pair.event,
+				target,
+			),
+		)
 	}
+
 	return errs
 }
 
@@ -579,11 +683,13 @@ func ruleHasExecCondition(r *config.Rule) bool {
 			return true
 		}
 	}
+
 	return false
 }
 
 func collectRuleFieldPaths(r *config.Rule) []string {
 	allPaths := make([]string, 0, len(r.FieldPaths))
+
 	allPaths = append(allPaths, r.FieldPaths...)
 	for j := range r.Conditions {
 		condition := &r.Conditions[j]
@@ -591,21 +697,38 @@ func collectRuleFieldPaths(r *config.Rule) []string {
 		if config.ConditionKind(condition.Kind) == config.ConditionKindInfer {
 			allPaths = append(allPaths, condition.InputField, condition.CacheKey)
 			if condition.ContextSource != "" {
-				allPaths = append(allPaths, condition.ContextWorkspaceField, condition.ContextSessionField)
+				allPaths = append(
+					allPaths,
+					condition.ContextWorkspaceField,
+					condition.ContextSessionField,
+				)
 			}
 		}
 	}
+
 	return allPaths
 }
 
 func validateConditionKinds(r *config.Rule) []error {
 	var errs []error
-	for j := range r.Conditions {
-		if isKnownConditionKind(r.Conditions[j].Kind) {
+
+	for conditionIndex := range r.Conditions {
+		if isKnownConditionKind(r.Conditions[conditionIndex].Kind) {
 			continue
 		}
-		errs = append(errs, fmt.Errorf("rule %q: condition %d has unknown kind %q", r.Name, j, r.Conditions[j].Kind))
+
+		errs = append(
+			errs,
+			fmt.Errorf(
+				"rule %q: condition %d has %w %q",
+				r.Name,
+				conditionIndex,
+				errUnknownConditionKind,
+				r.Conditions[conditionIndex].Kind,
+			),
+		)
 	}
+
 	return errs
 }
 
@@ -632,21 +755,37 @@ func applicableEventPairs(r *config.Rule) []schemaEventPair {
 		return filterDisabledProviders(allEventPairs(), r)
 	}
 
-	applicable := make([]schemaEventPair, 0, len(r.Events)*6+
-		len(r.ClaudeEvents)+len(r.CursorEvents)+len(r.CodexEvents)+len(r.CopilotEvents)+len(r.GeminiEvents))
-	for _, ev := range r.Events {
-		for _, system := range []string{"claude", "cursor", "codex", "copilot", "gemini", "response"} {
+	applicable := make(
+		[]schemaEventPair,
+		0,
+		len(r.Events)*6+
+			len(
+				r.ClaudeEvents,
+			)+len(r.CursorEvents)+len(r.CodexEvents)+len(r.CopilotEvents)+len(r.GeminiEvents),
+	)
+	for _, event := range r.Events {
+		for _, system := range []string{
+			"claude",
+			"cursor",
+			"codex",
+			"copilot",
+			"gemini",
+			"response",
+		} {
 			if r.ProviderDisabled(system) {
 				continue
 			}
-			applicable = append(applicable, schemaEventPair{system, ev})
+
+			applicable = append(applicable, schemaEventPair{system, event})
 		}
 	}
+
 	applicable = appendProviderEventPairs(applicable, r, "claude", r.ClaudeEvents)
 	applicable = appendProviderEventPairs(applicable, r, "cursor", r.CursorEvents)
 	applicable = appendProviderEventPairs(applicable, r, "codex", r.CodexEvents)
 	applicable = appendProviderEventPairs(applicable, r, "copilot", r.CopilotEvents)
 	applicable = appendProviderEventPairs(applicable, r, "gemini", r.GeminiEvents)
+
 	return applicable
 }
 
@@ -654,10 +793,16 @@ func ruleHasNoEventFilters(r *config.Rule) bool {
 	return r.AllEvents
 }
 
-func appendProviderEventPairs(applicable []schemaEventPair, r *config.Rule, system string, events []string) []schemaEventPair {
+func appendProviderEventPairs(
+	applicable []schemaEventPair,
+	r *config.Rule,
+	system string,
+	events []string,
+) []schemaEventPair {
 	if r.ProviderDisabled(system) {
 		return applicable
 	}
+
 	return appendEventPairs(applicable, system, events)
 }
 
@@ -665,52 +810,85 @@ func filterDisabledProviders(pairs []schemaEventPair, r *config.Rule) []schemaEv
 	if len(r.DisableProviders) == 0 {
 		return pairs
 	}
+
 	filtered := pairs[:0]
 	for _, pair := range pairs {
 		if !r.ProviderDisabled(pair.system) {
 			filtered = append(filtered, pair)
 		}
 	}
+
 	return filtered
 }
 
 func allEventPairs() []schemaEventPair {
-	applicable := make([]schemaEventPair, 0,
-		len(cursorSchema)+len(claudeSchema)+len(codexSchema)+len(copilotSchema)+len(geminiSchema)+len(responseSchema))
+	applicable := make(
+		[]schemaEventPair,
+		0,
+		len(cursorSchema)+len(
+			claudeSchema,
+		)+len(codexSchema)+len(copilotSchema)+len(geminiSchema)+len(responseSchema),
+	)
 	applicable = appendSchemaEvents(applicable, "cursor", cursorSchema)
 	applicable = appendSchemaEvents(applicable, "claude", claudeSchema)
 	applicable = appendSchemaEvents(applicable, "codex", codexSchema)
 	applicable = appendSchemaEvents(applicable, "copilot", copilotSchema)
 	applicable = appendSchemaEvents(applicable, "gemini", geminiSchema)
 	applicable = appendSchemaEvents(applicable, "response", responseSchema)
+
 	return applicable
 }
 
-func appendEventPairs(applicable []schemaEventPair, system string, events []string) []schemaEventPair {
+func appendEventPairs(
+	applicable []schemaEventPair,
+	system string,
+	events []string,
+) []schemaEventPair {
 	for _, ev := range events {
 		applicable = append(applicable, schemaEventPair{system, ev})
 	}
+
 	return applicable
 }
 
-func appendSchemaEvents[E ~string](applicable []schemaEventPair, system string, schema map[E]EventSchema) []schemaEventPair {
+func appendSchemaEvents[E ~string](
+	applicable []schemaEventPair,
+	system string,
+	schema map[E]EventSchema,
+) []schemaEventPair {
 	for ev := range schema {
 		applicable = append(applicable, schemaEventPair{system, string(ev)})
 	}
+
 	return applicable
 }
 
-func validateFieldPathForRule(r *config.Rule, fieldPath string, applicable []schemaEventPair) []error {
+func validateFieldPathForRule(
+	r *config.Rule,
+	fieldPath string,
+	applicable []schemaEventPair,
+) []error {
 	if config.CompileFieldSelector(fieldPath) == config.FieldSelectorInvalid {
-		return []error{fmt.Errorf("rule %q: field_path %q has no typed selector", r.Name, fieldPath)}
+		return []error{
+			fmt.Errorf("rule %q: field_path %q has no typed selector", r.Name, fieldPath),
+		}
 	}
+
 	if slices.Contains(virtualFields, fieldPath) {
 		return nil
 	}
+
 	if fieldPathApplies(fieldPath, applicable) {
 		return nil
 	}
-	return []error{fmt.Errorf("rule %q: field_path %q is not valid for any applicable event", r.Name, fieldPath)}
+
+	return []error{
+		fmt.Errorf(
+			"rule %q: field_path %q is not valid for any applicable event",
+			r.Name,
+			fieldPath,
+		),
+	}
 }
 
 func fieldPathApplies(fieldPath string, applicable []schemaEventPair) bool {
@@ -720,5 +898,6 @@ func fieldPathApplies(fieldPath string, applicable []schemaEventPair) bool {
 			return true
 		}
 	}
+
 	return false
 }

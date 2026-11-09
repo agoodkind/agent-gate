@@ -19,14 +19,17 @@ func TestReloadKeepsReplacementUpdateSchedulerAlive(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "")
 	requested := make(chan struct{}, 1)
 	canceled := make(chan struct{}, 1)
-	backend := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, request *http.Request) {
-		if request.URL.Path != "/agoodkind/agent-gate/releases.atom" {
-			t.Errorf("unexpected update request: %s", request.URL.Path)
-		}
-		requested <- struct{}{}
-		<-request.Context().Done()
-		canceled <- struct{}{}
-	}))
+	backend := httptest.NewServer(
+		http.HandlerFunc(func(_ http.ResponseWriter, request *http.Request) {
+			if request.URL.Path != "/agoodkind/agent-gate/releases.atom" {
+				t.Errorf("unexpected update request: %s", request.URL.Path)
+			}
+
+			requested <- struct{}{}
+			<-request.Context().Done()
+			canceled <- struct{}{}
+		}),
+	)
 	t.Cleanup(backend.Close)
 	t.Setenv("AGENT_GATE_UPDATE_WEB_BASE_URL", backend.URL)
 
@@ -34,38 +37,57 @@ func TestReloadKeepsReplacementUpdateSchedulerAlive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	t.Cleanup(server.Close)
 	server.configPath = filepath.Join(t.TempDir(), "candidate.toml")
-	writeConfig(t, server.configPath, "[audit]\nenabled = false\n[update]\nenabled = true\nmode = \"check\"\ninterval = \"1h\"\n")
+	writeConfig(
+		t,
+		server.configPath,
+		"[audit]\nenabled = false\n[update]\nenabled = true\nmode = \"check\"\ninterval = \"1h\"\n",
+	)
 	initial, cancelInitial := context.WithCancel(t.Context())
 	cancelInitial()
-	server.StartUpdateScheduler(initial, func() { t.Error("check-only scheduler requested relaunch") })
-	if err := selfupdate.SaveState(config.DefaultUpdateStatePath(), selfupdate.State{
-		NextCheckAt: time.Now().Add(time.Second),
-	}); err != nil {
+	server.StartUpdateScheduler(
+		initial,
+		func() { t.Error("check-only scheduler requested relaunch") },
+	)
+	if err := selfupdate.SaveState(
+		config.DefaultUpdateStatePath(),
+		selfupdate.State{
+			NextCheckAt: time.Now().Add(time.Second),
+		},
+	); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := server.reloadConfig(t.Context()); err != nil {
 		t.Fatal(err)
 	}
+
 	select {
 	case <-requested:
 	case <-time.After(3 * time.Second):
 		t.Fatal("replacement update scheduler made no request after reload returned")
 	}
+
 	select {
 	case <-canceled:
 		t.Fatal("reload canceled the replacement update request")
 	default:
 	}
+
 	server.Close()
 	select {
 	case <-canceled:
 	case <-time.After(time.Second):
 		t.Fatal("Server.Close did not cancel the active update request")
 	}
-	waitRuntimeCondition(t, func() bool {
-		state, err := selfupdate.LoadState(config.DefaultUpdateStatePath())
-		return err == nil && state.LastResult == "error"
-	})
+
+	waitRuntimeCondition(
+		t,
+		func() bool {
+			state, err := selfupdate.LoadState(config.DefaultUpdateStatePath())
+			return err == nil && state.LastResult == "error"
+		},
+	)
 }

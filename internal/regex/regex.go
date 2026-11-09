@@ -26,7 +26,11 @@ var limits = struct {
 	mu    sync.RWMutex
 	match uint32
 	depth uint32
-}{mu: sync.RWMutex{}, match: defaultMatchLimit, depth: defaultDepthLimit}
+}{
+	mu:    sync.RWMutex{},
+	match: defaultMatchLimit,
+	depth: defaultDepthLimit,
+}
 
 // SetLimits installs the backtracking match and depth bounds for patterns
 // compiled from this point on. A non-positive value leaves that bound alone.
@@ -36,6 +40,7 @@ func SetLimits(matchLimit int, depthLimit int) {
 	if matchLimit > 0 && matchLimit <= math.MaxUint32 {
 		limits.match = uint32(matchLimit)
 	}
+
 	if depthLimit > 0 && depthLimit <= math.MaxUint32 {
 		limits.depth = uint32(depthLimit)
 	}
@@ -44,6 +49,7 @@ func SetLimits(matchLimit int, depthLimit int) {
 func currentLimits() (uint32, uint32) {
 	limits.mu.RLock()
 	defer limits.mu.RUnlock()
+
 	return limits.match, limits.depth
 }
 
@@ -122,10 +128,15 @@ func (r *Regexp) FindAllStringGroupIndex(s string, n int, group uint32) [][2]int
 	}
 
 	out := make([][2]int, 0)
-	r.ForEachStringGroupIndex(s, n, group, func(start int, end int) bool {
-		out = append(out, [2]int{start, end})
-		return true
-	})
+	r.ForEachStringGroupIndex(
+		s,
+		n,
+		group,
+		func(start int, end int) bool {
+			out = append(out, [2]int{start, end})
+			return true
+		},
+	)
 
 	return out
 }
@@ -141,6 +152,7 @@ func (r *Regexp) ForEachStringGroupIndex(s string, n int, group uint32, yield fu
 	defer r.mu.Unlock()
 
 	offset := 0
+
 	matchCount := 0
 	for offset <= len(s) && (n < 0 || matchCount < n) {
 		rc := HandleMatch(r.handle, s, offset)
@@ -165,6 +177,7 @@ func (r *Regexp) ForEachStringGroupIndex(s string, n int, group uint32, yield fu
 		if !ok {
 			break
 		}
+
 		offset = nextOffset
 	}
 }
@@ -174,8 +187,10 @@ func (r *Regexp) CaptureCount() uint32 {
 	if r == nil || r.handle == nil {
 		return 0
 	}
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
 	return HandleCaptureCount(r.handle)
 }
 
@@ -183,13 +198,16 @@ func nextMatchOffset(s string, start int, end int) (int, bool) {
 	if start != end {
 		return end, true
 	}
+
 	if end == len(s) {
 		return end, false
 	}
+
 	_, width := utf8.DecodeRuneInString(s[end:])
 	if width == 0 {
 		width = 1
 	}
+
 	return end + width, true
 }
 
