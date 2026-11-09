@@ -956,14 +956,12 @@ func (s *Server) loadReloadCandidate(ctx context.Context) (*config.Config, error
 	candidate, err := config.LoadDegradedPath(s.configPath)
 	if err != nil {
 		s.log.WarnContext(ctx, "config load or compile failed", "path", s.configPath, "err", err)
+
 		return nil, fmt.Errorf("config load or compile failed: %w", err)
 	}
 
 	if candidate.Unusable() {
-		return nil, fmt.Errorf(
-			"config did not decode; keeping previous config: %s",
-			candidate.Failures()[0].Reason,
-		)
+		return nil, &reloadDecodeError{reason: candidate.Failures()[0].Reason}
 	}
 
 	for _, failure := range candidate.Failures() {
@@ -981,7 +979,7 @@ func (s *Server) loadReloadCandidate(ctx context.Context) (*config.Config, error
 		)
 		// Reload cannot replace a valid storage plan with a degraded fallback.
 		if failure.Kind == config.LoadFailureSection && failure.Scope == "audit.storage" {
-			return nil, fmt.Errorf("audit storage config invalid: %s", failure.Reason)
+			return nil, &reloadAuditStorageError{reason: failure.Reason}
 		}
 	}
 

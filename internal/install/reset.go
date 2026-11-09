@@ -191,7 +191,7 @@ func canonicalizeResetRoots(options *ResetOptions) error {
 		&options.ConfigDir,
 	} {
 		if !filepath.IsAbs(*path) || filepath.Base(filepath.Clean(*path)) != "agent-gate" {
-			return fmt.Errorf("reset root %q must be an absolute application directory", *path)
+			return &invalidResetRootError{path: *path}
 		}
 
 		resolved, err := resetCanonicalPath(*path)
@@ -200,7 +200,7 @@ func canonicalizeResetRoots(options *ResetOptions) error {
 		}
 
 		if filepath.Base(resolved) != "agent-gate" {
-			return fmt.Errorf("reset root %q resolves to a shared parent %q", *path, resolved)
+			return &sharedResetRootError{path: *path, resolved: resolved}
 		}
 
 		*path = resolved

@@ -180,6 +180,7 @@ func (cfg *Config) compileRules(
 		compileErr := compileRule(log, &cfg.Rules[index], cfg.Inference, filepath.Dir(path), cfg)
 		if compileErr == nil {
 			kept = append(kept, cfg.Rules[index])
+
 			continue
 		}
 

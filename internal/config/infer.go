@@ -139,6 +139,7 @@ func compileInferEvaluation(
 	condition.inputSelector, err = compileRequiredSelector(condition.InputField, "input_field")
 	if err != nil {
 		log.Warn("compile inference input selector failed", "context", contextLabel, "err", err)
+
 		return fmt.Errorf("%s: %w", contextLabel, err)
 	}
 
@@ -152,6 +153,7 @@ func compileInferEvaluation(
 	)
 	if err != nil {
 		log.Warn("compile inference cache selector failed", "context", contextLabel, "err", err)
+
 		return fmt.Errorf("%s: %w", contextLabel, err)
 	}
 
@@ -161,16 +163,15 @@ func compileInferEvaluation(
 
 	maxInferTimeoutMs := cfg.InferMaxTimeoutMs()
 	if condition.TimeoutMs < 0 || condition.TimeoutMs > maxInferTimeoutMs {
-		return fmt.Errorf(
-			"%s: timeout_ms %d exceeds performance.timeouts.infer_max_ms %d",
-			contextLabel,
-			condition.TimeoutMs,
-			maxInferTimeoutMs,
-		)
+		return &inferTimeoutError{
+			contextLabel: contextLabel,
+			timeoutMS:    condition.TimeoutMs,
+			maximumMS:    maxInferTimeoutMs,
+		}
 	}
 
 	if condition.CacheTTLMs < 0 {
-		return fmt.Errorf("%s: cache_ttl_ms must be non-negative", contextLabel)
+		return fmt.Errorf("%s: %w", contextLabel, errInferCacheTTLNegative)
 	}
 
 	if condition.BlockOn == "" {
@@ -178,13 +179,7 @@ func compileInferEvaluation(
 	}
 
 	if condition.BlockOn != BlockOnMatch && condition.BlockOn != "nonmatch" {
-		return fmt.Errorf(
-			"%s: block_on %q must be %q or %q",
-			contextLabel,
-			condition.BlockOn,
-			BlockOnMatch,
-			"nonmatch",
-		)
+		return &inferBlockOnError{contextLabel: contextLabel, value: condition.BlockOn}
 	}
 
 	if condition.OnError == "" {
@@ -192,28 +187,24 @@ func compileInferEvaluation(
 	}
 
 	if condition.OnError != OnErrorOpen && condition.OnError != OnErrorClosed {
-		return fmt.Errorf(
-			"%s: on_error %q must be %q or %q",
-			contextLabel,
-			condition.OnError,
-			OnErrorOpen,
-			OnErrorClosed,
-		)
+		return &inferFailurePolicyError{contextLabel: contextLabel, value: condition.OnError}
 	}
 
 	condition.ResponseJSONField = strings.TrimSpace(condition.ResponseJSONField)
 	if err := validateStdoutJSONFieldPath(condition.ResponseJSONField); err != nil {
 		log.Warn("compile inference response field failed", "context", contextLabel, "err", err)
+
 		return fmt.Errorf("%s: response_json_field: %w", contextLabel, err)
 	}
 
 	if condition.ResponseJSONEquals == "" {
-		return fmt.Errorf("%s: response_json_equals is required", contextLabel)
+		return fmt.Errorf("%s: %w", contextLabel, errInferResponsePredicateRequired)
 	}
 
 	condition.responseJSONValue, err = decodeTOMLScalar(condition.ResponseJSONEquals)
 	if err != nil {
 		log.Warn("compile inference response predicate failed", "context", contextLabel, "err", err)
+
 		return fmt.Errorf("%s: response_json_equals: %w", contextLabel, err)
 	}
 

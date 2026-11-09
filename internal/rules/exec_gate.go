@@ -541,7 +541,7 @@ func (r *ExecRuntime) startValidatorCompletion(
 					"rule",
 					rule.Name,
 					"err",
-					fmt.Errorf("panic: %v", recovered),
+					&validatorPanicError{value: fmt.Sprint(recovered)},
 				)
 				r.finishValidatorFlight(
 					cacheKey,
@@ -694,7 +694,7 @@ func (r *ExecRuntime) startValidatorCommands(
 					"rule",
 					rule.Name,
 					"err",
-					fmt.Errorf("panic: %v", recovered),
+					&validatorPanicError{value: fmt.Sprint(recovered)},
 				)
 				done <- execconcern.Verdict{
 					Block:        condition.OnError == config.OnErrorClosed,

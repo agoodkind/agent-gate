@@ -820,34 +820,46 @@ func compileExecConfig(ruleName string, index int, c *Condition, cfg *Config) er
 	return compileExecSelectors(ruleName, index, c)
 }
 
-func compileExecSelectors(ruleName string, index int, c *Condition) error {
-	if strings.TrimSpace(c.CacheKey) == "" {
-		c.CacheKey = DefaultExecCacheKey
+func compileExecSelectors(ruleName string, index int, condition *Condition) error {
+	if strings.TrimSpace(condition.CacheKey) == "" {
+		condition.CacheKey = DefaultExecCacheKey
 	}
 
-	for _, tool := range c.SearchTools {
+	for _, tool := range condition.SearchTools {
 		if strings.TrimSpace(tool) == "" {
-			return fmt.Errorf(
-				"rule %q condition %d: search_tools entries must be non-empty",
+			validationErr := fmt.Errorf(
+				"rule %q condition %d: %w",
 				ruleName,
 				index,
+				errEmptySearchTool,
 			)
+			slog.Warn(
+				"compile exec search tools failed",
+				"rule",
+				ruleName,
+				"condition_index",
+				index,
+				"err",
+				validationErr,
+			)
+
+			return validationErr
 		}
 	}
 
-	if err := compileExecCacheKey(ruleName, index, c); err != nil {
+	if err := compileExecCacheKey(ruleName, index, condition); err != nil {
 		return err
 	}
 
-	if err := compileExecForEach(ruleName, index, c); err != nil {
+	if err := compileExecForEach(ruleName, index, condition); err != nil {
 		return err
 	}
 
-	if err := compileExecStdoutJSON(ruleName, index, c); err != nil {
+	if err := compileExecStdoutJSON(ruleName, index, condition); err != nil {
 		return err
 	}
 
-	if err := normalizeExecBlockOn(ruleName, index, c); err != nil {
+	if err := normalizeExecBlockOn(ruleName, index, condition); err != nil {
 		return err
 	}
 
