@@ -49,91 +49,181 @@ func (c *Condition) ContextSessionSelector() FieldSelectorSpec { return c.contex
 // ResponseJSONEqualsValue returns the decoded infer response predicate scalar.
 func (c *Condition) ResponseJSONEqualsValue() TOMLScalarValue { return c.responseJSONValue }
 
-func compileInferConfig(log *slog.Logger, ruleName string, index int, condition *Condition, configDirectory string, cfg *Config) error {
+func compileInferConfig(
+	log *slog.Logger,
+	ruleName string,
+	index int,
+	condition *Condition,
+	configDirectory string,
+	cfg *Config,
+) error {
 	if ConditionKind(condition.Kind) != ConditionKindInfer {
 		return nil
 	}
+
 	contextLabel := fmt.Sprintf("rule %q condition %d", ruleName, index)
 	condition.Endpoint = strings.TrimSpace(condition.Endpoint)
 	condition.LayerName = strings.TrimSpace(condition.LayerName)
 	if condition.Endpoint == "" {
 		return fmt.Errorf("%s: infer requires endpoint", contextLabel)
 	}
+
 	if condition.LayerName == "" {
 		return fmt.Errorf("%s: infer requires layer_name", contextLabel)
 	}
-	prompt, err := compileDeclaration(configDirectory, condition.Prompt, condition.PromptFile, "prompt", "prompt_file")
+
+	prompt, err := compileDeclaration(
+		configDirectory,
+		condition.Prompt,
+		condition.PromptFile,
+		"prompt",
+		"prompt_file",
+	)
 	if err != nil {
-		log.Warn("compile inference prompt declaration failed", "rule", ruleName, "condition_index", index, "err", err)
+		log.Warn(
+			"compile inference prompt declaration failed",
+			"rule",
+			ruleName,
+			"condition_index",
+			index,
+			"err",
+			err,
+		)
+
 		return fmt.Errorf("%s: %w", contextLabel, err)
 	}
+
 	condition.Prompt = prompt
-	schema, err := compileDeclaration(configDirectory, condition.OutputSchema, condition.OutputSchemaFile, "output_schema", "output_schema_file")
+	schema, err := compileDeclaration(
+		configDirectory,
+		condition.OutputSchema,
+		condition.OutputSchemaFile,
+		"output_schema",
+		"output_schema_file",
+	)
 	if err != nil {
-		log.Warn("compile inference schema declaration failed", "rule", ruleName, "condition_index", index, "err", err)
+		log.Warn(
+			"compile inference schema declaration failed",
+			"rule",
+			ruleName,
+			"condition_index",
+			index,
+			"err",
+			err,
+		)
+
 		return fmt.Errorf("%s: %w", contextLabel, err)
 	}
+
 	if !json.Valid([]byte(schema)) {
 		return fmt.Errorf("%s: output_schema must be valid JSON", contextLabel)
 	}
+
 	condition.OutputSchema = schema
 	if err := compileInferGenerationOptions(contextLabel, condition); err != nil {
 		return err
 	}
 
+	return compileInferEvaluation(log, contextLabel, condition, cfg)
+}
+
+func compileInferEvaluation(
+	log *slog.Logger,
+	contextLabel string,
+	condition *Condition,
+	cfg *Config,
+) error {
+	var err error
+
 	condition.InputField = strings.TrimSpace(condition.InputField)
 	condition.inputSelector, err = compileRequiredSelector(condition.InputField, "input_field")
 	if err != nil {
+		log.Warn("compile inference input selector failed", "context", contextLabel, "err", err)
 		return fmt.Errorf("%s: %w", contextLabel, err)
 	}
+
 	if condition.CacheKey == "" {
 		condition.CacheKey = condition.InputField
 	}
-	condition.cacheKeySelector, err = compileRequiredSelector(strings.TrimSpace(condition.CacheKey), "cache_key")
+
+	condition.cacheKeySelector, err = compileRequiredSelector(
+		strings.TrimSpace(condition.CacheKey),
+		"cache_key",
+	)
 	if err != nil {
+		log.Warn("compile inference cache selector failed", "context", contextLabel, "err", err)
 		return fmt.Errorf("%s: %w", contextLabel, err)
 	}
+
 	if condition.TimeoutMs == 0 {
 		condition.TimeoutMs = cfg.InferDefaultTimeoutMs()
 	}
+
 	maxInferTimeoutMs := cfg.InferMaxTimeoutMs()
 	if condition.TimeoutMs < 0 || condition.TimeoutMs > maxInferTimeoutMs {
 		return fmt.Errorf(
 			"%s: timeout_ms %d exceeds performance.timeouts.infer_max_ms %d",
-			contextLabel, condition.TimeoutMs, maxInferTimeoutMs,
+			contextLabel,
+			condition.TimeoutMs,
+			maxInferTimeoutMs,
 		)
 	}
+
 	if condition.CacheTTLMs < 0 {
 		return fmt.Errorf("%s: cache_ttl_ms must be non-negative", contextLabel)
 	}
+
 	if condition.BlockOn == "" {
 		condition.BlockOn = BlockOnMatch
 	}
+
 	if condition.BlockOn != BlockOnMatch && condition.BlockOn != "nonmatch" {
-		return fmt.Errorf("%s: block_on %q must be %q or %q", contextLabel, condition.BlockOn, BlockOnMatch, "nonmatch")
+		return fmt.Errorf(
+			"%s: block_on %q must be %q or %q",
+			contextLabel,
+			condition.BlockOn,
+			BlockOnMatch,
+			"nonmatch",
+		)
 	}
+
 	if condition.OnError == "" {
 		condition.OnError = OnErrorOpen
 	}
+
 	if condition.OnError != OnErrorOpen && condition.OnError != OnErrorClosed {
-		return fmt.Errorf("%s: on_error %q must be %q or %q", contextLabel, condition.OnError, OnErrorOpen, OnErrorClosed)
+		return fmt.Errorf(
+			"%s: on_error %q must be %q or %q",
+			contextLabel,
+			condition.OnError,
+			OnErrorOpen,
+			OnErrorClosed,
+		)
 	}
+
 	condition.ResponseJSONField = strings.TrimSpace(condition.ResponseJSONField)
 	if err := validateStdoutJSONFieldPath(condition.ResponseJSONField); err != nil {
+		log.Warn("compile inference response field failed", "context", contextLabel, "err", err)
 		return fmt.Errorf("%s: response_json_field: %w", contextLabel, err)
 	}
+
 	if condition.ResponseJSONEquals == "" {
 		return fmt.Errorf("%s: response_json_equals is required", contextLabel)
 	}
+
 	condition.responseJSONValue, err = decodeTOMLScalar(condition.ResponseJSONEquals)
 	if err != nil {
+		log.Warn("compile inference response predicate failed", "context", contextLabel, "err", err)
 		return fmt.Errorf("%s: response_json_equals: %w", contextLabel, err)
 	}
+
 	return compileInferContextConfig(log, contextLabel, condition)
 }
 
 func compileInferGenerationOptions(contextLabel string, condition *Condition) error {
-	condition.ReasoningEffort = ReasoningEffort(strings.TrimSpace(string(condition.ReasoningEffort)))
+	condition.ReasoningEffort = ReasoningEffort(
+		strings.TrimSpace(string(condition.ReasoningEffort)),
+	)
 	switch condition.ReasoningEffort {
 	case ReasoningEffortUnspecified, ReasoningEffortNone, ReasoningEffortMinimal,
 		ReasoningEffortLow, ReasoningEffortMedium, ReasoningEffortHigh,
@@ -145,36 +235,59 @@ func compileInferGenerationOptions(contextLabel string, condition *Condition) er
 			condition.ReasoningEffort,
 		)
 	}
+
 	if condition.MaxCompletionTokens != nil && *condition.MaxCompletionTokens <= 0 {
 		return fmt.Errorf("%s: max_completion_tokens must be greater than zero", contextLabel)
 	}
+
 	if condition.Temperature != nil {
 		temperature := *condition.Temperature
-		if math.IsNaN(temperature) || math.IsInf(temperature, 0) || temperature < 0 || temperature > 2 {
+		if math.IsNaN(temperature) || math.IsInf(temperature, 0) || temperature < 0 ||
+			temperature > 2 {
 			return fmt.Errorf("%s: temperature must be between zero and two", contextLabel)
 		}
 	}
+
 	return nil
 }
 
-func compileDeclaration(configDirectory string, inline string, file string, inlineName string, fileName string) (string, error) {
+func compileDeclaration(
+	configDirectory string,
+	inline string,
+	file string,
+	inlineName string,
+	fileName string,
+) (string, error) {
 	hasInline := inline != ""
 	hasFile := strings.TrimSpace(file) != ""
 	if hasInline == hasFile {
 		return "", fmt.Errorf("exactly one of %s or %s must be set", inlineName, fileName)
 	}
+
 	if hasInline {
 		return inline, nil
 	}
+
 	path := file
 	if !filepath.IsAbs(path) {
 		path = filepath.Join(configDirectory, path)
 	}
+
 	content, err := os.ReadFile(path)
 	if err != nil {
-		slog.Warn("read inference declaration file failed", "field", fileName, "path", path, "err", err)
+		slog.Warn(
+			"read inference declaration file failed",
+			"field",
+			fileName,
+			"path",
+			path,
+			"err",
+			err,
+		)
+
 		return "", fmt.Errorf("read %s: %w", fileName, err)
 	}
+
 	return string(content), nil
 }
 
@@ -183,6 +296,7 @@ func compileRequiredSelector(path string, fieldName string) (FieldSelectorSpec, 
 	if path == "" || spec.Selector == FieldSelectorInvalid {
 		return spec, fmt.Errorf("%s %q is not a valid field selector", fieldName, path)
 	}
+
 	return spec, nil
 }
 
@@ -191,38 +305,83 @@ func compileInferContextConfig(log *slog.Logger, contextLabel string, condition 
 	if condition.ContextSource == "" {
 		return nil
 	}
+
 	if condition.ContextSource != "clyde_recent_turns" {
 		return fmt.Errorf("%s: unknown context_source %q", contextLabel, condition.ContextSource)
 	}
+
 	condition.ContextEndpoint = strings.TrimSpace(condition.ContextEndpoint)
 	if condition.ContextEndpoint == "" {
 		return fmt.Errorf("%s: context_endpoint is required", contextLabel)
 	}
+
 	var err error
-	condition.contextWorkspaceSelector, err = compileRequiredSelector(strings.TrimSpace(condition.ContextWorkspaceField), "context_workspace_field")
+	condition.contextWorkspaceSelector, err = compileRequiredSelector(
+		strings.TrimSpace(condition.ContextWorkspaceField),
+		"context_workspace_field",
+	)
 	if err != nil {
-		log.Warn("compile inference context workspace selector failed", "context", contextLabel, "err", err)
+		log.Warn(
+			"compile inference context workspace selector failed",
+			"context",
+			contextLabel,
+			"err",
+			err,
+		)
+
 		return fmt.Errorf("%s: %w", contextLabel, err)
 	}
-	condition.contextSessionSelector, err = compileRequiredSelector(strings.TrimSpace(condition.ContextSessionField), "context_session_field")
+
+	condition.contextSessionSelector, err = compileRequiredSelector(
+		strings.TrimSpace(condition.ContextSessionField),
+		"context_session_field",
+	)
 	if err != nil {
-		log.Warn("compile inference context session selector failed", "context", contextLabel, "err", err)
+		log.Warn(
+			"compile inference context session selector failed",
+			"context",
+			contextLabel,
+			"err",
+			err,
+		)
+
 		return fmt.Errorf("%s: %w", contextLabel, err)
 	}
+
 	if condition.ContextTurnBudget == 0 {
 		condition.ContextTurnBudget = DefaultContextTurnBudget
 	}
+
 	if condition.ContextTurnBudget < 1 || condition.ContextTurnBudget > MaxContextTurnBudget {
-		return fmt.Errorf("%s: context_turn_budget must be between 1 and %d", contextLabel, MaxContextTurnBudget)
+		return fmt.Errorf(
+			"%s: context_turn_budget must be between 1 and %d",
+			contextLabel,
+			MaxContextTurnBudget,
+		)
 	}
+
 	if condition.ContextMaxCharsPerTurn == 0 {
 		condition.ContextMaxCharsPerTurn = DefaultContextMaxCharsPerTurn
 	}
-	if condition.ContextMaxCharsPerTurn < 1 || condition.ContextMaxCharsPerTurn > MaxContextMaxCharsPerTurn {
-		return fmt.Errorf("%s: context_max_chars_per_turn must be between 1 and %d", contextLabel, MaxContextMaxCharsPerTurn)
+
+	if condition.ContextMaxCharsPerTurn < 1 ||
+		condition.ContextMaxCharsPerTurn > MaxContextMaxCharsPerTurn {
+		return fmt.Errorf(
+			"%s: context_max_chars_per_turn must be between 1 and %d",
+			contextLabel,
+			MaxContextMaxCharsPerTurn,
+		)
 	}
+
 	if condition.ContextOnError != "empty" && condition.ContextOnError != "error" {
-		return fmt.Errorf("%s: context_on_error %q must be %q or %q", contextLabel, condition.ContextOnError, "empty", "error")
+		return fmt.Errorf(
+			"%s: context_on_error %q must be %q or %q",
+			contextLabel,
+			condition.ContextOnError,
+			"empty",
+			"error",
+		)
 	}
+
 	return nil
 }

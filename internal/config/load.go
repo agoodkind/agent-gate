@@ -25,6 +25,7 @@ func LoadExisting(path string) (*Config, error) {
 		slog.Error("stat config failed", "path", path, "err", err)
 		return nil, fmt.Errorf("stat config %s: %w", path, err)
 	}
+
 	return loadExisting(path, true)
 }
 
@@ -42,15 +43,21 @@ func loadPath(path string, requireExisting bool, strict bool) (*Config, error) {
 			if resolveErr != nil {
 				return nil, resolveErr
 			}
+
 			cfg.auditStoragePolicy = policy
+
 			return &cfg, nil
 		}
+
 		log.Error("stat config failed", "path", path, "err", err)
+
 		return nil, fmt.Errorf("stat config %s: %w", path, err)
 	}
+
 	if strict {
 		return LoadExisting(path)
 	}
+
 	return loadExisting(path, false)
 }
 
@@ -61,6 +68,7 @@ func loadExisting(path string, strict bool) (*Config, error) {
 		log.Error("read config failed", "path", path, "err", err)
 		return nil, fmt.Errorf("read config %s: %w", path, err)
 	}
+
 	return loadSource(path, sourceBytes, strict)
 }
 
@@ -70,10 +78,12 @@ func loadSource(path string, sourceBytes []byte, strict bool) (*Config, error) {
 		log.Error("load shipped command descriptions", "err", err)
 		return nil, fmt.Errorf("load shipped command descriptions: %w", err)
 	}
+
 	if err := ValidateSelectorPolicyDefaults(); err != nil {
 		log.Error("load shipped selector policies", "err", err)
 		return nil, fmt.Errorf("load shipped selector policies: %w", err)
 	}
+
 	var cfg Config
 
 	// recordOrFail returns a non-nil error only in strict mode. In degraded mode
@@ -83,17 +93,32 @@ func loadSource(path string, sourceBytes []byte, strict bool) (*Config, error) {
 		if err == nil {
 			return nil
 		}
+
 		if strict {
 			return err
 		}
-		cfg.loadFailures = append(cfg.loadFailures, LoadFailure{
-			Scope: scope, Kind: kind, Reason: err.Error(),
-		})
-		log.Error("config part dropped; enforcement continues without it",
-			"kind", kind, "scope", scope, "err", err)
+
+		cfg.loadFailures = append(
+			cfg.loadFailures,
+			LoadFailure{
+				Scope:  scope,
+				Kind:   kind,
+				Reason: err.Error(),
+			},
+		)
+		log.Error(
+			"config part dropped; enforcement continues without it",
+			"kind",
+			kind,
+			"scope",
+			scope,
+			"err",
+			err,
+		)
 		if fallback != nil {
 			fallback()
 		}
+
 		return nil
 	}
 
@@ -101,6 +126,7 @@ func loadSource(path string, sourceBytes []byte, strict bool) (*Config, error) {
 	if err := decodeOrDegrade(log, path, sourceBytes, &cfg, strict); err != nil {
 		return nil, err
 	}
+
 	// A file that would not decode has no rules and no settings to salvage, so
 	// there is nothing further to compile. Returning here rather than walking an
 	// empty config keeps the caller's Failures the single description of what
@@ -110,6 +136,7 @@ func loadSource(path string, sourceBytes []byte, strict bool) (*Config, error) {
 		// invalid so a caller cannot use a fallback to destroy existing history.
 		return &cfg, nil
 	}
+
 	if err := validateSections(log, &cfg, recordOrFail); err != nil {
 		return nil, err
 	}
@@ -121,48 +148,63 @@ func loadSource(path string, sourceBytes []byte, strict bool) (*Config, error) {
 	// applied after Load returns would never reach a rule.
 	regex.SetLimits(cfg.RegexMatchLimit(), cfg.RegexDepthLimit())
 
-	// A rule that will not compile is dropped on its own. Keeping the rest is
-	// the difference between losing one rule and losing enforcement entirely.
-	declaredRules := len(cfg.Rules)
-	kept := cfg.Rules[:0]
-	// Held separately from loadFailures, whose first entry may be a settings
-	// block recorded earlier by validateSections. Reporting that one would name
-	// an unrelated reason for why no rule compiled.
-	var firstRuleErr error
-	for i := range cfg.Rules {
-		compileErr := compileRule(log, &cfg.Rules[i], cfg.Inference, filepath.Dir(path), &cfg)
-		if compileErr == nil {
-			kept = append(kept, cfg.Rules[i])
-			continue
-		}
-		if firstRuleErr == nil {
-			firstRuleErr = compileErr
-		}
-		if err := recordOrFail(LoadFailureRule, cfg.Rules[i].Name, compileErr, nil); err != nil {
-			return nil, err
-		}
-	}
-	cfg.Rules = kept
-
-	// Partial loss is degradation; total loss is a broken file. A config that
-	// declared rules and produced none is refused even in degraded mode, so the
-	// daemon keeps its previous rule set instead of quietly enforcing nothing.
-	// Accepting it would reproduce the outage this whole path exists to prevent,
-	// just without the crash to make it visible.
-	if !strict && declaredRules > 0 && len(cfg.Rules) == 0 {
-		return nil, fmt.Errorf(
-			"config %s declared %d rules and none compiled; keeping the previous config: %w",
-			path, declaredRules, firstRuleErr,
-		)
+	if err := cfg.compileRules(log, path, strict, recordOrFail); err != nil {
+		return nil, err
 	}
 
-	if err := recordOrFail(LoadFailureSection, "update",
-		normalizeUpdate(&cfg.Update), func() { cfg.Update = zeroUpdate },
+	if err := recordOrFail(
+		LoadFailureSection,
+		"update",
+		normalizeUpdate(&cfg.Update),
+		func() { cfg.Update = zeroUpdate },
 	); err != nil {
 		return nil, err
 	}
 
 	return &cfg, nil
+}
+
+func (cfg *Config) compileRules(
+	log *slog.Logger,
+	path string,
+	strict bool,
+	record sectionRecorder,
+) error {
+	declaredRules := len(cfg.Rules)
+	kept := cfg.Rules[:0]
+	// Use the first rule error rather than an earlier settings error when every
+	// declared rule fails to compile.
+	var firstRuleErr error
+
+	for index := range cfg.Rules {
+		compileErr := compileRule(log, &cfg.Rules[index], cfg.Inference, filepath.Dir(path), cfg)
+		if compileErr == nil {
+			kept = append(kept, cfg.Rules[index])
+			continue
+		}
+
+		if firstRuleErr == nil {
+			firstRuleErr = compileErr
+		}
+
+		if err := record(LoadFailureRule, cfg.Rules[index].Name, compileErr, nil); err != nil {
+			return err
+		}
+	}
+
+	cfg.Rules = kept
+	if !strict && declaredRules > 0 && len(cfg.Rules) == 0 {
+		log.Error("compile config rules failed", "path", path, "err", firstRuleErr)
+
+		return fmt.Errorf(
+			"config %s declared %d rules and none compiled; keeping the previous config: %w",
+			path,
+			declaredRules,
+			firstRuleErr,
+		)
+	}
+
+	return nil
 }
 
 // sectionRecorder files one settings-block failure. It returns a non-nil error
@@ -175,24 +217,34 @@ func validateSections(log *slog.Logger, cfg *Config, record sectionRecorder) err
 	if cfg.Performance.Hook.Cache.MaxBytes < 0 {
 		return errors.New("performance.hook.cache.max_bytes must be non-negative")
 	}
+
 	storagePolicy, storageErr := resolveAuditStorage(cfg.Audit.Storage)
 	if storageErr != nil {
 		return storageErr
 	}
+
 	cfg.auditStoragePolicy = storagePolicy
-	if err := record(LoadFailureSection, "performance.hook",
+	if err := record(
+		LoadFailureSection,
+		"performance.hook",
 		validateHookPerformance(cfg.Performance.Hook, cfg.Performance.Limits),
 		func() { cfg.Performance.Hook = zeroHookPerformance },
 	); err != nil {
 		return err
 	}
-	if err := record(LoadFailureSection, "performance.timeouts",
+
+	if err := record(
+		LoadFailureSection,
+		"performance.timeouts",
 		validateTimeouts(cfg.Performance.Timeouts),
 		func() { cfg.Performance.Timeouts = zeroTimeoutPerformance },
 	); err != nil {
 		return err
 	}
-	if err := record(LoadFailureSection, "performance.limits",
+
+	if err := record(
+		LoadFailureSection,
+		"performance.limits",
 		validateLimits(cfg.Performance.Limits, cfg.Performance.Intervals),
 		func() {
 			cfg.Performance.Limits = zeroLimitPerformance
@@ -201,15 +253,23 @@ func validateSections(log *slog.Logger, cfg *Config, record sectionRecorder) err
 	); err != nil {
 		return err
 	}
+
 	// An unusable inference point or judge block leaves the rules that reference
 	// it to fail on their own, which the rule loop records separately.
-	if err := record(LoadFailureSection, "inference",
-		validateInferencePoints(log, cfg.Inference), func() { cfg.Inference = nil },
+	if err := record(
+		LoadFailureSection,
+		"inference",
+		validateInferencePoints(log, cfg.Inference),
+		func() { cfg.Inference = nil },
 	); err != nil {
 		return err
 	}
-	return record(LoadFailureSection, "judge",
-		validateJudge(cfg.Judge), func() { cfg.Judge = zeroJudge },
+
+	return record(
+		LoadFailureSection,
+		"judge",
+		validateJudge(cfg.Judge),
+		func() { cfg.Judge = zeroJudge },
 	)
 }
 
@@ -249,6 +309,7 @@ func decodeOrDegrade(
 	if decodeErr == nil {
 		return nil
 	}
+
 	if strict {
 		log.Error("decode config failed", "path", path, "err", decodeErr)
 		return fmt.Errorf("decode config %s: %w", path, decodeErr)
@@ -264,13 +325,22 @@ func decodeOrDegrade(
 	var empty Config
 	*cfg = empty
 	cfg.sourceIdentity = identity
-	cfg.loadFailures = []LoadFailure{{
-		Scope:  path,
-		Kind:   LoadFailureDocument,
-		Reason: decodeErr.Error(),
-	}}
-	log.Error("config did not decode; starting with no rules and reporting "+
-		"every call as unevaluated", "path", path, "err", decodeErr)
+	cfg.loadFailures = []LoadFailure{
+		{
+			Scope:  path,
+			Kind:   LoadFailureDocument,
+			Reason: decodeErr.Error(),
+		},
+	}
+	log.Error(
+		"config did not decode; starting with no rules and reporting "+
+			"every call as unevaluated",
+		"path",
+		path,
+		"err",
+		decodeErr,
+	)
+
 	return nil
 }
 
@@ -284,10 +354,12 @@ func (c *Config) Unusable() bool {
 	if c == nil {
 		return false
 	}
+
 	for _, failure := range c.loadFailures {
 		if failure.Kind == LoadFailureDocument {
 			return true
 		}
 	}
+
 	return false
 }

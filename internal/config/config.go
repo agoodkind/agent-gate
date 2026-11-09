@@ -281,21 +281,25 @@ func NewCondition(fieldPaths []string, pattern, notPattern string) (Condition, e
 	var zeroScalar TOMLScalarValue
 	c.stdoutJSONValue = zeroScalar
 	if pattern != "" {
-		re, err := regex.Compile(pattern)
+		compiledPattern, err := regex.Compile(pattern)
 		if err != nil {
 			log.Error("compile condition pattern failed", "pattern", pattern, "err", err)
 			return Condition{}, fmt.Errorf("compile pattern %q: %w", pattern, err)
 		}
-		c.compiled = re
+
+		c.compiled = compiledPattern
 	}
+
 	if notPattern != "" {
-		re, err := regex.Compile(notPattern)
+		compiledPattern, err := regex.Compile(notPattern)
 		if err != nil {
 			log.Error("compile condition not_pattern failed", "not_pattern", notPattern, "err", err)
 			return Condition{}, fmt.Errorf("compile not_pattern %q: %w", notPattern, err)
 		}
-		c.compiledNot = re
+
+		c.compiledNot = compiledPattern
 	}
+
 	return c, nil
 }
 
@@ -305,15 +309,28 @@ func NewCondition(fieldPaths []string, pattern, notPattern string) (Condition, e
 func ParseFieldPair(spec string) (FieldPairSpec, error) {
 	trimmed := strings.TrimSpace(spec)
 	if trimmed == "" {
-		return FieldPairSpec{OldPath: "", NewPath: "", OldField: FieldSelectorInvalid, NewField: FieldSelectorInvalid}, nil
+		return FieldPairSpec{
+			OldPath:  "",
+			NewPath:  "",
+			OldField: FieldSelectorInvalid,
+			NewField: FieldSelectorInvalid,
+		}, nil
 	}
+
 	parts := strings.Split(trimmed, ",")
 	if len(parts) != 2 {
-		return FieldPairSpec{OldPath: "", NewPath: "", OldField: FieldSelectorInvalid, NewField: FieldSelectorInvalid},
+		return FieldPairSpec{
+				OldPath:  "",
+				NewPath:  "",
+				OldField: FieldSelectorInvalid,
+				NewField: FieldSelectorInvalid,
+			},
 			fmt.Errorf("field_pair %q: expected exactly two comma-separated paths", spec)
 	}
+
 	oldPath := strings.TrimSpace(parts[0])
 	newPath := strings.TrimSpace(parts[1])
+
 	return FieldPairSpec{
 		OldPath:  oldPath,
 		NewPath:  newPath,
@@ -326,15 +343,24 @@ func validateDiagnosticGroup(context string, group int, re *regex.Regexp) error 
 	if group < 0 {
 		return fmt.Errorf("%s: diagnostic_group must be non-negative", context)
 	}
+
 	if group == 0 {
 		return nil
 	}
+
 	if re == nil {
 		return fmt.Errorf("%s: diagnostic_group requires a pattern", context)
 	}
+
 	if group > int(re.CaptureCount()) {
-		return fmt.Errorf("%s: diagnostic_group %d exceeds capture count %d", context, group, re.CaptureCount())
+		return fmt.Errorf(
+			"%s: diagnostic_group %d exceeds capture count %d",
+			context,
+			group,
+			re.CaptureCount(),
+		)
 	}
+
 	return nil
 }
 
@@ -463,7 +489,15 @@ func (r *Rule) Selectors() []FieldSelectorSpec { return r.selectors }
 
 // NewSimpleRule constructs a simple (no conditions) Rule with a pre-compiled
 // regex. Intended for tests and programmatic rule construction.
-func NewSimpleRule(name, pattern string, compiled *regex.Regexp, events, fieldPaths []string, action, violationMessage string) Rule {
+func NewSimpleRule(
+	name string,
+	pattern string,
+	compiled *regex.Regexp,
+	events []string,
+	fieldPaths []string,
+	action string,
+	violationMessage string,
+) Rule {
 	return Rule{
 		Name:              name,
 		Description:       "",
@@ -546,6 +580,7 @@ func (c *Config) BlockFooter() string {
 	if c == nil {
 		return ""
 	}
+
 	return strings.TrimSpace(c.Messages.BlockFooter)
 }
 
@@ -554,6 +589,7 @@ func (c *Config) AuditEnabled() bool {
 	if c != nil && c.Audit.Enabled != nil {
 		return *c.Audit.Enabled
 	}
+
 	return true
 }
 
@@ -563,9 +599,11 @@ func (c *Config) AuditLevel() string {
 	if c != nil && c.Audit.Level != "" {
 		return c.Audit.Level
 	}
+
 	if c != nil {
 		return c.Log.Level
 	}
+
 	return ""
 }
 
@@ -574,6 +612,7 @@ func (c *Config) AuditSQLitePath() string {
 	if c != nil && c.Audit.Outputs.SQLite.Path != "" {
 		return c.Audit.Outputs.SQLite.Path
 	}
+
 	return DefaultAuditSQLitePath()
 }
 
@@ -589,60 +628,95 @@ func compileRule(
 	if err := normalizeRuleAction(r); err != nil {
 		return fmt.Errorf("rule %q: %w", r.Name, err)
 	}
+
 	if err := resolveRuleOutput(log, r, configDirectory); err != nil {
 		return fmt.Errorf("rule %q: %w", r.Name, err)
 	}
+
 	if err := normalizeRuleDiagnosticFormat(r); err != nil {
 		return fmt.Errorf("rule %q: %w", r.Name, err)
 	}
+
 	if err := validateRuleEval(log, r.Name, r.Eval, inference); err != nil {
 		return err
 	}
+
 	if err := validateRuleEvalConditions(log, r.Name, r.Eval, len(r.Conditions)); err != nil {
 		return err
 	}
+
 	if err := compileRuleEvalInference(r, inference); err != nil {
 		return err
 	}
+
 	if err := validateRuleJudgeContext(r.Name, r.JudgeContext); err != nil {
 		return err
 	}
+
 	if err := validateDisableProviders(r.Name, r.DisableProviders); err != nil {
 		return err
 	}
+
 	if len(r.Conditions) > 0 {
-		for j := range r.Conditions {
-			if r.IsResponseAction() && ConditionKind(r.Conditions[j].Kind) == ConditionKindExec && r.Conditions[j].BlockOn == "" {
-				r.Conditions[j].BlockOn = BlockOnZero
+		for conditionIndex := range r.Conditions {
+			if r.IsResponseAction() &&
+				ConditionKind(r.Conditions[conditionIndex].Kind) == ConditionKindExec &&
+				r.Conditions[conditionIndex].BlockOn == "" {
+				r.Conditions[conditionIndex].BlockOn = BlockOnZero
 			}
-			if err := compileCondition(log, r.Name, j, &r.Conditions[j], configDirectory, cfg); err != nil {
+
+			if err := compileCondition(
+				log,
+				r.Name,
+				conditionIndex,
+				&r.Conditions[conditionIndex],
+				configDirectory,
+				cfg,
+			); err != nil {
 				return err
 			}
 		}
+
 		return nil
 	}
+
 	if r.IsResponseAction() && r.Pattern == "" && r.NotPattern == "" {
 		if r.DiagnosticGroup != 0 {
 			return fmt.Errorf("rule %q: diagnostic_group requires a pattern", r.Name)
 		}
+
 		r.selectors = CompileFieldSelectorSpecs(r.FieldPaths)
+
 		return nil
 	}
+
 	r.selectors = CompileFieldSelectorSpecs(r.FieldPaths)
-	re, err := regex.Compile(r.Pattern)
+	compiledPattern, err := regex.Compile(r.Pattern)
 	if err != nil {
 		log.Error("compile rule pattern failed", "rule", r.Name, "pattern", r.Pattern, "err", err)
 		return fmt.Errorf("rule %q: compile pattern %q: %w", r.Name, r.Pattern, err)
 	}
-	r.compiled = re
+
+	r.compiled = compiledPattern
 	if r.NotPattern != "" {
 		notRe, notErr := regex.Compile(r.NotPattern)
 		if notErr != nil {
-			log.Error("compile rule not_pattern failed", "rule", r.Name, "not_pattern", r.NotPattern, "err", notErr)
+			log.Error(
+				"compile rule not_pattern failed",
+				"rule",
+				r.Name,
+				"not_pattern",
+				r.NotPattern,
+				"err",
+				notErr,
+			)
+
 			return fmt.Errorf("rule %q: compile not_pattern %q: %w", r.Name, r.NotPattern, notErr)
 		}
+
 		r.compiledNot = notRe
 	}
+
 	return validateDiagnosticGroup(fmt.Sprintf("rule %q", r.Name), r.DiagnosticGroup, r.compiled)
 }
 
@@ -650,6 +724,7 @@ func normalizeRuleDiagnosticFormat(r *Rule) error {
 	if r.DiagnosticFormat == "" {
 		r.DiagnosticFormat = DiagnosticFormatDetailed
 	}
+
 	switch r.DiagnosticFormat {
 	case DiagnosticFormatDetailed, DiagnosticFormatMessageOnly:
 		return nil
@@ -663,90 +738,6 @@ func normalizeRuleDiagnosticFormat(r *Rule) error {
 	}
 }
 
-// compileCondition fills in compiled regex and selector state for one
-// condition, validates the kind, and parses any field_pair value.
-func compileCondition(log *slog.Logger, ruleName string, index int, c *Condition, configDirectory string, cfg *Config) error {
-	c.selectors = CompileFieldSelectorSpecs(c.FieldPaths)
-	if c.Kind == "" {
-		c.Kind = "regex"
-	}
-	switch ConditionKind(c.Kind) {
-	case ConditionKindRegex, ConditionKindCommand, ConditionKindProject, ConditionKindDiff,
-		ConditionKindShellRead, ConditionKindShellWrite, ConditionKindExec,
-		ConditionKindGitDefaultBranch,
-		ConditionKindGitPrimaryCheckout, ConditionKindGitRefMove, ConditionKindInfer:
-	default:
-		return fmt.Errorf("rule %q condition %d: unknown kind %q", ruleName, index, c.Kind)
-	}
-	if c.Pattern != "" {
-		re, err := regex.Compile(c.Pattern)
-		if err != nil {
-			log.Error("compile rule condition pattern failed", "rule", ruleName, "condition_index", index, "pattern", c.Pattern, "err", err)
-			return fmt.Errorf("rule %q condition %d: compile pattern %q: %w", ruleName, index, c.Pattern, err)
-		}
-		c.compiled = re
-	}
-	if err := validateDiagnosticGroup(fmt.Sprintf("rule %q condition %d", ruleName, index), c.DiagnosticGroup, c.compiled); err != nil {
-		return err
-	}
-	if c.NotPattern != "" {
-		re, err := regex.Compile(c.NotPattern)
-		if err != nil {
-			log.Error("compile rule condition not_pattern failed", "rule", ruleName, "condition_index", index, "not_pattern", c.NotPattern, "err", err)
-			return fmt.Errorf("rule %q condition %d: compile not_pattern %q: %w", ruleName, index, c.NotPattern, err)
-		}
-		c.compiledNot = re
-	}
-	if c.PathPattern != "" {
-		re, err := regex.Compile(c.PathPattern)
-		if err != nil {
-			log.Error("compile rule condition path_pattern failed", "rule", ruleName, "condition_index", index, "path_pattern", c.PathPattern, "err", err)
-			return fmt.Errorf("rule %q condition %d: compile path_pattern %q: %w", ruleName, index, c.PathPattern, err)
-		}
-		c.compiledPath = re
-	}
-	if c.FieldPair != "" {
-		pair, err := ParseFieldPair(c.FieldPair)
-		if err != nil {
-			return fmt.Errorf("rule %q condition %d: %w", ruleName, index, err)
-		}
-		c.fieldPairs = []FieldPairSpec{pair}
-	}
-	if err := validateShellReadSpecConfig(ruleName, index, c); err != nil {
-		return err
-	}
-	if err := compileExecConfig(ruleName, index, c, cfg); err != nil {
-		return err
-	}
-	if ConditionKind(c.Kind) == ConditionKindExec &&
-		c.CacheTTLMs > 0 &&
-		containsTemporalExecSelector(c.selectors) {
-		log.Warn(
-			"exec condition caches process-local temporal context",
-			"rule",
-			ruleName,
-			"condition_index",
-			index,
-		)
-	}
-	if err := compileInferConfig(log, ruleName, index, c, configDirectory, cfg); err != nil {
-		return err
-	}
-	if err := validateShellWriteSpecConfig(ruleName, index, c); err != nil {
-		return err
-	}
-	if err := ValidateSelectorPolicies(ruleName, index, c.ProsePolicy, c.RedirectionPolicy); err != nil {
-		return err
-	}
-	if err := ValidateEnumerationSpecs(ruleName, index, c.EnumerationSpecs); err != nil {
-		return err
-	}
-	if ConditionKind(c.Kind) == ConditionKindGitRefMove && len(c.FieldPaths) > 0 {
-		return fmt.Errorf("rule %q condition %d: git_ref_move does not accept field_paths", ruleName, index)
-	}
-	return nil
-}
-
 // compileExecConfig validates the exec condition fields, applies defaults, and
 // compiles the cache-key field selector. Non-exec conditions are left
 // untouched.
@@ -754,37 +745,70 @@ func compileExecConfig(ruleName string, index int, c *Condition, cfg *Config) er
 	if ConditionKind(c.Kind) != ConditionKindExec {
 		return nil
 	}
+
 	if len(c.Command) == 0 || strings.TrimSpace(c.Command[0]) == "" {
-		return fmt.Errorf("rule %q condition %d: exec requires a non-empty command", ruleName, index)
+		return fmt.Errorf(
+			"rule %q condition %d: exec requires a non-empty command",
+			ruleName,
+			index,
+		)
 	}
+
 	maxTimeoutMs := cfg.ExecMaxTimeoutMs()
 	maxRetryCount := cfg.ExecMaxRetryCount()
 	if c.TimeoutMs == 0 {
 		c.TimeoutMs = cfg.ExecDefaultTimeoutMs()
 	}
+
 	if c.TimeoutMs < 0 {
 		return fmt.Errorf("rule %q condition %d: timeout_ms must be non-negative", ruleName, index)
 	}
+
 	if c.TimeoutMs > maxTimeoutMs {
 		return fmt.Errorf(
 			"rule %q condition %d: timeout_ms %d exceeds performance.timeouts.exec_max_ms %d",
-			ruleName, index, c.TimeoutMs, maxTimeoutMs,
+			ruleName,
+			index,
+			c.TimeoutMs,
+			maxTimeoutMs,
 		)
 	}
+
 	if c.RetryCount < 0 || c.RetryCount > maxRetryCount {
-		return fmt.Errorf("rule %q condition %d: retry_count %d must be between 0 and %d", ruleName, index, c.RetryCount, maxRetryCount)
+		return fmt.Errorf(
+			"rule %q condition %d: retry_count %d must be between 0 and %d",
+			ruleName,
+			index,
+			c.RetryCount,
+			maxRetryCount,
+		)
 	}
+
 	if c.CacheTTLMs < 0 {
-		return fmt.Errorf("rule %q condition %d: cache_ttl_ms must be non-negative", ruleName, index)
+		return fmt.Errorf(
+			"rule %q condition %d: cache_ttl_ms must be non-negative",
+			ruleName,
+			index,
+		)
 	}
+
 	if c.OnError == "" {
 		c.OnError = OnErrorOpen
 	}
+
 	switch c.OnError {
 	case OnErrorOpen, OnErrorClosed:
 	default:
-		return fmt.Errorf("rule %q condition %d: on_error %q must be %q or %q", ruleName, index, c.OnError, OnErrorOpen, OnErrorClosed)
+		return fmt.Errorf(
+			"rule %q condition %d: on_error %q must be %q or %q",
+			ruleName,
+			index,
+			c.OnError,
+			OnErrorOpen,
+			OnErrorClosed,
+		)
 	}
+
 	// An exec condition may declare read_specs alongside search_tools. They are
 	// two sources for the same selector: search_tools names argv0 values
 	// shelldecomp already treats as readers, and read_specs names a command
@@ -792,26 +816,41 @@ func compileExecConfig(ruleName string, index int, c *Condition, cfg *Config) er
 	if err := validateReadSpecs(ruleName, index, c.ReadSpecs); err != nil {
 		return err
 	}
+
+	return compileExecSelectors(ruleName, index, c)
+}
+
+func compileExecSelectors(ruleName string, index int, c *Condition) error {
 	if strings.TrimSpace(c.CacheKey) == "" {
 		c.CacheKey = DefaultExecCacheKey
 	}
+
 	for _, tool := range c.SearchTools {
 		if strings.TrimSpace(tool) == "" {
-			return fmt.Errorf("rule %q condition %d: search_tools entries must be non-empty", ruleName, index)
+			return fmt.Errorf(
+				"rule %q condition %d: search_tools entries must be non-empty",
+				ruleName,
+				index,
+			)
 		}
 	}
+
 	if err := compileExecCacheKey(ruleName, index, c); err != nil {
 		return err
 	}
+
 	if err := compileExecForEach(ruleName, index, c); err != nil {
 		return err
 	}
+
 	if err := compileExecStdoutJSON(ruleName, index, c); err != nil {
 		return err
 	}
+
 	if err := normalizeExecBlockOn(ruleName, index, c); err != nil {
 		return err
 	}
+
 	return nil
 }
 
@@ -822,11 +861,18 @@ func compileExecStdoutJSON(ruleName string, index int, c *Condition) error {
 	if !hasJSONField && !hasJSONValue {
 		var zeroScalar TOMLScalarValue
 		c.stdoutJSONValue = zeroScalar
+
 		return nil
 	}
+
 	if !hasJSONField || !hasJSONValue {
-		return fmt.Errorf("rule %q condition %d: stdout_json_field and stdout_json_equals must be set together", ruleName, index)
+		return fmt.Errorf(
+			"rule %q condition %d: stdout_json_field and stdout_json_equals must be set together",
+			ruleName,
+			index,
+		)
 	}
+
 	if err := validateStdoutJSONFieldPath(c.StdoutJSONField); err != nil {
 		return errors.New(
 			"rule " + strconv.Quote(ruleName) +
@@ -834,6 +880,7 @@ func compileExecStdoutJSON(ruleName string, index int, c *Condition) error {
 				": stdout_json_field: " + err.Error(),
 		)
 	}
+
 	value, err := decodeTOMLScalar(c.StdoutJSONEquals)
 	if err != nil {
 		return errors.New(
@@ -842,7 +889,9 @@ func compileExecStdoutJSON(ruleName string, index int, c *Condition) error {
 				": stdout_json_equals: " + err.Error(),
 		)
 	}
+
 	c.stdoutJSONValue = value
+
 	return nil
 }
 
@@ -850,9 +899,11 @@ func validateStdoutJSONFieldPath(path string) error {
 	if path == "" {
 		return errors.New("must not be empty")
 	}
+
 	if slices.Contains(strings.Split(path, "."), "") {
 		return errors.New("must not contain empty path segments")
 	}
+
 	return nil
 }
 
@@ -860,20 +911,43 @@ func normalizeExecBlockOn(ruleName string, index int, c *Condition) error {
 	if c.BlockOn == "" {
 		c.BlockOn = BlockOnNonzero
 	}
+
 	if c.StdoutJSONField != "" && c.BlockOn == BlockOnNonzero {
 		c.BlockOn = BlockOnMatch
 	}
+
 	switch c.BlockOn {
 	case BlockOnNonzero, BlockOnZero, BlockOnMatch:
 	default:
-		return fmt.Errorf("rule %q condition %d: block_on %q must be %q, %q, or %q", ruleName, index, c.BlockOn, BlockOnNonzero, BlockOnZero, BlockOnMatch)
+		return fmt.Errorf(
+			"rule %q condition %d: block_on %q must be %q, %q, or %q",
+			ruleName,
+			index,
+			c.BlockOn,
+			BlockOnNonzero,
+			BlockOnZero,
+			BlockOnMatch,
+		)
 	}
+
 	if c.StdoutJSONField != "" && c.BlockOn != BlockOnMatch {
-		return fmt.Errorf("rule %q condition %d: stdout_json_field requires block_on = %q", ruleName, index, BlockOnMatch)
+		return fmt.Errorf(
+			"rule %q condition %d: stdout_json_field requires block_on = %q",
+			ruleName,
+			index,
+			BlockOnMatch,
+		)
 	}
+
 	if c.StdoutJSONField == "" && c.BlockOn == BlockOnMatch {
-		return fmt.Errorf("rule %q condition %d: block_on %q requires stdout_json_field and stdout_json_equals", ruleName, index, BlockOnMatch)
+		return fmt.Errorf(
+			"rule %q condition %d: block_on %q requires stdout_json_field and stdout_json_equals",
+			ruleName,
+			index,
+			BlockOnMatch,
+		)
 	}
+
 	return nil
 }
 
@@ -895,6 +969,7 @@ func decodeTOMLScalar(encoded string) (TOMLScalarValue, error) {
 	if trimmed == "" {
 		return TOMLScalarValue{}, errors.New("expected a value, got an empty string")
 	}
+
 	// Text that is not valid JSON is the plain-word case, taken as a JSON
 	// string. Checking validity up front keeps that from looking like a
 	// swallowed decode error.
@@ -910,6 +985,7 @@ func decodeTOMLScalar(encoded string) (TOMLScalarValue, error) {
 		// change to that guard cannot turn into a silent misparse.
 		return TOMLScalarValue{}, errors.New("expected a JSON scalar")
 	}
+
 	switch typed := decoded.(type) {
 	case bool:
 		return NewBoolScalar(typed), nil
@@ -919,10 +995,12 @@ func decodeTOMLScalar(encoded string) (TOMLScalarValue, error) {
 		if intValue, intErr := typed.Int64(); intErr == nil {
 			return NewIntScalar(intValue), nil
 		}
+
 		floatValue, floatErr := typed.Float64()
 		if floatErr != nil {
 			return TOMLScalarValue{}, errors.New("expected a JSON number")
 		}
+
 		return NewFloatScalar(floatValue), nil
 	default:
 		// A JSON array or object opens with a delimiter token rather than a
@@ -936,18 +1014,35 @@ func validateShellReadSpecConfig(ruleName string, index int, c *Condition) error
 	if ConditionKind(c.Kind) != ConditionKindShellRead {
 		return nil
 	}
+
 	if c.CompiledPattern() == nil {
-		return fmt.Errorf("rule %q condition %d: shell_read_secret requires pattern", ruleName, index)
+		return fmt.Errorf(
+			"rule %q condition %d: shell_read_secret requires pattern",
+			ruleName,
+			index,
+		)
 	}
+
 	if c.CompiledPathPattern() == nil {
-		return fmt.Errorf("rule %q condition %d: shell_read_secret requires path_pattern", ruleName, index)
+		return fmt.Errorf(
+			"rule %q condition %d: shell_read_secret requires path_pattern",
+			ruleName,
+			index,
+		)
 	}
+
 	if c.MaxBytes < 0 {
 		return fmt.Errorf("rule %q condition %d: max_bytes must be non-negative", ruleName, index)
 	}
+
 	if len(c.ReadSpecs) == 0 {
-		return fmt.Errorf("rule %q condition %d: shell_read_secret requires at least one read_specs entry", ruleName, index)
+		return fmt.Errorf(
+			"rule %q condition %d: shell_read_secret requires at least one read_specs entry",
+			ruleName,
+			index,
+		)
 	}
+
 	return validateReadSpecs(ruleName, index, c.ReadSpecs)
 }
 
@@ -958,25 +1053,85 @@ func validateReadSpecs(ruleName string, index int, specs []ShellReadSpec) error 
 	for specIndex := range specs {
 		spec := specs[specIndex]
 		if err := validateReadArgumentMode(spec); err != nil {
-			slog.Error("validate read argument mode", "rule", ruleName, "condition", index, "spec", specIndex, "err", err)
-			return fmt.Errorf("rule %q condition %d read_specs %d: %w", ruleName, index, specIndex, err)
+			slog.Error(
+				"validate read argument mode",
+				"rule",
+				ruleName,
+				"condition",
+				index,
+				"spec",
+				specIndex,
+				"err",
+				err,
+			)
+
+			return fmt.Errorf(
+				"rule %q condition %d read_specs %d: %w",
+				ruleName,
+				index,
+				specIndex,
+				err,
+			)
 		}
+
 		if err := ValidateArgumentSpec(spec.Arguments); err != nil {
-			slog.Error("validate read argument specification", "rule", ruleName, "condition", index, "spec", specIndex, "err", err)
-			return fmt.Errorf("rule %q condition %d read_specs %d arguments: %w", ruleName, index, specIndex, err)
+			slog.Error(
+				"validate read argument specification",
+				"rule",
+				ruleName,
+				"condition",
+				index,
+				"spec",
+				specIndex,
+				"err",
+				err,
+			)
+
+			return fmt.Errorf(
+				"rule %q condition %d read_specs %d arguments: %w",
+				ruleName,
+				index,
+				specIndex,
+				err,
+			)
 		}
+
 		if len(spec.Argv0) == 0 {
-			return fmt.Errorf("rule %q condition %d read_specs %d: argv0 is required", ruleName, index, specIndex)
+			return fmt.Errorf(
+				"rule %q condition %d read_specs %d: argv0 is required",
+				ruleName,
+				index,
+				specIndex,
+			)
 		}
+
 		if spec.PathArgStart < 0 {
-			return fmt.Errorf("rule %q condition %d read_specs %d: path_arg_start must be non-negative", ruleName, index, specIndex)
+			return fmt.Errorf(
+				"rule %q condition %d read_specs %d: path_arg_start must be non-negative",
+				ruleName,
+				index,
+				specIndex,
+			)
 		}
+
 		if spec.PathArgStartIfFlagsValue < 0 {
-			return fmt.Errorf("rule %q condition %d read_specs %d: path_arg_start_if_flags_value must be non-negative", ruleName, index, specIndex)
+			return fmt.Errorf(
+				"rule %q condition %d read_specs %d: path_arg_start_if_flags_value must be non-negative",
+				ruleName,
+				index,
+				specIndex,
+			)
 		}
+
 		if spec.SkipPositionals < 0 {
-			return fmt.Errorf("rule %q condition %d read_specs %d: skip_positionals must be non-negative", ruleName, index, specIndex)
+			return fmt.Errorf(
+				"rule %q condition %d read_specs %d: skip_positionals must be non-negative",
+				ruleName,
+				index,
+				specIndex,
+			)
 		}
 	}
+
 	return nil
 }
