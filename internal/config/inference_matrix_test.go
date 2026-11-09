@@ -15,6 +15,7 @@ func writeTempConfig(t *testing.T, body string) string {
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
+
 	return path
 }
 
@@ -62,27 +63,35 @@ use = "v4"
 	if err != nil {
 		t.Fatalf("LoadExisting: %v", err)
 	}
+
 	point, ok := cfg.Inference["mini"]
 	if !ok {
 		t.Fatalf("inference point mini missing; have %v", cfg.Inference)
 	}
+
 	if point.Model != "gpt-5.4-mini" || point.ConfidenceSource != config.ConfidenceLogprob {
 		t.Fatalf("mini point = %#v", point)
 	}
+
 	if len(cfg.Rules) != 1 || len(cfg.Rules[0].Eval) != 3 {
 		t.Fatalf("rules/eval = %#v", cfg.Rules)
 	}
+
 	enforce := cfg.Rules[0].Eval[1]
-	if enforce.Use != "mini" || enforce.Role != config.RoleEnforce || enforce.OnError != config.OnErrorOpen {
+	if enforce.Use != "mini" || enforce.Role != config.RoleEnforce ||
+		enforce.OnError != config.OnErrorOpen {
 		t.Fatalf("enforce eval = %#v", enforce)
 	}
+
 	verify := cfg.Rules[0].Eval[2]
 	if verify.Use != "v4" || verify.Role != config.RoleVerify {
 		t.Fatalf("verify eval = %#v", verify)
 	}
+
 	if _, ok := cfg.Rules[0].EvalInference["mini"]; !ok {
 		t.Fatalf("EvalInference missing mini: %#v", cfg.Rules[0].EvalInference)
 	}
+
 	if _, ok := cfg.Rules[0].EvalInference["v4"]; !ok {
 		t.Fatalf("EvalInference missing v4: %#v", cfg.Rules[0].EvalInference)
 	}
@@ -236,15 +245,19 @@ use = "local"`,
 		},
 	}
 	for _, testCase := range cases {
-		t.Run(testCase.name, func(t *testing.T) {
-			_, err := config.LoadExisting(writeTempConfig(t, testCase.body))
-			if err == nil {
-				t.Fatalf("expected error containing %q, got nil", testCase.want)
-			}
-			if !strings.Contains(err.Error(), testCase.want) {
-				t.Fatalf("error %q does not contain %q", err.Error(), testCase.want)
-			}
-		})
+		t.Run(
+			testCase.name,
+			func(t *testing.T) {
+				_, err := config.LoadExisting(writeTempConfig(t, testCase.body))
+				if err == nil {
+					t.Fatalf("expected error containing %q, got nil", testCase.want)
+				}
+
+				if !strings.Contains(err.Error(), testCase.want) {
+					t.Fatalf("error %q does not contain %q", err.Error(), testCase.want)
+				}
+			},
+		)
 	}
 }
 
@@ -264,6 +277,7 @@ violation_message = "no"
 	if err != nil {
 		t.Fatalf("LoadExisting: %v", err)
 	}
+
 	if len(cfg.Rules) != 1 || len(cfg.Rules[0].Eval) != 0 {
 		t.Fatalf("rules = %#v", cfg.Rules)
 	}
@@ -302,9 +316,11 @@ role = "fallback"
 	if err != nil {
 		t.Fatalf("LoadExisting: %v", err)
 	}
+
 	if len(cfg.Rules) != 1 || len(cfg.Rules[0].Eval) != 2 {
 		t.Fatalf("rules/eval = %#v", cfg.Rules)
 	}
+
 	fallback := cfg.Rules[0].Eval[1]
 	if fallback.Role != config.RoleFallback || fallback.Kind != config.EvalKindDeterministic {
 		t.Fatalf("fallback eval = %#v", fallback)

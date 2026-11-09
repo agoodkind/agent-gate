@@ -20,14 +20,18 @@ func (s *NullableString) UnmarshalJSON(data []byte) error {
 	if text == "null" {
 		s.Value = ""
 		s.Valid = false
+
 		return nil
 	}
+
 	var value string
 	if err := json.Unmarshal(data, &value); err != nil {
 		return fmt.Errorf("decode nullable string: %w", err)
 	}
+
 	s.Value = value
 	s.Valid = true
+
 	return nil
 }
 
@@ -49,9 +53,11 @@ func (n *Number) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &value); err != nil {
 		return fmt.Errorf("decode number: %w", err)
 	}
+
 	n.Float = value
 	n.Int = int(value)
 	n.Valid = true
+
 	return nil
 }
 
@@ -247,6 +253,7 @@ func (input *CursorToolInput) UnmarshalJSON(data []byte) error {
 	if text == "null" {
 		var empty CursorToolInput
 		*input = empty
+
 		return nil
 	}
 
@@ -256,6 +263,7 @@ func (input *CursorToolInput) UnmarshalJSON(data []byte) error {
 		*input = CursorToolInput(decoded)
 		return nil
 	}
+
 	if strings.HasPrefix(text, "{") && json.Valid(data) {
 		*input = CursorToolInput(decoded)
 		return nil
@@ -278,6 +286,7 @@ func (input *CursorToolInput) UnmarshalJSON(data []byte) error {
 	var fallback CursorToolInput
 	fallback.Content = value
 	*input = fallback
+
 	return nil
 }
 
@@ -328,34 +337,46 @@ type VSCodeToolInput struct {
 // NormalizedOldStrings returns all observed old-string values from the
 // payload, with the top-level OldString first when set.
 func (input VSCodeToolInput) NormalizedOldStrings() []string {
-	values := stringsFromReplacements(input.Replacements, func(replacement Replacement) string {
-		return replacement.NormalizedOldString()
-	})
+	values := stringsFromReplacements(
+		input.Replacements,
+		func(replacement Replacement) string {
+			return replacement.NormalizedOldString()
+		},
+	)
 	if input.OldString != "" {
 		values = append([]string{input.OldString}, values...)
 	}
+
 	return values
 }
 
 // NormalizedNewStrings returns all observed new-string values from the
 // payload, with the top-level NewString first when set.
 func (input VSCodeToolInput) NormalizedNewStrings() []string {
-	values := stringsFromReplacements(input.Replacements, func(replacement Replacement) string {
-		return replacement.NormalizedNewString()
-	})
+	values := stringsFromReplacements(
+		input.Replacements,
+		func(replacement Replacement) string {
+			return replacement.NormalizedNewString()
+		},
+	)
 	if input.NewString != "" {
 		values = append([]string{input.NewString}, values...)
 	}
+
 	return values
 }
 
-func stringsFromReplacements(replacements []Replacement, extract func(Replacement) string) []string {
+func stringsFromReplacements(
+	replacements []Replacement,
+	extract func(Replacement) string,
+) []string {
 	values := make([]string, 0, len(replacements))
 	for _, replacement := range replacements {
 		if value := extract(replacement); value != "" {
 			values = append(values, value)
 		}
 	}
+
 	return values
 }
 
@@ -377,13 +398,17 @@ func (value *TextOrObject) UnmarshalJSON(data []byte) error {
 	if len(data) == 0 || string(data) == "null" {
 		return nil
 	}
+
 	if data[0] == '"' {
 		if err := json.Unmarshal(data, &value.Text); err != nil {
 			return fmt.Errorf("decode text-or-object string: %w", err)
 		}
+
 		return nil
 	}
+
 	value.JSON = string(data)
+
 	return nil
 }
 
@@ -397,6 +422,7 @@ func (value *TextOrObject) SearchableText() string {
 	if value.Text != "" {
 		return value.Text
 	}
+
 	if value.JSON == "" {
 		return ""
 	}
@@ -408,6 +434,7 @@ func (value *TextOrObject) SearchableText() string {
 
 	var builder strings.Builder
 	appendSearchableJSONText(&builder, "", rawJSON)
+
 	return strings.TrimRight(builder.String(), "\n")
 }
 
@@ -424,6 +451,7 @@ func appendSearchableJSONText(builder *strings.Builder, key string, rawJSON json
 			appendSearchableScalar(builder, key, string(trimmed))
 			return
 		}
+
 		appendSearchableJSONMap(builder, values)
 	case '[':
 		var values searchableJSONArray
@@ -431,6 +459,7 @@ func appendSearchableJSONText(builder *strings.Builder, key string, rawJSON json
 			appendSearchableScalar(builder, key, string(trimmed))
 			return
 		}
+
 		for _, item := range values {
 			appendSearchableJSONText(builder, "", item)
 		}
@@ -440,6 +469,7 @@ func appendSearchableJSONText(builder *strings.Builder, key string, rawJSON json
 			appendSearchableScalar(builder, key, string(trimmed))
 			return
 		}
+
 		appendSearchableScalar(builder, key, value)
 	case 't', 'f':
 		var value bool
@@ -447,6 +477,7 @@ func appendSearchableJSONText(builder *strings.Builder, key string, rawJSON json
 			appendSearchableScalar(builder, key, string(trimmed))
 			return
 		}
+
 		appendSearchableScalar(builder, key, strconv.FormatBool(value))
 	case 'n':
 		return
@@ -460,6 +491,7 @@ func appendSearchableJSONMap(builder *strings.Builder, values searchableJSONObje
 		if skipsSearchableJSONField(values, key) {
 			continue
 		}
+
 		appendSearchableJSONText(builder, key, value)
 	}
 }
@@ -468,6 +500,7 @@ func skipsSearchableJSONField(values searchableJSONObject, key string) bool {
 	if key != "data" {
 		return false
 	}
+
 	return isImagePayload(values)
 }
 
@@ -475,12 +508,15 @@ func isImagePayload(values searchableJSONObject) bool {
 	if searchableJSONString(values["type"]) == "image" {
 		return true
 	}
+
 	if strings.HasPrefix(searchableJSONString(values["mimeType"]), "image/") {
 		return true
 	}
+
 	if strings.HasPrefix(searchableJSONString(values["mime_type"]), "image/") {
 		return true
 	}
+
 	return false
 }
 
@@ -488,10 +524,12 @@ func searchableJSONString(rawJSON json.RawMessage) string {
 	if len(rawJSON) == 0 {
 		return ""
 	}
+
 	var value string
 	if err := json.Unmarshal(rawJSON, &value); err != nil {
 		return ""
 	}
+
 	return value
 }
 
@@ -499,10 +537,12 @@ func appendSearchableScalar(builder *strings.Builder, key string, value string) 
 	if value == "" {
 		return
 	}
+
 	if key != "" {
 		builder.WriteString(key)
 		builder.WriteString(": ")
 	}
+
 	builder.WriteString(value)
 	builder.WriteByte('\n')
 }

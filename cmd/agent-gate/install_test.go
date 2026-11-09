@@ -62,33 +62,39 @@ func TestRunInstallDefaultsBinPathThroughResolver(t *testing.T) {
 		t.Fatalf("EvalSymlinks executable: %v", err)
 	}
 	for _, subcommand := range []string{"hooks", "service", "all"} {
-		t.Run(subcommand, func(t *testing.T) {
-			dependencies := successfulInstallDependencies(binPath)
-			var hookBinPath string
-			var serviceBinPath string
-			dependencies.prepareHooks = func(options agentinstall.HooksOptions) (*agentinstall.HookInstallationPlan, error) {
-				hookBinPath = options.BinPath
-				return &agentinstall.HookInstallationPlan{}, nil
-			}
-			dependencies.installService = func(options agentinstall.ServiceOptions) error {
-				serviceBinPath = options.BinPath
-				if options.Ready != nil {
-					return options.Ready()
+		t.Run(
+			subcommand,
+			func(t *testing.T) {
+				dependencies := successfulInstallDependencies(binPath)
+				var hookBinPath string
+				var serviceBinPath string
+				dependencies.prepareHooks = func(options agentinstall.HooksOptions) (
+					*agentinstall.HookInstallationPlan,
+					error,
+				) {
+					hookBinPath = options.BinPath
+					return &agentinstall.HookInstallationPlan{}, nil
 				}
-				return nil
-			}
+				dependencies.installService = func(options agentinstall.ServiceOptions) error {
+					serviceBinPath = options.BinPath
+					if options.Ready != nil {
+						return options.Ready()
+					}
+					return nil
+				}
 
-			exitCode := runInstallWithDependencies([]string{subcommand}, dependencies)
-			if exitCode != 0 {
-				t.Fatalf("exitCode = %d, want 0", exitCode)
-			}
-			if subcommand != "service" && hookBinPath != canonicalBinPath {
-				t.Fatalf("hook bin path = %q, want %q", hookBinPath, canonicalBinPath)
-			}
-			if subcommand != "hooks" && serviceBinPath != canonicalBinPath {
-				t.Fatalf("service bin path = %q, want %q", serviceBinPath, canonicalBinPath)
-			}
-		})
+				exitCode := runInstallWithDependencies([]string{subcommand}, dependencies)
+				if exitCode != 0 {
+					t.Fatalf("exitCode = %d, want 0", exitCode)
+				}
+				if subcommand != "service" && hookBinPath != canonicalBinPath {
+					t.Fatalf("hook bin path = %q, want %q", hookBinPath, canonicalBinPath)
+				}
+				if subcommand != "hooks" && serviceBinPath != canonicalBinPath {
+					t.Fatalf("service bin path = %q, want %q", serviceBinPath, canonicalBinPath)
+				}
+			},
+		)
 	}
 }
 
@@ -104,41 +110,59 @@ func TestRunInstallCanonicalizesSymlinkedBinPathBeforeInstallation(t *testing.T)
 	}
 
 	for _, subcommand := range []string{"service", "all"} {
-		t.Run(subcommand, func(t *testing.T) {
-			dependencies := successfulInstallDependencies(targetPath)
-			var hookBinPath string
-			var serviceBinPath string
-			var readinessBinPath string
-			dependencies.prepareHooks = func(options agentinstall.HooksOptions) (*agentinstall.HookInstallationPlan, error) {
-				hookBinPath = options.BinPath
-				return &agentinstall.HookInstallationPlan{}, nil
-			}
-			dependencies.installService = func(options agentinstall.ServiceOptions) error {
-				serviceBinPath = options.BinPath
-				return options.Ready()
-			}
-			dependencies.waitForReady = func(binPath string) error {
-				readinessBinPath = binPath
-				return nil
-			}
+		t.Run(
+			subcommand,
+			func(t *testing.T) {
+				dependencies := successfulInstallDependencies(targetPath)
+				var hookBinPath string
+				var serviceBinPath string
+				var readinessBinPath string
+				dependencies.prepareHooks = func(options agentinstall.HooksOptions) (
+					*agentinstall.HookInstallationPlan,
+					error,
+				) {
+					hookBinPath = options.BinPath
+					return &agentinstall.HookInstallationPlan{}, nil
+				}
+				dependencies.installService = func(options agentinstall.ServiceOptions) error {
+					serviceBinPath = options.BinPath
+					return options.Ready()
+				}
+				dependencies.waitForReady = func(binPath string) error {
+					readinessBinPath = binPath
+					return nil
+				}
 
-			exitCode := runInstallWithDependencies(
-				[]string{subcommand, "--bin-path", linkPath},
-				dependencies,
-			)
-			if exitCode != 0 {
-				t.Fatalf("exitCode = %d, want 0", exitCode)
-			}
-			if serviceBinPath != canonicalTargetPath {
-				t.Fatalf("service bin path = %q, want canonical %q", serviceBinPath, canonicalTargetPath)
-			}
-			if readinessBinPath != canonicalTargetPath {
-				t.Fatalf("readiness bin path = %q, want canonical %q", readinessBinPath, canonicalTargetPath)
-			}
-			if subcommand == "all" && hookBinPath != canonicalTargetPath {
-				t.Fatalf("hook bin path = %q, want canonical %q", hookBinPath, canonicalTargetPath)
-			}
-		})
+				exitCode := runInstallWithDependencies(
+					[]string{subcommand, "--bin-path", linkPath},
+					dependencies,
+				)
+				if exitCode != 0 {
+					t.Fatalf("exitCode = %d, want 0", exitCode)
+				}
+				if serviceBinPath != canonicalTargetPath {
+					t.Fatalf(
+						"service bin path = %q, want canonical %q",
+						serviceBinPath,
+						canonicalTargetPath,
+					)
+				}
+				if readinessBinPath != canonicalTargetPath {
+					t.Fatalf(
+						"readiness bin path = %q, want canonical %q",
+						readinessBinPath,
+						canonicalTargetPath,
+					)
+				}
+				if subcommand == "all" && hookBinPath != canonicalTargetPath {
+					t.Fatalf(
+						"hook bin path = %q, want canonical %q",
+						hookBinPath,
+						canonicalTargetPath,
+					)
+				}
+			},
+		)
 	}
 }
 
@@ -216,38 +240,47 @@ func TestRunInstallRejectsBrokenExecutableSymlinkBeforeMutations(t *testing.T) {
 func TestRunInstallAllPrevalidatesInstallerOptionsBeforeMutations(t *testing.T) {
 	binPath := writeCommandExecutable(t)
 	for _, failingStage := range []string{"service options", "hook options"} {
-		t.Run(failingStage, func(t *testing.T) {
-			dependencies := successfulInstallDependencies(binPath)
-			mutationCount := 0
-			dependencies.ensureConfig = func(config.EnsureDefaultsOptions) error {
-				mutationCount++
-				return nil
-			}
-			dependencies.installService = func(agentinstall.ServiceOptions) error {
-				mutationCount++
-				return nil
-			}
-			dependencies.applyHooks = func(*agentinstall.HookInstallationPlan) error {
-				mutationCount++
-				return nil
-			}
-			if failingStage == "service options" {
-				dependencies.validateService = func(agentinstall.ServiceOptions) error {
-					return errors.New("invalid service template")
+		t.Run(
+			failingStage,
+			func(t *testing.T) {
+				dependencies := successfulInstallDependencies(binPath)
+				mutationCount := 0
+				dependencies.ensureConfig = func(config.EnsureDefaultsOptions) error {
+					mutationCount++
+					return nil
 				}
-			} else {
-				dependencies.prepareHooks = func(agentinstall.HooksOptions) (*agentinstall.HookInstallationPlan, error) {
-					return nil, errors.New("invalid hook template")
+				dependencies.installService = func(agentinstall.ServiceOptions) error {
+					mutationCount++
+					return nil
 				}
-			}
+				dependencies.applyHooks = func(*agentinstall.HookInstallationPlan) error {
+					mutationCount++
+					return nil
+				}
+				if failingStage == "service options" {
+					dependencies.validateService = func(agentinstall.ServiceOptions) error {
+						return errors.New("invalid service template")
+					}
+				} else {
+					dependencies.prepareHooks = func(agentinstall.HooksOptions) (
+						*agentinstall.HookInstallationPlan,
+						error,
+					) {
+						return nil, errors.New("invalid hook template")
+					}
+				}
 
-			if exitCode := runInstallWithDependencies([]string{"all"}, dependencies); exitCode != 2 {
-				t.Fatalf("exitCode = %d, want 2", exitCode)
-			}
-			if mutationCount != 0 {
-				t.Fatalf("mutationCount = %d, want 0", mutationCount)
-			}
-		})
+				if exitCode := runInstallWithDependencies(
+					[]string{"all"},
+					dependencies,
+				); exitCode != 2 {
+					t.Fatalf("exitCode = %d, want 2", exitCode)
+				}
+				if mutationCount != 0 {
+					t.Fatalf("mutationCount = %d, want 0", mutationCount)
+				}
+			},
+		)
 	}
 }
 
@@ -255,13 +288,21 @@ func TestRunInstallAllMalformedLaterHookLeavesConfigServiceAndHooksUntouched(t *
 	binPath := writeCommandExecutable(t)
 	homeDir := t.TempDir()
 	initialFiles := map[string][]byte{
-		filepath.Join(homeDir, "config-state"):                         []byte("config-original"),
-		filepath.Join(homeDir, "service-state"):                        []byte("service-original"),
-		filepath.Join(homeDir, ".claude", "settings.json"):             []byte(`{"theme":"claude"}`),
-		filepath.Join(homeDir, ".codex", "config.toml"):                []byte("model = \"original\"\n"),
-		filepath.Join(homeDir, ".cursor", "hooks.json"):                []byte(`{"hooks":`),
-		filepath.Join(homeDir, ".gemini", "settings.json"):             []byte(`{"theme":"gemini"}`),
-		filepath.Join(homeDir, ".copilot", "hooks", "agent-gate.json"): []byte(`{"owned":"copilot"}`),
+		filepath.Join(homeDir, "config-state"):  []byte("config-original"),
+		filepath.Join(homeDir, "service-state"): []byte("service-original"),
+		filepath.Join(homeDir, ".claude", "settings.json"): []byte(
+			`{"theme":"claude"}`,
+		),
+		filepath.Join(homeDir, ".codex", "config.toml"): []byte(
+			"model = \"original\"\n",
+		),
+		filepath.Join(homeDir, ".cursor", "hooks.json"): []byte(`{"hooks":`),
+		filepath.Join(homeDir, ".gemini", "settings.json"): []byte(
+			`{"theme":"gemini"}`,
+		),
+		filepath.Join(homeDir, ".copilot", "hooks", "agent-gate.json"): []byte(
+			`{"owned":"copilot"}`,
+		),
 	}
 	for path, content := range initialFiles {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -272,7 +313,10 @@ func TestRunInstallAllMalformedLaterHookLeavesConfigServiceAndHooksUntouched(t *
 		}
 	}
 	dependencies := successfulInstallDependencies(binPath)
-	dependencies.prepareHooks = func(options agentinstall.HooksOptions) (*agentinstall.HookInstallationPlan, error) {
+	dependencies.prepareHooks = func(options agentinstall.HooksOptions) (
+		*agentinstall.HookInstallationPlan,
+		error,
+	) {
 		options.HomeDir = homeDir
 		return agentinstall.PrepareHookInstallation(options)
 	}
@@ -280,7 +324,11 @@ func TestRunInstallAllMalformedLaterHookLeavesConfigServiceAndHooksUntouched(t *
 		return os.WriteFile(filepath.Join(homeDir, "config-state"), []byte("config-mutated"), 0o600)
 	}
 	dependencies.installService = func(agentinstall.ServiceOptions) error {
-		return os.WriteFile(filepath.Join(homeDir, "service-state"), []byte("service-mutated"), 0o600)
+		return os.WriteFile(
+			filepath.Join(homeDir, "service-state"),
+			[]byte("service-mutated"),
+			0o600,
+		)
 	}
 	dependencies.applyHooks = agentinstall.ApplyHookInstallation
 
@@ -386,8 +434,10 @@ func TestInstallAllUsesSharedInstallationPlan(t *testing.T) {
 	exitCode := runInstallWithDependencies(
 		[]string{
 			"all",
-			"--auto-update", config.UpdateModeCheck,
-			"--audit-profile", string(config.AuditStorageProfileMinimal),
+			"--auto-update",
+			config.UpdateModeCheck,
+			"--audit-profile",
+			string(config.AuditStorageProfileMinimal),
 		},
 		dependencies,
 	)
@@ -418,17 +468,22 @@ mode = "apply"
 		t.Fatalf("WriteFile initial config: %v", err)
 	}
 
-	exitCode := runInstallWithDependencies([]string{
-		"all",
-		"--no-service",
-		"--no-claude",
-		"--no-codex",
-		"--no-cursor",
-		"--no-gemini",
-		"--no-copilot",
-		"--auto-update", config.UpdateModeCheck,
-		"--audit-profile", string(config.AuditStorageProfileMinimal),
-	}, defaultInstallDependencies())
+	exitCode := runInstallWithDependencies(
+		[]string{
+			"all",
+			"--no-service",
+			"--no-claude",
+			"--no-codex",
+			"--no-cursor",
+			"--no-gemini",
+			"--no-copilot",
+			"--auto-update",
+			config.UpdateModeCheck,
+			"--audit-profile",
+			string(config.AuditStorageProfileMinimal),
+		},
+		defaultInstallDependencies(),
+	)
 	if exitCode != 0 {
 		t.Fatalf("exitCode = %d, want 0", exitCode)
 	}
@@ -451,11 +506,18 @@ func TestRunInstallAllAppliesPreparedHookBytesAfterServiceReadiness(t *testing.T
 	if err := os.MkdirAll(filepath.Dir(cursorPath), 0o755); err != nil {
 		t.Fatalf("MkdirAll Cursor directory: %v", err)
 	}
-	if err := os.WriteFile(cursorPath, []byte(`{"version":1,"theme":"prepared"}`), 0o600); err != nil {
+	if err := os.WriteFile(
+		cursorPath,
+		[]byte(`{"version":1,"theme":"prepared"}`),
+		0o600,
+	); err != nil {
 		t.Fatalf("WriteFile Cursor hooks: %v", err)
 	}
 	dependencies := successfulInstallDependencies(binPath)
-	dependencies.prepareHooks = func(options agentinstall.HooksOptions) (*agentinstall.HookInstallationPlan, error) {
+	dependencies.prepareHooks = func(options agentinstall.HooksOptions) (
+		*agentinstall.HookInstallationPlan,
+		error,
+	) {
 		options.HomeDir = homeDir
 		return agentinstall.PrepareHookInstallation(options)
 	}
@@ -467,9 +529,17 @@ func TestRunInstallAllAppliesPreparedHookBytesAfterServiceReadiness(t *testing.T
 	}
 	dependencies.applyHooks = agentinstall.ApplyHookInstallation
 
-	exitCode := runInstallWithDependencies([]string{
-		"all", "--no-config", "--no-claude", "--no-codex", "--no-gemini", "--no-copilot",
-	}, dependencies)
+	exitCode := runInstallWithDependencies(
+		[]string{
+			"all",
+			"--no-config",
+			"--no-claude",
+			"--no-codex",
+			"--no-gemini",
+			"--no-copilot",
+		},
+		dependencies,
+	)
 	if exitCode != 0 {
 		t.Fatalf("exitCode = %d, want 0", exitCode)
 	}
@@ -504,15 +574,27 @@ func TestRunInstallAllHonorsOptOutFlags(t *testing.T) {
 		readinessCalled = true
 		return nil
 	}
-	dependencies.prepareHooks = func(options agentinstall.HooksOptions) (*agentinstall.HookInstallationPlan, error) {
+	dependencies.prepareHooks = func(options agentinstall.HooksOptions) (
+		*agentinstall.HookInstallationPlan,
+		error,
+	) {
 		hooks = options
 		return &agentinstall.HookInstallationPlan{}, nil
 	}
 
-	exitCode := runInstallWithDependencies([]string{
-		"all", "--no-config", "--no-service", "--no-claude", "--no-codex",
-		"--no-cursor", "--no-gemini", "--no-copilot",
-	}, dependencies)
+	exitCode := runInstallWithDependencies(
+		[]string{
+			"all",
+			"--no-config",
+			"--no-service",
+			"--no-claude",
+			"--no-codex",
+			"--no-cursor",
+			"--no-gemini",
+			"--no-copilot",
+		},
+		dependencies,
+	)
 	if exitCode != 0 {
 		t.Fatalf("exitCode = %d, want 0", exitCode)
 	}
@@ -533,7 +615,10 @@ func TestRunInstallProvidersUseCanonicalOrder(t *testing.T) {
 	binPath := writeCommandExecutable(t)
 	dependencies := successfulInstallDependencies(binPath)
 	var hooks agentinstall.HooksOptions
-	dependencies.prepareHooks = func(options agentinstall.HooksOptions) (*agentinstall.HookInstallationPlan, error) {
+	dependencies.prepareHooks = func(options agentinstall.HooksOptions) (
+		*agentinstall.HookInstallationPlan,
+		error,
+	) {
 		hooks = options
 		return &agentinstall.HookInstallationPlan{}, nil
 	}
@@ -565,30 +650,36 @@ func TestRunInstallRejectsMixedProviderSelectionForms(t *testing.T) {
 		"--no-gemini",
 		"--no-copilot",
 	} {
-		t.Run(flagName, func(t *testing.T) {
-			dependencies := successfulInstallDependencies(binPath)
-			prepareCalled := false
-			dependencies.prepareHooks = func(agentinstall.HooksOptions) (*agentinstall.HookInstallationPlan, error) {
-				prepareCalled = true
-				return &agentinstall.HookInstallationPlan{}, nil
-			}
+		t.Run(
+			flagName,
+			func(t *testing.T) {
+				dependencies := successfulInstallDependencies(binPath)
+				prepareCalled := false
+				dependencies.prepareHooks = func(agentinstall.HooksOptions) (
+					*agentinstall.HookInstallationPlan,
+					error,
+				) {
+					prepareCalled = true
+					return &agentinstall.HookInstallationPlan{}, nil
+				}
 
-			exitCode, stderr := captureInstallStderrWithDependencies(
-				t,
-				[]string{"hooks", "--providers", "cursor", flagName},
-				dependencies,
-			)
-			if exitCode != 2 {
-				t.Fatalf("exitCode = %d, want 2", exitCode)
-			}
-			if prepareCalled {
-				t.Fatal("hooks were prepared after conflicting selection flags")
-			}
-			wantFlag := strings.TrimSuffix(flagName, "=false")
-			if !strings.Contains(stderr, "--providers cannot be used with "+wantFlag) {
-				t.Fatalf("stderr = %q, want mixed selection error", stderr)
-			}
-		})
+				exitCode, stderr := captureInstallStderrWithDependencies(
+					t,
+					[]string{"hooks", "--providers", "cursor", flagName},
+					dependencies,
+				)
+				if exitCode != 2 {
+					t.Fatalf("exitCode = %d, want 2", exitCode)
+				}
+				if prepareCalled {
+					t.Fatal("hooks were prepared after conflicting selection flags")
+				}
+				wantFlag := strings.TrimSuffix(flagName, "=false")
+				if !strings.Contains(stderr, "--providers cannot be used with "+wantFlag) {
+					t.Fatalf("stderr = %q, want mixed selection error", stderr)
+				}
+			},
+		)
 	}
 }
 
@@ -612,10 +703,19 @@ func TestRunInstallAllSharedPlanPreservesAllLegacyProviderOptOuts(t *testing.T) 
 		return agentinstall.ApplyResult{}, nil
 	}
 
-	exitCode := runInstallWithDependencies([]string{
-		"all", "--no-config", "--no-service", "--no-claude", "--no-codex",
-		"--no-cursor", "--no-gemini", "--no-copilot",
-	}, dependencies)
+	exitCode := runInstallWithDependencies(
+		[]string{
+			"all",
+			"--no-config",
+			"--no-service",
+			"--no-claude",
+			"--no-codex",
+			"--no-cursor",
+			"--no-gemini",
+			"--no-copilot",
+		},
+		dependencies,
+	)
 	if exitCode != 0 {
 		t.Fatalf("exitCode = %d, want 0", exitCode)
 	}
@@ -624,24 +724,30 @@ func TestRunInstallAllSharedPlanPreservesAllLegacyProviderOptOuts(t *testing.T) 
 func TestRunInstallRejectsInvalidProvidersBeforePreparation(t *testing.T) {
 	binPath := writeCommandExecutable(t)
 	for _, value := range []string{"cursor,other", "cursor,cursor"} {
-		t.Run(value, func(t *testing.T) {
-			dependencies := successfulInstallDependencies(binPath)
-			prepareCalled := false
-			dependencies.prepareHooks = func(agentinstall.HooksOptions) (*agentinstall.HookInstallationPlan, error) {
-				prepareCalled = true
-				return &agentinstall.HookInstallationPlan{}, nil
-			}
-			exitCode := runInstallWithDependencies(
-				[]string{"hooks", "--providers", value},
-				dependencies,
-			)
-			if exitCode != 2 {
-				t.Fatalf("exitCode = %d, want 2", exitCode)
-			}
-			if prepareCalled {
-				t.Fatal("hooks were prepared after invalid provider selection")
-			}
-		})
+		t.Run(
+			value,
+			func(t *testing.T) {
+				dependencies := successfulInstallDependencies(binPath)
+				prepareCalled := false
+				dependencies.prepareHooks = func(agentinstall.HooksOptions) (
+					*agentinstall.HookInstallationPlan,
+					error,
+				) {
+					prepareCalled = true
+					return &agentinstall.HookInstallationPlan{}, nil
+				}
+				exitCode := runInstallWithDependencies(
+					[]string{"hooks", "--providers", value},
+					dependencies,
+				)
+				if exitCode != 2 {
+					t.Fatalf("exitCode = %d, want 2", exitCode)
+				}
+				if prepareCalled {
+					t.Fatal("hooks were prepared after invalid provider selection")
+				}
+			},
+		)
 	}
 }
 
@@ -694,13 +800,7 @@ func TestWaitForDaemonReadyRetriesUntilIdentityMatches(t *testing.T) {
 		return daemonIdentity{ExecutablePath: newPath, BuildHash: "new"}, nil
 	}
 
-	err := waitForDaemonReady(
-		context.Background(),
-		newPath,
-		"new",
-		time.Millisecond,
-		status,
-	)
+	err := waitForDaemonReady(context.Background(), newPath, "new", time.Millisecond, status)
 	if err != nil {
 		t.Fatalf("waitForDaemonReady: %v", err)
 	}
@@ -798,13 +898,7 @@ func TestWaitForDaemonReadyProductionLookupPreservesMismatchAtDeadline(t *testin
 		<-fake.served
 		cancel()
 	}()
-	err = waitForDaemonReady(
-		ctx,
-		newPath,
-		"new",
-		time.Millisecond,
-		lookupDaemonIdentity,
-	)
+	err = waitForDaemonReady(ctx, newPath, "new", time.Millisecond, lookupDaemonIdentity)
 	if err == nil {
 		t.Fatal("waitForDaemonReady returned nil")
 	}
@@ -824,7 +918,10 @@ func successfulInstallDependencies(binPath string) installDependencies {
 	return installDependencies{
 		resolveExecutable:  func() (string, error) { return binPath, nil },
 		validateExecutable: agentinstall.ValidateExecutable,
-		prepareHooks: func(agentinstall.HooksOptions) (*agentinstall.HookInstallationPlan, error) {
+		prepareHooks: func(agentinstall.HooksOptions) (
+			*agentinstall.HookInstallationPlan,
+			error,
+		) {
 			return &agentinstall.HookInstallationPlan{}, nil
 		},
 		applyHooks:      func(*agentinstall.HookInstallationPlan) error { return nil },

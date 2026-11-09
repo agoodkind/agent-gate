@@ -21,6 +21,7 @@ func TestResolveJudgeContextFieldSelector(t *testing.T) {
 	if len(facts) != 1 {
 		t.Fatalf("facts = %+v, want one", facts)
 	}
+
 	if facts[0].Label != "cmd_write_targets" || !strings.Contains(facts[0].Value, "/tmp/out.txt") {
 		t.Fatalf("fact = %+v, want cmd_write_targets containing /tmp/out.txt", facts[0])
 	}
@@ -52,17 +53,21 @@ func TestResolveCheckoutStatusOutsideRepo(t *testing.T) {
 	facts := resolveJudgeContext(ctx, fields, []string{"checkout_status"})
 
 	var gotDir, gotWrites string
+
 	for _, fact := range facts {
 		if fact.Label == "checkout_status effective_cwd" {
 			gotDir = fact.Value
 		}
+
 		if fact.Label == "write targets under the primary checkout" {
 			gotWrites = fact.Value
 		}
 	}
+
 	if !strings.Contains(gotDir, "not in a git repository") {
 		t.Fatalf("effective_cwd label = %q, want not-in-a-git-repository", gotDir)
 	}
+
 	if gotWrites != "none" {
 		t.Fatalf("write-targets label = %q, want none", gotWrites)
 	}
@@ -74,19 +79,33 @@ func TestResolveCheckoutStatusOutsideRepo(t *testing.T) {
 func TestBuildJudgeInputRendersFacts(t *testing.T) {
 	fields := FieldSet{CWD: "/repo", ToolName: "Bash", ToolInputCommand: "git status"}
 	facts := []judgeContextFact{
-		{Label: "checkout_status effective_cwd", Value: "a linked worktree, not the primary checkout", FromCheckoutStatus: true},
-		{Label: "write targets under the primary checkout", Value: "none", FromCheckoutStatus: true},
+		{
+			Label:              "checkout_status effective_cwd",
+			Value:              "a linked worktree, not the primary checkout",
+			FromCheckoutStatus: true,
+		},
+		{
+			Label:              "write targets under the primary checkout",
+			Value:              "none",
+			FromCheckoutStatus: true,
+		},
 	}
 	out := buildJudgeInput(fields, "", facts)
 	if !strings.Contains(out, "resolved facts:") {
 		t.Fatalf("output has no resolved-facts heading: %q", out)
 	}
-	if !strings.Contains(out, "checkout_status effective_cwd: a linked worktree, not the primary checkout") {
+
+	if !strings.Contains(
+		out,
+		"checkout_status effective_cwd: a linked worktree, not the primary checkout",
+	) {
 		t.Fatalf("output missing checkout label: %q", out)
 	}
+
 	if !strings.Contains(out, "write targets under the primary checkout: none") {
 		t.Fatalf("output missing write-target fact: %q", out)
 	}
+
 	if strings.Contains(out, "chat working directory:") {
 		t.Fatalf("checkout_status present but raw working-directory line not suppressed: %q", out)
 	}
@@ -104,6 +123,7 @@ func TestBuildJudgeInputKeepsCwdWithoutCheckoutStatus(t *testing.T) {
 	if !strings.Contains(out, "chat working directory: /repo") {
 		t.Fatalf("no checkout_status fact but working-directory line was suppressed: %q", out)
 	}
+
 	if !strings.Contains(out, "cmd_write_targets: /tmp/out.txt") {
 		t.Fatalf("output missing field-path fact: %q", out)
 	}

@@ -92,6 +92,7 @@ func RenderResponse(request ResponseRequest) Response {
 			request.DiagnosticText = request.DiagnosticText + "\n" + request.Footer
 		}
 	}
+
 	rendered := renderForSystem(request)
 	// Every provider says on stderr that the call went unevaluated. Claude and
 	// the unknown renderer already carry it, and stdout keeps each provider's
@@ -102,6 +103,7 @@ func RenderResponse(request ResponseRequest) Response {
 	if request.FailOpenReason != "" && len(rendered.Stderr) == 0 {
 		rendered.Stderr = failOpenStderr(request.FailOpenReason, request.DiagnosticText)
 	}
+
 	return rendered
 }
 
@@ -130,16 +132,23 @@ func diagnosticWithEventID(text, eventID string) string {
 	if eventID == "" {
 		return text
 	}
+
 	if text == "" {
 		return "agent-gate event_id: " + eventID
 	}
+
 	return text + "\n\nagent-gate event_id: " + eventID
 }
 
 // FailOpenResponse emits a non-blocking response for hook transport,
 // availability, or internal failures. Policy decisions from the daemon should
 // not use this path.
-func FailOpenResponse(system System, eventName string, diagnosticText string, reason FailOpenReason) Response {
+func FailOpenResponse(
+	system System,
+	eventName string,
+	diagnosticText string,
+	reason FailOpenReason,
+) Response {
 	return RenderResponse(ResponseRequest{
 		System:         system,
 		EventName:      eventName,
@@ -166,6 +175,7 @@ func renderUnknownResponse(request ResponseRequest) Response {
 			ExitCode: 2,
 		}
 	}
+
 	// A provider with no known response schema still gets the fail-open warning
 	// on stderr, so a call nobody evaluated is visible in the transcript rather
 	// than indistinguishable from one that passed every rule.

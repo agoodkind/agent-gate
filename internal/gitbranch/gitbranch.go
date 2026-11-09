@@ -30,16 +30,19 @@ func resolveDefaultBranch(storer storage.Storer) string {
 			// origin/HEAD that targets some other refname is not a usable default
 			// name, so fall through to the conventional-default fallback rather
 			// than returning a bogus prefixed string that never matches HEAD.
-			if name, ok := strings.CutPrefix(ref.Target().String(), "refs/remotes/origin/"); ok && name != "" {
+			if name, ok := strings.CutPrefix(ref.Target().String(), "refs/remotes/origin/"); ok &&
+				name != "" {
 				return name
 			}
 		}
 	}
+
 	for _, name := range defaultBranchNames {
 		if _, err := storer.Reference(plumbing.NewBranchReferenceName(name)); err == nil {
 			return name
 		}
 	}
+
 	return ""
 }
 
@@ -50,19 +53,24 @@ func nearestExistingDir(path string) string {
 	if path == "" {
 		return ""
 	}
+
 	current := path
+
 	for {
 		info, err := os.Stat(current)
 		if err == nil {
 			if info.IsDir() {
 				return current
 			}
+
 			return filepath.Dir(current)
 		}
+
 		parent := filepath.Dir(current)
 		if parent == current {
 			return ""
 		}
+
 		current = parent
 	}
 }

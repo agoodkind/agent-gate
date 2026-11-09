@@ -36,7 +36,9 @@ func writeConfigCheckRules(t *testing.T, configHome string, nameSuffix string) {
 	t.Helper()
 	var body strings.Builder
 	for index := range configCheckRuleCount {
-		fmt.Fprintf(&body, `[[rules]]
+		fmt.Fprintf(
+			&body,
+			`[[rules]]
 name = "canary-rule-%03d-%s"
 events = ["PreToolUse"]
 field_paths = ["tool_input.command"]
@@ -44,7 +46,10 @@ pattern = "canary-pattern"
 action = "block"
 violation_message = "blocked"
 
-`, index, nameSuffix)
+`,
+			index,
+			nameSuffix,
+		)
 	}
 	configDir := filepath.Join(configHome, "agent-gate")
 	if err := os.MkdirAll(configDir, 0o700); err != nil {
@@ -59,11 +64,7 @@ violation_message = "blocked"
 func runConfigCheck(t *testing.T, binaryPath string, configHome string) (int, string) {
 	t.Helper()
 	command := exec.CommandContext(t.Context(), binaryPath, "config", "check")
-	command.Env = append(
-		os.Environ(),
-		"XDG_CONFIG_HOME="+configHome,
-		"XDG_STATE_HOME="+t.TempDir(),
-	)
+	command.Env = append(os.Environ(), "XDG_CONFIG_HOME="+configHome, "XDG_STATE_HOME="+t.TempDir())
 	var stderr bytes.Buffer
 	command.Stderr = &stderr
 	err := command.Run()
@@ -80,28 +81,44 @@ func runConfigCheck(t *testing.T, binaryPath string, configHome string) (int, st
 func TestConfigCheckThroughCLI(t *testing.T) {
 	binaryPath := buildConfigCheckBinary(t)
 
-	t.Run("rejects a rule set the store refuses", func(t *testing.T) {
-		configHome := t.TempDir()
-		writeConfigCheckRules(t, configHome, strings.Repeat("x", configCheckLongNameBytes))
+	t.Run(
+		"rejects a rule set the store refuses",
+		func(t *testing.T) {
+			configHome := t.TempDir()
+			writeConfigCheckRules(t, configHome, strings.Repeat("x", configCheckLongNameBytes))
 
-		exitCode, stderr := runConfigCheck(t, binaryPath, configHome)
+			exitCode, stderr := runConfigCheck(t, binaryPath, configHome)
 
-		if exitCode != configCheckExitFailed {
-			t.Fatalf("exit code = %d, want %d; stderr = %q", exitCode, configCheckExitFailed, stderr)
-		}
-		if !strings.Contains(stderr, "bytes of rule-engine metadata") {
-			t.Fatalf("stderr = %q, want the rule-engine metadata size", stderr)
-		}
-	})
+			if exitCode != configCheckExitFailed {
+				t.Fatalf(
+					"exit code = %d, want %d; stderr = %q",
+					exitCode,
+					configCheckExitFailed,
+					stderr,
+				)
+			}
+			if !strings.Contains(stderr, "bytes of rule-engine metadata") {
+				t.Fatalf("stderr = %q, want the rule-engine metadata size", stderr)
+			}
+		},
+	)
 
-	t.Run("accepts a recordable rule set", func(t *testing.T) {
-		configHome := t.TempDir()
-		writeConfigCheckRules(t, configHome, configCheckShortNameSuffix)
+	t.Run(
+		"accepts a recordable rule set",
+		func(t *testing.T) {
+			configHome := t.TempDir()
+			writeConfigCheckRules(t, configHome, configCheckShortNameSuffix)
 
-		exitCode, stderr := runConfigCheck(t, binaryPath, configHome)
+			exitCode, stderr := runConfigCheck(t, binaryPath, configHome)
 
-		if exitCode != configCheckExitOK {
-			t.Fatalf("exit code = %d, want %d; stderr = %q", exitCode, configCheckExitOK, stderr)
-		}
-	})
+			if exitCode != configCheckExitOK {
+				t.Fatalf(
+					"exit code = %d, want %d; stderr = %q",
+					exitCode,
+					configCheckExitOK,
+					stderr,
+				)
+			}
+		},
+	)
 }

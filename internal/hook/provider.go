@@ -28,6 +28,7 @@ func EvaluateClassifiedHotWithEventID(
 		if input.Classification.Result == ClassificationResultInvalid {
 			message = "agent-gate: parse stdin JSON: "
 		}
+
 		return HotEvaluation{
 			Stdout:                  nil,
 			Stderr:                  []byte(message + err.Error() + "\n"),
@@ -52,10 +53,15 @@ func EvaluateClassifiedHotWithEventID(
 func emptyDecisionTrace() rules.DecisionTrace {
 	return rules.DecisionTrace{
 		Deterministic: rules.DeterministicTrace{
-			StartedAt: time.Time{}, CompletedAt: time.Time{},
-			InputJSON: json.RawMessage(`{}`), OutputJSON: json.RawMessage(`{}`),
-			InputHash: "", OutputHash: "", ServiceName: "agent-gate",
-			ServiceVersion: "", CheckedRules: nil,
+			StartedAt:      time.Time{},
+			CompletedAt:    time.Time{},
+			InputJSON:      json.RawMessage(`{}`),
+			OutputJSON:     json.RawMessage(`{}`),
+			InputHash:      "",
+			OutputHash:     "",
+			ServiceName:    "agent-gate",
+			ServiceVersion: "",
+			CheckedRules:   nil,
 		},
 		Layers: nil,
 	}
@@ -63,6 +69,7 @@ func emptyDecisionTrace() rules.DecisionTrace {
 
 func emptyDeferredAuditEvent(system System) DeferredAuditEvent {
 	var fields rules.FieldSet
+
 	return DeferredAuditEvent{
 		Valid:               false,
 		RawBytes:            nil,
@@ -102,9 +109,12 @@ func evaluatePayloadHot(
 	fields := payload.Fields()
 	fields = recoverCodexExecWorkdir(payload.System, fields)
 	ruleSet := rulesForConfig(cfg)
-	ctx = rules.WithExecResponseTargetResolver(ctx, func(action string) string {
-		return responseTargetForAction(payload.System, eventName, action)
-	})
+	ctx = rules.WithExecResponseTargetResolver(
+		ctx,
+		func(action string) string {
+			return responseTargetForAction(payload.System, eventName, action)
+		},
+	)
 	staged := evaluateStagedRules(
 		ctx,
 		cfg,
@@ -123,6 +133,7 @@ func evaluatePayloadHot(
 		auditOnlyViolations = append(auditOnlyViolations, blockingViolations...)
 		blockingViolations = nil
 	}
+
 	contextText, mutationText, responseEffects := composeResponseEffects(
 		payload.System,
 		eventName,
@@ -148,11 +159,24 @@ func evaluatePayloadHot(
 			MutationText:   "",
 			PromptText:     promptText,
 		})
+
 		return HotEvaluation{
-			Stdout:                  response.Stdout,
-			Stderr:                  response.Stderr,
-			ExitCode:                response.ExitCode,
-			Deferred:                newDeferredAuditEvent(wireBytes, payload, fields, ruleSet, blockingViolations, auditOnlyViolations, responseEffects, staged.trace, decision, diagnostic, eventID),
+			Stdout:   response.Stdout,
+			Stderr:   response.Stderr,
+			ExitCode: response.ExitCode,
+			Deferred: newDeferredAuditEvent(
+				wireBytes,
+				payload,
+				fields,
+				ruleSet,
+				blockingViolations,
+				auditOnlyViolations,
+				responseEffects,
+				staged.trace,
+				decision,
+				diagnostic,
+				eventID,
+			),
 			Trace:                   staged.trace,
 			TemporalResponseOutputs: nil,
 		}
@@ -170,30 +194,51 @@ func evaluatePayloadHot(
 		MutationText:   mutationText,
 		PromptText:     promptText,
 	})
+
 	return HotEvaluation{
-		Stdout:                  response.Stdout,
-		Stderr:                  response.Stderr,
-		ExitCode:                response.ExitCode,
-		Deferred:                newDeferredAuditEvent(wireBytes, payload, fields, ruleSet, blockingViolations, auditOnlyViolations, responseEffects, staged.trace, decision, diagnostic, eventID),
-		Trace:                   staged.trace,
-		TemporalResponseOutputs: temporalResponseOutputs(payload.System, eventName, contextText, mutationText, promptText),
+		Stdout:   response.Stdout,
+		Stderr:   response.Stderr,
+		ExitCode: response.ExitCode,
+		Deferred: newDeferredAuditEvent(
+			wireBytes,
+			payload,
+			fields,
+			ruleSet,
+			blockingViolations,
+			auditOnlyViolations,
+			responseEffects,
+			staged.trace,
+			decision,
+			diagnostic,
+			eventID,
+		),
+		Trace: staged.trace,
+		TemporalResponseOutputs: temporalResponseOutputs(
+			payload.System,
+			eventName,
+			contextText,
+			mutationText,
+			promptText,
+		),
 	}
 }
 
 func responseTargetForAction(system System, eventName string, action string) string {
 	if action == config.ActionInject {
 		capability := LookupResponseCapability(system, eventName)
-		if capability.Supports(
-			ResponseCapabilityInject | ResponseCapabilityPromptMutation,
-		) {
+		if capability.Supports(ResponseCapabilityInject | ResponseCapabilityPromptMutation) {
 			return "prompt"
 		}
+
 		return "context"
 	}
+
 	if action != config.ActionMutate {
 		return ""
 	}
+
 	target, _ := responseMutationTarget(LookupResponseCapability(system, eventName))
+
 	return target
 }
 
@@ -205,40 +250,46 @@ func temporalResponseOutputs(
 	promptText string,
 ) []TemporalResponseOutput {
 	capability := LookupResponseCapability(system, eventName)
-	promptOutput := copilotPromptResponseOutput(
-		capability,
-		contextText,
-		mutationText,
-		promptText,
-	)
+	promptOutput := copilotPromptResponseOutput(capability, contextText, mutationText, promptText)
 	if promptOutput != "" {
 		action := config.ActionInject
 		if mutationText != "" {
 			action = config.ActionMutate
 		}
-		return []TemporalResponseOutput{{
-			Action: action,
-			Target: "prompt",
-			Output: promptOutput,
-		}}
+
+		return []TemporalResponseOutput{
+			{
+				Action: action,
+				Target: "prompt",
+				Output: promptOutput,
+			},
+		}
 	}
 
 	outputs := make([]TemporalResponseOutput, 0, 2)
 	if contextText != "" && capability.Supports(ResponseCapabilityInject) {
-		outputs = append(outputs, TemporalResponseOutput{
-			Action: config.ActionInject,
-			Target: "context",
-			Output: contextText,
-		})
+		outputs = append(
+			outputs,
+			TemporalResponseOutput{
+				Action: config.ActionInject,
+				Target: "context",
+				Output: contextText,
+			},
+		)
 	}
+
 	target, _ := responseMutationTarget(capability)
 	if mutationText != "" && target != "" {
-		outputs = append(outputs, TemporalResponseOutput{
-			Action: config.ActionMutate,
-			Target: target,
-			Output: mutationText,
-		})
+		outputs = append(
+			outputs,
+			TemporalResponseOutput{
+				Action: config.ActionMutate,
+				Target: target,
+				Output: mutationText,
+			},
+		)
 	}
+
 	return outputs
 }
 
@@ -246,6 +297,7 @@ func rulesForConfig(cfg *config.Config) []config.Rule {
 	if cfg == nil {
 		return nil
 	}
+
 	return cfg.Rules
 }
 
@@ -291,11 +343,16 @@ func composeResponseEffects(
 	capability := LookupResponseCapability(system, eventName)
 	contextParts := make([]string, 0, len(effects))
 	var mutationText string
+
 	records := make([]ResponseEffectRecord, 0, len(effects))
 	for index := range effects {
 		effect := effects[index]
 		record := ResponseEffectRecord{
-			RuleName: effect.RuleName, EffectType: effect.Action, Target: "", ByteCount: len(effect.Output), Disposition: effect.Disposition,
+			RuleName:    effect.RuleName,
+			EffectType:  effect.Action,
+			Target:      "",
+			ByteCount:   len(effect.Output),
+			Disposition: effect.Disposition,
 		}
 		target, structured := responseMutationTarget(capability)
 		switch effect.Action {
@@ -308,15 +365,18 @@ func composeResponseEffects(
 				record.Target = target
 			}
 		}
+
 		if suppressed {
 			record.Disposition = "suppressed_by_block"
 			records = append(records, record)
 			continue
 		}
+
 		if effect.Output == "" {
 			records = append(records, record)
 			continue
 		}
+
 		switch effect.Action {
 		case config.ActionInject:
 			if !capability.Supports(ResponseCapabilityInject) {
@@ -336,8 +396,10 @@ func composeResponseEffects(
 				record.Disposition = "invalid_noop"
 			}
 		}
+
 		records = append(records, record)
 	}
+
 	return strings.Join(contextParts, "\n\n"), mutationText, records
 }
 
@@ -346,7 +408,9 @@ func validResponseMutation(system System, target string, value string) bool {
 		_, ok := validCopilotToolOutputMutation(value)
 		return ok
 	}
+
 	_, ok := validStructuredMutation(value)
+
 	return ok
 }
 
@@ -355,8 +419,10 @@ func payloadPromptText(payload Payload) string {
 		if copilot.TransformedPrompt != "" {
 			return copilot.TransformedPrompt
 		}
+
 		return copilot.Prompt
 	}
+
 	return ""
 }
 
@@ -370,6 +436,7 @@ func WriteDeferredAudit(ctx context.Context, event DeferredAuditEvent, sink audi
 	if shouldWriteReceivedAudit(event) {
 		auditReceivedFields(ctx, event, sink)
 	}
+
 	writeDecisionAudit(ctx, event, sink)
 }
 
@@ -379,6 +446,7 @@ func WriteDeferredFindings(ctx context.Context, event DeferredAuditEvent, sink a
 	if sink == nil || !event.Valid {
 		return
 	}
+
 	writeAuditFindings(ctx, event, sink, decisionAuditAttrs(event))
 }
 
@@ -396,11 +464,20 @@ func auditReceivedFields(ctx context.Context, event DeferredAuditEvent, sink aud
 	}
 
 	infoAttrs := audit.AttrsFromSlog(append(base, logAttrs(event.Fields)...))
-	sink.Log(ctx, event.SystemString, event.SessionID, event.EventName, "info", "hook.received", infoAttrs)
+	sink.Log(
+		ctx,
+		event.SystemString,
+		event.SessionID,
+		event.EventName,
+		"info",
+		"hook.received",
+		infoAttrs,
+	)
 }
 
 func decisionAuditAttrs(event DeferredAuditEvent) []slog.Attr {
 	checked := rules.CheckedRuleNames(event.SystemString, event.EventName, event.Rules)
+
 	return []slog.Attr{
 		slog.String("system", event.SystemString),
 		slog.String("event", event.EventName),
@@ -418,40 +495,77 @@ func decisionAuditAttrs(event DeferredAuditEvent) []slog.Attr {
 func writeDecisionAudit(ctx context.Context, event DeferredAuditEvent, sink audit.Sink) {
 	base := decisionAuditAttrs(event)
 	if event.Decision == ResponseDecisionBlock {
-		attrs := audit.AttrsFromSlog(append(
-			base,
-			slog.String("decision", "block"),
-			slog.Any("blocking_rules", matchRuleNames(event.BlockingViolations)),
-			slog.String("violation_message", event.DiagnosticText),
-		))
-		sink.Log(ctx, event.SystemString, event.SessionID, event.EventName, "info", "hook.blocked", attrs)
+		attrs := audit.AttrsFromSlog(
+			append(
+				base,
+				slog.String("decision", "block"),
+				slog.Any("blocking_rules", matchRuleNames(event.BlockingViolations)),
+				slog.String("violation_message", event.DiagnosticText),
+			),
+		)
+		sink.Log(
+			ctx,
+			event.SystemString,
+			event.SessionID,
+			event.EventName,
+			"info",
+			"hook.blocked",
+			attrs,
+		)
 		writeResponseEffectAudit(ctx, event, sink)
+
 		return
 	}
 
 	writeAuditFindings(ctx, event, sink, base)
 	writeResponseEffectAudit(ctx, event, sink)
 
-	allowAttrs := audit.AttrsFromSlog(append(
-		base,
-		slog.String("decision", "allow"),
-		slog.String("blocking_rule", ""),
-		slog.String("violation_message", ""),
-	))
-	sink.Log(ctx, event.SystemString, event.SessionID, event.EventName, "info", "hook.allowed", allowAttrs)
+	allowAttrs := audit.AttrsFromSlog(
+		append(
+			base,
+			slog.String("decision", "allow"),
+			slog.String("blocking_rule", ""),
+			slog.String("violation_message", ""),
+		),
+	)
+	sink.Log(
+		ctx,
+		event.SystemString,
+		event.SessionID,
+		event.EventName,
+		"info",
+		"hook.allowed",
+		allowAttrs,
+	)
 }
 
-func writeAuditFindings(ctx context.Context, event DeferredAuditEvent, sink audit.Sink, base []slog.Attr) {
+func writeAuditFindings(
+	ctx context.Context,
+	event DeferredAuditEvent,
+	sink audit.Sink,
+	base []slog.Attr,
+) {
 	if len(event.AuditOnlyViolations) == 0 {
 		return
 	}
-	attrs := audit.AttrsFromSlog(append(
-		base,
-		slog.String("decision", "audit_only"),
-		slog.Any("blocking_rules", matchRuleNames(event.AuditOnlyViolations)),
-		slog.String("violation_message", rules.FormatViolations(event.AuditOnlyViolations)),
-	))
-	sink.Log(ctx, event.SystemString, event.SessionID, event.EventName, "info", "hook.audit_violation", attrs)
+
+	attrs := audit.AttrsFromSlog(
+		append(
+			base,
+			slog.String("decision", "audit_only"),
+			slog.Any("blocking_rules", matchRuleNames(event.AuditOnlyViolations)),
+			slog.String("violation_message", rules.FormatViolations(event.AuditOnlyViolations)),
+		),
+	)
+	sink.Log(
+		ctx,
+		event.SystemString,
+		event.SessionID,
+		event.EventName,
+		"info",
+		"hook.audit_violation",
+		attrs,
+	)
 }
 
 func writeResponseEffectAudit(ctx context.Context, event DeferredAuditEvent, sink audit.Sink) {
@@ -467,7 +581,15 @@ func writeResponseEffectAudit(ctx context.Context, event DeferredAuditEvent, sin
 			slog.Int("byte_count", effect.ByteCount),
 			slog.String("disposition", effect.Disposition),
 		})
-		sink.Log(ctx, event.SystemString, event.SessionID, event.EventName, "info", "hook.response_effect", attrs)
+		sink.Log(
+			ctx,
+			event.SystemString,
+			event.SessionID,
+			event.EventName,
+			"info",
+			"hook.response_effect",
+			attrs,
+		)
 	}
 }
 
@@ -478,6 +600,7 @@ func blockingMatches(violations []rules.Violation) []rules.Violation {
 			out = append(out, violation)
 		}
 	}
+
 	return out
 }
 
@@ -488,19 +611,23 @@ func auditOnlyMatches(violations []rules.Violation) []rules.Violation {
 			out = append(out, violation)
 		}
 	}
+
 	return out
 }
 
 func matchRuleNames(violations []rules.Violation) []string {
 	seen := make(map[string]bool)
 	var names []string
+
 	for _, violation := range violations {
 		if seen[violation.RuleName] {
 			continue
 		}
+
 		seen[violation.RuleName] = true
 		names = append(names, violation.RuleName)
 	}
+
 	return names
 }
 

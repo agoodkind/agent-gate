@@ -51,6 +51,7 @@ func runEvalMatrix(evals []config.RuleEval, resolve evaluatorResolver) matrixDec
 	for index := range evals {
 		outcomes[index] = resolve(index, evals[index])
 	}
+
 	return matrixDecision{block: foldMatrixOutcomes(evals, outcomes)}
 }
 
@@ -64,12 +65,14 @@ func foldMatrixOutcomes(evals []config.RuleEval, outcomes []evalOutcome) bool {
 	if len(enforce) == 0 {
 		return false
 	}
+
 	if allErrored(enforce, outcomes) {
 		fallback := indicesForRole(evals, config.RoleFallback)
 		if len(fallback) > 0 {
 			return combineBlocks(combine, fallback, outcomes)
 		}
 	}
+
 	return combineBlocks(combine, enforce, outcomes)
 }
 
@@ -77,11 +80,13 @@ func foldMatrixOutcomes(evals []config.RuleEval, outcomes []evalOutcome) bool {
 // declaration order.
 func indicesForRole(evals []config.RuleEval, role string) []int {
 	var indices []int
+
 	for index := range evals {
 		if evals[index].Role == role {
 			indices = append(indices, index)
 		}
 	}
+
 	return indices
 }
 
@@ -93,17 +98,20 @@ func allErrored(indices []int, outcomes []evalOutcome) bool {
 			return false
 		}
 	}
+
 	return true
 }
 
 // combineBlocks applies the combine operator to the listed evaluators' verdicts.
 func combineBlocks(combine string, indices []int, outcomes []evalOutcome) bool {
 	blockingCount := 0
+
 	for _, index := range indices {
 		if outcomes[index].verdict == verdictBlock {
 			blockingCount++
 		}
 	}
+
 	return matrixBlocks(combine, len(indices), blockingCount)
 }
 
@@ -115,6 +123,7 @@ func matrixCombineOperator(evals []config.RuleEval) string {
 			return evals[index].Combine
 		}
 	}
+
 	return config.CombineUnion
 }
 
@@ -126,9 +135,11 @@ func matrixBlocks(combine string, enforcingCount, blockingCount int) bool {
 	if enforcingCount == 0 {
 		return false
 	}
+
 	if combine == config.CombineAnd {
 		return blockingCount == enforcingCount
 	}
+
 	return blockingCount > 0
 }
 
@@ -151,7 +162,10 @@ func (e *evalMatrixCondition) Profile() pipeline.Profile {
 	}
 }
 
-func (e *evalMatrixCondition) Execute(ctx context.Context, _ pipeline.Input) (pipeline.Outcome, error) {
+func (e *evalMatrixCondition) Execute(
+	ctx context.Context,
+	_ pipeline.Input,
+) (pipeline.Outcome, error) {
 	// A rule's deterministic conditions are its scope. The judge (an infer entry) runs
 	// only when the conditions match this command, so a rule with no conditions is in
 	// scope for every command, and a conditioned rule joins only when it matches. This
@@ -164,15 +178,21 @@ func (e *evalMatrixCondition) Execute(ctx context.Context, _ pipeline.Input) (pi
 	} else {
 		inferOutcomes = map[int]evalOutcome{}
 	}
-	decision := runEvalMatrix(e.rule.Eval, func(index int, eval config.RuleEval) evalOutcome {
-		if !conditionsMatch {
-			return evalOutcome{verdict: verdictAllow, errored: false}
-		}
-		if eval.Kind == config.EvalKindInfer {
-			return inferOutcomes[index]
-		}
-		return evalOutcome{verdict: verdictBlock, errored: false}
-	})
+
+	decision := runEvalMatrix(
+		e.rule.Eval,
+		func(index int, eval config.RuleEval) evalOutcome {
+			if !conditionsMatch {
+				return evalOutcome{verdict: verdictAllow, errored: false}
+			}
+
+			if eval.Kind == config.EvalKindInfer {
+				return inferOutcomes[index]
+			}
+
+			return evalOutcome{verdict: verdictBlock, errored: false}
+		},
+	)
 	if !decision.block {
 		return ruleOutcome{
 			violations:       nil,
@@ -181,6 +201,7 @@ func (e *evalMatrixCondition) Execute(ctx context.Context, _ pipeline.Input) (pi
 			gateMatched:      false,
 		}, nil
 	}
+
 	return ruleOutcome{
 		violations:       []Violation{conditionFallbackViolation(*e.fields, e.rule)},
 		rule:             e.rule,
@@ -199,11 +220,13 @@ func (e *evalMatrixCondition) runInferConcurrently(ctx context.Context) map[int]
 	outcomes := make(map[int]evalOutcome)
 	var mu sync.Mutex
 	var wg sync.WaitGroup
+
 	for index := range e.rule.Eval {
 		eval := e.rule.Eval[index]
 		if eval.Kind != config.EvalKindInfer {
 			continue
 		}
+
 		wg.Add(1)
 		go func(index int, eval config.RuleEval) {
 			defer wg.Done()
@@ -215,23 +238,34 @@ func (e *evalMatrixCondition) runInferConcurrently(ctx context.Context) map[int]
 			if eval.OnError == config.OnErrorOpen {
 				outcome.verdict = verdictAllow
 			}
+
 			defer func() {
 				if recovered := recover(); recovered != nil {
 					slog.ErrorContext(
 						ctx,
 						"eval matrix inference goroutine panicked",
-						"err", fmt.Errorf("panic: %v", recovered),
-						"rule", e.rule.Name, "index", index,
+						"err",
+						fmt.Errorf("panic: %v", recovered),
+						"rule",
+						e.rule.Name,
+						"index",
+						index,
 					)
 				}
+
 				mu.Lock()
 				outcomes[index] = outcome
 				mu.Unlock()
 			}()
 			outcome = e.resolveInferSingle(ctx, index, eval)
-		}(index, eval)
+		}(
+			index,
+			eval,
+		)
 	}
+
 	wg.Wait()
+
 	return outcomes
 }
 
@@ -241,23 +275,32 @@ func (e *evalMatrixCondition) runInferConcurrently(ctx context.Context) map[int]
 // closed otherwise. The deterministic evaluators stay the fail-closed backstop, so
 // a fail-open infer entry only widens coverage without dropping the guard for a
 // command a deterministic evaluator already blocks.
-func (e *evalMatrixCondition) resolveInferSingle(ctx context.Context, index int, eval config.RuleEval) evalOutcome {
+func (e *evalMatrixCondition) resolveInferSingle(
+	ctx context.Context,
+	index int,
+	eval config.RuleEval,
+) evalOutcome {
 	point, ok := e.rule.EvalInference[eval.Use]
 	if !ok {
 		// A missing inference point means the judge cannot run, so the call counts as
 		// an error and fails closed, keeping the deterministic backstop in charge.
 		return evalOutcome{verdict: verdictBlock, errored: true}
 	}
+
 	// A fanout=batch entry reads the decision the per-event batch call already made
 	// for this rule, so the rule adds no inference call of its own. When no batch
 	// result exists (the planner did not run for this point), it falls back to an
 	// individual call so the old path keeps working.
 	if eval.Fanout == config.FanoutBatch {
-		if verdict, found := batchInferenceMemoFromContext(ctx).verdictFor(point, e.rule.Name); found {
+		if verdict, found := batchInferenceMemoFromContext(ctx).verdictFor(
+			point,
+			e.rule.Name,
+		); found {
 			recordPointLayer(ctx, e.rule.Name, index, *verdict)
 			return evalOutcome{verdict: applyPointVerdict(eval, *verdict), errored: verdict.errored}
 		}
 	}
+
 	runtime := inferRuntimeFromContext(ctx)
 	// CommandValue prefers ToolInputCommand, where the hook payload carries the
 	// command, over the generic Command field, which stays empty for a tool call.
@@ -265,6 +308,7 @@ func (e *evalMatrixCondition) resolveInferSingle(ctx context.Context, index int,
 	// invalid_argument, so the enforcer always errored and fell back to on_error.
 	result := runtime.evaluatePoint(ctx, point, e.rule.Intent, e.fields.CommandValue())
 	recordPointLayer(ctx, e.rule.Name, index, result)
+
 	return evalOutcome{verdict: applyPointVerdict(eval, result), errored: result.errored}
 }
 
@@ -276,10 +320,13 @@ func applyPointVerdict(eval config.RuleEval, result pointVerdict) evalVerdict {
 		if eval.OnError == config.OnErrorOpen {
 			return verdictAllow
 		}
+
 		return verdictBlock
 	}
+
 	if result.block {
 		return verdictBlock
 	}
+
 	return verdictAllow
 }

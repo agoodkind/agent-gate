@@ -32,15 +32,38 @@ func validateShellWriteSpecConfig(ruleName string, index int, condition *Conditi
 	if len(condition.WriteSpecs) == 0 {
 		return nil
 	}
+
 	if !conditionConsumesCmdWriteTargets(condition) {
-		return fmt.Errorf("rule %q condition %d write_specs 0: write_specs require cmd_write_targets", ruleName, index)
+		return fmt.Errorf(
+			"rule %q condition %d write_specs 0: write_specs require cmd_write_targets",
+			ruleName,
+			index,
+		)
 	}
+
 	for specIndex := range condition.WriteSpecs {
 		if err := validateShellWriteSpec(&condition.WriteSpecs[specIndex]); err != nil {
-			slog.Error("invalid write description", "rule", ruleName, "condition", index, "write_spec", specIndex, "err", err)
-			return fmt.Errorf("rule %q condition %d write_specs %d: %w", ruleName, index, specIndex, err)
+			slog.Error(
+				"invalid write description",
+				"rule",
+				ruleName,
+				"condition",
+				index,
+				"write_spec",
+				specIndex,
+				"err",
+				err,
+			)
+			return fmt.Errorf(
+				"rule %q condition %d write_specs %d: %w",
+				ruleName,
+				index,
+				specIndex,
+				err,
+			)
 		}
 	}
+
 	return nil
 }
 
@@ -48,51 +71,66 @@ func validateShellWriteSpec(spec *ShellWriteSpec) error {
 	if len(spec.Argv0) == 0 {
 		return fmt.Errorf("argv0 is required")
 	}
+
 	for argvIndex := range spec.Argv0 {
 		spec.Argv0[argvIndex] = strings.TrimSpace(spec.Argv0[argvIndex])
 		if spec.Argv0[argvIndex] == "" {
 			return fmt.Errorf("argv0 entries must be non-empty")
 		}
 	}
+
 	if spec.TargetMode != WriteTargetAllOperands && spec.TargetMode != WriteTargetLastOperand {
 		return fmt.Errorf("unknown target_mode %q", spec.TargetMode)
 	}
+
 	if !nonEmptyFlagEntries(spec.SkipFlagsWithValues) || !nonEmptyFlagEntries(spec.CwdFlags) {
 		return fmt.Errorf("flag entries must be non-empty")
 	}
+
 	if !flagEntries(spec.SkipFlagsWithValues) {
 		return fmt.Errorf("skip_flags_with_values entries must start with '-'")
 	}
+
 	if !flagEntries(spec.CwdFlags) {
 		return fmt.Errorf("cwd_flags entries must start with '-'")
 	}
+
 	for _, flag := range spec.SkipFlagsWithValues {
 		if slices.Contains(spec.CwdFlags, flag) {
-			return fmt.Errorf("flag %q must not appear in both skip_flags_with_values and cwd_flags", flag)
+			return fmt.Errorf(
+				"flag %q must not appear in both skip_flags_with_values and cwd_flags",
+				flag,
+			)
 		}
 	}
+
 	if spec.Unresolved != "" && spec.Unresolved != "match" && spec.Unresolved != "ignore" {
 		return fmt.Errorf("unresolved must be match or ignore")
 	}
+
 	arguments := spec.ArgumentDescription()
 	if err := ValidateArgumentSpec(&arguments); err != nil {
 		return err
 	}
+
 	return validateWriteTargetOptions(spec.TargetOptions, arguments.Options)
 }
 
 func validateWriteTargetOptions(names []string, options []ArgumentOptionSpec) error {
 	for _, name := range names {
 		declared := false
+
 		for _, option := range options {
 			if slices.Contains(option.Names, name) && option.Value != "none" {
 				declared = true
 			}
 		}
+
 		if !declared {
 			return fmt.Errorf("target option %q must accept a declared value", name)
 		}
 	}
+
 	return nil
 }
 
@@ -109,11 +147,13 @@ func conditionConsumesCmdWriteTargets(condition *Condition) bool {
 		ConditionKindGitRefMove:
 		return false
 	}
+
 	for _, selector := range condition.selectors {
 		if selector.Selector == FieldCmdWriteTargets {
 			return true
 		}
 	}
+
 	return condition.cacheKeySelector.Selector == FieldCmdWriteTargets ||
 		condition.forEachSelector.Selector == FieldCmdWriteTargets ||
 		condition.inputSelector.Selector == FieldCmdWriteTargets
@@ -129,12 +169,33 @@ func (spec ShellWriteSpec) ArgumentDescription() ArgumentSpec {
 		arguments.Options = slices.Clone(spec.Arguments.Options)
 		arguments.EndOfOptions = arguments.EndOfOptions || spec.EndOfOptions
 	}
+
 	for _, flag := range spec.SkipFlagsWithValues {
-		arguments.Options = append(arguments.Options, ArgumentOptionSpec{Names: []string{flag}, Value: "required", Forms: []string{"separate", "equals"}, CWD: false, AttachedValuePattern: ""})
+		arguments.Options = append(
+			arguments.Options,
+			ArgumentOptionSpec{
+				Names:                []string{flag},
+				Value:                "required",
+				Forms:                []string{"separate", "equals"},
+				CWD:                  false,
+				AttachedValuePattern: "",
+			},
+		)
 	}
+
 	for _, flag := range spec.CwdFlags {
-		arguments.Options = append(arguments.Options, ArgumentOptionSpec{Names: []string{flag}, Value: "required", Forms: []string{"separate", "equals"}, CWD: true, AttachedValuePattern: ""})
+		arguments.Options = append(
+			arguments.Options,
+			ArgumentOptionSpec{
+				Names:                []string{flag},
+				Value:                "required",
+				Forms:                []string{"separate", "equals"},
+				CWD:                  true,
+				AttachedValuePattern: "",
+			},
+		)
 	}
+
 	return arguments
 }
 
@@ -144,6 +205,7 @@ func nonEmptyFlagEntries(values []string) bool {
 			return false
 		}
 	}
+
 	return true
 }
 
@@ -153,5 +215,6 @@ func flagEntries(values []string) bool {
 			return false
 		}
 	}
+
 	return true
 }

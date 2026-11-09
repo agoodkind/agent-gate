@@ -52,6 +52,7 @@ func (s *recordingAuditSink) snapshot() []string {
 	defer s.mu.Unlock()
 	out := make([]string, len(s.messages))
 	copy(out, s.messages)
+
 	return out
 }
 
@@ -74,19 +75,31 @@ func TestCanBlock_NewProviders(t *testing.T) {
 
 	for _, testCase := range tests {
 		if got := hook.CanBlock(testCase.system, testCase.event); got != testCase.want {
-			t.Fatalf("CanBlock(%q, %q) = %v, want %v", testCase.system.String(), testCase.event, got, testCase.want)
+			t.Fatalf(
+				"CanBlock(%q, %q) = %v, want %v",
+				testCase.system.String(),
+				testCase.event,
+				got,
+				testCase.want,
+			)
 		}
 	}
 }
 
 func TestEvaluateHotCopilotPromptInjectionFallsBackToPrompt(t *testing.T) {
-	cfg := &config.Config{Rules: []config.Rule{{
-		Name:          "prompt-context",
-		CopilotEvents: []string{"userPromptTransformed"},
-		Action:        config.ActionInject,
-		Output:        "turn context",
-	}}}
-	rawJSON := []byte(`{"hook_event_name":"userPromptTransformed","session_id":"s1","prompt":"original prompt"}`)
+	cfg := &config.Config{
+		Rules: []config.Rule{
+			{
+				Name:          "prompt-context",
+				CopilotEvents: []string{"userPromptTransformed"},
+				Action:        config.ActionInject,
+				Output:        "turn context",
+			},
+		},
+	}
+	rawJSON := []byte(
+		`{"hook_event_name":"userPromptTransformed","session_id":"s1","prompt":"original prompt"}`,
+	)
 
 	evaluation := evaluateHot(
 		context.Background(),
@@ -97,21 +110,29 @@ func TestEvaluateHotCopilotPromptInjectionFallsBackToPrompt(t *testing.T) {
 			if key == "COPILOT_OTEL_ENABLED" {
 				return "true"
 			}
+
 			return ""
 		},
 	)
-	if !strings.Contains(string(evaluation.Stdout), `"modifiedTransformedPrompt":"turn context\n\noriginal prompt"`) {
+	if !strings.Contains(
+		string(evaluation.Stdout),
+		`"modifiedTransformedPrompt":"turn context\n\noriginal prompt"`,
+	) {
 		t.Fatalf("response = %q", evaluation.Stdout)
 	}
 }
 
 func TestEvaluateHotCopilotPromptInjectionPublishesFinalPrompt(t *testing.T) {
-	cfg := &config.Config{Rules: []config.Rule{{
-		Name:          "prompt-context",
-		CopilotEvents: []string{"userPromptTransformed"},
-		Action:        config.ActionInject,
-		Output:        "turn context",
-	}}}
+	cfg := &config.Config{
+		Rules: []config.Rule{
+			{
+				Name:          "prompt-context",
+				CopilotEvents: []string{"userPromptTransformed"},
+				Action:        config.ActionInject,
+				Output:        "turn context",
+			},
+		},
+	}
 	rawJSON := []byte(
 		`{"hook_event_name":"userPromptTransformed","session_id":"s1",` +
 			`"prompt":"user-authored prompt","transformedPrompt":"provider-transformed prompt"}`,
@@ -131,11 +152,14 @@ func TestEvaluateHotCopilotPromptInjectionPublishesFinalPrompt(t *testing.T) {
 	) {
 		t.Fatalf("response = %q", evaluation.Stdout)
 	}
-	want := []hook.TemporalResponseOutput{{
-		Action: config.ActionInject,
-		Target: "prompt",
-		Output: finalPrompt,
-	}}
+
+	want := []hook.TemporalResponseOutput{
+		{
+			Action: config.ActionInject,
+			Target: "prompt",
+			Output: finalPrompt,
+		},
+	}
 	if !reflect.DeepEqual(evaluation.TemporalResponseOutputs, want) {
 		t.Fatalf(
 			"temporal response outputs = %#v, want %#v",
@@ -146,20 +170,22 @@ func TestEvaluateHotCopilotPromptInjectionPublishesFinalPrompt(t *testing.T) {
 }
 
 func TestEvaluateHotCopilotPromptEffectsPublishFinalComposedPromptOnce(t *testing.T) {
-	cfg := &config.Config{Rules: []config.Rule{
-		{
-			Name:          "prompt-context",
-			CopilotEvents: []string{"userPromptTransformed"},
-			Action:        config.ActionInject,
-			Output:        "turn context",
+	cfg := &config.Config{
+		Rules: []config.Rule{
+			{
+				Name:          "prompt-context",
+				CopilotEvents: []string{"userPromptTransformed"},
+				Action:        config.ActionInject,
+				Output:        "turn context",
+			},
+			{
+				Name:          "prompt-mutation",
+				CopilotEvents: []string{"userPromptTransformed"},
+				Action:        config.ActionMutate,
+				Output:        "replacement prompt",
+			},
 		},
-		{
-			Name:          "prompt-mutation",
-			CopilotEvents: []string{"userPromptTransformed"},
-			Action:        config.ActionMutate,
-			Output:        "replacement prompt",
-		},
-	}}
+	}
 	rawJSON := []byte(
 		`{"hook_event_name":"userPromptTransformed","session_id":"s1",` +
 			`"prompt":"user-authored prompt","transformedPrompt":"provider-transformed prompt"}`,
@@ -179,11 +205,14 @@ func TestEvaluateHotCopilotPromptEffectsPublishFinalComposedPromptOnce(t *testin
 	) {
 		t.Fatalf("response = %q", evaluation.Stdout)
 	}
-	want := []hook.TemporalResponseOutput{{
-		Action: config.ActionMutate,
-		Target: "prompt",
-		Output: finalPrompt,
-	}}
+
+	want := []hook.TemporalResponseOutput{
+		{
+			Action: config.ActionMutate,
+			Target: "prompt",
+			Output: finalPrompt,
+		},
+	}
 	if !reflect.DeepEqual(evaluation.TemporalResponseOutputs, want) {
 		t.Fatalf(
 			"temporal response outputs = %#v, want %#v",
@@ -194,13 +223,19 @@ func TestEvaluateHotCopilotPromptEffectsPublishFinalComposedPromptOnce(t *testin
 }
 
 func TestEvaluateHotCursorStopInjectsFollowupPrompt(t *testing.T) {
-	cfg := &config.Config{Rules: []config.Rule{{
-		Name:         "stop-followup",
-		CursorEvents: []string{"stop"},
-		Action:       config.ActionInject,
-		Output:       "Continue with verification.",
-	}}}
-	rawJSON := []byte(`{"hook_event_name":"stop","session_id":"s1","status":"completed","loop_count":0}`)
+	cfg := &config.Config{
+		Rules: []config.Rule{
+			{
+				Name:         "stop-followup",
+				CursorEvents: []string{"stop"},
+				Action:       config.ActionInject,
+				Output:       "Continue with verification.",
+			},
+		},
+	}
+	rawJSON := []byte(
+		`{"hook_event_name":"stop","session_id":"s1","status":"completed","loop_count":0}`,
+	)
 
 	evaluation := evaluateHot(
 		context.Background(),
@@ -213,6 +248,7 @@ func TestEvaluateHotCursorStopInjectsFollowupPrompt(t *testing.T) {
 	if !strings.Contains(stdout, `"followup_message":"Continue with verification."`) {
 		t.Fatalf("response = %q", stdout)
 	}
+
 	if strings.Contains(stdout, "additional_context") {
 		t.Fatalf("stop response used additional_context: %q", stdout)
 	}
@@ -231,62 +267,86 @@ func TestCursorStopPreservesLoopCountPresenceAndValue(t *testing.T) {
 	}
 
 	for _, testCase := range tests {
-		t.Run(testCase.name, func(t *testing.T) {
-			rawJSON := []byte(
-				`{"hook_event_name":"stop","conversation_id":"c1","status":"completed"` +
-					testCase.extraJSON + `}`,
-			)
-			payload, err := hook.ParseHookPayload(hook.SystemCursor, rawJSON)
-			if err != nil {
-				t.Fatalf("ParseHookPayload: %v", err)
-			}
-			value, available := payload.Fields().Value(config.FieldLoopCount)
-			if value != testCase.wantValue || available != testCase.wantSet {
-				t.Fatalf(
-					"loop_count = (%q, %v), want (%q, %v)",
-					value,
-					available,
-					testCase.wantValue,
-					testCase.wantSet,
+		t.Run(
+			testCase.name,
+			func(t *testing.T) {
+				rawJSON := []byte(
+					`{"hook_event_name":"stop","conversation_id":"c1","status":"completed"` +
+						testCase.extraJSON + `}`,
 				)
-			}
-		})
+				payload, err := hook.ParseHookPayload(hook.SystemCursor, rawJSON)
+				if err != nil {
+					t.Fatalf("ParseHookPayload: %v", err)
+				}
+
+				value, available := payload.Fields().Value(config.FieldLoopCount)
+				if value != testCase.wantValue || available != testCase.wantSet {
+					t.Fatalf(
+						"loop_count = (%q, %v), want (%q, %v)",
+						value,
+						available,
+						testCase.wantValue,
+						testCase.wantSet,
+					)
+				}
+			},
+		)
 	}
 }
 
 func TestEvaluateHot_ComposesResponseEffectsInConfigOrder(t *testing.T) {
-	cfg := &config.Config{Rules: []config.Rule{
-		{
-			Name: "first-context", CodexEvents: []string{"PreToolUse"},
-			Action: config.ActionInject, Output: "first context",
+	cfg := &config.Config{
+		Rules: []config.Rule{
+			{
+				Name:        "first-context",
+				CodexEvents: []string{"PreToolUse"},
+				Action:      config.ActionInject,
+				Output:      "first context",
+			},
+			{
+				Name:        "second-context",
+				CodexEvents: []string{"PreToolUse"},
+				Action:      config.ActionInject,
+				Output:      "second context",
+			},
+			{
+				Name:        "replace-input",
+				CodexEvents: []string{"PreToolUse"},
+				Action:      config.ActionMutate,
+				Output:      `{"command":"make test"}`,
+			},
 		},
-		{
-			Name: "second-context", CodexEvents: []string{"PreToolUse"},
-			Action: config.ActionInject, Output: "second context",
-		},
-		{
-			Name: "replace-input", CodexEvents: []string{"PreToolUse"},
-			Action: config.ActionMutate, Output: `{"command":"make test"}`,
-		},
-	}}
-	rawJSON := []byte(`{"hook_event_name":"PreToolUse","session_id":"s1","tool_name":"Shell","tool_input":{"command":"go test ./..."}}`)
+	}
+	rawJSON := []byte(
+		`{"hook_event_name":"PreToolUse","session_id":"s1","tool_name":"Shell","tool_input":{"command":"go test ./..."}}`,
+	)
 
-	evaluation := evaluateHot(context.Background(), rawJSON, cfg, hook.SystemCodex, func(string) string { return "" })
+	evaluation := evaluateHot(
+		context.Background(),
+		rawJSON,
+		cfg,
+		hook.SystemCodex,
+		func(string) string { return "" },
+	)
 	stdout := string(evaluation.Stdout)
 	if !strings.Contains(stdout, `"additionalContext":"first context\n\nsecond context"`) {
 		t.Fatalf("response context = %q", stdout)
 	}
+
 	if !strings.Contains(stdout, `"updatedInput":{"command":"make test"}`) {
 		t.Fatalf("response mutation = %q", stdout)
 	}
+
 	if len(evaluation.Deferred.ResponseEffects) != 3 {
 		t.Fatalf("response effects = %#v", evaluation.Deferred.ResponseEffects)
 	}
+
 	for _, effect := range evaluation.Deferred.ResponseEffects {
 		if effect.ByteCount == 0 {
 			t.Fatalf("effect did not record output byte count: %#v", effect)
 		}
 	}
+
 	wantTemporalOutputs := []hook.TemporalResponseOutput{
 		{
 			Action: config.ActionInject,
@@ -309,21 +369,36 @@ func TestEvaluateHot_ComposesResponseEffectsInConfigOrder(t *testing.T) {
 }
 
 func TestEvaluateHotUsesLastMatchingMutationForTarget(t *testing.T) {
-	cfg := &config.Config{Rules: []config.Rule{
-		{
-			Name: "first-input", CodexEvents: []string{"PreToolUse"},
-			Action: config.ActionMutate, Output: `{"command":"first"}`,
+	cfg := &config.Config{
+		Rules: []config.Rule{
+			{
+				Name:        "first-input",
+				CodexEvents: []string{"PreToolUse"},
+				Action:      config.ActionMutate,
+				Output:      `{"command":"first"}`,
+			},
+			{
+				Name:        "last-input",
+				CodexEvents: []string{"PreToolUse"},
+				Action:      config.ActionMutate,
+				Output:      `{"command":"last"}`,
+			},
 		},
-		{
-			Name: "last-input", CodexEvents: []string{"PreToolUse"},
-			Action: config.ActionMutate, Output: `{"command":"last"}`,
-		},
-	}}
-	rawJSON := []byte(`{"hook_event_name":"PreToolUse","session_id":"s1","tool_name":"Shell","tool_input":{"command":"original"}}`)
+	}
+	rawJSON := []byte(
+		`{"hook_event_name":"PreToolUse","session_id":"s1","tool_name":"Shell","tool_input":{"command":"original"}}`,
+	)
 
-	evaluation := evaluateHot(context.Background(), rawJSON, cfg, hook.SystemCodex, func(string) string { return "" })
+	evaluation := evaluateHot(
+		context.Background(),
+		rawJSON,
+		cfg,
+		hook.SystemCodex,
+		func(string) string { return "" },
+	)
 	stdout := string(evaluation.Stdout)
-	if !strings.Contains(stdout, `"updatedInput":{"command":"last"}`) || strings.Contains(stdout, `"updatedInput":{"command":"first"}`) {
+	if !strings.Contains(stdout, `"updatedInput":{"command":"last"}`) ||
+		strings.Contains(stdout, `"updatedInput":{"command":"first"}`) {
 		t.Fatalf("response mutation = %q", stdout)
 	}
 }
@@ -337,44 +412,77 @@ func TestEvaluateHot_BlockSuppressesResponseEffects(t *testing.T) {
 		[]string{"tool_input.command"},
 		"blocked",
 	)
-	cfg := &config.Config{Rules: []config.Rule{
-		{
-			Name: "context", CodexEvents: []string{"PreToolUse"},
-			Action: config.ActionInject, Output: "must not appear",
+	cfg := &config.Config{
+		Rules: []config.Rule{
+			{
+				Name:        "context",
+				CodexEvents: []string{"PreToolUse"},
+				Action:      config.ActionInject,
+				Output:      "must not appear",
+			},
+			blockingRule,
 		},
-		blockingRule,
-	}}
-	rawJSON := []byte(`{"hook_event_name":"PreToolUse","session_id":"s1","tool_name":"Shell","tool_input":{"command":"blocked-command"}}`)
+	}
+	rawJSON := []byte(
+		`{"hook_event_name":"PreToolUse","session_id":"s1","tool_name":"Shell","tool_input":{"command":"blocked-command"}}`,
+	)
 
-	evaluation := evaluateHot(context.Background(), rawJSON, cfg, hook.SystemCodex, func(string) string { return "" })
+	evaluation := evaluateHot(
+		context.Background(),
+		rawJSON,
+		cfg,
+		hook.SystemCodex,
+		func(string) string { return "" },
+	)
 	if strings.Contains(string(evaluation.Stdout), "must not appear") {
 		t.Fatalf("block response retained context: %q", evaluation.Stdout)
 	}
-	if len(evaluation.Deferred.ResponseEffects) != 1 || evaluation.Deferred.ResponseEffects[0].Disposition != "suppressed_by_block" {
+
+	if len(evaluation.Deferred.ResponseEffects) != 1 ||
+		evaluation.Deferred.ResponseEffects[0].Disposition != "suppressed_by_block" {
 		t.Fatalf("response effects = %#v", evaluation.Deferred.ResponseEffects)
 	}
+
 	if evaluation.Deferred.ResponseEffects[0].Target != "context" {
 		t.Fatalf("suppressed response effect target = %#v", evaluation.Deferred.ResponseEffects[0])
 	}
+
 	if len(evaluation.TemporalResponseOutputs) != 0 {
-		t.Fatalf("blocked response offered temporal update: %#v", evaluation.TemporalResponseOutputs)
+		t.Fatalf(
+			"blocked response offered temporal update: %#v",
+			evaluation.TemporalResponseOutputs,
+		)
 	}
 }
 
 func TestEvaluateHotRecordsTargetForEmptyResponseEffect(t *testing.T) {
-	cfg := &config.Config{Rules: []config.Rule{{
-		Name: "empty-context", CodexEvents: []string{"SessionStart"}, Action: config.ActionInject,
-	}}}
+	cfg := &config.Config{
+		Rules: []config.Rule{
+			{
+				Name:        "empty-context",
+				CodexEvents: []string{"SessionStart"},
+				Action:      config.ActionInject,
+			},
+		},
+	}
 	rawJSON := []byte(`{"hook_event_name":"SessionStart","session_id":"s1"}`)
 
-	evaluation := evaluateHot(context.Background(), rawJSON, cfg, hook.SystemCodex, func(string) string { return "" })
+	evaluation := evaluateHot(
+		context.Background(),
+		rawJSON,
+		cfg,
+		hook.SystemCodex,
+		func(string) string { return "" },
+	)
 	if len(evaluation.Deferred.ResponseEffects) != 1 {
 		t.Fatalf("response effects = %#v", evaluation.Deferred.ResponseEffects)
 	}
+
 	effect := evaluation.Deferred.ResponseEffects[0]
 	if effect.Target != "context" || effect.Disposition != "empty_noop" || effect.ByteCount != 0 {
 		t.Fatalf("response effect = %#v", effect)
 	}
+
 	if len(evaluation.TemporalResponseOutputs) != 0 {
 		t.Fatalf("empty response offered temporal update: %#v", evaluation.TemporalResponseOutputs)
 	}
@@ -389,8 +497,12 @@ func TestEvaluateHotComposesEveryPromptSubmitInjection(t *testing.T) {
 	); err != nil {
 		t.Fatalf("WriteFile output file: %v", err)
 	}
+
 	path := filepath.Join(configDir, "config.toml")
-	if err := os.WriteFile(path, []byte(`
+	if err := os.WriteFile(
+		path,
+		[]byte(
+			`
 [[rules]]
 name = "first-prompt-context"
 claude_events = ["UserPromptSubmit"]
@@ -408,13 +520,18 @@ name = "third-prompt-context"
 claude_events = ["UserPromptSubmit"]
 action = "inject"
 output = "third context"
-`), 0o600); err != nil {
+`,
+		),
+		0o600,
+	); err != nil {
 		t.Fatalf("WriteFile config: %v", err)
 	}
+
 	cfg, err := config.LoadExisting(path)
 	if err != nil {
 		t.Fatalf("LoadExisting: %v", err)
 	}
+
 	rawJSON := []byte(
 		`{"hook_event_name":"UserPromptSubmit","session_id":"s1","prompt":"do the thing"}`,
 	)
@@ -429,16 +546,19 @@ output = "third context"
 	if evaluation.ExitCode != 0 {
 		t.Fatalf("ExitCode = %d, want 0 (stderr %q)", evaluation.ExitCode, evaluation.Stderr)
 	}
+
 	const wantContext = `"additionalContext":"first context\n\nsecond context\n\nthird context"`
 	if !strings.Contains(string(evaluation.Stdout), wantContext) {
 		t.Fatalf("Stdout = %q, want substring %q", evaluation.Stdout, wantContext)
 	}
+
 	if len(evaluation.Deferred.ResponseEffects) != 3 {
 		t.Fatalf(
 			"ResponseEffects = %#v, want three applied effects",
 			evaluation.Deferred.ResponseEffects,
 		)
 	}
+
 	for _, effect := range evaluation.Deferred.ResponseEffects {
 		if effect.Target != "context" || effect.Disposition != rules.ResponseEffectApplied {
 			t.Fatalf("response effect = %#v, want applied context injection", effect)
@@ -447,10 +567,16 @@ output = "third context"
 }
 
 func TestEvaluateHotDoesNotPublishUnsupportedResponseEffect(t *testing.T) {
-	cfg := &config.Config{Rules: []config.Rule{{
-		Name: "unsupported-context", CursorEvents: []string{"beforeSubmitPrompt"},
-		Action: config.ActionInject, Output: "unsupported response",
-	}}}
+	cfg := &config.Config{
+		Rules: []config.Rule{
+			{
+				Name:         "unsupported-context",
+				CursorEvents: []string{"beforeSubmitPrompt"},
+				Action:       config.ActionInject,
+				Output:       "unsupported response",
+			},
+		},
+	}
 	rawJSON := []byte(
 		`{"hook_event_name":"beforeSubmitPrompt","conversation_id":"c1",` +
 			`"prompt":"request"}`,
@@ -473,7 +599,10 @@ func TestEvaluateHotDoesNotPublishUnsupportedResponseEffect(t *testing.T) {
 
 func TestEvaluateHotDoesNotPublishFailedExecResponse(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
-	if err := os.WriteFile(path, []byte(`
+	if err := os.WriteFile(
+		path,
+		[]byte(
+			`
 [[rules]]
 name = "failed-response"
 cursor_events = ["stop"]
@@ -484,18 +613,21 @@ output = "configured fallback"
 kind = "exec"
 command = ["/bin/validator"]
 cache_ttl_ms = 0
-`), 0o600); err != nil {
+`,
+		),
+		0o600,
+	); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
+
 	cfg, err := config.LoadExisting(path)
 	if err != nil {
 		t.Fatalf("LoadExisting: %v", err)
 	}
+
 	runtime := rules.NewExecRuntime(failedResponseExecRunner{}, nil)
 	ctx := rules.WithExecRuntime(context.Background(), runtime)
-	rawJSON := []byte(
-		`{"hook_event_name":"stop","conversation_id":"c1","status":"completed"}`,
-	)
+	rawJSON := []byte(`{"hook_event_name":"stop","conversation_id":"c1","status":"completed"}`)
 
 	evaluation := evaluateHot(
 		ctx,
@@ -513,28 +645,45 @@ cache_ttl_ms = 0
 }
 
 func TestEvaluateHotAuditsInvalidCopilotToolOutputAsNoOp(t *testing.T) {
-	cfg := &config.Config{Rules: []config.Rule{{
-		Name: "invalid-result", CopilotEvents: []string{"postToolUse"},
-		Action: config.ActionMutate, Output: `{"content":"not a Copilot ToolResult"}`,
-	}}}
+	cfg := &config.Config{
+		Rules: []config.Rule{
+			{
+				Name:          "invalid-result",
+				CopilotEvents: []string{"postToolUse"},
+				Action:        config.ActionMutate,
+				Output:        `{"content":"not a Copilot ToolResult"}`,
+			},
+		},
+	}
 	rawJSON := []byte(`{"hook_event_name":"postToolUse","session_id":"s1"}`)
 
-	evaluation := evaluateHot(context.Background(), rawJSON, cfg, hook.SystemCopilot, func(string) string { return "" })
+	evaluation := evaluateHot(
+		context.Background(),
+		rawJSON,
+		cfg,
+		hook.SystemCopilot,
+		func(string) string { return "" },
+	)
 	if strings.Contains(string(evaluation.Stdout), "modifiedResult") {
 		t.Fatalf("invalid mutation rendered: %q", evaluation.Stdout)
 	}
+
 	if len(evaluation.Deferred.ResponseEffects) != 1 {
 		t.Fatalf("response effects = %#v", evaluation.Deferred.ResponseEffects)
 	}
+
 	effect := evaluation.Deferred.ResponseEffects[0]
-	if effect.Target != "tool_output" || effect.Disposition != "invalid_noop" || effect.ByteCount == 0 {
+	if effect.Target != "tool_output" || effect.Disposition != "invalid_noop" ||
+		effect.ByteCount == 0 {
 		t.Fatalf("response effect = %#v", effect)
 	}
+
 	sink := &recordingAuditSink{}
 	hook.WriteDeferredAudit(context.Background(), evaluation.Deferred, sink)
 	if got := strings.Join(sink.snapshot(), ","); got != "hook.response_effect,hook.allowed" {
 		t.Fatalf("audit messages = %q", got)
 	}
+
 	if len(evaluation.TemporalResponseOutputs) != 0 {
 		t.Fatalf(
 			"invalid response offered temporal update: %#v",
@@ -544,14 +693,21 @@ func TestEvaluateHotAuditsInvalidCopilotToolOutputAsNoOp(t *testing.T) {
 }
 
 func TestParseHookPayload_UsesToolInputWorkdir(t *testing.T) {
-	payload, err := hook.ParseHookPayload(hook.SystemCodex, []byte(`{"hook_event_name":"PreToolUse","cwd":"/chat","tool_input":{"command":"go test ./...","workdir":"/project"}}`))
+	payload, err := hook.ParseHookPayload(
+		hook.SystemCodex,
+		[]byte(
+			`{"hook_event_name":"PreToolUse","cwd":"/chat","tool_input":{"command":"go test ./...","workdir":"/project"}}`,
+		),
+	)
 	if err != nil {
 		t.Fatalf("ParseHookPayload: %v", err)
 	}
+
 	fields := payload.Fields()
 	if fields.CWD != "/chat" {
 		t.Fatalf("cwd was overwritten: %#v", fields)
 	}
+
 	if fields.String(config.FieldEffectiveCWD) != "/project" {
 		t.Fatalf("effective_cwd = %#v, want /project", fields.String(config.FieldEffectiveCWD))
 	}
@@ -564,7 +720,10 @@ func TestEvaluateHot_RecoversCodexExecWorkdirFromTranscript(t *testing.T) {
 	if err := os.WriteFile(transcript, []byte(line), 0o600); err != nil {
 		t.Fatalf("write transcript: %v", err)
 	}
-	rawJSON := []byte(`{"hook_event_name":"PreToolUse","session_id":"s1","turn_id":"turn-1","transcript_path":"` + transcript + `","cwd":"/repo/main","tool_name":"Bash","tool_input":{"command":"git switch -c feature"}}`)
+
+	rawJSON := []byte(
+		`{"hook_event_name":"PreToolUse","session_id":"s1","turn_id":"turn-1","transcript_path":"` + transcript + `","cwd":"/repo/main","tool_name":"Bash","tool_input":{"command":"git switch -c feature"}}`,
+	)
 
 	evaluation := evaluateHot(
 		context.Background(),
@@ -579,6 +738,7 @@ func TestEvaluateHot_RecoversCodexExecWorkdirFromTranscript(t *testing.T) {
 			evaluation.Deferred.Fields.ToolInputWorkdir,
 		)
 	}
+
 	if got := evaluation.Deferred.Fields.String(config.FieldEffectiveCWD); got != "/repo/worktree" {
 		t.Fatalf("effective_cwd = %q, want /repo/worktree", got)
 	}
@@ -586,39 +746,50 @@ func TestEvaluateHot_RecoversCodexExecWorkdirFromTranscript(t *testing.T) {
 
 func TestCodexSubagentStop_PopulatesAgentIdentity(t *testing.T) {
 	// Field shape captured from a live codex-native SubagentStop payload.
-	rawJSON := []byte(`{"hook_event_name":"SubagentStop","session_id":"s1","turn_id":"t1","transcript_path":"/Users/x/.codex/sessions/a.jsonl","agent_transcript_path":"/Users/x/.codex/sessions/b.jsonl","cwd":"/repo","model":"gpt-5.5","permission_mode":"bypassPermissions","stop_hook_active":false,"agent_id":"019e8fe6","agent_type":"worker","last_assistant_message":"done"}`)
+	rawJSON := []byte(
+		`{"hook_event_name":"SubagentStop","session_id":"s1","turn_id":"t1","transcript_path":"/Users/x/.codex/sessions/a.jsonl","agent_transcript_path":"/Users/x/.codex/sessions/b.jsonl","cwd":"/repo","model":"gpt-5.5","permission_mode":"bypassPermissions","stop_hook_active":false,"agent_id":"019e8fe6","agent_type":"worker","last_assistant_message":"done"}`,
+	)
 	payload, err := hook.ParseHookPayload(hook.SystemCodex, rawJSON)
 	if err != nil {
 		t.Fatalf("ParseHookPayload: %v", err)
 	}
+
 	if _, ok := payload.Event.(hook.CodexSubagentStopPayload); !ok {
 		t.Fatalf("event type = %T, want CodexSubagentStopPayload", payload.Event)
 	}
+
 	fields := payload.Fields()
 	if fields.AgentType != "worker" {
 		t.Fatalf("agent_type = %q, want worker", fields.AgentType)
 	}
+
 	if fields.AgentID != "019e8fe6" {
 		t.Fatalf("agent_id = %q, want 019e8fe6", fields.AgentID)
 	}
+
 	if fields.PermissionMode != "bypassPermissions" {
 		t.Fatalf("permission_mode = %q, want bypassPermissions", fields.PermissionMode)
 	}
+
 	if fields.AgentTranscriptPath != "/Users/x/.codex/sessions/b.jsonl" {
 		t.Fatalf("agent_transcript_path = %q", fields.AgentTranscriptPath)
 	}
 }
 
 func TestCursorBeforeMCPExecution_ObjectToolInput(t *testing.T) {
-	rawJSON := []byte(`{"hook_event_name":"beforeMCPExecution","session_id":"s1","tool_name":"mcp__docker__logs","tool_use_id":"call_1","cwd":"/repo","tool_input":{"command":"docker logs api","query":"errors"}}`)
+	rawJSON := []byte(
+		`{"hook_event_name":"beforeMCPExecution","session_id":"s1","tool_name":"mcp__docker__logs","tool_use_id":"call_1","cwd":"/repo","tool_input":{"command":"docker logs api","query":"errors"}}`,
+	)
 	payload, err := hook.ParseHookPayload(hook.SystemCursor, rawJSON)
 	if err != nil {
 		t.Fatalf("ParseHookPayload: %v", err)
 	}
+
 	fields := payload.Fields()
 	if fields.ToolInputCommand != "docker logs api" {
 		t.Fatalf("tool_input.command = %#v, want docker logs api", fields.ToolInputCommand)
 	}
+
 	if fields.ToolInputQuery != "errors" {
 		t.Fatalf("tool_input.query = %#v, want errors", fields.ToolInputQuery)
 	}
@@ -633,68 +804,87 @@ func TestUserPromptAcceptsOnlyTypedPromptSubmissionEvents(t *testing.T) {
 		wantOK bool
 	}{
 		{
-			name: "claude", system: hook.SystemClaude,
-			raw:  `{"hook_event_name":"UserPromptSubmit","session_id":"s1","prompt":"claude prompt"}`,
-			want: "claude prompt", wantOK: true,
+			name:   "claude",
+			system: hook.SystemClaude,
+			raw:    `{"hook_event_name":"UserPromptSubmit","session_id":"s1","prompt":"claude prompt"}`,
+			want:   "claude prompt",
+			wantOK: true,
 		},
 		{
-			name: "codex", system: hook.SystemCodex,
-			raw:  `{"hook_event_name":"UserPromptSubmit","session_id":"s1","prompt":"codex prompt"}`,
-			want: "codex prompt", wantOK: true,
+			name:   "codex",
+			system: hook.SystemCodex,
+			raw:    `{"hook_event_name":"UserPromptSubmit","session_id":"s1","prompt":"codex prompt"}`,
+			want:   "codex prompt",
+			wantOK: true,
 		},
 		{
-			name: "cursor", system: hook.SystemCursor,
-			raw:  `{"hook_event_name":"beforeSubmitPrompt","conversation_id":"c1","prompt":"cursor prompt"}`,
-			want: "cursor prompt", wantOK: true,
+			name:   "cursor",
+			system: hook.SystemCursor,
+			raw:    `{"hook_event_name":"beforeSubmitPrompt","conversation_id":"c1","prompt":"cursor prompt"}`,
+			want:   "cursor prompt",
+			wantOK: true,
 		},
 		{
-			name: "copilot", system: hook.SystemCopilot,
-			raw:  `{"hook_event_name":"userPromptTransformed","session_id":"s1","prompt":"copilot prompt"}`,
-			want: "copilot prompt", wantOK: true,
+			name:   "copilot",
+			system: hook.SystemCopilot,
+			raw:    `{"hook_event_name":"userPromptTransformed","session_id":"s1","prompt":"copilot prompt"}`,
+			want:   "copilot prompt",
+			wantOK: true,
 		},
 		{
-			name: "copilot user-authored prompt", system: hook.SystemCopilot,
+			name:   "copilot user-authored prompt",
+			system: hook.SystemCopilot,
 			raw: `{"hook_event_name":"userPromptTransformed","session_id":"s1",` +
 				`"prompt":"user-authored prompt","transformedPrompt":"provider-transformed prompt"}`,
-			want: "user-authored prompt", wantOK: true,
+			want:   "user-authored prompt",
+			wantOK: true,
 		},
 		{
-			name: "copilot transformed prompt only", system: hook.SystemCopilot,
+			name:   "copilot transformed prompt only",
+			system: hook.SystemCopilot,
 			raw: `{"hook_event_name":"userPromptTransformed","session_id":"s1",` +
 				`"transformedPrompt":"provider-transformed prompt"}`,
 		},
 		{
-			name: "gemini", system: hook.SystemGemini,
-			raw:  `{"hook_event_name":"BeforeAgent","session_id":"s1","prompt":"gemini prompt"}`,
-			want: "gemini prompt", wantOK: true,
+			name:   "gemini",
+			system: hook.SystemGemini,
+			raw:    `{"hook_event_name":"BeforeAgent","session_id":"s1","prompt":"gemini prompt"}`,
+			want:   "gemini prompt",
+			wantOK: true,
 		},
 		{
-			name: "tool prompt", system: hook.SystemClaude,
-			raw: `{"hook_event_name":"PreToolUse","session_id":"s1","tool_input":{"prompt":"tool prompt"}}`,
+			name:   "tool prompt",
+			system: hook.SystemClaude,
+			raw:    `{"hook_event_name":"PreToolUse","session_id":"s1","tool_input":{"prompt":"tool prompt"}}`,
 		},
 		{
-			name: "assistant text", system: hook.SystemCursor,
-			raw: `{"hook_event_name":"afterAgentResponse","conversation_id":"c1","text":"assistant text"}`,
+			name:   "assistant text",
+			system: hook.SystemCursor,
+			raw:    `{"hook_event_name":"afterAgentResponse","conversation_id":"c1","text":"assistant text"}`,
 		},
 	}
 
 	for _, testCase := range tests {
-		t.Run(testCase.name, func(t *testing.T) {
-			payload, err := hook.ParseHookPayload(testCase.system, []byte(testCase.raw))
-			if err != nil {
-				t.Fatalf("ParseHookPayload: %v", err)
-			}
-			got, ok := hook.UserPrompt(payload)
-			if got != testCase.want || ok != testCase.wantOK {
-				t.Fatalf(
-					"UserPrompt() = (%q, %v), want (%q, %v)",
-					got,
-					ok,
-					testCase.want,
-					testCase.wantOK,
-				)
-			}
-		})
+		t.Run(
+			testCase.name,
+			func(t *testing.T) {
+				payload, err := hook.ParseHookPayload(testCase.system, []byte(testCase.raw))
+				if err != nil {
+					t.Fatalf("ParseHookPayload: %v", err)
+				}
+
+				got, ok := hook.UserPrompt(payload)
+				if got != testCase.want || ok != testCase.wantOK {
+					t.Fatalf(
+						"UserPrompt() = (%q, %v), want (%q, %v)",
+						got,
+						ok,
+						testCase.want,
+						testCase.wantOK,
+					)
+				}
+			},
+		)
 	}
 }
 
@@ -705,74 +895,111 @@ func TestCursorMCPExecution_NestedObjectToolInputAllows(t *testing.T) {
 		extraJSON string
 	}{
 		{name: "before", eventName: "beforeMCPExecution", extraJSON: ""},
-		{name: "after", eventName: "afterMCPExecution", extraJSON: `,"tool_output":"ok","result_json":"{}"`},
+		{
+			name:      "after",
+			eventName: "afterMCPExecution",
+			extraJSON: `,"tool_output":"ok","result_json":"{}"`,
+		},
 	}
 
 	for _, testCase := range tests {
-		t.Run(testCase.name, func(t *testing.T) {
-			rawJSON := []byte(`{"hook_event_name":"` + testCase.eventName + `","session_id":"s1","tool_name":"mcp__contentful__search_entries","tool_use_id":"call_1","cwd":"/repo","tool_input":{"query":{"content_type":"blogPost"},"spaceId":"space","environmentId":"master","command":"contentful search"}` + testCase.extraJSON + `}`)
+		t.Run(
+			testCase.name,
+			func(t *testing.T) {
+				rawJSON := []byte(
+					`{"hook_event_name":"` + testCase.eventName + `","session_id":"s1","tool_name":"mcp__contentful__search_entries","tool_use_id":"call_1","cwd":"/repo","tool_input":{"query":{"content_type":"blogPost"},"spaceId":"space","environmentId":"master","command":"contentful search"}` + testCase.extraJSON + `}`,
+				)
 
-			payload, err := hook.ParseHookPayload(hook.SystemCursor, rawJSON)
-			if err != nil {
-				t.Fatalf("ParseHookPayload: %v", err)
-			}
-			fields := payload.Fields()
-			if fields.HookEventName != testCase.eventName {
-				t.Fatalf("hook_event_name = %q, want %q", fields.HookEventName, testCase.eventName)
-			}
-			if fields.ToolName != "mcp__contentful__search_entries" {
-				t.Fatalf("tool_name = %q, want mcp__contentful__search_entries", fields.ToolName)
-			}
-			if fields.ToolUseID != "call_1" {
-				t.Fatalf("tool_use_id = %q, want call_1", fields.ToolUseID)
-			}
-			if fields.CWD != "/repo" {
-				t.Fatalf("cwd = %q, want /repo", fields.CWD)
-			}
-			if fields.ToolInputCommand != "contentful search" {
-				t.Fatalf("tool_input.command = %q, want contentful search", fields.ToolInputCommand)
-			}
+				payload, err := hook.ParseHookPayload(hook.SystemCursor, rawJSON)
+				if err != nil {
+					t.Fatalf("ParseHookPayload: %v", err)
+				}
 
-			evaluation := evaluateHot(
-				context.Background(),
-				rawJSON,
-				nil,
-				hook.SystemCursor,
-				func(string) string { return "" },
-			)
-			if evaluation.ExitCode != 0 {
-				t.Fatalf("ExitCode = %d, want 0; stderr = %q", evaluation.ExitCode, string(evaluation.Stderr))
-			}
-			if got := string(evaluation.Stdout); got != "{\"permission\":\"allow\"}\n" {
-				t.Fatalf("Stdout = %q, want Cursor allow response", got)
-			}
-			if len(evaluation.Stderr) != 0 {
-				t.Fatalf("Stderr = %q, want empty", string(evaluation.Stderr))
-			}
-		})
+				fields := payload.Fields()
+				if fields.HookEventName != testCase.eventName {
+					t.Fatalf(
+						"hook_event_name = %q, want %q",
+						fields.HookEventName,
+						testCase.eventName,
+					)
+				}
+
+				if fields.ToolName != "mcp__contentful__search_entries" {
+					t.Fatalf(
+						"tool_name = %q, want mcp__contentful__search_entries",
+						fields.ToolName,
+					)
+				}
+
+				if fields.ToolUseID != "call_1" {
+					t.Fatalf("tool_use_id = %q, want call_1", fields.ToolUseID)
+				}
+
+				if fields.CWD != "/repo" {
+					t.Fatalf("cwd = %q, want /repo", fields.CWD)
+				}
+
+				if fields.ToolInputCommand != "contentful search" {
+					t.Fatalf(
+						"tool_input.command = %q, want contentful search",
+						fields.ToolInputCommand,
+					)
+				}
+
+				evaluation := evaluateHot(
+					context.Background(),
+					rawJSON,
+					nil,
+					hook.SystemCursor,
+					func(string) string { return "" },
+				)
+				if evaluation.ExitCode != 0 {
+					t.Fatalf(
+						"ExitCode = %d, want 0; stderr = %q",
+						evaluation.ExitCode,
+						string(evaluation.Stderr),
+					)
+				}
+
+				if got := string(evaluation.Stdout); got != "{\"permission\":\"allow\"}\n" {
+					t.Fatalf("Stdout = %q, want Cursor allow response", got)
+				}
+
+				if len(evaluation.Stderr) != 0 {
+					t.Fatalf("Stderr = %q, want empty", string(evaluation.Stderr))
+				}
+			},
+		)
 	}
 }
 
 func TestCursorBeforeMCPExecution_ArrayToolInputRejected(t *testing.T) {
-	rawJSON := []byte(`{"hook_event_name":"beforeMCPExecution","session_id":"s1","tool_name":"mcp__contentful__search_entries","tool_use_id":"call_1","cwd":"/repo","tool_input":[]}`)
+	rawJSON := []byte(
+		`{"hook_event_name":"beforeMCPExecution","session_id":"s1","tool_name":"mcp__contentful__search_entries","tool_use_id":"call_1","cwd":"/repo","tool_input":[]}`,
+	)
 	if _, err := hook.ParseHookPayload(hook.SystemCursor, rawJSON); err == nil {
 		t.Fatal("ParseHookPayload succeeded, want unsupported array tool_input error")
 	}
 }
 
 func TestCursorBeforeMCPExecution_MalformedObjectToolInputRejected(t *testing.T) {
-	rawJSON := []byte(`{"hook_event_name":"beforeMCPExecution","session_id":"s1","tool_name":"mcp__contentful__search_entries","tool_use_id":"call_1","cwd":"/repo","tool_input":{"query":}}`)
+	rawJSON := []byte(
+		`{"hook_event_name":"beforeMCPExecution","session_id":"s1","tool_name":"mcp__contentful__search_entries","tool_use_id":"call_1","cwd":"/repo","tool_input":{"query":}}`,
+	)
 	if _, err := hook.ParseHookPayload(hook.SystemCursor, rawJSON); err == nil {
 		t.Fatal("ParseHookPayload succeeded, want malformed object tool_input error")
 	}
 }
 
 func TestCursorBeforeMCPExecution_StringToolInput(t *testing.T) {
-	rawJSON := []byte(`{"hook_event_name":"beforeMCPExecution","session_id":"s1","tool_name":"mcp__docker__logs","tool_use_id":"call_1","cwd":"/repo","tool_input":"docker logs api"}`)
+	rawJSON := []byte(
+		`{"hook_event_name":"beforeMCPExecution","session_id":"s1","tool_name":"mcp__docker__logs","tool_use_id":"call_1","cwd":"/repo","tool_input":"docker logs api"}`,
+	)
 	payload, err := hook.ParseHookPayload(hook.SystemCursor, rawJSON)
 	if err != nil {
 		t.Fatalf("ParseHookPayload: %v", err)
 	}
+
 	if got := payload.Fields().ToolInputContent; got != "docker logs api" {
 		t.Fatalf("tool_input.content = %#v, want docker logs api", got)
 	}
@@ -780,15 +1007,19 @@ func TestCursorBeforeMCPExecution_StringToolInput(t *testing.T) {
 
 func TestCursorBeforeMCPExecution_JSONStringToolInput(t *testing.T) {
 	toolInput := strconv.Quote(`{"command":"docker logs api","query":"errors"}`)
-	rawJSON := []byte(`{"hook_event_name":"beforeMCPExecution","session_id":"s1","tool_name":"mcp__docker__logs","tool_use_id":"call_1","cwd":"/repo","tool_input":` + toolInput + `}`)
+	rawJSON := []byte(
+		`{"hook_event_name":"beforeMCPExecution","session_id":"s1","tool_name":"mcp__docker__logs","tool_use_id":"call_1","cwd":"/repo","tool_input":` + toolInput + `}`,
+	)
 	payload, err := hook.ParseHookPayload(hook.SystemCursor, rawJSON)
 	if err != nil {
 		t.Fatalf("ParseHookPayload: %v", err)
 	}
+
 	fields := payload.Fields()
 	if fields.ToolInputCommand != "docker logs api" {
 		t.Fatalf("tool_input.command = %#v, want docker logs api", fields.ToolInputCommand)
 	}
+
 	if fields.ToolInputQuery != "errors" {
 		t.Fatalf("tool_input.query = %#v, want errors", fields.ToolInputQuery)
 	}
@@ -796,57 +1027,79 @@ func TestCursorBeforeMCPExecution_JSONStringToolInput(t *testing.T) {
 
 func TestCursorBeforeMCPExecution_MalformedJSONStringToolInput(t *testing.T) {
 	toolInput := strconv.Quote(`{"command":"docker logs api"`)
-	rawJSON := []byte(`{"hook_event_name":"beforeMCPExecution","session_id":"s1","tool_name":"mcp__docker__logs","tool_use_id":"call_1","cwd":"/repo","tool_input":` + toolInput + `}`)
+	rawJSON := []byte(
+		`{"hook_event_name":"beforeMCPExecution","session_id":"s1","tool_name":"mcp__docker__logs","tool_use_id":"call_1","cwd":"/repo","tool_input":` + toolInput + `}`,
+	)
 	payload, err := hook.ParseHookPayload(hook.SystemCursor, rawJSON)
 	if err != nil {
 		t.Fatalf("ParseHookPayload: %v", err)
 	}
+
 	if got := payload.Fields().ToolInputContent; got != `{"command":"docker logs api"` {
 		t.Fatalf("tool_input.content = %#v, want malformed JSON string", got)
 	}
 }
 
 func TestCursorAfterMCPExecution_StringToolInput(t *testing.T) {
-	rawJSON := []byte(`{"hook_event_name":"afterMCPExecution","session_id":"s1","tool_name":"mcp__docker__logs","tool_use_id":"call_1","cwd":"/repo","tool_input":"docker logs api","tool_output":"ok"}`)
+	rawJSON := []byte(
+		`{"hook_event_name":"afterMCPExecution","session_id":"s1","tool_name":"mcp__docker__logs","tool_use_id":"call_1","cwd":"/repo","tool_input":"docker logs api","tool_output":"ok"}`,
+	)
 	payload, err := hook.ParseHookPayload(hook.SystemCursor, rawJSON)
 	if err != nil {
 		t.Fatalf("ParseHookPayload: %v", err)
 	}
+
 	fields := payload.Fields()
 	if fields.ToolInputContent != "docker logs api" {
 		t.Fatalf("tool_input.content = %#v, want docker logs api", fields.ToolInputContent)
 	}
+
 	if fields.ToolOutput != "ok" {
 		t.Fatalf("tool_output = %#v, want ok", fields.ToolOutput)
 	}
 }
 
 func TestVSCodePayload_EditToolInput(t *testing.T) {
-	payload, err := hook.ParseHookPayload(hook.SystemVSCode, []byte(`{"hook_event_name":"PreToolUse","tool_name":"replace_string_in_file","tool_input":{"filePath":"/project/page.zig","oldString":"old text","newString":"new text"}}`))
+	payload, err := hook.ParseHookPayload(
+		hook.SystemVSCode,
+		[]byte(
+			`{"hook_event_name":"PreToolUse","tool_name":"replace_string_in_file","tool_input":{"filePath":"/project/page.zig","oldString":"old text","newString":"new text"}}`,
+		),
+	)
 	if err != nil {
 		t.Fatalf("ParseHookPayload: %v", err)
 	}
+
 	fields := payload.Fields()
 	if fields.ToolInputFilePath != "/project/page.zig" {
 		t.Fatalf("tool_input.file_path = %#v, want /project/page.zig", fields.ToolInputFilePath)
 	}
+
 	if fields.ToolInputOldString != "old text" {
 		t.Fatalf("tool_input.old_string = %#v, want old text", fields.ToolInputOldString)
 	}
+
 	if fields.ToolInputNewString != "new text" {
 		t.Fatalf("tool_input.new_string = %#v, want new text", fields.ToolInputNewString)
 	}
 }
 
 func TestVSCodePayload_MultiReplaceToolInput(t *testing.T) {
-	payload, err := hook.ParseHookPayload(hook.SystemVSCode, []byte(`{"hook_event_name":"PreToolUse","tool_name":"multi_replace_string_in_file","tool_input":{"replacements":[{"filePath":"/project/page.zig","oldString":"first old","newString":"first new"},{"filePath":"/project/list.zig","oldString":"second old","newString":"second new"}]}}`))
+	payload, err := hook.ParseHookPayload(
+		hook.SystemVSCode,
+		[]byte(
+			`{"hook_event_name":"PreToolUse","tool_name":"multi_replace_string_in_file","tool_input":{"replacements":[{"filePath":"/project/page.zig","oldString":"first old","newString":"first new"},{"filePath":"/project/list.zig","oldString":"second old","newString":"second new"}]}}`,
+		),
+	)
 	if err != nil {
 		t.Fatalf("ParseHookPayload: %v", err)
 	}
+
 	fields := payload.Fields()
 	if fields.ToolInputNewString != "first new\nsecond new" {
 		t.Fatalf("tool_input.new_string = %#v, want joined new strings", fields.ToolInputNewString)
 	}
+
 	if len(fields.EditsNewString) != 2 || fields.EditsNewString[1] != "second new" {
 		t.Fatalf("edits new strings = %#v, want second new", fields.EditsNewString)
 	}
@@ -856,18 +1109,25 @@ func TestCopilotPayload_AddsAssistantMessageFromTranscript(t *testing.T) {
 	dir := t.TempDir()
 	transcript := filepath.Join(dir, "copilot.jsonl")
 	dash := string(rune(0x2014))
-	lines := strings.Join([]string{
-		`{"type":"assistant.message","data":{"content":"First response."}}`,
-		`{"type":"assistant.message","data":{"content":"Final response with em dash ` + dash + ` blocked."}}`,
-	}, "\n") + "\n"
+	lines := strings.Join(
+		[]string{
+			`{"type":"assistant.message","data":{"content":"First response."}}`,
+			`{"type":"assistant.message","data":{"content":"Final response with em dash ` + dash + ` blocked."}}`,
+		},
+		"\n",
+	) + "\n"
 	if err := os.WriteFile(transcript, []byte(lines), 0o600); err != nil {
 		t.Fatalf("write transcript: %v", err)
 	}
 
-	payload, err := hook.ParseHookPayload(hook.SystemCopilot, []byte(`{"hook_event_name":"Stop","transcript_path":"`+transcript+`"}`))
+	payload, err := hook.ParseHookPayload(
+		hook.SystemCopilot,
+		[]byte(`{"hook_event_name":"Stop","transcript_path":"`+transcript+`"}`),
+	)
 	if err != nil {
 		t.Fatalf("ParseHookPayload: %v", err)
 	}
+
 	want := "Final response with em dash " + dash + " blocked."
 	if got := payload.Fields().LastAssistantMessage; got != want {
 		t.Fatalf("last_assistant_message = %#v, want %#v", got, want)
@@ -879,6 +1139,7 @@ func TestCodexBlockResponses(t *testing.T) {
 	if !strings.Contains(got, `"permissionDecision":"deny"`) {
 		t.Fatalf("CodexBlock(PreToolUse) missing deny payload: %s", got)
 	}
+
 	if strings.Contains(got, `"decision"`) {
 		t.Fatalf("CodexBlock(PreToolUse) should omit unsupported nested decision: %s", got)
 	}
@@ -894,9 +1155,11 @@ func TestCodexBlockResponses(t *testing.T) {
 	}
 
 	got = string(hook.CodexBlock("PostToolUse", "r", "blocked"))
-	if !strings.Contains(got, `"continue":false`) || !strings.Contains(got, `"stopReason":"agent-gate: [r] blocked"`) {
+	if !strings.Contains(got, `"continue":false`) ||
+		!strings.Contains(got, `"stopReason":"agent-gate: [r] blocked"`) {
 		t.Fatalf("CodexBlock(PostToolUse) missing stop payload: %s", got)
 	}
+
 	if strings.Contains(got, "hookSpecificOutput") {
 		t.Fatalf("CodexBlock(PostToolUse) should omit hookSpecificOutput: %s", got)
 	}
@@ -907,20 +1170,30 @@ func TestBlockTextResponses(t *testing.T) {
 	if got := strings.TrimSpace(string(hook.CodexBlockText("Stop", diagnostic))); got != "{}" {
 		t.Fatalf("CodexBlockText(Stop) should allow for observe-only event: %s", got)
 	}
-	if got := string(hook.CursorBlockText(diagnostic)); !strings.Contains(got, `"permission":"deny"`) || !strings.Contains(got, "alpha xx") {
+
+	if got := string(
+		hook.CursorBlockText(diagnostic),
+	); !strings.Contains(got, `"permission":"deny"`) ||
+		!strings.Contains(got, "alpha xx") {
 		t.Fatalf("CursorBlockText missing deny diagnostic: %s", got)
 	}
+
 	if got := string(hook.ClaudeBlockText(diagnostic)); got != diagnostic+"\n" {
 		t.Fatalf("ClaudeBlockText = %q", got)
 	}
-	if got := string(hook.GeminiBlockText("BeforeTool", diagnostic)); !strings.Contains(got, `"decision":"deny"`) || !strings.Contains(got, "alpha xx") {
+
+	if got := string(
+		hook.GeminiBlockText("BeforeTool", diagnostic),
+	); !strings.Contains(got, `"decision":"deny"`) ||
+		!strings.Contains(got, "alpha xx") {
 		t.Fatalf("GeminiBlockText missing deny diagnostic: %s", got)
 	}
 }
 
 func TestGeminiBlockResponses(t *testing.T) {
 	got := string(hook.GeminiBlock("BeforeTool", "r", "blocked"))
-	if !strings.Contains(got, `"decision":"deny"`) || !strings.Contains(got, `"reason":"agent-gate: [r] blocked"`) {
+	if !strings.Contains(got, `"decision":"deny"`) ||
+		!strings.Contains(got, `"reason":"agent-gate: [r] blocked"`) {
 		t.Fatalf("GeminiBlock(BeforeTool) missing deny response: %s", got)
 	}
 }
@@ -935,16 +1208,26 @@ func TestEvaluateHot_BlocksCodexCredentialFileRead(t *testing.T) {
 		"Do not read likely credential files into the agent transcript.",
 	)
 	cfg := &config.Config{Rules: []config.Rule{rule}}
-	rawJSON := []byte(`{"hook_event_name":"PreToolUse","session_id":"s1","turn_id":"t1","tool_name":"Read","tool_use_id":"call_1","cwd":"/repo","tool_input":{"path":"/Users/agoodkind/Downloads/AuthKey_ABC123.p8"}}`)
+	rawJSON := []byte(
+		`{"hook_event_name":"PreToolUse","session_id":"s1","turn_id":"t1","tool_name":"Read","tool_use_id":"call_1","cwd":"/repo","tool_input":{"path":"/Users/agoodkind/Downloads/AuthKey_ABC123.p8"}}`,
+	)
 
-	evaluation := evaluateHot(context.Background(), rawJSON, cfg, hook.SystemCodex, func(string) string { return "" })
+	evaluation := evaluateHot(
+		context.Background(),
+		rawJSON,
+		cfg,
+		hook.SystemCodex,
+		func(string) string { return "" },
+	)
 	if evaluation.ExitCode != 0 {
 		t.Fatalf("ExitCode = %d, want 0 for Codex hook response", evaluation.ExitCode)
 	}
+
 	stdout := string(evaluation.Stdout)
 	if !strings.Contains(stdout, `"permissionDecision":"deny"`) {
 		t.Fatalf("Codex response did not deny read: %s", stdout)
 	}
+
 	if !strings.Contains(stdout, "no-credential-file-reads") {
 		t.Fatalf("Codex response missing rule diagnostic: %s", stdout)
 	}
@@ -960,15 +1243,26 @@ func TestEvaluateHotWithEventID_BlocksCodexWithVisibleEventID(t *testing.T) {
 		"Do not run bad-command.",
 	)
 	cfg := &config.Config{Rules: []config.Rule{rule}}
-	rawJSON := []byte(`{"hook_event_name":"PreToolUse","session_id":"s1","turn_id":"t1","tool_name":"Bash","tool_use_id":"call_1","cwd":"/repo","tool_input":{"command":"bad-command"}}`)
+	rawJSON := []byte(
+		`{"hook_event_name":"PreToolUse","session_id":"s1","turn_id":"t1","tool_name":"Bash","tool_use_id":"call_1","cwd":"/repo","tool_input":{"command":"bad-command"}}`,
+	)
 
-	evaluation := evaluateHotWithEventID(context.Background(), rawJSON, cfg, hook.SystemCodex, func(string) string { return "" }, "intake_test")
+	evaluation := evaluateHotWithEventID(
+		context.Background(),
+		rawJSON,
+		cfg,
+		hook.SystemCodex,
+		func(string) string { return "" },
+		"intake_test",
+	)
 	if evaluation.ExitCode != 0 {
 		t.Fatalf("ExitCode = %d, want 0 for Codex hook response", evaluation.ExitCode)
 	}
+
 	if !strings.Contains(string(evaluation.Stdout), "agent-gate event_id: intake_test") {
 		t.Fatalf("Codex response missing event_id: %s", string(evaluation.Stdout))
 	}
+
 	if evaluation.Deferred.EventID != "intake_test" {
 		t.Fatalf("Deferred.EventID = %q, want intake_test", evaluation.Deferred.EventID)
 	}
@@ -984,16 +1278,26 @@ func TestEvaluateHot_BlocksCursorBeforeReadFileCredentialPath(t *testing.T) {
 		"Do not read likely credential files into the agent transcript.",
 	)
 	cfg := &config.Config{Rules: []config.Rule{rule}}
-	rawJSON := []byte(`{"hook_event_name":"beforeReadFile","session_id":"s1","cwd":"/repo","file_path":"/Users/agoodkind/Downloads/1Password Export/items.json"}`)
+	rawJSON := []byte(
+		`{"hook_event_name":"beforeReadFile","session_id":"s1","cwd":"/repo","file_path":"/Users/agoodkind/Downloads/1Password Export/items.json"}`,
+	)
 
-	evaluation := evaluateHot(context.Background(), rawJSON, cfg, hook.SystemCursor, func(string) string { return "" })
+	evaluation := evaluateHot(
+		context.Background(),
+		rawJSON,
+		cfg,
+		hook.SystemCursor,
+		func(string) string { return "" },
+	)
 	if evaluation.ExitCode != 0 {
 		t.Fatalf("ExitCode = %d, want 0 for Cursor hook response", evaluation.ExitCode)
 	}
+
 	stdout := string(evaluation.Stdout)
 	if !strings.Contains(stdout, `"permission":"deny"`) {
 		t.Fatalf("Cursor response did not deny read: %s", stdout)
 	}
+
 	if !strings.Contains(stdout, "no-credential-file-reads") {
 		t.Fatalf("Cursor response missing rule diagnostic: %s", stdout)
 	}
@@ -1010,16 +1314,26 @@ func TestEvaluateHot_BlocksCursorPostToolSecretOutput(t *testing.T) {
 	)
 	cfg := &config.Config{Rules: []config.Rule{rule}}
 	privateKeyHeader := "-----BEGIN " + "PRIVATE KEY-----"
-	rawJSON := []byte(`{"hook_event_name":"postToolUse","session_id":"s1","tool_name":"Read","tool_use_id":"call_1","cwd":"/repo","tool_input":{"file_path":"/tmp/AuthKey_ABC123.p8"},"tool_output":"` + privateKeyHeader + `\nsecret\n-----END PRIVATE KEY-----"}`)
+	rawJSON := []byte(
+		`{"hook_event_name":"postToolUse","session_id":"s1","tool_name":"Read","tool_use_id":"call_1","cwd":"/repo","tool_input":{"file_path":"/tmp/AuthKey_ABC123.p8"},"tool_output":"` + privateKeyHeader + `\nsecret\n-----END PRIVATE KEY-----"}`,
+	)
 
-	evaluation := evaluateHot(context.Background(), rawJSON, cfg, hook.SystemCursor, func(string) string { return "" })
+	evaluation := evaluateHot(
+		context.Background(),
+		rawJSON,
+		cfg,
+		hook.SystemCursor,
+		func(string) string { return "" },
+	)
 	if evaluation.ExitCode != 0 {
 		t.Fatalf("ExitCode = %d, want 0 for Cursor hook response", evaluation.ExitCode)
 	}
+
 	stdout := string(evaluation.Stdout)
 	if !strings.Contains(stdout, `"permission":"deny"`) {
 		t.Fatalf("Cursor response did not deny post-tool output: %s", stdout)
 	}
+
 	if !strings.Contains(stdout, "no-secrets-in-output") {
 		t.Fatalf("Cursor response missing rule diagnostic: %s", stdout)
 	}
@@ -1036,14 +1350,26 @@ func TestEvaluateHot_AllowsCodexPostToolImageDataJWTShape(t *testing.T) {
 	)
 	cfg := &config.Config{Rules: []config.Rule{rule}}
 	imageData := "eyJ" + strings.Repeat("A", 100)
-	rawJSON := []byte(`{"hook_event_name":"PostToolUse","session_id":"s1","turn_id":"t1","tool_name":"mcp__computer_use__get_app_state","tool_use_id":"call_1","cwd":"/repo","tool_input":{},"tool_response":{"content":[{"type":"text","text":"visible output"},{"type":"image","mimeType":"image/png","data":` + strconv.Quote(imageData) + `}]}}`)
+	rawJSON := []byte(
+		`{"hook_event_name":"PostToolUse","session_id":"s1","turn_id":"t1","tool_name":"mcp__computer_use__get_app_state","tool_use_id":"call_1","cwd":"/repo","tool_input":{},"tool_response":{"content":[{"type":"text","text":"visible output"},{"type":"image","mimeType":"image/png","data":` + strconv.Quote(
+			imageData,
+		) + `}]}}`,
+	)
 
-	evaluation := evaluateHot(context.Background(), rawJSON, cfg, hook.SystemCodex, func(string) string { return "" })
+	evaluation := evaluateHot(
+		context.Background(),
+		rawJSON,
+		cfg,
+		hook.SystemCodex,
+		func(string) string { return "" },
+	)
 	if evaluation.ExitCode != 0 {
 		t.Fatalf("ExitCode = %d, want 0 for Codex hook response", evaluation.ExitCode)
 	}
+
 	stdout := string(evaluation.Stdout)
-	if strings.Contains(stdout, `"continue":false`) || strings.Contains(stdout, "no-secrets-in-output") {
+	if strings.Contains(stdout, `"continue":false`) ||
+		strings.Contains(stdout, "no-secrets-in-output") {
 		t.Fatalf("Codex post-tool image response was blocked: %s", string(evaluation.Stdout))
 	}
 }
@@ -1059,16 +1385,28 @@ func TestEvaluateHot_BlocksCodexPostToolTextSecretInStructuredResponse(t *testin
 	)
 	cfg := &config.Config{Rules: []config.Rule{rule}}
 	secretText := "token: " + "sk-" + "ant-" + strings.Repeat("a", 20)
-	rawJSON := []byte(`{"hook_event_name":"PostToolUse","session_id":"s1","turn_id":"t1","tool_name":"mcp__computer_use__get_app_state","tool_use_id":"call_1","cwd":"/repo","tool_input":{},"tool_response":{"content":[{"type":"text","text":` + strconv.Quote(secretText) + `},{"type":"image","mimeType":"image/png","data":"not-scanned"}]}}`)
+	rawJSON := []byte(
+		`{"hook_event_name":"PostToolUse","session_id":"s1","turn_id":"t1","tool_name":"mcp__computer_use__get_app_state","tool_use_id":"call_1","cwd":"/repo","tool_input":{},"tool_response":{"content":[{"type":"text","text":` + strconv.Quote(
+			secretText,
+		) + `},{"type":"image","mimeType":"image/png","data":"not-scanned"}]}}`,
+	)
 
-	evaluation := evaluateHot(context.Background(), rawJSON, cfg, hook.SystemCodex, func(string) string { return "" })
+	evaluation := evaluateHot(
+		context.Background(),
+		rawJSON,
+		cfg,
+		hook.SystemCodex,
+		func(string) string { return "" },
+	)
 	if evaluation.ExitCode != 0 {
 		t.Fatalf("ExitCode = %d, want 0 for Codex hook response", evaluation.ExitCode)
 	}
+
 	stdout := string(evaluation.Stdout)
 	if !strings.Contains(stdout, `"continue":false`) {
 		t.Fatalf("Codex response did not stop post-tool output: %s", stdout)
 	}
+
 	if !strings.Contains(stdout, "no-secrets-in-output") {
 		t.Fatalf("Codex response missing rule diagnostic: %s", stdout)
 	}
@@ -1076,9 +1414,17 @@ func TestEvaluateHot_BlocksCodexPostToolTextSecretInStructuredResponse(t *testin
 
 func TestWriteDeferredAudit_AllowSkipsReceivedAndRawPayload(t *testing.T) {
 	cfg := &config.Config{}
-	rawJSON := []byte(`{"hook_event_name":"PreToolUse","session_id":"s1","tool_name":"Shell","tool_use_id":"call_1","cwd":"/repo","tool_input":{"command":"echo ok"}}`)
+	rawJSON := []byte(
+		`{"hook_event_name":"PreToolUse","session_id":"s1","tool_name":"Shell","tool_use_id":"call_1","cwd":"/repo","tool_input":{"command":"echo ok"}}`,
+	)
 
-	evaluation := evaluateHot(context.Background(), rawJSON, cfg, hook.SystemCodex, func(string) string { return "" })
+	evaluation := evaluateHot(
+		context.Background(),
+		rawJSON,
+		cfg,
+		hook.SystemCodex,
+		func(string) string { return "" },
+	)
 	sink := &recordingAuditSink{}
 	hook.WriteDeferredAudit(context.Background(), evaluation.Deferred, sink)
 
@@ -1098,9 +1444,17 @@ func TestWriteDeferredAudit_AuditOnlySkipsReceivedAndRawPayload(t *testing.T) {
 	)
 	rule.AuditOnly = true
 	cfg := &config.Config{Rules: []config.Rule{rule}}
-	rawJSON := []byte(`{"hook_event_name":"PreToolUse","session_id":"s1","tool_name":"Shell","tool_use_id":"call_1","cwd":"/repo","tool_input":{"command":"echo ok"}}`)
+	rawJSON := []byte(
+		`{"hook_event_name":"PreToolUse","session_id":"s1","tool_name":"Shell","tool_use_id":"call_1","cwd":"/repo","tool_input":{"command":"echo ok"}}`,
+	)
 
-	evaluation := evaluateHot(context.Background(), rawJSON, cfg, hook.SystemCodex, func(string) string { return "" })
+	evaluation := evaluateHot(
+		context.Background(),
+		rawJSON,
+		cfg,
+		hook.SystemCodex,
+		func(string) string { return "" },
+	)
 	sink := &recordingAuditSink{}
 	hook.WriteDeferredAudit(context.Background(), evaluation.Deferred, sink)
 
@@ -1110,20 +1464,33 @@ func TestWriteDeferredAudit_AuditOnlySkipsReceivedAndRawPayload(t *testing.T) {
 }
 
 func TestWriteDeferredAudit_CodexStopBlockingRuleDowngradesToAudit(t *testing.T) {
-	cfg := &config.Config{Rules: []config.Rule{testProviderRule(
-		t,
-		"stop-text-rule",
-		`blocked`,
-		[]string{"Stop"},
-		[]string{"last_assistant_message"},
-		"Stop text matched.",
-	)}}
-	rawJSON := []byte(`{"hook_event_name":"Stop","session_id":"s1","turn_id":"t1","cwd":"/repo","stop_hook_active":false,"last_assistant_message":"blocked"}`)
+	cfg := &config.Config{
+		Rules: []config.Rule{
+			testProviderRule(
+				t,
+				"stop-text-rule",
+				`blocked`,
+				[]string{"Stop"},
+				[]string{"last_assistant_message"},
+				"Stop text matched.",
+			),
+		},
+	}
+	rawJSON := []byte(
+		`{"hook_event_name":"Stop","session_id":"s1","turn_id":"t1","cwd":"/repo","stop_hook_active":false,"last_assistant_message":"blocked"}`,
+	)
 
-	evaluation := evaluateHot(context.Background(), rawJSON, cfg, hook.SystemCodex, func(string) string { return "" })
+	evaluation := evaluateHot(
+		context.Background(),
+		rawJSON,
+		cfg,
+		hook.SystemCodex,
+		func(string) string { return "" },
+	)
 	if strings.TrimSpace(string(evaluation.Stdout)) != "{}" {
 		t.Fatalf("Codex Stop should allow, got %s", string(evaluation.Stdout))
 	}
+
 	sink := &recordingAuditSink{}
 	hook.WriteDeferredAudit(context.Background(), evaluation.Deferred, sink)
 
@@ -1133,17 +1500,29 @@ func TestWriteDeferredAudit_CodexStopBlockingRuleDowngradesToAudit(t *testing.T)
 }
 
 func TestWriteDeferredAudit_BlockKeepsReceived(t *testing.T) {
-	cfg := &config.Config{Rules: []config.Rule{testProviderRule(
-		t,
-		"block-shell-command",
-		`go test \./\.\.\.`,
-		[]string{"PreToolUse"},
-		[]string{"tool_input.command"},
-		"Use make test for full project runs.",
-	)}}
-	rawJSON := []byte(`{"hook_event_name":"PreToolUse","session_id":"s1","tool_name":"Shell","tool_use_id":"call_1","cwd":"/repo","tool_input":{"command":"go test ./..."}}`)
+	cfg := &config.Config{
+		Rules: []config.Rule{
+			testProviderRule(
+				t,
+				"block-shell-command",
+				`go test \./\.\.\.`,
+				[]string{"PreToolUse"},
+				[]string{"tool_input.command"},
+				"Use make test for full project runs.",
+			),
+		},
+	}
+	rawJSON := []byte(
+		`{"hook_event_name":"PreToolUse","session_id":"s1","tool_name":"Shell","tool_use_id":"call_1","cwd":"/repo","tool_input":{"command":"go test ./..."}}`,
+	)
 
-	evaluation := evaluateHot(context.Background(), rawJSON, cfg, hook.SystemCodex, func(string) string { return "" })
+	evaluation := evaluateHot(
+		context.Background(),
+		rawJSON,
+		cfg,
+		hook.SystemCodex,
+		func(string) string { return "" },
+	)
 	sink := &recordingAuditSink{}
 	hook.WriteDeferredAudit(context.Background(), evaluation.Deferred, sink)
 
@@ -1152,17 +1531,28 @@ func TestWriteDeferredAudit_BlockKeepsReceived(t *testing.T) {
 	}
 }
 
-func testProviderRule(t *testing.T, name string, pattern string, events []string, fieldPaths []string, message string) config.Rule {
+func testProviderRule(
+	t *testing.T,
+	name string,
+	pattern string,
+	events []string,
+	fieldPaths []string,
+	message string,
+) config.Rule {
 	t.Helper()
 	compiled := regex.MustCompile(pattern)
+
 	return config.NewSimpleRule(name, pattern, compiled, events, fieldPaths, "block", message)
 }
 
 func TestValidPaths_NewProviders(t *testing.T) {
-	if got := hook.ValidPaths("codex", "PreToolUse"); !got["tool_input.command"] || !got["turn_id"] {
+	if got := hook.ValidPaths("codex", "PreToolUse"); !got["tool_input.command"] ||
+		!got["turn_id"] {
 		t.Fatalf("codex PreToolUse schema missing expected paths: %#v", got)
 	}
-	if got := hook.ValidPaths("gemini", "BeforeTool"); !got["tool_name"] || !got["tool_input.command"] {
+
+	if got := hook.ValidPaths("gemini", "BeforeTool"); !got["tool_name"] ||
+		!got["tool_input.command"] {
 		t.Fatalf("gemini BeforeTool schema missing expected paths: %#v", got)
 	}
 }
@@ -1170,8 +1560,16 @@ func TestValidPaths_NewProviders(t *testing.T) {
 func TestValidateConfig_NewProviderSpecificEvents(t *testing.T) {
 	cfg := &config.Config{
 		Rules: []config.Rule{
-			{Name: "codex-tool-command", CodexEvents: []string{"PreToolUse"}, FieldPaths: []string{"tool_input.command"}},
-			{Name: "gemini-tool-command", GeminiEvents: []string{"BeforeTool"}, FieldPaths: []string{"tool_input.command"}},
+			{
+				Name:        "codex-tool-command",
+				CodexEvents: []string{"PreToolUse"},
+				FieldPaths:  []string{"tool_input.command"},
+			},
+			{
+				Name:         "gemini-tool-command",
+				GeminiEvents: []string{"BeforeTool"},
+				FieldPaths:   []string{"tool_input.command"},
+			},
 		},
 	}
 
@@ -1188,11 +1586,25 @@ func TestValidateConfig_ConditionKinds(t *testing.T) {
 				CodexEvents: []string{"PreToolUse"},
 				Conditions: []config.Condition{
 					{Kind: "command", Argv0: "go"},
-					{Kind: "command", Argv0: "go", StripEnv: true, StripArgs: []string{"env"}, CwdFlags: []string{"-C"}},
+					{
+						Kind:      "command",
+						Argv0:     "go",
+						StripEnv:  true,
+						StripArgs: []string{"env"},
+						CwdFlags:  []string{"-C"},
+					},
 					{Kind: "project", RootMarkers: []string{"go.mod"}},
 					{Kind: "regex", FieldPaths: []string{"tool_input.command"}, Pattern: "x"},
-					{Kind: "diff", FieldPair: "tool_input.old_string,tool_input.new_string", Pattern: "y"},
-					{Kind: "shell_write", FieldPaths: []string{"tool_input.command"}, Globs: []string{"*.txt"}},
+					{
+						Kind:      "diff",
+						FieldPair: "tool_input.old_string,tool_input.new_string",
+						Pattern:   "y",
+					},
+					{
+						Kind:       "shell_write",
+						FieldPaths: []string{"tool_input.command"},
+						Globs:      []string{"*.txt"},
+					},
 				},
 			},
 		},
@@ -1208,10 +1620,16 @@ func TestValidateConfig_ConditionKinds(t *testing.T) {
 }
 
 func TestValidateConfigRejectsInvalidCopilotToolOutputMutation(t *testing.T) {
-	cfg := &config.Config{Rules: []config.Rule{{
-		Name: "replace-result", CopilotEvents: []string{"postToolUse"},
-		Action: config.ActionMutate, Output: `{"content":"not a Copilot ToolResult"}`,
-	}}}
+	cfg := &config.Config{
+		Rules: []config.Rule{
+			{
+				Name:          "replace-result",
+				CopilotEvents: []string{"postToolUse"},
+				Action:        config.ActionMutate,
+				Output:        `{"content":"not a Copilot ToolResult"}`,
+			},
+		},
+	}
 	errs := hook.ValidateConfig(cfg)
 	if len(errs) != 1 || !strings.Contains(errs[0].Error(), "invalid for tool_output") {
 		t.Fatalf("ValidateConfig errors = %v", errs)

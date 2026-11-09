@@ -22,14 +22,18 @@ func unusableServer(t *testing.T) *Server {
 	if err != nil {
 		t.Fatalf("degraded load refused to start: %v", err)
 	}
+
 	if !cfg.Unusable() {
 		t.Fatal("test fixture did not produce an unusable config")
 	}
+
 	server, err := newReadyTestServer(newDiscardLogger(), cfg)
 	if err != nil {
 		t.Fatalf("New refused an unusable config: %v", err)
 	}
+
 	t.Cleanup(server.Close)
+
 	return server
 }
 
@@ -43,22 +47,29 @@ func unusableServer(t *testing.T) *Server {
 func TestUnusableConfigAllowsButSaysSo(t *testing.T) {
 	server := unusableServer(t)
 
-	response, err := server.EvaluateHook(context.Background(), &daemonpb.EvaluateHookRequest{
-		RawJson: []byte(`{"hook_event_name":"PreToolUse","tool_name":"Bash",` +
-			`"tool_input":{"command":"grep -rn x /repo"}}`),
-		ProviderHint: hook.SystemClaude.String(),
-	})
+	response, err := server.EvaluateHook(
+		context.Background(),
+		&daemonpb.EvaluateHookRequest{
+			RawJson: []byte(
+				`{"hook_event_name":"PreToolUse","tool_name":"Bash",` +
+					`"tool_input":{"command":"grep -rn x /repo"}}`,
+			),
+			ProviderHint: hook.SystemClaude.String(),
+		},
+	)
 	if err != nil {
 		t.Fatalf("EvaluateHook: %v", err)
 	}
+
 	if response.ExitCode != 0 {
-		t.Fatalf("exit = %d, want 0; enforcing nothing must not block the call",
-			response.ExitCode)
+		t.Fatalf("exit = %d, want 0; enforcing nothing must not block the call", response.ExitCode)
 	}
+
 	body := string(response.StdoutData) + string(response.StderrData)
 	if !strings.Contains(body, "no rule was enforced") {
 		t.Fatalf("response = %q, want it to say the call went unevaluated", body)
 	}
+
 	if !strings.Contains(body, string(hook.FailOpenReasonConfigUnusable)) {
 		t.Fatalf("response = %q, want it to name config_unusable", body)
 	}
@@ -74,12 +85,15 @@ func TestUnusableConfigIsReportedInStatus(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Status: %v", err)
 	}
+
 	if response.RulesLoaded != 0 {
 		t.Fatalf("RulesLoaded = %d, want 0", response.RulesLoaded)
 	}
+
 	if response.ConfigError == "" {
 		t.Fatal("ConfigError is empty, so status looks healthy while nothing is enforced")
 	}
+
 	if !strings.Contains(response.ConfigError, "did not decode") {
 		t.Fatalf("ConfigError = %q, want it to name the decode failure", response.ConfigError)
 	}
@@ -88,7 +102,10 @@ func TestUnusableConfigIsReportedInStatus(t *testing.T) {
 // TestUsableConfigReportsItsRuleCount keeps the status signal meaningful.
 func TestUsableConfigReportsItsRuleCount(t *testing.T) {
 	setDaemonTestDirs(t)
-	writeConfig(t, config.Path(), `
+	writeConfig(
+		t,
+		config.Path(),
+		`
 [audit]
 enabled = false
 
@@ -99,11 +116,13 @@ field_paths = ["tool_input.command"]
 pattern = "alpha"
 action = "block"
 violation_message = "blocked"
-`)
+`,
+	)
 	cfg, err := config.LoadDegraded()
 	if err != nil {
 		t.Fatalf("LoadDegraded: %v", err)
 	}
+
 	server, err := newReadyTestServer(newDiscardLogger(), cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -114,12 +133,13 @@ violation_message = "blocked"
 	if err != nil {
 		t.Fatalf("Status: %v", err)
 	}
+
 	if response.RulesLoaded != 1 {
 		t.Fatalf("RulesLoaded = %d, want 1", response.RulesLoaded)
 	}
+
 	if response.ConfigError != "" {
-		t.Fatalf("ConfigError = %q, want empty for a config that loaded",
-			response.ConfigError)
+		t.Fatalf("ConfigError = %q, want empty for a config that loaded", response.ConfigError)
 	}
 }
 
@@ -130,10 +150,13 @@ func TestUnusableConfigRecordsTheOutage(t *testing.T) {
 	// path is read back from the same place the daemon writes it.
 	server := unusableServer(t)
 
-	_, err := server.EvaluateHook(context.Background(), &daemonpb.EvaluateHookRequest{
-		RawJson:      []byte(`{"hook_event_name":"PreToolUse","tool_name":"Bash"}`),
-		ProviderHint: hook.SystemClaude.String(),
-	})
+	_, err := server.EvaluateHook(
+		context.Background(),
+		&daemonpb.EvaluateHookRequest{
+			RawJson:      []byte(`{"hook_event_name":"PreToolUse","tool_name":"Bash"}`),
+			ProviderHint: hook.SystemClaude.String(),
+		},
+	)
 	if err != nil {
 		t.Fatalf("EvaluateHook: %v", err)
 	}
@@ -144,12 +167,13 @@ func TestUnusableConfigRecordsTheOutage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("summary: %v", err)
 	}
+
 	if summary.Count != 1 {
 		t.Fatalf("records = %d, want 1 for one unevaluated call", summary.Count)
 	}
+
 	if summary.Earliest == "" || summary.Latest == "" {
-		t.Fatalf("record window = %q..%q, want both ends set",
-			summary.Earliest, summary.Latest)
+		t.Fatalf("record window = %q..%q, want both ends set", summary.Earliest, summary.Latest)
 	}
 
 	// The reason has to survive as a field, not merely as text somewhere in the
@@ -159,17 +183,20 @@ func TestUnusableConfigRecordsTheOutage(t *testing.T) {
 	if readErr != nil {
 		t.Fatalf("no durable record of the outage at %s: %v", record, readErr)
 	}
+
 	var decoded FailOpenRecord
 	if err := json.Unmarshal([]byte(strings.TrimSpace(string(data))), &decoded); err != nil {
 		t.Fatalf("record is not decodable JSON: %v\n%s", err, data)
 	}
+
 	if decoded.Reason != string(hook.FailOpenReasonConfigUnusable) {
-		t.Fatalf("reason = %q, want %q", decoded.Reason,
-			hook.FailOpenReasonConfigUnusable)
+		t.Fatalf("reason = %q, want %q", decoded.Reason, hook.FailOpenReasonConfigUnusable)
 	}
+
 	if decoded.At == "" {
 		t.Fatal("record carries no timestamp, so it cannot date the outage")
 	}
+
 	if !strings.Contains(decoded.Detail, "did not decode") {
 		t.Fatalf("detail = %q, want it to name the decode failure", decoded.Detail)
 	}
@@ -188,6 +215,7 @@ func assertSaysUnevaluated(
 	if !strings.Contains(body, "no rule was enforced") {
 		t.Fatalf("response = %q, want it to say the call went unevaluated", body)
 	}
+
 	if !strings.Contains(body, string(reason)) {
 		t.Fatalf("response = %q, want it to name %q", body, reason)
 	}

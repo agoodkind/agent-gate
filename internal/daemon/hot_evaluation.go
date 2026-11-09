@@ -40,25 +40,38 @@ func (s *Server) commitHotEvaluation(
 		configHash = "unknown"
 		result = failOpenHotEvaluation(result)
 	}
+
 	record := buildHotEvaluationRecord(hotEvaluationRecordInput{
-		ReceiptID: input.AppendResult.ReceiptID, EventID: input.AppendResult.EventID,
-		Intake: input.Intake, ConfigHash: configHash,
-		EngineVersion: gkversion.Version, EngineCommit: gkversion.Commit,
-		EngineBuildHash: version.BuildHash(), StartedAt: input.StartedAt,
-		CompletedAt: hotEvalNow(), Result: result, SystemError: systemError,
-		ErrorMessage: errorMessage,
+		ReceiptID:       input.AppendResult.ReceiptID,
+		EventID:         input.AppendResult.EventID,
+		Intake:          input.Intake,
+		ConfigHash:      configHash,
+		EngineVersion:   gkversion.Version,
+		EngineCommit:    gkversion.Commit,
+		EngineBuildHash: version.BuildHash(),
+		StartedAt:       input.StartedAt,
+		CompletedAt:     hotEvalNow(),
+		Result:          result,
+		SystemError:     systemError,
+		ErrorMessage:    errorMessage,
 	})
 	if input.Snapshot.evaluationRecorder == nil {
 		s.logHotEvaluationFailure(
-			ctx, input, record.Evaluation.EvaluationID, "evaluation_recorder_unavailable",
+			ctx,
+			input,
+			record.Evaluation.EvaluationID,
+			"evaluation_recorder_unavailable",
 		)
+
 		return s.discardedVerdict(ctx, input, "evaluation recorder unavailable")
 	}
+
 	deferredPending := result.Deferred.Valid && systemError == ""
 	var auditEntries []audit.NormalizedEntry
 	if systemError == "" {
 		auditEntries = captureHotAudit(ctx, result.Deferred, input.Snapshot.eventLogger)
 	}
+
 	if err := input.Snapshot.evaluationRecorder.CommitHotEvaluation(
 		ctx,
 		input.AppendResult.EventID,
@@ -69,26 +82,41 @@ func (s *Server) commitHotEvaluation(
 	); err != nil {
 		result = failOpenHotEvaluation(result)
 		failureRecord := buildHotEvaluationRecord(hotEvaluationRecordInput{
-			ReceiptID: input.AppendResult.ReceiptID, EventID: input.AppendResult.EventID,
-			Intake: input.Intake, ConfigHash: configHash,
-			EngineVersion: gkversion.Version, EngineCommit: gkversion.Commit,
-			EngineBuildHash: version.BuildHash(), StartedAt: input.StartedAt,
-			CompletedAt: hotEvalNow(), Result: result,
-			SystemError: "hot_evaluation_commit_failed", ErrorMessage: err.Error(),
+			ReceiptID:       input.AppendResult.ReceiptID,
+			EventID:         input.AppendResult.EventID,
+			Intake:          input.Intake,
+			ConfigHash:      configHash,
+			EngineVersion:   gkversion.Version,
+			EngineCommit:    gkversion.Commit,
+			EngineBuildHash: version.BuildHash(),
+			StartedAt:       input.StartedAt,
+			CompletedAt:     hotEvalNow(),
+			Result:          result,
+			SystemError:     "hot_evaluation_commit_failed",
+			ErrorMessage:    err.Error(),
 		})
 		if fallbackErr := input.Snapshot.evaluationRecorder.RecordCompleted(
-			ctx, failureRecord,
+			ctx,
+			failureRecord,
 		); fallbackErr != nil {
 			s.logHotEvaluationFailure(
-				ctx, input, failureRecord.Evaluation.EvaluationID,
+				ctx,
+				input,
+				failureRecord.Evaluation.EvaluationID,
 				"fallback_evaluation_persistence_failed",
 			)
 		}
+
 		s.logHotEvaluationFailure(
-			ctx, input, record.Evaluation.EvaluationID, "hot_evaluation_commit_failed",
+			ctx,
+			input,
+			record.Evaluation.EvaluationID,
+			"hot_evaluation_commit_failed",
 		)
+
 		return s.discardedVerdict(ctx, input, err.Error())
 	}
+
 	if systemError == "" && len(result.Stdout) > 0 {
 		for _, output := range result.TemporalResponseOutputs {
 			input.Snapshot.execRuntime.ObserveResponseOutputOrdered(
@@ -101,11 +129,14 @@ func (s *Server) commitHotEvaluation(
 			)
 		}
 	}
+
 	if deferredPending {
 		input.Snapshot.deferredProcessor.submit(input.Snapshot.bucket, input.AppendResult.ReceiptID)
 	}
+
 	return &daemonpb.EvaluateHookResponse{
-		ExitCode: clampExitCode(result.ExitCode), StdoutData: append([]byte(nil), result.Stdout...),
+		ExitCode:   clampExitCode(result.ExitCode),
+		StdoutData: append([]byte(nil), result.Stdout...),
 		StderrData: append([]byte(nil), result.Stderr...),
 	}
 }
@@ -118,10 +149,13 @@ func captureHotAudit(
 	if logger == nil || !logger.Enabled() || !event.Valid {
 		return nil
 	}
+
 	collector := &normalizedAuditCollector{
-		sink: audit.NewLocalSink(logger), entries: make([]audit.NormalizedEntry, 0, 3),
+		sink:    audit.NewLocalSink(logger),
+		entries: make([]audit.NormalizedEntry, 0, 3),
 	}
 	hook.WriteDeferredAudit(ctx, event, collector)
+
 	return collector.entries
 }
 
@@ -134,10 +168,14 @@ func (s *Server) logHotEvaluationFailure(
 	input.Log.WarnContext(
 		ctx,
 		"record hot evaluation failed; failing open",
-		"receipt_id", input.AppendResult.ReceiptID,
-		"event_id", input.AppendResult.EventID,
-		"evaluation_id", evaluationID,
-		"status_class", statusClass,
+		"receipt_id",
+		input.AppendResult.ReceiptID,
+		"event_id",
+		input.AppendResult.EventID,
+		"evaluation_id",
+		evaluationID,
+		"status_class",
+		statusClass,
 	)
 }
 
@@ -155,14 +193,25 @@ func (s *Server) discardedVerdict(
 ) *daemonpb.EvaluateHookResponse {
 	system := hook.SystemFromString(input.Intake.System)
 	RecordFailOpen(
-		string(hook.FailOpenReasonVerdictNotRecorded), system.String(),
-		input.Intake.EventName, input.Intake.ToolName, "", diagnostic,
+		string(hook.FailOpenReasonVerdictNotRecorded),
+		system.String(),
+		input.Intake.EventName,
+		input.Intake.ToolName,
+		"",
+		diagnostic,
 	)
 	if s != nil && s.log != nil {
-		s.log.ErrorContext(ctx, "verdict discarded; call allowed without enforcement",
-			"err", diagnostic)
+		s.log.ErrorContext(
+			ctx,
+			"verdict discarded; call allowed without enforcement",
+			"err",
+			diagnostic,
+		)
 	}
+
 	return failOpenEvaluateHookResponseFor(
-		system, hook.FailOpenReasonVerdictNotRecorded, diagnostic,
+		system,
+		hook.FailOpenReasonVerdictNotRecorded,
+		diagnostic,
 	)
 }

@@ -114,17 +114,25 @@ type Store struct {
 var intakeNow = time.Now
 
 // NewStore borrows a catalog database without taking ownership of its lifetime.
-func NewStore(ctx context.Context, database *sql.DB, policy config.AuditStoragePolicy, log *slog.Logger) (*Store, error) {
+func NewStore(
+	ctx context.Context,
+	database *sql.DB,
+	policy config.AuditStoragePolicy,
+	log *slog.Logger,
+) (*Store, error) {
 	if database == nil {
 		return nil, errors.New("intake database is required")
 	}
+
 	if log == nil {
 		log = slog.Default()
 	}
+
 	evaluations, err := evaluation.NewStoreWithPolicy(ctx, "", database, policy)
 	if err != nil {
 		return nil, wrapLoggedError(ctx, log, "create borrowed evaluation store", err)
 	}
+
 	return &Store{db: database, log: log, policy: policy, evaluations: evaluations}, nil
 }
 
@@ -136,6 +144,7 @@ func (s *Store) Handle() *sql.DB {
 	if s == nil {
 		return nil
 	}
+
 	return s.db
 }
 
@@ -144,6 +153,7 @@ func (s *Store) Evaluations() *evaluation.Store {
 	if s == nil {
 		return nil
 	}
+
 	return s.evaluations
 }
 
@@ -153,25 +163,31 @@ func (s *Store) Append(ctx context.Context, record Record) (AppendResult, error)
 	if err != nil {
 		return AppendResult{}, wrapLoggedError(ctx, s.log, "normalize intake payload", err)
 	}
+
 	record.NormalizedJSON = normalizedJSON
 	classificationJSON, err := normalizeJSON(record.ClassificationJSON)
 	if err != nil {
 		return AppendResult{}, wrapLoggedError(ctx, s.log, "normalize intake classification", err)
 	}
+
 	record.ClassificationJSON = classificationJSON
 	record = normalizeRecord(record)
 	if record.EventID == "" {
 		record.EventID = stableEventID(record)
 	}
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return AppendResult{}, wrapLoggedError(ctx, s.log, "begin intake append tx", err)
 	}
+
 	defer func() {
 		_ = tx.Rollback()
 	}()
 
-	result, err := tx.ExecContext(ctx, storeSQL1,
+	result, err := tx.ExecContext(
+		ctx,
+		storeSQL1,
 		record.EventID,
 		record.SchemaVersion,
 		auditstorage.FormatTime(record.RecordedAt),
@@ -195,27 +211,38 @@ func (s *Store) Append(ctx context.Context, record Record) (AppendResult, error)
 	if err != nil {
 		return AppendResult{}, wrapLoggedError(ctx, s.log, "insert intake event", err)
 	}
+
 	rowsAffected, err := result.RowsAffected()
 	if err != nil {
 		return AppendResult{}, wrapLoggedError(ctx, s.log, "read intake append rows", err)
 	}
+
 	receivedAt := intakeNow().UTC()
 	if rowsAffected == 0 {
 		if err := s.restoreInput(ctx, tx, record); err != nil {
 			return AppendResult{}, err
 		}
 	}
-	receiptResult, err := tx.ExecContext(ctx, storeSQL2, record.EventID, auditstorage.FormatTime(receivedAt))
+
+	receiptResult, err := tx.ExecContext(
+		ctx,
+		storeSQL2,
+		record.EventID,
+		auditstorage.FormatTime(receivedAt),
+	)
 	if err != nil {
 		return AppendResult{}, wrapLoggedError(ctx, s.log, "insert intake receipt", err)
 	}
+
 	receiptID, err := receiptResult.LastInsertId()
 	if err != nil {
 		return AppendResult{}, wrapLoggedError(ctx, s.log, "read intake receipt id", err)
 	}
+
 	if err := tx.Commit(); err != nil {
 		return AppendResult{}, wrapLoggedError(ctx, s.log, "commit intake append tx", err)
 	}
+
 	return AppendResult{
 		ReceiptID: receiptID,
 		EventID:   record.EventID,
@@ -228,54 +255,79 @@ func (s *Store) recordedInputMask() auditstorage.DetailMask {
 	if s.policy.Detail.WireInput {
 		mask |= auditstorage.DetailWireInput
 	}
+
 	if s.policy.Detail.NormalizedInput {
 		mask |= auditstorage.DetailNormalizedInput
 	}
+
 	if s.policy.Detail.ProviderEvidence {
 		mask |= auditstorage.DetailProviderEvidence
 	}
+
 	if s.policy.Detail.EnvironmentEvidence {
 		mask |= auditstorage.DetailEnvironmentEvidence
 	}
+
 	return mask
 }
 
 func (s *Store) restoreInput(ctx context.Context, transaction *sql.Tx, record Record) error {
-	result, err := transaction.ExecContext(ctx, restoreInputSQL,
-		record.RawPayload, []byte(record.NormalizedJSON), []byte(record.ClassificationJSON),
-		[]byte(mustMarshalEnvFingerprint(record.EnvFingerprint)), s.recordedInputMask(), record.EventID, record.RawPayloadHash)
+	result, err := transaction.ExecContext(
+		ctx,
+		restoreInputSQL,
+		record.RawPayload,
+		[]byte(record.NormalizedJSON),
+		[]byte(record.ClassificationJSON),
+		[]byte(mustMarshalEnvFingerprint(record.EnvFingerprint)),
+		s.recordedInputMask(),
+		record.EventID,
+		record.RawPayloadHash,
+	)
 	if err != nil {
 		return wrapLoggedError(ctx, s.log, "store canonical intake input", err)
 	}
+
 	count, err := result.RowsAffected()
 	if err != nil {
 		return wrapLoggedError(ctx, s.log, "read restored input result", err)
 	}
+
 	if count != 1 {
 		return errors.New("intake event identity does not match canonical input")
 	}
+
 	return nil
 }
 
 // MarkDeferredPending marks an intake record ready for deferred replay.
 func (s *Store) MarkDeferredPending(ctx context.Context, eventID string, receiptID int64) error {
-	return s.withExistingReceipt(ctx, eventID, receiptID, func(tx *sql.Tx, canonicalEventID string) error {
-		return markDeferredPendingInTx(
-			ctx, tx, receiptID, canonicalEventID, intakeNow().UTC(),
-		)
-	})
+	return s.withExistingReceipt(
+		ctx,
+		eventID,
+		receiptID,
+		func(tx *sql.Tx, canonicalEventID string) error {
+			return markDeferredPendingInTx(ctx, tx, receiptID, canonicalEventID, intakeNow().UTC())
+		},
+	)
 }
 
 // MarkDeferredComplete marks an intake record as fully replayed.
 func (s *Store) MarkDeferredComplete(ctx context.Context, receiptID int64) error {
 	now := auditstorage.FormatTime(intakeNow())
-	return s.withExistingReceipt(ctx, "", receiptID, func(tx *sql.Tx, eventID string) error {
-		_, err := tx.ExecContext(ctx, storeSQL3, receiptID, eventID, DeferredStateComplete, now)
-		if err != nil {
-			return wrapLoggedError(ctx, s.log, "mark intake deferred complete", err)
-		}
-		return s.clearTerminalInput(ctx, tx, eventID)
-	})
+
+	return s.withExistingReceipt(
+		ctx,
+		"",
+		receiptID,
+		func(tx *sql.Tx, eventID string) error {
+			_, err := tx.ExecContext(ctx, storeSQL3, receiptID, eventID, DeferredStateComplete, now)
+			if err != nil {
+				return wrapLoggedError(ctx, s.log, "mark intake deferred complete", err)
+			}
+
+			return s.clearTerminalInput(ctx, tx, eventID)
+		},
+	)
 }
 
 // ListDeferredPending returns pending intake records in append order.
@@ -289,24 +341,30 @@ func (s *Store) ListDeferredPending(ctx context.Context, limit int) ([]Record, e
 	} else {
 		rows, err = s.db.QueryContext(ctx, query, DeferredStatePending)
 	}
+
 	if err != nil {
 		return nil, wrapLoggedError(ctx, s.log, "query pending intake events", err)
 	}
+
 	defer func() {
 		_ = rows.Close()
 	}()
 
 	records := make([]Record, 0)
+
 	for rows.Next() {
 		record, err := scanRecord(rows)
 		if err != nil {
 			return nil, err
 		}
+
 		records = append(records, record)
 	}
+
 	if err := rows.Err(); err != nil {
 		return nil, wrapLoggedError(ctx, s.log, "iterate pending intake events", err)
 	}
+
 	return records, nil
 }
 
@@ -316,19 +374,23 @@ func (s *Store) Get(ctx context.Context, eventID string) (Record, error) {
 	if err != nil {
 		return Record{}, wrapLoggedError(ctx, s.log, "query intake record", err)
 	}
+
 	defer func() {
 		_ = rows.Close()
 	}()
 	if !rows.Next() {
 		return Record{}, ErrEventNotFound
 	}
+
 	record, err := scanRecord(rows)
 	if err != nil {
 		return Record{}, err
 	}
+
 	if err := rows.Err(); err != nil {
 		return Record{}, wrapLoggedError(ctx, s.log, "iterate intake record", err)
 	}
+
 	return record, nil
 }
 
@@ -347,6 +409,7 @@ func (s *Store) withExistingReceipt(
 	if err != nil {
 		return wrapLoggedError(ctx, s.log, "begin intake state tx", err)
 	}
+
 	defer func() {
 		_ = tx.Rollback()
 	}()
@@ -356,44 +419,62 @@ func (s *Store) withExistingReceipt(
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrEventNotFound
 	}
+
 	if err != nil {
 		return wrapLoggedError(ctx, s.log, "lookup intake receipt", err)
 	}
+
 	if expectedEventID != "" && expectedEventID != eventID {
 		return ErrReceiptEventMismatch
 	}
+
 	if err := run(tx, eventID); err != nil {
 		return err
 	}
+
 	if err := tx.Commit(); err != nil {
 		return wrapLoggedError(ctx, s.log, "commit intake state tx", err)
 	}
+
 	return nil
 }
 
 func (s *Store) noteReplay(ctx context.Context, receiptID int64) error {
 	now := auditstorage.FormatTime(intakeNow())
-	return s.withExistingReceipt(ctx, "", receiptID, func(tx *sql.Tx, _ string) error {
-		result, err := tx.ExecContext(ctx, storeSQL7, now, receiptID, DeferredStatePending)
-		if err != nil {
-			return wrapLoggedError(ctx, s.log, "update intake replay metadata", err)
-		}
-		rowsAffected, err := result.RowsAffected()
-		if err != nil {
-			return wrapLoggedError(ctx, s.log, "read intake replay rows", err)
-		}
-		if rowsAffected == 0 {
-			return ErrEventNotFound
-		}
-		return nil
-	})
+
+	return s.withExistingReceipt(
+		ctx,
+		"",
+		receiptID,
+		func(tx *sql.Tx, _ string) error {
+			result, err := tx.ExecContext(ctx, storeSQL7, now, receiptID, DeferredStatePending)
+			if err != nil {
+				return wrapLoggedError(ctx, s.log, "update intake replay metadata", err)
+			}
+
+			rowsAffected, err := result.RowsAffected()
+			if err != nil {
+				return wrapLoggedError(ctx, s.log, "read intake replay rows", err)
+			}
+
+			if rowsAffected == 0 {
+				return ErrEventNotFound
+			}
+
+			return nil
+		},
+	)
 }
 
 func (s *Store) pendingRecord(ctx context.Context, receiptID int64) (Record, error) {
 	return s.receiptRecord(ctx, receiptID, string(DeferredStatePending))
 }
 
-func (s *Store) receiptRecord(ctx context.Context, receiptID int64, requiredState string) (Record, error) {
+func (s *Store) receiptRecord(
+	ctx context.Context,
+	receiptID int64,
+	requiredState string,
+) (Record, error) {
 	query := storeSQL8
 	var rows *sql.Rows
 	var err error
@@ -403,22 +484,27 @@ func (s *Store) receiptRecord(ctx context.Context, receiptID int64, requiredStat
 	} else {
 		rows, err = s.db.QueryContext(ctx, query, receiptID)
 	}
+
 	if err != nil {
 		return Record{}, wrapLoggedError(ctx, s.log, "query refreshed intake record", err)
 	}
+
 	defer func() {
 		_ = rows.Close()
 	}()
 	if !rows.Next() {
 		return Record{}, ErrEventNotFound
 	}
+
 	record, err := scanRecord(rows)
 	if err != nil {
 		return Record{}, err
 	}
+
 	if err := rows.Err(); err != nil {
 		return Record{}, wrapLoggedError(ctx, s.log, "iterate refreshed intake record", err)
 	}
+
 	return record, nil
 }
 
@@ -468,14 +554,17 @@ func scanRecord(rows *sql.Rows) (Record, error) {
 	if err != nil {
 		return Record{}, wrapError("scan intake record", err)
 	}
+
 	record.RecordedAt, err = time.Parse(time.RFC3339Nano, recordedAt)
 	if err != nil {
 		return Record{}, wrapError("parse intake recorded_at", err)
 	}
+
 	record.ReceivedAt, err = time.Parse(time.RFC3339Nano, receivedAt)
 	if err != nil {
 		return Record{}, wrapError("parse intake received_at", err)
 	}
+
 	record.NormalizedJSON = json.RawMessage(normalized)
 	record.ClassificationJSON = json.RawMessage(classification)
 	record.RawPayload = bytes.Clone(rawPayload)
@@ -484,19 +573,23 @@ func scanRecord(rows *sql.Rows) (Record, error) {
 	if err != nil {
 		return Record{}, err
 	}
+
 	record.DeferredState = DeferredState(state)
 	record.PendingAt, err = parseOptionalTime(pendingAt)
 	if err != nil {
 		return Record{}, err
 	}
+
 	record.CompletedAt, err = parseOptionalTime(completedAt)
 	if err != nil {
 		return Record{}, err
 	}
+
 	record.LastReplayAt, err = parseOptionalTime(lastReplayAt)
 	if err != nil {
 		return Record{}, err
 	}
+
 	return record, nil
 }
 
@@ -504,10 +597,12 @@ func parseOptionalTime(value sql.NullString) (*time.Time, error) {
 	if !value.Valid || value.String == "" {
 		return nil, nil
 	}
+
 	parsed, err := time.Parse(time.RFC3339Nano, value.String)
 	if err != nil {
 		return nil, wrapError("parse intake optional timestamp", err)
 	}
+
 	return &parsed, nil
 }
 
@@ -515,9 +610,11 @@ func normalizeRecord(record Record) Record {
 	if record.SchemaVersion == 0 {
 		record.SchemaVersion = schemaVersion
 	}
+
 	if record.RecordedAt.IsZero() {
 		record.RecordedAt = intakeNow().UTC()
 	}
+
 	record.System = strings.TrimSpace(record.System)
 	record.SessionID = strings.TrimSpace(record.SessionID)
 	record.TurnID = strings.TrimSpace(record.TurnID)
@@ -535,6 +632,7 @@ func normalizeRecord(record Record) Record {
 	if record.RawPayloadHash == "" {
 		record.RawPayloadHash = payloadHash(record.RawPayload)
 	}
+
 	return record
 }
 
@@ -542,10 +640,12 @@ func normalizeJSON(raw json.RawMessage) (json.RawMessage, error) {
 	if len(raw) == 0 {
 		return json.RawMessage(`{}`), nil
 	}
+
 	var normalized bytes.Buffer
 	if err := json.Compact(&normalized, raw); err != nil {
 		return nil, wrapError("decode intake normalized json", err)
 	}
+
 	return json.RawMessage(normalized.Bytes()), nil
 }
 
@@ -565,6 +665,7 @@ func stableEventID(record Record) string {
 	writeHashPart(hash, string(record.ClassificationJSON))
 	writeHashPart(hash, mustMarshalEnvFingerprint(record.EnvFingerprint))
 	_, _ = hash.Write(record.RawPayload)
+
 	return "intake_" + hex.EncodeToString(hash.Sum(nil))
 }
 
@@ -582,8 +683,10 @@ func cloneEnvFingerprint(envFingerprint map[string]string) map[string]string {
 	if len(envFingerprint) == 0 {
 		return map[string]string{}
 	}
+
 	cloned := make(map[string]string, len(envFingerprint))
 	maps.Copy(cloned, envFingerprint)
+
 	return cloned
 }
 
@@ -593,6 +696,7 @@ func mustMarshalEnvFingerprint(envFingerprint map[string]string) string {
 	if err != nil {
 		return "{}"
 	}
+
 	return string(encoded)
 }
 
@@ -600,23 +704,31 @@ func unmarshalEnvFingerprint(raw string) (map[string]string, error) {
 	if strings.TrimSpace(raw) == "" {
 		return map[string]string{}, nil
 	}
+
 	var envFingerprint map[string]string
 	if err := json.Unmarshal([]byte(raw), &envFingerprint); err != nil {
 		return nil, wrapError("decode intake env fingerprint", err)
 	}
+
 	return cloneEnvFingerprint(envFingerprint), nil
 }
 
 // UpdateHotEvalLatency records the synchronous hot-path evaluation latency for a
 // durable event.
-func (s *Store) UpdateHotEvalLatency(ctx context.Context, eventID string, latencyMicros int64) error {
+func (s *Store) UpdateHotEvalLatency(
+	ctx context.Context,
+	eventID string,
+	latencyMicros int64,
+) error {
 	if strings.TrimSpace(eventID) == "" {
 		return ErrEventNotFound
 	}
+
 	_, err := s.db.ExecContext(ctx, storeSQL9, latencyMicros, eventID)
 	if err != nil {
 		return wrapLoggedError(ctx, s.log, "update intake hot_eval_latency_us", err)
 	}
+
 	return nil
 }
 

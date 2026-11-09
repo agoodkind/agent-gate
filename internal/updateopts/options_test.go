@@ -23,36 +23,50 @@ func TestOptionsPreserveAgentGatePathsAndRollingDefault(t *testing.T) {
 	if options.Config.Repo != config.DefaultUpdateRepo {
 		t.Fatalf("Repo = %q, want %q", options.Config.Repo, config.DefaultUpdateRepo)
 	}
+
 	if options.Config.Binary != "agent-gate" {
 		t.Fatalf("Binary = %q, want agent-gate", options.Config.Binary)
 	}
+
 	if options.Config.CurrentVersion != gkversion.Version {
 		t.Fatalf("CurrentVersion = %q, want %q", options.Config.CurrentVersion, gkversion.Version)
 	}
+
 	if options.Config.CurrentCommit != gkversion.Commit {
 		t.Fatalf("CurrentCommit = %q, want %q", options.Config.CurrentCommit, gkversion.Commit)
 	}
+
 	if options.Config.CurrentBuildHash != version.BuildHash() {
-		t.Fatalf("CurrentBuildHash = %q, want %q", options.Config.CurrentBuildHash, version.BuildHash())
+		t.Fatalf(
+			"CurrentBuildHash = %q, want %q",
+			options.Config.CurrentBuildHash,
+			version.BuildHash(),
+		)
 	}
+
 	// CurrentDirty now carries every local build, not only a dirty worktree,
 	// so a clean `make deploy` binary is never auto-replaced by a release.
 	wantLocal := isLocalBuild(gkversion.Version, gkversion.Dirty == "true")
 	if options.Config.CurrentDirty != wantLocal {
 		t.Fatalf("CurrentDirty = %v, want %v", options.Config.CurrentDirty, wantLocal)
 	}
+
 	if options.Config.AllowPrerelease == nil {
 		t.Fatal("AllowPrerelease = nil, want pointer")
 	}
+
 	if !*options.Config.AllowPrerelease {
 		t.Fatal("AllowPrerelease = false, want true")
 	}
+
 	if options.Config.Interval != 24*time.Hour {
 		t.Fatalf("Interval = %s, want 24h", options.Config.Interval)
 	}
+
 	if options.StatePath != filepath.Join(stateHome, "agent-gate", "update.json") {
 		t.Fatalf("StatePath = %q", options.StatePath)
 	}
+
 	if options.CacheDir != filepath.Join(cacheHome, "agent-gate", "update") {
 		t.Fatalf("CacheDir = %q", options.CacheDir)
 	}
@@ -70,34 +84,44 @@ func TestOptionsPreserveExplicitStableChannelAndOverrides(t *testing.T) {
 		},
 	}
 
-	options := Options(configValue, Overrides{
-		Client:      client,
-		InstallPath: "/tmp/agent-gate",
-		DryRun:      true,
-		Log:         logger,
-	})
+	options := Options(
+		configValue,
+		Overrides{
+			Client:      client,
+			InstallPath: "/tmp/agent-gate",
+			DryRun:      true,
+			Log:         logger,
+		},
+	)
 
 	if options.Config.Repo != "example/custom" {
 		t.Fatalf("Repo = %q, want example/custom", options.Config.Repo)
 	}
+
 	if options.Config.AllowPrerelease == nil {
 		t.Fatal("AllowPrerelease = nil, want pointer")
 	}
+
 	if *options.Config.AllowPrerelease {
 		t.Fatal("AllowPrerelease = true, want false")
 	}
+
 	if options.Config.Interval != 48*time.Hour {
 		t.Fatalf("Interval = %s, want 48h", options.Config.Interval)
 	}
+
 	if options.Client != client {
 		t.Fatal("Client override was not preserved")
 	}
+
 	if options.InstallPath != "/tmp/agent-gate" {
 		t.Fatalf("InstallPath = %q, want /tmp/agent-gate", options.InstallPath)
 	}
+
 	if !options.DryRun {
 		t.Fatal("DryRun = false, want true")
 	}
+
 	if options.Log != logger {
 		t.Fatal("Log override was not preserved")
 	}

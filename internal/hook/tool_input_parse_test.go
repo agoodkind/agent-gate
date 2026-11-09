@@ -27,27 +27,35 @@ func TestParseHookPayloadAcceptsStringToolInput(t *testing.T) {
 	}
 
 	for name, toolInput := range shapes {
-		t.Run(name, func(t *testing.T) {
-			raw, err := json.Marshal(map[string]any{
-				"session_id":      "parse-test",
-				"cwd":             "/repo",
-				"hook_event_name": "PreToolUse",
-				"tool_name":       "Bash",
-				"tool_input":      toolInput,
-			})
-			if err != nil {
-				t.Fatalf("marshal payload: %v", err)
-			}
+		t.Run(
+			name,
+			func(t *testing.T) {
+				raw, err := json.Marshal(map[string]any{
+					"session_id":      "parse-test",
+					"cwd":             "/repo",
+					"hook_event_name": "PreToolUse",
+					"tool_name":       "Bash",
+					"tool_input":      toolInput,
+				})
+				if err != nil {
+					t.Fatalf("marshal payload: %v", err)
+				}
 
-			payload, err := hook.ParseHookPayload(hook.SystemClaude, raw)
-			if err != nil {
-				t.Fatalf("ParseHookPayload rejected the %s shape: %v", name, err)
-			}
-			fields := payload.Fields()
-			if fields.ToolInputCommand != command {
-				t.Fatalf("%s shape: command = %q, want %q",
-					name, fields.ToolInputCommand, command)
-			}
-		})
+				payload, err := hook.ParseHookPayload(hook.SystemClaude, raw)
+				if err != nil {
+					t.Fatalf("ParseHookPayload rejected the %s shape: %v", name, err)
+				}
+
+				fields := payload.Fields()
+				if fields.ToolInputCommand != command {
+					t.Fatalf(
+						"%s shape: command = %q, want %q",
+						name,
+						fields.ToolInputCommand,
+						command,
+					)
+				}
+			},
+		)
 	}
 }

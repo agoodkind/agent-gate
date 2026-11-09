@@ -116,6 +116,7 @@ func (fields FieldSet) FirstString(selectors []config.FieldSelectorSpec) (string
 			return selector.Path, value
 		}
 	}
+
 	return "", ""
 }
 
@@ -143,11 +144,15 @@ var fieldStringAccessors = map[config.FieldSelector]func(FieldSet) string{
 	// rule's search_tools, so the generic selector path (which has no rule
 	// context) yields nothing. The exec gate computes it with the condition's
 	// declared tools.
-	config.FieldCmdReadTargets:            func(f FieldSet) string { return f.CmdReadTargets(nil, nil, nil) },
-	config.FieldCredentialReadTargets:     func(f FieldSet) string { return f.CredentialReadTargets() },
-	config.FieldCmdWriteTargets:           func(f FieldSet) string { return f.CmdWriteTargets() },
-	config.FieldPatchWriteTargets:         func(f FieldSet) string { return f.PatchWriteTargets() },
-	config.FieldExecTargets:               func(f FieldSet) string { return f.ExecTargets(nil, nil, nil) },
+	config.FieldCmdReadTargets: func(f FieldSet) string {
+		return f.CmdReadTargets(nil, nil, nil)
+	},
+	config.FieldCredentialReadTargets: func(f FieldSet) string { return f.CredentialReadTargets() },
+	config.FieldCmdWriteTargets:       func(f FieldSet) string { return f.CmdWriteTargets() },
+	config.FieldPatchWriteTargets:     func(f FieldSet) string { return f.PatchWriteTargets() },
+	config.FieldExecTargets: func(f FieldSet) string {
+		return f.ExecTargets(nil, nil, nil)
+	},
 	config.FieldPermissionMode:            func(f FieldSet) string { return f.PermissionMode },
 	config.FieldAgentID:                   func(f FieldSet) string { return f.AgentID },
 	config.FieldAgentType:                 func(f FieldSet) string { return f.AgentType },
@@ -223,12 +228,24 @@ var fieldStringAccessors = map[config.FieldSelector]func(FieldSet) string{
 	config.FieldLLMRequest:                func(f FieldSet) string { return f.LLMRequest },
 	config.FieldLLMResponse:               func(f FieldSet) string { return f.LLMResponse },
 	config.FieldDetails:                   func(f FieldSet) string { return f.Details },
-	config.FieldEditsOldString:            func(f FieldSet) string { return strings.Join(f.EditsOldString, "\n") },
-	config.FieldEditsNewString:            func(f FieldSet) string { return strings.Join(f.EditsNewString, "\n") },
-	config.FieldEditsOldLine:              func(f FieldSet) string { return strings.Join(f.EditsOldLine, "\n") },
-	config.FieldEditsNewLine:              func(f FieldSet) string { return strings.Join(f.EditsNewLine, "\n") },
-	config.FieldAttachmentsFilePath:       func(f FieldSet) string { return strings.Join(f.AttachmentsFilePath, "\n") },
-	config.FieldAttachmentsType:           func(f FieldSet) string { return strings.Join(f.AttachmentsType, "\n") },
+	config.FieldEditsOldString: func(f FieldSet) string {
+		return strings.Join(f.EditsOldString, "\n")
+	},
+	config.FieldEditsNewString: func(f FieldSet) string {
+		return strings.Join(f.EditsNewString, "\n")
+	},
+	config.FieldEditsOldLine: func(f FieldSet) string {
+		return strings.Join(f.EditsOldLine, "\n")
+	},
+	config.FieldEditsNewLine: func(f FieldSet) string {
+		return strings.Join(f.EditsNewLine, "\n")
+	},
+	config.FieldAttachmentsFilePath: func(f FieldSet) string {
+		return strings.Join(f.AttachmentsFilePath, "\n")
+	},
+	config.FieldAttachmentsType: func(f FieldSet) string {
+		return strings.Join(f.AttachmentsType, "\n")
+	},
 }
 
 // CommandValue returns the most specific command string available, preferring
@@ -237,17 +254,24 @@ func (fields FieldSet) CommandValue() string {
 	if fields.ToolInputCommand != "" {
 		return fields.ToolInputCommand
 	}
+
 	return fields.Command
 }
 
 // FilePathValue returns the first non-empty file path candidate from the
 // payload, walking explicit fields before tool input fallbacks.
 func (fields FieldSet) FilePathValue() string {
-	for _, value := range []string{fields.FilePath, fields.Path, fields.ToolInputFilePath, fields.ToolInputPath} {
+	for _, value := range []string{
+		fields.FilePath,
+		fields.Path,
+		fields.ToolInputFilePath,
+		fields.ToolInputPath,
+	} {
 		if value != "" {
 			return value
 		}
 	}
+
 	return ""
 }
 
@@ -266,6 +290,7 @@ func (fields FieldSet) BaseCWD() string {
 			return value
 		}
 	}
+
 	return ""
 }
 
@@ -277,15 +302,19 @@ func (fields FieldSet) CmdSegments() string {
 	if !fields.hasShellCommandContext() {
 		return ""
 	}
+
 	command := fields.CommandValue()
 	if command == "" {
 		return ""
 	}
+
 	command = stripShellComments(stripHeredocBodies(command))
+
 	segments := shellparse.SplitCommandChain(command)
 	for index, segment := range segments {
 		segments[index] = strings.NewReplacer("\r\n", " ", "\n", " ", "\r", " ").Replace(segment)
 	}
+
 	return strings.Join(segments, "\n")
 }
 
@@ -294,10 +323,12 @@ func (fields FieldSet) CmdComments() string {
 	if !fields.hasShellCommandContext() {
 		return ""
 	}
+
 	command := fields.CommandValue()
 	if command == "" {
 		return ""
 	}
+
 	return extractShellComments(command)
 }
 
@@ -312,11 +343,16 @@ func (fields FieldSet) CmdDoubleHyphenProseWithPolicy(policy *config.ProsePolicy
 	if !fields.hasShellCommandContext() {
 		return ""
 	}
+
 	command := fields.CommandValue()
 	if command == "" {
 		return ""
 	}
-	return strings.Join(extractCommandDoubleHyphenProseWithPolicy(command, fields.BaseCWD(), policy), "\n")
+
+	return strings.Join(
+		extractCommandDoubleHyphenProseWithPolicy(command, fields.BaseCWD(), policy),
+		"\n",
+	)
 }
 
 // CmdRedirections returns unsafe shell redirections from the active command
@@ -330,10 +366,12 @@ func (fields FieldSet) CmdRedirectionsWithPolicy(policy *config.RedirectionPolic
 	if !fields.hasShellCommandContext() {
 		return ""
 	}
+
 	command := fields.CommandValue()
 	if command == "" {
 		return ""
 	}
+
 	return strings.Join(extractUnsafeShellRedirectionsWithPolicy(command, policy), "\n")
 }
 
@@ -342,9 +380,11 @@ func (fields FieldSet) hasShellCommandContext() bool {
 	if command == "" {
 		return false
 	}
+
 	if fields.ToolName == "" {
 		return true
 	}
+
 	return isShellToolName(fields.ToolName)
 }
 
@@ -365,20 +405,25 @@ func (fields FieldSet) effectiveCWD() string {
 	if cwd == "" {
 		return ""
 	}
+
 	command := fields.CommandValue()
 	if command == "" {
 		return cwd
 	}
+
 	home, err := ReadUserHomeDir()
 	if err != nil {
 		home = cwd
 	}
+
 	return effectiveCwdAfterChain(cwd, home, command)
 }
 
 // patchEnvelopeRe matches an apply_patch style payload, whose body is a diff
 // rather than prose.
-var patchEnvelopeRe = regexp.MustCompile(`(?m)^\s*\*\*\* (?:Begin|End|Add|Update|Delete) (?:Patch|File)\b`)
+var patchEnvelopeRe = regexp.MustCompile(
+	`(?m)^\s*\*\*\* (?:Begin|End|Add|Update|Delete) (?:Patch|File)\b`,
+)
 
 // huggingFaceCacheRunRe matches the HuggingFace hub cache directory naming
 // convention, which joins the repo type, org, and name with a double hyphen.
@@ -390,12 +435,15 @@ var huggingFaceCacheRunRe = regexp.MustCompile(`^(?:models|datasets|spaces)--`)
 // genuine prose words and spaced em dashes are kept.
 func dropStructuredIdentifierRuns(chunk string) string {
 	var kept []string
+
 	for run := range strings.FieldsSeq(chunk) {
 		if strings.Contains(run, "--") && isStructuredIdentifierRun(run) {
 			continue
 		}
+
 		kept = append(kept, run)
 	}
+
 	return strings.Join(kept, " ")
 }
 
@@ -407,33 +455,45 @@ func isStructuredIdentifierRun(run string) bool {
 	if huggingFaceCacheRunRe.MatchString(run) {
 		return true
 	}
+
 	if strings.Count(run, "--") >= 2 {
 		return true
 	}
+
 	if strings.ContainsAny(run, "0123456789") {
 		return true
 	}
+
 	return strings.ContainsAny(run, "_@+.:=")
 }
 
-func extractUnsafeShellRedirectionsWithPolicy(command string, policy *config.RedirectionPolicy) []string {
+func extractUnsafeShellRedirectionsWithPolicy(
+	command string,
+	policy *config.RedirectionPolicy,
+) []string {
 	if policy == nil {
 		policy = config.DefaultRedirectionPolicy()
 	}
+
 	if policy == nil {
 		return nil
 	}
+
 	if hasUnquotedHereDoc(command) {
 		return nil
 	}
+
 	var out []string
+
 	for _, segment := range cmdChainRe.Split(stripShellComments(command), -1) {
 		segment = strings.TrimSpace(segment)
 		if segment == "" {
 			continue
 		}
+
 		out = append(out, extractUnsafeSegmentRedirections(segment, policy)...)
 	}
+
 	return out
 }
 
@@ -441,45 +501,58 @@ func extractUnsafeSegmentRedirections(segment string, policy *config.Redirection
 	var out []string
 	var quote byte
 	escaped := false
+
 	for index := 0; index < len(segment); index++ {
 		ch := segment[index]
 		if escaped {
 			escaped = false
 			continue
 		}
+
 		if ch == '\\' && quote != '\'' {
 			escaped = true
 			continue
 		}
+
 		if quote != 0 {
 			if ch == quote {
 				quote = 0
 			}
+
 			continue
 		}
+
 		if ch == '\'' || ch == '"' {
 			quote = ch
 			continue
 		}
+
 		if ch == '|' && index+1 < len(segment) && segment[index+1] == '&' {
 			out = append(out, pipeAndErrorToken())
 			index++
 			continue
 		}
+
 		if snippet, end, ok := parseUnsafeOutputRedirection(segment, index, policy); ok {
 			out = append(out, snippet)
 			index = end - 1
 		}
 	}
+
 	return out
 }
 
-func parseUnsafeOutputRedirection(segment string, start int, policy *config.RedirectionPolicy) (string, int, bool) {
+func parseUnsafeOutputRedirection(
+	segment string,
+	start int,
+	policy *config.RedirectionPolicy,
+) (string, int, bool) {
 	index := start
 	if isASCIIDigit(rune(segment[index])) {
 		for index < len(segment) && isASCIIDigit(rune(segment[index])) {
 			index++
 		}
+
 		if index >= len(segment) || segment[index] != '>' {
 			return "", start, false
 		}
@@ -495,81 +568,118 @@ func parseUnsafeOutputRedirection(segment string, start int, policy *config.Redi
 	}
 }
 
-func parseAmpOutputRedirection(segment string, start, index int, policy *config.RedirectionPolicy) (string, int, bool) {
+func parseAmpOutputRedirection(
+	segment string,
+	start int,
+	index int,
+	policy *config.RedirectionPolicy,
+) (string, int, bool) {
 	if index+1 >= len(segment) || segment[index+1] != '>' {
 		return "", start, false
 	}
+
 	end := index + 2
 	if end < len(segment) && segment[end] == '>' {
 		end++
 	}
+
 	return parseRedirectionTarget(segment, start, end, policy)
 }
 
-func parseGtOutputRedirection(segment string, start, index int, policy *config.RedirectionPolicy) (string, int, bool) {
+func parseGtOutputRedirection(
+	segment string,
+	start int,
+	index int,
+	policy *config.RedirectionPolicy,
+) (string, int, bool) {
 	if index+1 < len(segment) && segment[index+1] == '&' {
 		return parseDuplicationRedirection(segment, start, index, policy)
 	}
+
 	end := index + 1
 	if end < len(segment) && (segment[end] == '>' || segment[end] == '|') {
 		end++
 	}
+
 	return parseRedirectionTarget(segment, start, end, policy)
 }
 
-func parseDuplicationRedirection(segment string, start, index int, policy *config.RedirectionPolicy) (string, int, bool) {
+func parseDuplicationRedirection(
+	segment string,
+	start int,
+	index int,
+	policy *config.RedirectionPolicy,
+) (string, int, bool) {
 	end := index + 2
+
 	targetStart := end
 	for end < len(segment) && isASCIIDigit(rune(segment[end])) {
 		end++
 	}
+
 	if targetStart == end {
 		return "", start, false
 	}
+
 	if slices.Contains(policy.IgnoreFDs, segment[targetStart:end]) {
 		return "", end, false
 	}
+
 	return strings.TrimSpace(segment[start:end]), end, true
 }
 
-func parseRedirectionTarget(segment string, start, end int, policy *config.RedirectionPolicy) (string, int, bool) {
+func parseRedirectionTarget(
+	segment string,
+	start int,
+	end int,
+	policy *config.RedirectionPolicy,
+) (string, int, bool) {
 	target, targetEnd := readShellWord(segment, end)
 	if target == "" {
 		return strings.TrimSpace(segment[start:end]), end, true
 	}
+
 	if slices.Contains(policy.IgnorePaths, target) {
 		return "", targetEnd, false
 	}
+
 	return strings.TrimSpace(segment[start:targetEnd]), targetEnd, true
 }
 
 func hasUnquotedHereDoc(segment string) bool {
 	var quote byte
 	escaped := false
+
 	for index := 0; index+1 < len(segment); index++ {
 		ch := segment[index]
 		if escaped {
 			escaped = false
 			continue
 		}
+
 		if ch == '\\' && quote != '\'' {
 			escaped = true
 			continue
 		}
+
 		if quote != 0 {
 			if ch == quote {
 				quote = 0
 			}
+
 			continue
 		}
+
 		if ch == '\'' || ch == '"' {
 			quote = ch
 			continue
 		}
+
 		if ch == '<' && segment[index+1] == '<' {
 			return true
 		}
 	}
+
 	return false
 }
 
@@ -578,6 +688,7 @@ func readShellWord(segment string, start int) (string, int) {
 	for index < len(segment) && isASCIISpace(rune(segment[index])) {
 		index++
 	}
+
 	if index >= len(segment) {
 		return "", index
 	}
@@ -585,6 +696,7 @@ func readShellWord(segment string, start int) (string, int) {
 	var builder strings.Builder
 	var quote byte
 	escaped := false
+
 	for index < len(segment) {
 		ch := segment[index]
 		if escaped {
@@ -593,32 +705,39 @@ func readShellWord(segment string, start int) (string, int) {
 			index++
 			continue
 		}
+
 		if ch == '\\' && quote != '\'' {
 			escaped = true
 			index++
 			continue
 		}
+
 		if quote != 0 {
 			if ch == quote {
 				quote = 0
 				index++
 				continue
 			}
+
 			builder.WriteByte(ch)
 			index++
 			continue
 		}
+
 		if ch == '\'' || ch == '"' {
 			quote = ch
 			index++
 			continue
 		}
+
 		if isASCIISpace(rune(ch)) || ch == ';' || ch == '&' || ch == '|' {
 			break
 		}
+
 		builder.WriteByte(ch)
 		index++
 	}
+
 	return builder.String(), index
 }
 
@@ -636,6 +755,7 @@ func extractShellComments(command string) string {
 	inDoubleQuote := false
 	escaped := false
 	commentStart := -1
+
 	for i := range len(command) {
 		ch := command[i]
 		if commentStart >= 0 {
@@ -643,31 +763,39 @@ func extractShellComments(command string) string {
 				appendShellComment(&comments, command[commentStart:i])
 				commentStart = -1
 			}
+
 			continue
 		}
+
 		if escaped {
 			escaped = false
 			continue
 		}
+
 		if ch == '\\' && !inSingleQuote {
 			escaped = true
 			continue
 		}
+
 		if ch == '\'' && !inDoubleQuote {
 			inSingleQuote = !inSingleQuote
 			continue
 		}
+
 		if ch == '"' && !inSingleQuote {
 			inDoubleQuote = !inDoubleQuote
 			continue
 		}
+
 		if ch == '#' && !inSingleQuote && !inDoubleQuote && isShellCommentStart(command, i) {
 			commentStart = i + 1
 		}
 	}
+
 	if commentStart >= 0 {
 		appendShellComment(&comments, command[commentStart:])
 	}
+
 	return strings.Join(comments, "\n")
 }
 
@@ -677,6 +805,7 @@ func stripShellComments(command string) string {
 	inDoubleQuote := false
 	escaped := false
 	commentStart := -1
+
 	for i := range len(command) {
 		ch := command[i]
 		if commentStart >= 0 {
@@ -684,34 +813,42 @@ func stripShellComments(command string) string {
 				builder.WriteByte('\n')
 				commentStart = -1
 			}
+
 			continue
 		}
+
 		if escaped {
 			builder.WriteByte(ch)
 			escaped = false
 			continue
 		}
+
 		if ch == '\\' && !inSingleQuote {
 			builder.WriteByte(ch)
 			escaped = true
 			continue
 		}
+
 		if ch == '\'' && !inDoubleQuote {
 			inSingleQuote = !inSingleQuote
 			builder.WriteByte(ch)
 			continue
 		}
+
 		if ch == '"' && !inSingleQuote {
 			inDoubleQuote = !inDoubleQuote
 			builder.WriteByte(ch)
 			continue
 		}
+
 		if ch == '#' && !inSingleQuote && !inDoubleQuote && isShellCommentStart(command, i) {
 			commentStart = i + 1
 			continue
 		}
+
 		builder.WriteByte(ch)
 	}
+
 	return builder.String()
 }
 
@@ -726,10 +863,12 @@ func isShellCommentStart(command string, index int) bool {
 	if index == 0 {
 		return true
 	}
+
 	previous := rune(command[index-1])
 	if previous == ';' || previous == '&' || previous == '|' || previous == '(' {
 		return true
 	}
+
 	return isASCIISpace(previous)
 }
 

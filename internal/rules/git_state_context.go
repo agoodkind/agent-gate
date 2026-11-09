@@ -20,9 +20,11 @@ func WithGitStateReader(ctx context.Context, reader GitStateReader) context.Cont
 
 func gitStateReaderFromContext(ctx context.Context) GitStateReader {
 	if ctx != nil {
-		if reader, ok := ctx.Value(gitStateReaderContextKey{}).(GitStateReader); ok && reader != nil {
+		if reader, ok := ctx.Value(gitStateReaderContextKey{}).(GitStateReader); ok &&
+			reader != nil {
 			return reader
 		}
 	}
+
 	return gitbranch.ReadState
 }

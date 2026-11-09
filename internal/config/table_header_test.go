@@ -34,12 +34,19 @@ func TestTableHeaderSpellings(t *testing.T) {
 		{"trailing content", "[update] mode = 1", false},
 	}
 	for _, testCase := range cases {
-		t.Run(testCase.name, func(t *testing.T) {
-			if got := isTopLevelTableHeader(testCase.header, "update"); got != testCase.want {
-				t.Fatalf("isTopLevelTableHeader(%q) = %v, want %v",
-					testCase.header, got, testCase.want)
-			}
-		})
+		t.Run(
+			testCase.name,
+			func(t *testing.T) {
+				if got := isTopLevelTableHeader(testCase.header, "update"); got != testCase.want {
+					t.Fatalf(
+						"isTopLevelTableHeader(%q) = %v, want %v",
+						testCase.header,
+						got,
+						testCase.want,
+					)
+				}
+			},
+		)
 	}
 }
 
@@ -48,20 +55,25 @@ func TestTableHeaderSpellings(t *testing.T) {
 // second copy appended, which TOML rejects as a duplicate key.
 func TestMergeDoesNotDuplicateADecoratedTable(t *testing.T) {
 	for _, header := range []string{"[update] # managed", "[ update ]", `["update"]`} {
-		t.Run(header, func(t *testing.T) {
-			contents := header + "\nmode = \"check\"\n"
-			merged, err := mergeUpdateDefaults(contents, "")
-			if err != nil {
-				t.Fatalf("mergeUpdateDefaults: %v", err)
-			}
-			if strings.Count(merged, "[update]") > 1 {
-				t.Fatalf("merged config declares [update] twice:\n%s", merged)
-			}
-			// The result has to stay loadable, which a duplicate table breaks.
-			var decoded Config
-			if err := toml.Unmarshal([]byte(merged), &decoded); err != nil {
-				t.Fatalf("merged config no longer parses: %v\n%s", err, merged)
-			}
-		})
+		t.Run(
+			header,
+			func(t *testing.T) {
+				contents := header + "\nmode = \"check\"\n"
+				merged, err := mergeUpdateDefaults(contents, "")
+				if err != nil {
+					t.Fatalf("mergeUpdateDefaults: %v", err)
+				}
+
+				if strings.Count(merged, "[update]") > 1 {
+					t.Fatalf("merged config declares [update] twice:\n%s", merged)
+				}
+
+				// The result has to stay loadable, which a duplicate table breaks.
+				var decoded Config
+				if err := toml.Unmarshal([]byte(merged), &decoded); err != nil {
+					t.Fatalf("merged config no longer parses: %v\n%s", err, merged)
+				}
+			},
+		)
 	}
 }

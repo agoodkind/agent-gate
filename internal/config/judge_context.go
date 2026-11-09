@@ -20,13 +20,18 @@ func validateRuleJudgeContext(ruleName string, keys []string) error {
 		if trimmed == JudgeContextCheckoutStatus {
 			continue
 		}
+
 		if CompileFieldSelector(trimmed) != FieldSelectorInvalid {
 			continue
 		}
+
 		return fmt.Errorf(
 			"rule %q judge_context %q: not a known field path or %q",
-			ruleName, key, JudgeContextCheckoutStatus,
+			ruleName,
+			key,
+			JudgeContextCheckoutStatus,
 		)
 	}
+
 	return nil
 }

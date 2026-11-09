@@ -41,7 +41,12 @@ func newResetInstallationFixture(t *testing.T) *resetInstallationFixture {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(runtimeRoot) })
-	fixture := &resetInstallationFixture{t: t, home: home, bin: filepath.Join(home, "bin", "agent-gate"), preserved: make(map[string]os.FileMode)}
+	fixture := &resetInstallationFixture{
+		t:         t,
+		home:      home,
+		bin:       filepath.Join(home, "bin", "agent-gate"),
+		preserved: make(map[string]os.FileMode),
+	}
 	if err := os.MkdirAll(filepath.Dir(fixture.bin), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +74,10 @@ func newResetInstallationFixture(t *testing.T) *resetInstallationFixture {
 	}
 	fixture.install = defaultInstallDependencies()
 	fixture.install.resolveExecutable = func() (string, error) { return fixture.bin, nil }
-	fixture.install.prepareInstallation = func(options installer.InstallationOptions) (*installer.InstallationPlan, error) {
+	fixture.install.prepareInstallation = func(options installer.InstallationOptions) (
+		*installer.InstallationPlan,
+		error,
+	) {
 		if options.Service != nil {
 			options.Service.Runner = fixture
 			options.Service.HomeDir = home
@@ -82,7 +90,10 @@ func newResetInstallationFixture(t *testing.T) *resetInstallationFixture {
 
 func (f *resetInstallationFixture) InstallUsingExistingInstaller() {
 	f.t.Helper()
-	if code := runInstallWithDependencies([]string{"all", "--bin-path", f.bin, "--auto-update", "off"}, f.install); code != 0 {
+	if code := runInstallWithDependencies(
+		[]string{"all", "--bin-path", f.bin, "--auto-update", "off"},
+		f.install,
+	); code != 0 {
 		f.t.Fatalf("install = %d", code)
 	}
 	f.oldPID = f.child.Process.Pid
@@ -90,7 +101,12 @@ func (f *resetInstallationFixture) InstallUsingExistingInstaller() {
 
 func (f *resetInstallationFixture) SeedAuditAndInstallationState() {
 	f.t.Helper()
-	for _, path := range []string{filepath.Join(config.DefaultStateDir(), "old-state"), filepath.Join(config.DefaultCacheDir(), "old-cache"), filepath.Join(config.RuntimeDir(), "old-runtime"), config.DefaultAuditSQLitePath()} {
+	for _, path := range []string{
+		filepath.Join(config.DefaultStateDir(), "old-state"),
+		filepath.Join(config.DefaultCacheDir(), "old-cache"),
+		filepath.Join(config.RuntimeDir(), "old-runtime"),
+		config.DefaultAuditSQLitePath(),
+	} {
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			f.t.Fatal(err)
 		}
@@ -99,14 +115,26 @@ func (f *resetInstallationFixture) SeedAuditAndInstallationState() {
 		}
 		f.oldPaths = append(f.oldPaths, path)
 	}
-	if err := os.WriteFile(filepath.Join(config.DefaultConfigDir(), "user-rule.md"), []byte("user authored rule"), 0o600); err != nil {
+	if err := os.WriteFile(
+		filepath.Join(config.DefaultConfigDir(), "user-rule.md"),
+		[]byte("user authored rule"),
+		0o600,
+	); err != nil {
 		f.t.Fatal(err)
 	}
 }
 
 func (f *resetInstallationFixture) ReadPreservedFiles() map[string][]byte {
 	f.t.Helper()
-	paths := []string{config.Path(), filepath.Join(config.DefaultConfigDir(), "user-rule.md"), filepath.Join(f.home, ".claude", "settings.json"), filepath.Join(f.home, ".codex", "config.toml"), filepath.Join(f.home, ".cursor", "hooks.json"), filepath.Join(f.home, ".gemini", "settings.json"), filepath.Join(f.home, ".copilot", "hooks", "agent-gate.json")}
+	paths := []string{
+		config.Path(),
+		filepath.Join(config.DefaultConfigDir(), "user-rule.md"),
+		filepath.Join(f.home, ".claude", "settings.json"),
+		filepath.Join(f.home, ".codex", "config.toml"),
+		filepath.Join(f.home, ".cursor", "hooks.json"),
+		filepath.Join(f.home, ".gemini", "settings.json"),
+		filepath.Join(f.home, ".copilot", "hooks", "agent-gate.json"),
+	}
 	result := make(map[string][]byte)
 	for _, path := range paths {
 		content, err := os.ReadFile(path)
@@ -160,7 +188,11 @@ func (f *resetInstallationFixture) AssertOldAuditAndStateAbsent() {
 
 func (f *resetInstallationFixture) AssertExecutableRestoredAndRunnable() {
 	f.t.Helper()
-	if output, err := exec.CommandContext(f.t.Context(), f.bin, "version").CombinedOutput(); err != nil || len(output) == 0 {
+	if output, err := exec.CommandContext(
+		f.t.Context(),
+		f.bin,
+		"version",
+	).CombinedOutput(); err != nil || len(output) == 0 {
 		f.t.Fatalf("restored executable: %s %v", output, err)
 	}
 }
@@ -195,7 +227,10 @@ func (f *resetInstallationFixture) Run(name string, args ...string) error {
 func (f *resetInstallationFixture) Output(name string, args ...string) ([]byte, error) {
 	return f.OutputContext(context.Background(), name, args...)
 }
-func (f *resetInstallationFixture) OutputContext(_ context.Context, name string, args ...string) ([]byte, error) {
+func (f *resetInstallationFixture) OutputContext(_ context.Context, name string, args ...string) (
+	[]byte,
+	error,
+) {
 	command := strings.Join(args, " ")
 	if name == "pgrep" || name == "lsof" {
 		return nil, installer.ErrServiceAbsent
@@ -212,16 +247,33 @@ func (f *resetInstallationFixture) OutputContext(_ context.Context, name string,
 		}
 		pid := f.child.Process.Pid
 		if runtime.GOOS == "darwin" {
-			return []byte(fmt.Sprintf("program = %s\narguments = {\n%s\ndaemon\n}\nstate = running\npid = %d\n", f.bin, f.bin, pid)), nil
+			return []byte(
+				fmt.Sprintf(
+					"program = %s\narguments = {\n%s\ndaemon\n}\nstate = running\npid = %d\n",
+					f.bin,
+					f.bin,
+					pid,
+				),
+			), nil
 		}
-		return []byte(fmt.Sprintf("LoadState=loaded\nActiveState=active\nMainPID=%d\nExecStart={ path=%s ; argv[]=%s daemon ; }\n", pid, f.bin, f.bin)), nil
+		return []byte(
+			fmt.Sprintf(
+				"LoadState=loaded\nActiveState=active\nMainPID=%d\nExecStart={ path=%s ; argv[]=%s daemon ; }\n",
+				pid,
+				f.bin,
+				f.bin,
+			),
+		), nil
 	}
 	if strings.HasPrefix(command, "bootout ") || strings.Contains(command, " stop ") {
 		f.stopChild()
 		f.loaded = false
 		return nil, nil
 	}
-	if strings.HasPrefix(command, "bootstrap ") || strings.Contains(command, " restart ") || strings.Contains(command, " enable --now ") {
+	if strings.HasPrefix(
+		command,
+		"bootstrap ",
+	) || strings.Contains(command, " restart ") || strings.Contains(command, " enable --now ") {
 		f.child = exec.Command(f.bin, "daemon")
 		f.child.Env = os.Environ()
 		if err := f.child.Start(); err != nil {
@@ -238,7 +290,13 @@ func (f *resetInstallationFixture) OutputContext(_ context.Context, name string,
 
 func TestResetFixtureSystemdEnableStartsDaemon(t *testing.T) {
 	fixture := newResetInstallationFixture(t)
-	if err := fixture.Run("systemctl", "--user", "enable", "--now", "agent-gate.service"); err != nil {
+	if err := fixture.Run(
+		"systemctl",
+		"--user",
+		"enable",
+		"--now",
+		"agent-gate.service",
+	); err != nil {
 		t.Fatal(err)
 	}
 	if fixture.child == nil {
@@ -272,7 +330,10 @@ func TestResetReinstallsAndPreservesConfiguration(t *testing.T) {
 	if err := os.Remove(config.DaemonSocketPath()); err != nil && !errors.Is(err, os.ErrNotExist) {
 		t.Fatal(err)
 	}
-	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: config.DaemonSocketPath(), Net: "unix"})
+	listener, err := net.ListenUnix(
+		"unix",
+		&net.UnixAddr{Name: config.DaemonSocketPath(), Net: "unix"},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -286,7 +347,9 @@ func TestResetReinstallsAndPreservesConfiguration(t *testing.T) {
 	fixture.AssertServiceReadyWithNewProcess()
 	fixture.SeedAuditAndInstallationState()
 	ready := fixture.install.waitForReady
-	fixture.install.waitForReady = func(string) error { return errors.New("injected readiness failure") }
+	fixture.install.waitForReady = func(string) error {
+		return errors.New("injected readiness failure")
+	}
 	if code := fixture.RunReset(); code == 0 {
 		t.Fatal("readiness failure reported success")
 	}
@@ -301,11 +364,26 @@ func TestResetReinstallsAndPreservesConfiguration(t *testing.T) {
 }
 
 func TestResetRejectsArgumentsBeforeMutation(t *testing.T) {
-	dependencies := resetDependencies{resolveExecutable: func() (string, error) { t.Fatal("reset started mutation preparation"); return "", nil }}
-	if code := runResetWithDependencies([]string{"extra"}, io.Discard, io.Discard, dependencies); code != 2 {
+	dependencies := resetDependencies{
+		resolveExecutable: func() (string, error) {
+			t.Fatal("reset started mutation preparation")
+			return "", nil
+		},
+	}
+	if code := runResetWithDependencies(
+		[]string{"extra"},
+		io.Discard,
+		io.Discard,
+		dependencies,
+	); code != 2 {
 		t.Fatalf("extra argument exit = %d", code)
 	}
-	if code := runCLIWithHook([]string{"reset", "extra"}, &bytes.Buffer{}, &bytes.Buffer{}, func(hookRoute) int { t.Fatal("reset routed to hook"); return 0 }); code != 2 {
+	if code := runCLIWithHook(
+		[]string{"reset", "extra"},
+		&bytes.Buffer{},
+		&bytes.Buffer{},
+		func(hookRoute) int { t.Fatal("reset routed to hook"); return 0 },
+	); code != 2 {
 		t.Fatalf("routing exit = %d", code)
 	}
 }

@@ -31,15 +31,18 @@ func TestExtractCodeSearchTargetsSedInScriptRead(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := targetPaths(ExtractCodeSearchTargets(tc.command, cwd, sedTestTools, nil))
-			slices.Sort(got)
-			want := slices.Clone(tc.want)
-			slices.Sort(want)
-			if !slices.Equal(got, want) {
-				t.Fatalf("ExtractCodeSearchTargets(%q) = %v, want %v", tc.command, got, want)
-			}
-		})
+		t.Run(
+			tc.name,
+			func(t *testing.T) {
+				got := targetPaths(ExtractCodeSearchTargets(tc.command, cwd, sedTestTools, nil))
+				slices.Sort(got)
+				want := slices.Clone(tc.want)
+				slices.Sort(want)
+				if !slices.Equal(got, want) {
+					t.Fatalf("ExtractCodeSearchTargets(%q) = %v, want %v", tc.command, got, want)
+				}
+			},
+		)
 	}
 }
 

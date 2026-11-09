@@ -10,13 +10,17 @@ import (
 func searchPaths(t *testing.T, command string, tools []string) []string {
 	t.Helper()
 	paths := make([]string, 0)
+
 	for _, target := range shellread.ExtractCodeSearchTargets(command, "/repo", tools, nil) {
 		if target.Remote || target.Path == "" {
 			continue
 		}
+
 		paths = append(paths, target.Path)
 	}
+
 	slices.Sort(paths)
+
 	return paths
 }
 
@@ -51,12 +55,15 @@ func TestPinnedAnalyzerDoesNotFabricateJqPaths(t *testing.T) {
 		},
 	}
 	for _, testCase := range cases {
-		t.Run(testCase.name, func(t *testing.T) {
-			got := searchPaths(t, testCase.command, []string{"jq"})
-			if !slices.Equal(got, testCase.want) {
-				t.Fatalf("read targets = %v, want %v", got, testCase.want)
-			}
-		})
+		t.Run(
+			testCase.name,
+			func(t *testing.T) {
+				got := searchPaths(t, testCase.command, []string{"jq"})
+				if !slices.Equal(got, testCase.want) {
+					t.Fatalf("read targets = %v, want %v", got, testCase.want)
+				}
+			},
+		)
 	}
 }
 
@@ -73,12 +80,15 @@ func TestPinnedAnalyzerStillResolvesRealSearches(t *testing.T) {
 		{"rg with a path", `rg pattern /repo/internal`, []string{"/repo/internal"}},
 	}
 	for _, testCase := range cases {
-		t.Run(testCase.name, func(t *testing.T) {
-			got := searchPaths(t, testCase.command, []string{"grep", "rg"})
-			if !slices.Equal(got, testCase.want) {
-				t.Fatalf("read targets = %v, want %v", got, testCase.want)
-			}
-		})
+		t.Run(
+			testCase.name,
+			func(t *testing.T) {
+				got := searchPaths(t, testCase.command, []string{"grep", "rg"})
+				if !slices.Equal(got, testCase.want) {
+					t.Fatalf("read targets = %v, want %v", got, testCase.want)
+				}
+			},
+		)
 	}
 }
 

@@ -41,10 +41,18 @@ func FailOpenRecordPath() string {
 
 // RecordFailOpen records an unevaluated call even when the daemon cannot answer.
 // A write error does not change the hook response.
-func RecordFailOpen(reason string, system string, eventName string, toolName string, cwd string, detail string) {
+func RecordFailOpen(
+	reason string,
+	system string,
+	eventName string,
+	toolName string,
+	cwd string,
+	detail string,
+) {
 	if reason == "" {
 		return
 	}
+
 	record := FailOpenRecord{
 		At:        failOpenNow().UTC().Format(time.RFC3339Nano),
 		Reason:    reason,
@@ -59,7 +67,11 @@ func RecordFailOpen(reason string, system string, eventName string, toolName str
 		slog.Warn("encode fail-open record failed", "err", err)
 		return
 	}
-	if err := logstorage.AppendFailOpen(config.DefaultStateDir(), append(encoded, '\n')); err != nil {
+
+	if err := logstorage.AppendFailOpen(
+		config.DefaultStateDir(),
+		append(encoded, '\n'),
+	); err != nil {
 		slog.Warn("write fail-open record failed", "err", err)
 	}
 }
@@ -91,62 +103,79 @@ func FailOpenRecordSummary() (FailOpenSummary, error) {
 	} else if !os.IsNotExist(err) {
 		return summary, fmt.Errorf("read fail-open truncation marker: %w", err)
 	}
+
 	if readErr != nil {
 		if errors.Is(readErr, os.ErrNotExist) {
 			return summary, nil
 		}
+
 		slog.Warn("read fail-open record failed", "path", path, "err", readErr)
+
 		return summary, fmt.Errorf("read fail-open record: %w", readErr)
 	}
+
 	for _, line := range splitLines(data) {
 		var record FailOpenRecord
 		if json.Unmarshal(line, &record) != nil {
 			continue
 		}
+
 		recordedAt, err := time.Parse(time.RFC3339Nano, record.At)
 		if err != nil {
 			return summary, fmt.Errorf("parse fail-open record timestamp: %w", err)
 		}
+
 		age := now.Sub(recordedAt)
 		if age >= 0 {
 			if age <= time.Hour {
 				summary.LastHour++
 			}
+
 			if age <= 24*time.Hour {
 				summary.Last24Hours++
 			}
+
 			if age <= 7*24*time.Hour {
 				summary.Last7Days++
 			}
+
 			if age <= 90*24*time.Hour {
 				summary.Last90Days++
 			}
 		}
+
 		summary.Count++
 		if summary.Earliest == "" || record.At < summary.Earliest {
 			summary.Earliest = record.At
 		}
+
 		if record.At > summary.Latest {
 			summary.Latest = record.At
 		}
 	}
+
 	return summary, nil
 }
 
 func splitLines(data []byte) [][]byte {
 	lines := make([][]byte, 0)
 	start := 0
+
 	for index, character := range data {
 		if character != '\n' {
 			continue
 		}
+
 		if index > start {
 			lines = append(lines, data[start:index])
 		}
+
 		start = index + 1
 	}
+
 	if start < len(data) {
 		lines = append(lines, data[start:])
 	}
+
 	return lines
 }

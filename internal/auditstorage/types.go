@@ -51,6 +51,7 @@ const (
 // Classes returns the retained classes in stable bit order.
 func (mask DetailMask) Classes() []DetailClass {
 	classes := make([]DetailClass, 0, 5)
+
 	for _, entry := range []struct {
 		bit   DetailMask
 		class DetailClass
@@ -65,6 +66,7 @@ func (mask DetailMask) Classes() []DetailClass {
 			classes = append(classes, entry.class)
 		}
 	}
+
 	return classes
 }
 
@@ -75,5 +77,10 @@ func ProjectDetail(recorded, available, requested DetailMask) DetailProjection {
 	if available&requested != requested {
 		state = DetailStateNotRecorded
 	}
-	return DetailProjection{State: state, RecordedClasses: recorded.Classes(), AvailableClasses: available.Classes()}
+
+	return DetailProjection{
+		State:            state,
+		RecordedClasses:  recorded.Classes(),
+		AvailableClasses: available.Classes(),
+	}
 }

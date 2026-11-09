@@ -49,22 +49,27 @@ func NewMeteringSentinel() (*MeteringSentinel, error) {
 		slog.Error("sentinel counter init failed", slog.Any("err", err))
 		return nil, fmt.Errorf("create sentinel failures counter: %w", err)
 	}
+
 	return &MeteringSentinel{counter: counter}, nil
 }
 
 // Probe calls fn(ctx). If fn returns a non-nil error, it increments the failure
 // counter with the adapter name and a short reason derived from the error, then
 // returns the original error unchanged.
-func (s *MeteringSentinel) Probe(ctx context.Context, name string, fn func(context.Context) error) error {
+func (s *MeteringSentinel) Probe(
+	ctx context.Context,
+	name string,
+	fn func(context.Context) error,
+) error {
 	err := fn(ctx)
 	if err != nil {
-		s.counter.Add(ctx, 1,
-			metric.WithAttributes(
-				attrAdapter.String(name),
-				attrReason.String(classifyError(err)),
-			),
+		s.counter.Add(
+			ctx,
+			1,
+			metric.WithAttributes(attrAdapter.String(name), attrReason.String(classifyError(err))),
 		)
 	}
+
 	return err
 }
 
@@ -75,21 +80,28 @@ func classifyError(err error) string {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return "timeout"
 	}
+
 	if errors.Is(err, context.Canceled) {
 		return "canceled"
 	}
+
 	msg := err.Error()
 	// Use the first token of the error message, capped to 32 characters, so
 	// high-cardinality messages do not blow up metric storage.
-	first := strings.FieldsFunc(msg, func(r rune) bool {
-		return r == ':' || r == ' ' || r == '\n'
-	})
+	first := strings.FieldsFunc(
+		msg,
+		func(r rune) bool {
+			return r == ':' || r == ' ' || r == '\n'
+		},
+	)
 	if len(first) == 0 {
 		return "unknown"
 	}
+
 	label := strings.ToLower(first[0])
 	if len(label) > 32 {
 		label = label[:32]
 	}
+
 	return label
 }

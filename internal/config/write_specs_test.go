@@ -8,7 +8,9 @@ import (
 )
 
 func TestLoadWriteSpecs(t *testing.T) {
-	setConfigHome(t, `
+	setConfigHome(
+		t,
+		`
 [[rules]]
 name = "declared-writers"
 events = ["PreToolUse"]
@@ -29,19 +31,23 @@ cwd_flags = ["--cwd"]
 [[rules.conditions.write_specs]]
 argv0 = ["writer-copy", "writer-move"]
 target_mode = "last_operand"
-`)
+`,
+	)
 
 	cfg, err := config.Load()
 	if err != nil {
 		t.Fatalf("Load() error: %v", err)
 	}
+
 	specs := cfg.Rules[0].Conditions[0].WriteSpecs
 	if len(specs) != 2 {
 		t.Fatalf("WriteSpecs length = %d, want 2", len(specs))
 	}
+
 	if specs[0].TargetMode != config.WriteTargetAllOperands || !specs[0].EndOfOptions {
 		t.Fatalf("first WriteSpec = %#v", specs[0])
 	}
+
 	if specs[1].TargetMode != config.WriteTargetLastOperand {
 		t.Fatalf("second target mode = %q", specs[1].TargetMode)
 	}
@@ -113,23 +119,30 @@ cwd_flags = ["directory"]`,
 	}
 
 	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			setConfigHome(t, `
+		t.Run(
+			test.name,
+			func(t *testing.T) {
+				setConfigHome(
+					t,
+					`
 [[rules]]
 name = "invalid-writer"
 events = ["PreToolUse"]
 action = "block"
 violation_message = "blocked"
 [[rules.conditions]]
-`+test.condition)
-			_, err := config.Load()
-			if err == nil || !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("Load() error = %v, want substring %q", err, test.want)
-			}
-			const wantContext = `rule "invalid-writer" condition 0 write_specs 0`
-			if !strings.Contains(err.Error(), wantContext) {
-				t.Fatalf("Load() error = %v, want context %q", err, wantContext)
-			}
-		})
+`+test.condition,
+				)
+				_, err := config.Load()
+				if err == nil || !strings.Contains(err.Error(), test.want) {
+					t.Fatalf("Load() error = %v, want substring %q", err, test.want)
+				}
+
+				const wantContext = `rule "invalid-writer" condition 0 write_specs 0`
+				if !strings.Contains(err.Error(), wantContext) {
+					t.Fatalf("Load() error = %v, want context %q", err, wantContext)
+				}
+			},
+		)
 	}
 }

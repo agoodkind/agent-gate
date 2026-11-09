@@ -51,10 +51,16 @@ type runtimeSnapshot struct {
 	deferredProcessor    *deferredProcessor
 	evaluateSlots        chan struct{}
 	evaluateQueueWait    time.Duration
-	hotEvaluate          func(context.Context, hook.EvaluationInput, *config.Config, func(string) string, string) hook.HotEvaluation
-	execRuntime          *rules.ExecRuntime
-	inferRuntime         *rules.InferRuntime
-	inference            *inferenceOwner
+	hotEvaluate          func(
+		context.Context,
+		hook.EvaluationInput,
+		*config.Config,
+		func(string) string,
+		string,
+	) hook.HotEvaluation
+	execRuntime  *rules.ExecRuntime
+	inferRuntime *rules.InferRuntime
+	inference    *inferenceOwner
 }
 
 // Server implements the AgentGateD gRPC service.
@@ -98,6 +104,7 @@ type Server struct {
 // top-level field is named so a new config section cannot be silently defaulted.
 func zeroConfig() *config.Config {
 	var emptyAuditStorage config.AuditStorage
+
 	return &config.Config{
 		Log: config.Log{Level: ""},
 		Audit: config.Audit{
@@ -121,18 +128,27 @@ func zeroConfig() *config.Config {
 				},
 			},
 			Timeouts: config.TimeoutPerformance{
-				HookEvaluateMS: 0, ExecDefaultMS: 0, ExecMaxMS: 0,
-				ExecBackgroundMS: 0, ExecMaxRetryCount: 0,
-				InferDefaultMS: 0, InferMaxMS: 0,
+				HookEvaluateMS:    0,
+				ExecDefaultMS:     0,
+				ExecMaxMS:         0,
+				ExecBackgroundMS:  0,
+				ExecMaxRetryCount: 0,
+				InferDefaultMS:    0,
+				InferMaxMS:        0,
 			},
 			Limits: config.LimitPerformance{
-				RegexMatchLimit: 0, RegexDepthLimit: 0, AuditQueueLimit: 0,
-				AuditDedupCacheSize: 0, HookInferencePhaseMaxMs: 0,
+				RegexMatchLimit:         0,
+				RegexDepthLimit:         0,
+				AuditQueueLimit:         0,
+				AuditDedupCacheSize:     0,
+				HookInferencePhaseMaxMs: 0,
 			},
 			Intervals: config.IntervalPerformance{
-				AuditDedupTTLMs: 0, AuditDropLogIntervalMs: 0,
-				OverloadLogIntervalMs: 0, DeferredClaimLeaseMs: 0,
-				DeferredClaimRenewMs: 0,
+				AuditDedupTTLMs:        0,
+				AuditDropLogIntervalMs: 0,
+				OverloadLogIntervalMs:  0,
+				DeferredClaimLeaseMs:   0,
+				DeferredClaimRenewMs:   0,
 			},
 		},
 		Update: config.Update{
@@ -162,21 +178,35 @@ func New(ctx context.Context, log *slog.Logger, cfg *config.Config) (*Server, er
 	return newServer(ctx, log, cfg, time.Now)
 }
 
-func newServer(ctx context.Context, log *slog.Logger, cfg *config.Config, now func() time.Time) (*Server, error) {
+func newServer(
+	ctx context.Context,
+	log *slog.Logger,
+	cfg *config.Config,
+	now func() time.Time,
+) (*Server, error) {
 	return newServerWithStorageWait(ctx, log, cfg, now, waitAuditRetry)
 }
 
-func newServerWithStorageWait(ctx context.Context, log *slog.Logger, cfg *config.Config, now func() time.Time, wait func(context.Context, time.Duration) error) (*Server, error) {
+func newServerWithStorageWait(
+	ctx context.Context,
+	log *slog.Logger,
+	cfg *config.Config,
+	now func() time.Time,
+	wait func(context.Context, time.Duration) error,
+) (*Server, error) {
 	if log == nil {
 		log = slog.Default()
 	}
+
 	if cfg == nil {
 		cfg = zeroConfig()
 	}
+
 	if errs := hook.ValidateConfig(cfg); len(errs) > 0 {
 		log.Error("invalid hook config", slog.Any("err", errs[0]))
 		return nil, fmt.Errorf("invalid hook config: %w", errs[0])
 	}
+
 	initializeBuildIdentity(log)
 	if !cfg.Unusable() {
 		if err := cfg.PrepareAuditStorage(); err != nil {
@@ -208,14 +238,30 @@ func newServerWithStorageWait(ctx context.Context, log *slog.Logger, cfg *config
 		stopDaemon:                    nil,
 		overloadLogMu:                 sync.Mutex{},
 		lastOverloadLogTime:           time.Time{},
-		catalog:                       nil, shutdown: lifetime.Done(), auditCancel: nil, cancel: cancel, now: now,
-		auditTicks: nil, auditWake: make(chan struct{}, 1), auditOnce: sync.Once{}, auditWG: sync.WaitGroup{},
-		closeOnce:      sync.Once{},
-		retryWait:      wait,
-		auditStarted:   make(chan struct{}),
-		auditRequested: false,
+		catalog:                       nil,
+		shutdown:                      lifetime.Done(),
+		auditCancel:                   nil,
+		cancel:                        cancel,
+		now:                           now,
+		auditTicks:                    nil,
+		auditWake:                     make(chan struct{}, 1),
+		auditOnce:                     sync.Once{},
+		auditWG:                       sync.WaitGroup{},
+		closeOnce:                     sync.Once{},
+		retryWait:                     wait,
+		auditStarted:                  make(chan struct{}),
+		auditRequested:                false,
 	}
-	s.deferredProcessor = newDeferredProcessor(lifetime, nil, nil, cfg, nil, cfg.HookDeferredQueueLimit(), 0, log)
+	s.deferredProcessor = newDeferredProcessor(
+		lifetime,
+		nil,
+		nil,
+		cfg,
+		nil,
+		cfg.HookDeferredQueueLimit(),
+		0,
+		log,
+	)
 	s.deferredProcessor.service.mu.Lock()
 	s.deferredProcessor.cfg = nil
 	s.deferredProcessor.service.server = s
@@ -227,8 +273,10 @@ func newServerWithStorageWait(ctx context.Context, log *slog.Logger, cfg *config
 		cancel()
 		s.deferredProcessor.Close()
 		hotStore.Close()
+
 		return nil, err
 	}
+
 	s.publishRuntimeLocked(snapshot)
 	s.deferredProcessor.configure(cfg)
 	if err := s.startConfigWatcher(lifetime); err != nil {
@@ -236,8 +284,10 @@ func newServerWithStorageWait(ctx context.Context, log *slog.Logger, cfg *config
 		snapshot.close(ctx, log)
 		s.deferredProcessor.Close()
 		hotStore.Close()
+
 		return nil, err
 	}
+
 	return s, nil
 }
 
@@ -250,36 +300,56 @@ func hotKVOptions(cfg *config.Config) hotkv.Options {
 	}
 }
 
-func newRuntimeSnapshotForBucket(ctx context.Context, cfg *config.Config, log *slog.Logger, hotStore *hotkv.Store, owner *fileOwner, inference *inferenceOwner) (*runtimeSnapshot, error) {
+func newRuntimeSnapshotForBucket(
+	ctx context.Context,
+	cfg *config.Config,
+	log *slog.Logger,
+	hotStore *hotkv.Store,
+	owner *fileOwner,
+	inference *inferenceOwner,
+) (*runtimeSnapshot, error) {
 	handle := owner.handle
 	store, err := intake.NewStore(ctx, handle.Database, cfg.AuditStoragePolicy(), log)
 	if err != nil {
 		return nil, fmt.Errorf("create intake store: %w", err)
 	}
+
 	intakeStore := &sqliteIntakeStore{store: store, log: log}
 
 	if inference == nil {
-		inference = &inferenceOwner{runtime: rules.NewInferRuntimeWithCache(log, hotStore), references: atomic.Int64{}}
+		inference = &inferenceOwner{
+			runtime:    rules.NewInferRuntimeWithCache(log, hotStore),
+			references: atomic.Int64{},
+		}
 		inference.runtime.SetJudgeTranscript(
-			cfg.JudgeTranscriptEndpoint(), cfg.JudgeTranscriptMaxTokens(),
-			cfg.JudgeTranscriptTokenModel(), cfg.JudgeTranscriptTimeout(),
+			cfg.JudgeTranscriptEndpoint(),
+			cfg.JudgeTranscriptMaxTokens(),
+			cfg.JudgeTranscriptTokenModel(),
+			cfg.JudgeTranscriptTimeout(),
 			cfg.JudgeTranscriptOnError(),
 		)
 	}
+
 	inference.references.Add(1)
 
-	eventLogger, err := audit.NewEventLoggerWithOptions(ctx, cfg, log, audit.LoggerOptions{
-		QueueLimit:    0,
-		BatchMaxItems: 0,
-		BatchMaxBytes: 0,
-		QueueMaxBytes: 0,
-		SharedDB:      intakeStore.Handle(),
-	})
+	eventLogger, err := audit.NewEventLoggerWithOptions(
+		ctx,
+		cfg,
+		log,
+		audit.LoggerOptions{
+			QueueLimit:    0,
+			BatchMaxItems: 0,
+			BatchMaxBytes: 0,
+			QueueMaxBytes: 0,
+			SharedDB:      intakeStore.Handle(),
+		},
+	)
 	if err != nil {
 		inference.release()
 		if log != nil {
 			log.WarnContext(ctx, "create event logger failed", "err", err)
 		}
+
 		return nil, fmt.Errorf("create event logger: %w", err)
 	}
 
@@ -294,19 +364,21 @@ func newRuntimeSnapshotForBucket(ctx context.Context, cfg *config.Config, log *s
 		assignmentGeneration: 0,
 		owner:                owner,
 		catalog:              nil,
-		bucket:               handle.Bucket, bucketHandle: handle,
-		cfg:                cfg,
-		eventLogger:        eventLogger,
-		intakeStore:        intakeStore,
-		evaluationRecorder: intakeStore.Evaluations(),
-		deferredProcessor:  nil,
-		evaluateSlots:      make(chan struct{}, cfg.HookHotConcurrency()),
-		evaluateQueueWait:  cfg.HookHotQueueWait(),
-		hotEvaluate:        defaultHotEvaluate,
-		execRuntime:        execRuntime,
-		inferRuntime:       inference.runtime,
-		inference:          inference,
+		bucket:               handle.Bucket,
+		bucketHandle:         handle,
+		cfg:                  cfg,
+		eventLogger:          eventLogger,
+		intakeStore:          intakeStore,
+		evaluationRecorder:   intakeStore.Evaluations(),
+		deferredProcessor:    nil,
+		evaluateSlots:        make(chan struct{}, cfg.HookHotConcurrency()),
+		evaluateQueueWait:    cfg.HookHotQueueWait(),
+		hotEvaluate:          defaultHotEvaluate,
+		execRuntime:          execRuntime,
+		inferRuntime:         inference.runtime,
+		inference:            inference,
 	}
+
 	return snapshot, nil
 }
 
@@ -324,6 +396,7 @@ func (s *runtimeSnapshot) close(ctx context.Context, log *slog.Logger) {
 	if s == nil {
 		return
 	}
+
 	if s.eventLogger != nil {
 		drainContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
@@ -331,9 +404,11 @@ func (s *runtimeSnapshot) close(ctx context.Context, log *slog.Logger) {
 			log.WarnContext(ctx, "audit logger close failed", "err", err)
 		}
 	}
+
 	if s.inference != nil {
 		s.inference.release()
 	}
+
 	if s.owner != nil {
 		if err := s.owner.release(); err != nil && log != nil {
 			log.WarnContext(ctx, "audit bucket close failed", "err", err)
@@ -350,13 +425,24 @@ func (s *Server) startConfigWatcher(ctx context.Context) error {
 
 	configDir := filepath.Dir(s.configPath)
 	if err := os.MkdirAll(configDir, 0o700); err != nil {
-		s.log.Error("create config directory failed", slog.String("dir", configDir), slog.Any("err", err))
+		s.log.Error(
+			"create config directory failed",
+			slog.String("dir", configDir),
+			slog.Any("err", err),
+		)
 		_ = watcher.Close()
+
 		return fmt.Errorf("create config directory %s: %w", configDir, err)
 	}
+
 	if err := watcher.Add(configDir); err != nil {
-		s.log.Error("watch config directory failed", slog.String("dir", configDir), slog.Any("err", err))
+		s.log.Error(
+			"watch config directory failed",
+			slog.String("dir", configDir),
+			slog.Any("err", err),
+		)
 		_ = watcher.Close()
+
 		return fmt.Errorf("watch config directory %s: %w", configDir, err)
 	}
 
@@ -370,6 +456,7 @@ func (s *Server) startConfigWatcher(ctx context.Context) error {
 		}()
 		s.watchConfigFile(ctx)
 	}()
+
 	return nil
 }
 
@@ -378,6 +465,7 @@ func (s *Server) watchConfigFile(ctx context.Context) {
 	if !timer.Stop() {
 		<-timer.C
 	}
+
 	pending := false
 	defer func() { _ = timer.Stop() }()
 
@@ -387,16 +475,25 @@ func (s *Server) watchConfigFile(ctx context.Context) {
 			if !ok {
 				return
 			}
+
 			if s.shouldReloadConfig(event) {
 				pending = true
 				resetTimer(timer, configReloadDebounce)
-				s.log.DebugContext(ctx, "config change detected", "path", s.configPath, "event", event.Op.String())
+				s.log.DebugContext(
+					ctx,
+					"config change detected",
+					"path",
+					s.configPath,
+					"event",
+					event.Op.String(),
+				)
 			}
 
 		case <-timer.C:
 			if !pending {
 				continue
 			}
+
 			pending = false
 			if err := s.reloadConfig(ctx); err != nil {
 				s.log.WarnContext(ctx, "config reload rejected", "path", s.configPath, "err", err)
@@ -406,6 +503,7 @@ func (s *Server) watchConfigFile(ctx context.Context) {
 			if !ok {
 				return
 			}
+
 			s.log.WarnContext(ctx, "config watcher error", "path", s.configPath, "err", err)
 		}
 	}
@@ -415,7 +513,9 @@ func (s *Server) shouldReloadConfig(event fsnotify.Event) bool {
 	if filepath.Clean(event.Name) != filepath.Clean(s.configPath) {
 		return false
 	}
+
 	reloadEvents := fsnotify.Write | fsnotify.Create | fsnotify.Rename | fsnotify.Remove | fsnotify.Chmod
+
 	return event.Op&reloadEvents != 0
 }
 
@@ -426,6 +526,7 @@ func resetTimer(timer *time.Timer, duration time.Duration) {
 		default:
 		}
 	}
+
 	timer.Reset(duration)
 }
 
@@ -435,6 +536,7 @@ func (s *Server) reloadConfig(ctx context.Context) error {
 	if s.closing {
 		return nil
 	}
+
 	ctx, cancel := context.WithCancel(ctx)
 	go func() {
 		defer func() {
@@ -459,19 +561,42 @@ func (s *Server) reloadConfig(ctx context.Context) error {
 		s.log.WarnContext(ctx, "config load or compile failed", "path", s.configPath, "err", err)
 		return fmt.Errorf("config load or compile failed: %w", err)
 	}
+
 	if candidate.Unusable() {
-		return fmt.Errorf("config did not decode; keeping previous config: %s", candidate.Failures()[0].Reason)
+		return fmt.Errorf(
+			"config did not decode; keeping previous config: %s",
+			candidate.Failures()[0].Reason,
+		)
 	}
+
 	for _, failure := range candidate.Failures() {
-		s.log.ErrorContext(ctx, "config degraded on reload", "path", s.configPath,
-			"kind", failure.Kind, "scope", failure.Scope, "err", failure.Reason)
+		s.log.ErrorContext(
+			ctx,
+			"config degraded on reload",
+			"path",
+			s.configPath,
+			"kind",
+			failure.Kind,
+			"scope",
+			failure.Scope,
+			"err",
+			failure.Reason,
+		)
 		// Reload cannot replace a valid storage plan with a degraded fallback.
 		if failure.Kind == config.LoadFailureSection && failure.Scope == "audit.storage" {
 			return fmt.Errorf("audit storage config invalid: %s", failure.Reason)
 		}
 	}
+
 	if errs := hook.ValidateConfig(candidate); len(errs) > 0 {
-		s.log.WarnContext(ctx, "hook config validation failed", "path", s.configPath, "err", errs[0])
+		s.log.WarnContext(
+			ctx,
+			"hook config validation failed",
+			"path",
+			s.configPath,
+			"err",
+			errs[0],
+		)
 		return fmt.Errorf("hook config validation failed: %w", errs[0])
 	}
 
@@ -479,7 +604,14 @@ func (s *Server) reloadConfig(ctx context.Context) error {
 
 	newSnapshot, err := s.replaceAuditSnapshot(ctx, candidate)
 	if err != nil {
-		s.log.WarnContext(ctx, "create runtime snapshot for reloaded config failed", "path", s.configPath, "err", err)
+		s.log.WarnContext(
+			ctx,
+			"create runtime snapshot for reloaded config failed",
+			"path",
+			s.configPath,
+			"err",
+			err,
+		)
 		return fmt.Errorf("failed to create runtime snapshot for reloaded config: %w", err)
 	}
 
@@ -487,14 +619,17 @@ func (s *Server) reloadConfig(ctx context.Context) error {
 	if s.closing {
 		s.cfgMu.Unlock()
 		newSnapshot.close(ctx, s.log)
+
 		return nil
 	}
+
 	s.cfgMu.Unlock()
 
 	s.cfgMu.Lock()
 	if s.hotKV != nil {
 		s.hotKV.Configure(hotKVOptions(candidate))
 	}
+
 	s.runtimeMu.Lock()
 	oldSnapshot := s.publishRuntimeLocked(newSnapshot)
 	s.runtimeMu.Unlock()
@@ -507,30 +642,52 @@ func (s *Server) reloadConfig(ctx context.Context) error {
 	if updateCancel != nil {
 		updateCancel()
 	}
+
 	if stopDaemon != nil {
 		s.StartUpdateScheduler(context.WithoutCancel(ctx), stopDaemon)
 	}
+
 	oldSnapshot.close(ctx, s.log)
 	if auditRequested {
 		s.StartAuditScheduler(context.WithoutCancel(ctx))
 	}
-	s.log.InfoContext(ctx, "config reloaded", "path", s.configPath, "rules", len(candidate.Rules), "audit_enabled", candidate.AuditEnabled())
+
+	s.log.InfoContext(
+		ctx,
+		"config reloaded",
+		"path",
+		s.configPath,
+		"rules",
+		len(candidate.Rules),
+		"audit_enabled",
+		candidate.AuditEnabled(),
+	)
+
 	return nil
 }
 
 // EvaluateHook processes a hook event through daemon-owned enforcement.
-func (s *Server) EvaluateHook(ctx context.Context, req *daemonpb.EvaluateHookRequest) (*daemonpb.EvaluateHookResponse, error) {
+func (s *Server) EvaluateHook(
+	ctx context.Context,
+	req *daemonpb.EvaluateHookRequest,
+) (*daemonpb.EvaluateHookResponse, error) {
 	s.runtimeMu.RLock()
 	defer s.runtimeMu.RUnlock()
 	snapshot := s.runtime.Load()
 	if snapshot == nil {
-		return s.unevaluated(ctx, req, hook.FailOpenReasonDaemonNotReady,
-			"daemon has no runtime snapshot yet"), nil
+		return s.unevaluated(
+			ctx,
+			req,
+			hook.FailOpenReasonDaemonNotReady,
+			"daemon has no runtime snapshot yet",
+		), nil
 	}
+
 	requestLog := s.log
 	if peerInfo, ok := peer.FromContext(ctx); ok && peerInfo.Addr != nil {
 		requestLog = requestLog.With("peer_addr", peerInfo.Addr.String())
 	}
+
 	// A config that did not decode leaves no rules, so the daemon is running but
 	// enforcing nothing. Answering with a clean allow would be worse than being
 	// down, because a hook that reaches no daemon at least says so. Report every
@@ -539,20 +696,38 @@ func (s *Server) EvaluateHook(ctx context.Context, req *daemonpb.EvaluateHookReq
 		system := hook.SystemFromString(req.GetProviderHint())
 		diagnostic := unusableConfigDiagnostic(snapshot.cfg)
 		RecordFailOpen(
-			string(hook.FailOpenReasonConfigUnusable), system.String(),
-			"", "", req.GetCwd(), diagnostic,
+			string(hook.FailOpenReasonConfigUnusable),
+			system.String(),
+			"",
+			"",
+			req.GetCwd(),
+			diagnostic,
 		)
-		requestLog.ErrorContext(ctx, "config unusable; call allowed without enforcement",
-			"err", diagnostic)
+		requestLog.ErrorContext(
+			ctx,
+			"config unusable; call allowed without enforcement",
+			"err",
+			diagnostic,
+		)
+
 		return failOpenEvaluateHookResponseFor(
-			system, hook.FailOpenReasonConfigUnusable, diagnostic,
+			system,
+			hook.FailOpenReasonConfigUnusable,
+			diagnostic,
 		), nil
 	}
+
 	if !s.acquireEvaluateSlot(ctx, snapshot) {
 		s.logEvaluateOverload(ctx, snapshot)
-		return s.unevaluated(ctx, req, hook.FailOpenReasonOverloaded,
-			"every evaluation slot was busy past the queue deadline"), nil
+
+		return s.unevaluated(
+			ctx,
+			req,
+			hook.FailOpenReasonOverloaded,
+			"every evaluation slot was busy past the queue deadline",
+		), nil
 	}
+
 	defer s.releaseEvaluateSlot(snapshot)
 
 	ctx = hookEvaluationContext(ctx, snapshot)
@@ -563,6 +738,7 @@ func (s *Server) EvaluateHook(ctx context.Context, req *daemonpb.EvaluateHookReq
 		if envFingerprint == nil {
 			return ""
 		}
+
 		return envFingerprint[key]
 	}
 
@@ -576,6 +752,7 @@ func (s *Server) EvaluateHook(ctx context.Context, req *daemonpb.EvaluateHookReq
 	if normalizationErr != nil {
 		intakeErr = normalizationErr
 	}
+
 	if intakeErr != nil {
 		intakeRecord = buildInvalidIntakeRecord(
 			evaluationInput.WireBytes,
@@ -589,7 +766,11 @@ func (s *Server) EvaluateHook(ctx context.Context, req *daemonpb.EvaluateHookReq
 		requestLog.WarnContext(ctx, "append hook intake failed; failing open", "err", err)
 		return s.unevaluated(ctx, req, hook.FailOpenReasonIntakeWriteFailed, err.Error()), nil
 	}
-	order := hotkv.ObservationOrder{Generation: snapshot.assignmentGeneration, ReceiptID: appendResult.ReceiptID}
+
+	order := hotkv.ObservationOrder{
+		Generation: snapshot.assignmentGeneration,
+		ReceiptID:  appendResult.ReceiptID,
+	}
 	s.hotKV.RegisterObservation(order)
 	if intakeErr == nil {
 		observeUserPrompt(
@@ -601,24 +782,28 @@ func (s *Server) EvaluateHook(ctx context.Context, req *daemonpb.EvaluateHookReq
 	}
 
 	syncCfg := hook.SyncConfig(snapshot.cfg)
-	result := snapshot.hotEvaluate(
-		ctx,
-		evaluationInput,
-		syncCfg,
-		getenv,
-		appendResult.EventID,
-	)
+	result := snapshot.hotEvaluate(ctx, evaluationInput, syncCfg, getenv, appendResult.EventID)
 	systemError := ""
 	errorMessage := ""
 	if intakeErr != nil {
 		systemError = intakeParseFailed
 		errorMessage = intakeErr.Error()
 	}
-	return s.commitHotEvaluation(ctx, hotEvaluationCommitInput{
-		Log: requestLog, Snapshot: snapshot, Intake: intakeRecord,
-		AppendResult: appendResult, ObservationOrder: order, StartedAt: evalStart, Result: result,
-		SystemError: systemError, ErrorMessage: errorMessage,
-	}), nil
+
+	return s.commitHotEvaluation(
+		ctx,
+		hotEvaluationCommitInput{
+			Log:              requestLog,
+			Snapshot:         snapshot,
+			Intake:           intakeRecord,
+			AppendResult:     appendResult,
+			ObservationOrder: order,
+			StartedAt:        evalStart,
+			Result:           result,
+			SystemError:      systemError,
+			ErrorMessage:     errorMessage,
+		},
+	), nil
 }
 
 func hookEvaluationContext(
@@ -627,6 +812,7 @@ func hookEvaluationContext(
 ) context.Context {
 	ctx = rules.WithExecRuntime(ctx, snapshot.execRuntime)
 	ctx = rules.WithInferRuntime(ctx, snapshot.inferRuntime)
+
 	return rules.WithGitStateReader(ctx, gitbranch.ReadState)
 }
 
@@ -645,6 +831,7 @@ func prepareHookEvaluationInput(
 	if cwd := request.GetCwd(); cwd != "" {
 		normalizedJSON = injectCWD(normalizedJSON, cwd)
 	}
+
 	if classification.ResolvedSystem() == hook.SystemCopilot {
 		var err error
 		normalizedJSON, err = hook.NormalizeCopilotPayload(
@@ -659,6 +846,7 @@ func prepareHookEvaluationInput(
 			}, wrapServerError("normalize Copilot payload", err)
 		}
 	}
+
 	return hook.EvaluationInput{
 		WireBytes:      wireInput,
 		NormalizedJSON: normalizedJSON,
@@ -676,10 +864,12 @@ func observeUserPrompt(
 	if err != nil {
 		return
 	}
+
 	prompt, ok := hook.UserPrompt(payload)
 	if !ok {
 		return
 	}
+
 	runtime.ObserveUserPromptOrdered(system, payload.Fields(), order, prompt)
 }
 
@@ -689,13 +879,16 @@ func copilotEventHint(argv []string) string {
 			if index+1 < len(argv) {
 				return argv[index+1]
 			}
+
 			return ""
 		}
+
 		if argv[index] == "managed-hook" &&
 			index+2 < len(argv) && argv[index+1] == "copilot" {
 			return argv[index+2]
 		}
 	}
+
 	return ""
 }
 
@@ -730,9 +923,11 @@ func buildClassifiedIntakeRecord(
 		// not leak into the intake database.
 		effectiveCwd = ""
 	}
+
 	record.Operation.EffectiveCWD = effectiveCwd
 	record.Operation.Command = fields.CommandValue()
 	record.Operation.FilePath = fields.FilePathValue()
+
 	return record, nil
 }
 
@@ -742,17 +937,34 @@ func buildInvalidIntakeRecord(
 	envFingerprint map[string]string,
 ) intake.Record {
 	return intake.Record{
-		ReceiptID: 0, ReceivedAt: time.Time{}, EventID: "", SchemaVersion: 0,
-		RecordedAt: time.Time{}, System: classification.ResolvedProvider,
-		SessionID: "_no-session", TurnID: "", EventName: "_invalid",
-		ToolName: "", ToolUseID: "", Operation: intake.Operation{
-			CWD: "", EffectiveCWD: "", Command: "", FilePath: "",
+		ReceiptID:     0,
+		ReceivedAt:    time.Time{},
+		EventID:       "",
+		SchemaVersion: 0,
+		RecordedAt:    time.Time{},
+		System:        classification.ResolvedProvider,
+		SessionID:     "_no-session",
+		TurnID:        "",
+		EventName:     "_invalid",
+		ToolName:      "",
+		ToolUseID:     "",
+		Operation: intake.Operation{
+			CWD:          "",
+			EffectiveCWD: "",
+			Command:      "",
+			FilePath:     "",
 		},
-		RawPayload: cloneBytes(wireInput), NormalizedJSON: json.RawMessage(`{}`),
+		RawPayload:         cloneBytes(wireInput),
+		NormalizedJSON:     json.RawMessage(`{}`),
 		ClassificationJSON: hook.MarshalClassification(classification),
-		RawPayloadHash:     "", EnvFingerprint: cloneStringMap(envFingerprint),
-		DeferredState: intake.DeferredStateNone, PendingAt: nil, CompletedAt: nil,
-		LastReplayAt: nil, DeferredReplays: 0, Sequence: 0,
+		RawPayloadHash:     "",
+		EnvFingerprint:     cloneStringMap(envFingerprint),
+		DeferredState:      intake.DeferredStateNone,
+		PendingAt:          nil,
+		CompletedAt:        nil,
+		LastReplayAt:       nil,
+		DeferredReplays:    0,
+		Sequence:           0,
 	}
 }
 
@@ -762,6 +974,7 @@ func firstNonEmpty(values ...string) string {
 			return value
 		}
 	}
+
 	return ""
 }
 
@@ -769,14 +982,17 @@ func cloneStringMap(values map[string]string) map[string]string {
 	if len(values) == 0 {
 		return map[string]string{}
 	}
+
 	cloned := make(map[string]string, len(values))
 	maps.Copy(cloned, values)
+
 	return cloned
 }
 
 func cloneBytes(value []byte) []byte {
 	cloned := make([]byte, len(value))
 	copy(cloned, value)
+
 	return cloned
 }
 
@@ -784,6 +1000,7 @@ func failOpenHotEvaluation(result hook.HotEvaluation) hook.HotEvaluation {
 	result.Stdout = nil
 	result.Stderr = nil
 	result.ExitCode = 0
+
 	return result
 }
 
@@ -791,9 +1008,11 @@ func wrapServerError(message string, err error) error {
 	if err == nil {
 		return nil
 	}
+
 	if !auditstorage.CancellationOnly(err) {
 		slog.Warn(message+" failed", "err", err)
 	}
+
 	return fmt.Errorf("%s: %w", message, err)
 }
 
@@ -801,6 +1020,7 @@ func (s *Server) acquireEvaluateSlot(ctx context.Context, snapshot *runtimeSnaps
 	if s == nil || snapshot == nil || snapshot.evaluateSlots == nil {
 		return true
 	}
+
 	select {
 	case snapshot.evaluateSlots <- struct{}{}:
 		return true
@@ -812,6 +1032,7 @@ func (s *Server) acquireEvaluateSlot(ctx context.Context, snapshot *runtimeSnaps
 	if snapshot.evaluateQueueWait > 0 {
 		waitCtx, cancel = context.WithTimeout(ctx, snapshot.evaluateQueueWait)
 	}
+
 	defer cancel()
 
 	select {
@@ -826,6 +1047,7 @@ func (s *Server) releaseEvaluateSlot(snapshot *runtimeSnapshot) {
 	if s == nil || snapshot == nil || snapshot.evaluateSlots == nil {
 		return
 	}
+
 	select {
 	case <-snapshot.evaluateSlots:
 	default:
@@ -851,6 +1073,7 @@ func failOpenEvaluateHookResponseFor(
 	if rendered.ExitCode > 0 && rendered.ExitCode <= math.MaxInt32 {
 		exitCode = int32(rendered.ExitCode)
 	}
+
 	return &daemonpb.EvaluateHookResponse{
 		ExitCode:   exitCode,
 		StdoutData: rendered.Stdout,
@@ -866,6 +1089,7 @@ func (s *Server) logEvaluateOverload(ctx context.Context, snapshot *runtimeSnaps
 	if s == nil || s.log == nil || snapshot == nil {
 		return
 	}
+
 	now := auditNow()
 	// Read the interval from the snapshot rather than a field captured at
 	// construction, so a config reload takes effect. The snapshot is replaced
@@ -876,13 +1100,17 @@ func (s *Server) logEvaluateOverload(ctx context.Context, snapshot *runtimeSnaps
 		s.overloadLogMu.Unlock()
 		return
 	}
+
 	s.lastOverloadLogTime = now
 	s.overloadLogMu.Unlock()
 
 	s.log.WarnContext(
-		ctx, "evaluate hook overloaded; failing open",
-		"max_concurrency", cap(snapshot.evaluateSlots),
-		"queue_wait_ms", snapshot.evaluateQueueWait.Milliseconds(),
+		ctx,
+		"evaluate hook overloaded; failing open",
+		"max_concurrency",
+		cap(snapshot.evaluateSlots),
+		"queue_wait_ms",
+		snapshot.evaluateQueueWait.Milliseconds(),
 	)
 }
 
@@ -895,9 +1123,11 @@ func clampExitCode(exitCode int) int32 {
 	if exitCode > maxInt32 {
 		return int32(maxInt32)
 	}
+
 	if exitCode < minInt32 {
 		return int32(minInt32)
 	}
+
 	return int32(exitCode)
 }
 
@@ -905,30 +1135,38 @@ func injectCWD(rawJSON []byte, cwd string) []byte {
 	if cwd == "" || len(rawJSON) == 0 {
 		return rawJSON
 	}
+
 	var payload map[string]json.RawMessage
 	if err := json.Unmarshal(rawJSON, &payload); err != nil {
 		return rawJSON
 	}
+
 	encodedCWD, err := json.Marshal(cwd)
 	if err != nil {
 		return rawJSON
 	}
+
 	payload["cwd"] = encodedCWD
 	normalized, err := json.Marshal(payload)
 	if err != nil {
 		return rawJSON
 	}
+
 	return normalized
 }
 
 // Status implements the AgentGateD Status RPC and returns a snapshot of
 // daemon-side identifying information.
-func (s *Server) Status(_ context.Context, _ *daemonpb.StatusRequest) (*daemonpb.StatusResponse, error) {
+func (s *Server) Status(
+	_ context.Context,
+	_ *daemonpb.StatusRequest,
+) (*daemonpb.StatusResponse, error) {
 	exe, err := os.Executable()
 	if err != nil {
 		s.log.Error("resolve executable failed", slog.Any("err", err))
 		return nil, status.Errorf(codes.Internal, "resolve executable: %v", err)
 	}
+
 	// Reported so an operator can tell a healthy daemon from one that is running
 	// and enforcing nothing. Those look identical from the outside otherwise,
 	// which is how a ten hour outage went unnoticed.
@@ -940,6 +1178,7 @@ func (s *Server) Status(_ context.Context, _ *daemonpb.StatusRequest) (*daemonpb
 			configError = unusableConfigDiagnostic(snapshot.cfg)
 		}
 	}
+
 	return &daemonpb.StatusResponse{
 		Pid:            int64(os.Getpid()),
 		ExecutablePath: exe,
@@ -962,6 +1201,7 @@ func unusableConfigDiagnostic(cfg *config.Config) string {
 			return fmt.Sprintf("config %s did not decode: %s", failure.Scope, failure.Reason)
 		}
 	}
+
 	return "config did not decode"
 }
 
@@ -981,8 +1221,15 @@ func (s *Server) unevaluated(
 	system := hook.SystemFromString(req.GetProviderHint())
 	RecordFailOpen(string(reason), system.String(), "", "", req.GetCwd(), diagnostic)
 	if s != nil && s.log != nil {
-		s.log.ErrorContext(ctx, "call allowed without enforcement",
-			"reason", string(reason), "err", diagnostic)
+		s.log.ErrorContext(
+			ctx,
+			"call allowed without enforcement",
+			"reason",
+			string(reason),
+			"err",
+			diagnostic,
+		)
 	}
+
 	return failOpenEvaluateHookResponseFor(system, reason, diagnostic)
 }

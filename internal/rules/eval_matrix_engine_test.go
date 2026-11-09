@@ -21,10 +21,12 @@ func loadRuleConfig(t *testing.T, body string) *config.Config {
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
+
 	cfg, err := config.LoadExisting(path)
 	if err != nil {
 		t.Fatalf("LoadExisting: %v", err)
 	}
+
 	return cfg
 }
 
@@ -61,6 +63,7 @@ pattern = "SECRET"
 kind = "deterministic"
 role = "verify"
 `
+
 	cases := []struct {
 		name      string
 		config    string
@@ -68,30 +71,59 @@ role = "verify"
 		wantBlock bool
 		wantRule  string
 	}{
-		{name: "enforce blocks matching", config: enforceConfig, command: "echo SECRET", wantBlock: true, wantRule: "matrix-enforce"},
-		{name: "enforce allows non-matching", config: enforceConfig, command: "echo hello", wantBlock: false, wantRule: ""},
-		{name: "verify does not enforce", config: verifyConfig, command: "echo SECRET", wantBlock: false, wantRule: ""},
+		{
+			name:      "enforce blocks matching",
+			config:    enforceConfig,
+			command:   "echo SECRET",
+			wantBlock: true,
+			wantRule:  "matrix-enforce",
+		},
+		{
+			name:      "enforce allows non-matching",
+			config:    enforceConfig,
+			command:   "echo hello",
+			wantBlock: false,
+			wantRule:  "",
+		},
+		{
+			name:      "verify does not enforce",
+			config:    verifyConfig,
+			command:   "echo SECRET",
+			wantBlock: false,
+			wantRule:  "",
+		},
 	}
 	for _, testCase := range cases {
-		t.Run(testCase.name, func(t *testing.T) {
-			cfg := loadRuleConfig(t, testCase.config)
-			payload := map[string]any{"command": testCase.command}
-			violations := rules.EvaluateAll(
-				context.Background(), "claude", "Stop", testFields(payload), cfg.Rules, nil,
-			)
-			if testCase.wantBlock {
-				if len(violations) == 0 {
-					t.Fatalf("expected a violation, got none")
+		t.Run(
+			testCase.name,
+			func(t *testing.T) {
+				cfg := loadRuleConfig(t, testCase.config)
+				payload := map[string]any{"command": testCase.command}
+				violations := rules.EvaluateAll(
+					context.Background(),
+					"claude",
+					"Stop",
+					testFields(payload),
+					cfg.Rules,
+					nil,
+				)
+				if testCase.wantBlock {
+					if len(violations) == 0 {
+						t.Fatalf("expected a violation, got none")
+					}
+
+					if violations[0].RuleName != testCase.wantRule {
+						t.Fatalf("rule = %q, want %q", violations[0].RuleName, testCase.wantRule)
+					}
+
+					return
 				}
-				if violations[0].RuleName != testCase.wantRule {
-					t.Fatalf("rule = %q, want %q", violations[0].RuleName, testCase.wantRule)
+
+				if len(violations) != 0 {
+					t.Fatalf("expected no violation, got %d: %+v", len(violations), violations)
 				}
-				return
-			}
-			if len(violations) != 0 {
-				t.Fatalf("expected no violation, got %d: %+v", len(violations), violations)
-			}
-		})
+			},
+		)
 	}
 }
 
@@ -118,11 +150,17 @@ use = "dead"
 	cfg := loadRuleConfig(t, failClosedConfig)
 	payload := map[string]any{"command": "echo anything"}
 	violations := rules.EvaluateAll(
-		context.Background(), "claude", "Stop", testFields(payload), cfg.Rules, nil,
+		context.Background(),
+		"claude",
+		"Stop",
+		testFields(payload),
+		cfg.Rules,
+		nil,
 	)
 	if len(violations) == 0 {
 		t.Fatalf("expected a fail-closed violation when the inference point is unreachable")
 	}
+
 	if violations[0].RuleName != "matrix-infer-failclosed" {
 		t.Fatalf("rule = %q, want matrix-infer-failclosed", violations[0].RuleName)
 	}
@@ -156,19 +194,30 @@ use = "dead"
 	cfg := loadRuleConfig(t, scopedConfig)
 
 	matched := rules.EvaluateAll(
-		context.Background(), "claude", "Stop",
-		testFields(map[string]any{"command": "echo SECRET"}), cfg.Rules, nil,
+		context.Background(),
+		"claude",
+		"Stop",
+		testFields(map[string]any{"command": "echo SECRET"}),
+		cfg.Rules,
+		nil,
 	)
 	if len(matched) == 0 || matched[0].RuleName != "matrix-infer-scoped" {
 		t.Fatalf("in-condition command was not judged/failed-closed: %+v", matched)
 	}
 
 	unmatched := rules.EvaluateAll(
-		context.Background(), "claude", "Stop",
-		testFields(map[string]any{"command": "echo hello"}), cfg.Rules, nil,
+		context.Background(),
+		"claude",
+		"Stop",
+		testFields(map[string]any{"command": "echo hello"}),
+		cfg.Rules,
+		nil,
 	)
 	if len(unmatched) != 0 {
-		t.Fatalf("out-of-condition command was judged despite non-matching conditions: %+v", unmatched)
+		t.Fatalf(
+			"out-of-condition command was judged despite non-matching conditions: %+v",
+			unmatched,
+		)
 	}
 }
 
@@ -196,24 +245,41 @@ use = "dead"
 	cfg := loadRuleConfig(t, failClosedConfig)
 	payload := map[string]any{"command": "echo anything"}
 	detailed := rules.EvaluateAllDetailed(
-		context.Background(), "claude", "Stop", testFields(payload), cfg.Rules, nil, nil, "test",
+		context.Background(),
+		"claude",
+		"Stop",
+		testFields(payload),
+		cfg.Rules,
+		nil,
+		nil,
+		"test",
 	)
 	var inferLayers []rules.LayerTrace
+
 	for _, layer := range detailed.Trace.Layers {
 		if layer.RuleName == "matrix-infer-record" && layer.Kind == "inference" {
 			inferLayers = append(inferLayers, layer)
 		}
 	}
+
 	if len(inferLayers) == 0 {
-		t.Fatalf("expected an inference layer for the matrix rule, got layers %+v", detailed.Trace.Layers)
+		t.Fatalf(
+			"expected an inference layer for the matrix rule, got layers %+v",
+			detailed.Trace.Layers,
+		)
 	}
+
 	if inferLayers[0].ServiceName != "inference" {
 		t.Fatalf("layer ServiceName = %q, want inference", inferLayers[0].ServiceName)
 	}
+
 	// The evaluation store rejects a layer whose input JSON is not valid, so the
 	// recorded inference layer must carry a valid, non-empty input.
 	if len(inferLayers[0].InputJSON) == 0 || !json.Valid(inferLayers[0].InputJSON) {
-		t.Fatalf("layer InputJSON = %q, want valid non-empty JSON", string(inferLayers[0].InputJSON))
+		t.Fatalf(
+			"layer InputJSON = %q, want valid non-empty JSON",
+			string(inferLayers[0].InputJSON),
+		)
 	}
 }
 
@@ -243,23 +309,34 @@ use = "dead"
 	// Command carried only in ToolInputCommand, not the generic Command field.
 	payload := map[string]any{"tool_input_command": command}
 	detailed := rules.EvaluateAllDetailed(
-		context.Background(), "claude", "Stop", testFields(payload), cfg.Rules, nil, nil, "test",
+		context.Background(),
+		"claude",
+		"Stop",
+		testFields(payload),
+		cfg.Rules,
+		nil,
+		nil,
+		"test",
 	)
 	var inferLayer *rules.LayerTrace
+
 	for index := range detailed.Trace.Layers {
 		if detailed.Trace.Layers[index].Kind == "inference" {
 			inferLayer = &detailed.Trace.Layers[index]
 		}
 	}
+
 	if inferLayer == nil {
 		t.Fatalf("no inference layer recorded")
 	}
+
 	var decoded struct {
 		Input string `json:"input"`
 	}
 	if err := json.Unmarshal(inferLayer.InputJSON, &decoded); err != nil {
 		t.Fatalf("input JSON unmarshal: %v (raw %q)", err, string(inferLayer.InputJSON))
 	}
+
 	if decoded.Input != command {
 		t.Fatalf("recorded input = %q, want the ToolInputCommand %q", decoded.Input, command)
 	}
@@ -290,7 +367,12 @@ on_error = "open"
 	cfg := loadRuleConfig(t, failOpenConfig)
 	payload := map[string]any{"command": "echo anything"}
 	violations := rules.EvaluateAll(
-		context.Background(), "claude", "Stop", testFields(payload), cfg.Rules, nil,
+		context.Background(),
+		"claude",
+		"Stop",
+		testFields(payload),
+		cfg.Rules,
+		nil,
 	)
 	if len(violations) != 0 {
 		t.Fatalf("expected no violation (fail open), got %d: %+v", len(violations), violations)
@@ -310,22 +392,28 @@ func TestEvalMatrixBatchesRulesIntoOneCallPerModel(t *testing.T) {
 	var miniSchema atomic.Value
 	var miniInput atomic.Value
 	var miniContext atomic.Value
-	inference := &inferenceFake{handler: func(_ context.Context, request *inferencepb.InferRequest) (*inferencepb.InferReply, error) {
-		calls.Add(1)
-		perModelMu.Lock()
-		perModel[request.GetModel()]++
-		perModelMu.Unlock()
-		if request.GetModel() == "gpt-5.4-mini" {
-			miniPrompt.Store(request.GetPrompt())
-			miniSchema.Store(request.GetOutputSchema())
-			miniInput.Store(request.GetInput())
-			miniContext.Store(request.GetContext())
-		}
-		return &inferencepb.InferReply{
-			OutputJson: `{"block":["worktree"]}`,
-			Status:     1,
-		}, nil
-	}}
+	inference := &inferenceFake{
+		handler: func(_ context.Context, request *inferencepb.InferRequest) (
+			*inferencepb.InferReply,
+			error,
+		) {
+			calls.Add(1)
+			perModelMu.Lock()
+			perModel[request.GetModel()]++
+			perModelMu.Unlock()
+			if request.GetModel() == "gpt-5.4-mini" {
+				miniPrompt.Store(request.GetPrompt())
+				miniSchema.Store(request.GetOutputSchema())
+				miniInput.Store(request.GetInput())
+				miniContext.Store(request.GetContext())
+			}
+
+			return &inferencepb.InferReply{
+				OutputJson: `{"block":["worktree"]}`,
+				Status:     1,
+			}, nil
+		},
+	}
 	endpoint, _ := startInferenceServer(t, inference)
 	body := `
 [inference.mini]
@@ -378,12 +466,20 @@ fanout = "batch"
 	ctx := rules.WithInferRuntime(context.Background(), runtime)
 	payload := map[string]any{"command": "vim config.go"}
 	detailed := rules.EvaluateAllDetailed(
-		ctx, "claude", "PreToolUse", testFields(payload), cfg.Rules, nil, nil, "test",
+		ctx,
+		"claude",
+		"PreToolUse",
+		testFields(payload),
+		cfg.Rules,
+		nil,
+		nil,
+		"test",
 	)
 
 	if calls.Load() != 2 {
 		t.Fatalf("inference calls = %d, want 2 (one per model for two batched rules)", calls.Load())
 	}
+
 	perModelMu.Lock()
 	miniCalls, v4Calls := perModel["gpt-5.4-mini"], perModel["agentgate/agent-gate-judge-v4"]
 	perModelMu.Unlock()
@@ -393,11 +489,13 @@ fanout = "batch"
 
 	type layerKey struct{ rule, model string }
 	layerOutcome := map[layerKey]string{}
+
 	for _, layer := range detailed.Trace.Layers {
 		if layer.Kind == "inference" {
 			layerOutcome[layerKey{layer.RuleName, layer.LayerName}] = layer.Outcome
 		}
 	}
+
 	want := map[layerKey]string{
 		{"worktree", "gpt-5.4-mini"}:                  "match",
 		{"worktree", "agentgate/agent-gate-judge-v4"}: "match",
@@ -406,7 +504,13 @@ fanout = "batch"
 	}
 	for key, wantOutcome := range want {
 		if layerOutcome[key] != wantOutcome {
-			t.Fatalf("layer %+v outcome = %q, want %q (all layers: %+v)", key, layerOutcome[key], wantOutcome, layerOutcome)
+			t.Fatalf(
+				"layer %+v outcome = %q, want %q (all layers: %+v)",
+				key,
+				layerOutcome[key],
+				wantOutcome,
+				layerOutcome,
+			)
 		}
 	}
 
@@ -415,17 +519,24 @@ fanout = "batch"
 	}
 
 	prompt, _ := miniPrompt.Load().(string)
-	if !strings.Contains(prompt, "rule_id: worktree") || !strings.Contains(prompt, "rule_id: search") {
+	if !strings.Contains(prompt, "rule_id: worktree") ||
+		!strings.Contains(prompt, "rule_id: search") {
 		t.Fatalf("batch prompt does not enumerate both rule_ids: %q", prompt)
 	}
+
 	if schema, _ := miniSchema.Load().(string); !strings.Contains(schema, `"block"`) {
 		t.Fatalf("mini output schema is not the blocks-only schema: %q", schema)
 	}
+
 	if input, _ := miniInput.Load().(string); !strings.Contains(input, "vim config.go") {
 		t.Fatalf("mini input is not the judge-input panel with the verbatim call: %q", input)
 	}
+
 	if gotContext, _ := miniContext.Load().(string); gotContext != "" {
-		t.Fatalf("mini context = %q, want empty (transcript now rides inside the input)", gotContext)
+		t.Fatalf(
+			"mini context = %q, want empty (transcript now rides inside the input)",
+			gotContext,
+		)
 	}
 }
 
@@ -436,14 +547,20 @@ fanout = "batch"
 func TestEvalMatrixBatchSendsEmptyContextAndJudgeInput(t *testing.T) {
 	var contexts sync.Map
 	var inputs sync.Map
-	inference := &inferenceFake{handler: func(_ context.Context, request *inferencepb.InferRequest) (*inferencepb.InferReply, error) {
-		contexts.Store(request.GetModel(), request.GetContext())
-		inputs.Store(request.GetModel(), request.GetInput())
-		return &inferencepb.InferReply{
-			OutputJson: `{"block":[]}`,
-			Status:     1,
-		}, nil
-	}}
+	inference := &inferenceFake{
+		handler: func(_ context.Context, request *inferencepb.InferRequest) (
+			*inferencepb.InferReply,
+			error,
+		) {
+			contexts.Store(request.GetModel(), request.GetContext())
+			inputs.Store(request.GetModel(), request.GetInput())
+
+			return &inferencepb.InferReply{
+				OutputJson: `{"block":[]}`,
+				Status:     1,
+			}, nil
+		},
+	}
 	endpoint, _ := startInferenceServer(t, inference)
 	body := `
 [inference.mini]
@@ -476,7 +593,11 @@ fanout = "batch"
 	runtime := rules.NewInferRuntimeWithCache(nil, nil)
 	t.Cleanup(runtime.Close)
 	ctx := rules.WithInferRuntime(context.Background(), runtime)
-	fields := rules.FieldSet{CWD: "/workspace", ConversationID: "conv-1", ToolInputCommand: "git worktree remove x"}
+	fields := rules.FieldSet{
+		CWD:              "/workspace",
+		ConversationID:   "conv-1",
+		ToolInputCommand: "git worktree remove x",
+	}
 	rules.EvaluateAllDetailed(ctx, "claude", "PreToolUse", fields, cfg.Rules, nil, nil, "test")
 
 	for _, model := range []string{"gpt-5.4-mini", "agentgate/agent-gate-judge-v4"} {
@@ -484,10 +605,15 @@ fanout = "batch"
 		if gotContext != "" {
 			t.Fatalf("model %s context = %q, want empty", model, gotContext)
 		}
+
 		gotInput, _ := inputs.Load(model)
 		input, _ := gotInput.(string)
 		if !strings.Contains(input, "git worktree remove x") {
-			t.Fatalf("model %s input is not the judge-input panel with the verbatim call: %q", model, input)
+			t.Fatalf(
+				"model %s input is not the judge-input panel with the verbatim call: %q",
+				model,
+				input,
+			)
 		}
 	}
 }
@@ -524,14 +650,23 @@ use = "trainer"
 	cfg := loadRuleConfig(t, bothConfig)
 	payload := map[string]any{"command": "echo anything"}
 	detailed := rules.EvaluateAllDetailed(
-		context.Background(), "claude", "Stop", testFields(payload), cfg.Rules, nil, nil, "test",
+		context.Background(),
+		"claude",
+		"Stop",
+		testFields(payload),
+		cfg.Rules,
+		nil,
+		nil,
+		"test",
 	)
 	models := make(map[string]bool)
+
 	for _, layer := range detailed.Trace.Layers {
 		if layer.RuleName == "matrix-both" && layer.Kind == "inference" {
 			models[layer.LayerName] = true
 		}
 	}
+
 	if !models["gpt-5.4-mini"] || !models["agentgate/agent-gate-judge-v4"] {
 		t.Fatalf("expected inference layers for both models, got %+v", models)
 	}

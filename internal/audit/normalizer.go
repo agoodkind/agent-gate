@@ -20,23 +20,38 @@ type Normalizer struct {
 
 // NewNormalizer resolves the settings used by audit writers.
 func NewNormalizer(cfg *config.Config) Normalizer {
-	return Normalizer{minLevel: parseLevel(cfg.AuditLevel()), enabled: cfg.AuditEnabled(), rawHash: true}
+	return Normalizer{
+		minLevel: parseLevel(cfg.AuditLevel()),
+		enabled:  cfg.AuditEnabled(),
+		rawHash:  true,
+	}
 }
 
 // Normalize captures the event identity, timestamp, fields, and payload hash.
-func (normalizer Normalizer) Normalize(system, sessionID, eventName, level, msg string, attrs Attrs) NormalizedEntry {
+func (normalizer Normalizer) Normalize(
+	system string,
+	sessionID string,
+	eventName string,
+	level string,
+	msg string,
+	attrs Attrs,
+) NormalizedEntry {
 	if !normalizer.enabled || parseLevel(level) < normalizer.minLevel {
 		return emptyNormalizedEntry()
 	}
+
 	event := normalizeEvent(system, sessionID, eventName, level, msg, attrs)
 	fingerprint := dedupFingerprint(event, attrs)
 	rawPayload := ""
 	if value, ok := attrs["raw_payload"]; ok {
 		rawPayload = value.String()
 	}
+
 	if rawPayload != "" && normalizer.rawHash {
 		event.RawPayloadHash = payloadHash(rawPayload)
 	}
+
 	event.EventID = "evt_" + fingerprint[:32]
+
 	return NormalizedEntry{Event: event, Fingerprint: fingerprint}
 }

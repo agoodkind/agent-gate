@@ -80,27 +80,51 @@ func Query(ctx context.Context, cfg *config.Config, filter QueryFilter) (QueryRe
 	if filter.Limit == 0 {
 		filter.Limit = 100
 	}
+
 	result := QueryResult{Source: "sqlite", Records: make([]QueryRecord, 0), Note: ""}
-	err := Walk(ctx, cfg, filter, func(record QueryRecord) error { result.Records = append(result.Records, record); return nil })
+	err := Walk(
+		ctx,
+		cfg,
+		filter,
+		func(record QueryRecord) error {
+			result.Records = append(result.Records, record)
+			return nil
+		},
+	)
 	if len(result.Records) == 0 {
 		result.Note = "no durable seen-event history in range"
 	}
+
 	return result, err
 }
 
 // Walk streams retained intake events; zero limit visits every matching event.
 // Summary pages fix selection and order; detail reflects state at fetch time.
-func Walk(ctx context.Context, cfg *config.Config, filter QueryFilter, yield func(QueryRecord) error) error {
+func Walk(
+	ctx context.Context,
+	cfg *config.Config,
+	filter QueryFilter,
+	yield func(QueryRecord) error,
+) error {
 	if err := auditstorage.ValidatePage(filter.Limit, filter.Offset); err != nil {
 		return wrapLoggedError(ctx, slog.Default(), "read retained history", err)
 	}
+
 	set, err := cfg.ReadAuditHistory(ctx, filter.BucketID)
 	if err != nil {
 		return wrapLoggedError(ctx, slog.Default(), "read retained history", err)
 	}
+
 	defer func() { _ = set.Close() }()
-	err = auditstorage.Merge(ctx, set, filter.Limit, filter.Offset,
-		func(handle *auditstorage.BucketHandle, cursor *auditstorage.QuerySummary) ([]auditstorage.QuerySummary, error) {
+	err = auditstorage.Merge(
+		ctx,
+		set,
+		filter.Limit,
+		filter.Offset,
+		func(handle *auditstorage.BucketHandle, cursor *auditstorage.QuerySummary) (
+			[]auditstorage.QuerySummary,
+			error,
+		) {
 			where, args := intakeQueryWhere(filter)
 			if cursor != nil {
 				if where == "" {
@@ -108,22 +132,37 @@ func Walk(ctx context.Context, cfg *config.Config, filter QueryFilter, yield fun
 				} else {
 					where += " and "
 				}
+
 				where += intakeKeysetSQL
-				args = append(args, queryArgument{Value: cursor.Time}, queryArgument{Value: strconv.FormatInt(cursor.Sequence, 10)})
+				args = append(
+					args,
+					queryArgument{Value: cursor.Time},
+					queryArgument{Value: strconv.FormatInt(cursor.Sequence, 10)},
+				)
 			}
-			rows, err := queryIntakeRows(ctx, handle.Database, intakeSummarySQL+where+intakePageSQL, args)
+
+			rows, err := queryIntakeRows(
+				ctx,
+				handle.Database,
+				intakeSummarySQL+where+intakePageSQL,
+				args,
+			)
 			if err != nil {
 				return nil, wrapLoggedError(ctx, slog.Default(), "read query rows", err)
 			}
+
 			defer func() { _ = rows.Close() }()
 			var result []auditstorage.QuerySummary
+
 			for rows.Next() {
 				var row auditstorage.QuerySummary
 				if err := rows.Scan(&row.ID, &row.Time, &row.Sequence); err != nil {
 					return nil, wrapLoggedError(ctx, slog.Default(), "read query rows", err)
 				}
+
 				result = append(result, row)
 			}
+
 			return result, rows.Err()
 		},
 		func(handle *auditstorage.BucketHandle, row auditstorage.QuerySummary) error {
@@ -135,15 +174,20 @@ func Walk(ctx context.Context, cfg *config.Config, filter QueryFilter, yield fun
 			if err != nil {
 				return wrapLoggedError(ctx, slog.Default(), "read retained history", err)
 			}
+
 			if len(records) != 1 {
 				return fmt.Errorf("intake event %q disappeared during read", row.ID)
 			}
+
 			records[0].BucketID = handle.Bucket.ID
+
 			return yield(records[0])
-		})
+		},
+	)
 	if err != nil {
 		return wrapLoggedError(ctx, slog.Default(), "walk retained history", err)
 	}
+
 	return nil
 }
 
@@ -157,34 +201,49 @@ func queryRecords(
 	if filter.Limit > 0 {
 		limit = " limit " + strconv.Itoa(filter.Limit)
 	}
+
 	query := intakeQuerySelect(filter)
 	allArgs := make([]queryArgument, 0, len(args)+1)
 	allArgs = append(allArgs, queryArgument{Value: string(DeferredStateNone)})
 	allArgs = append(allArgs, args...)
-	rows, err := queryIntakeRows(ctx, db, query+where+" order by e.recorded_at desc, e.seq desc"+limit, allArgs)
+	rows, err := queryIntakeRows(
+		ctx,
+		db,
+		query+where+" order by e.recorded_at desc, e.seq desc"+limit,
+		allArgs,
+	)
 	if err != nil {
 		return nil, wrapLoggedError(ctx, slog.Default(), "read query rows", err)
 	}
+
 	defer func() {
 		_ = rows.Close()
 	}()
 
 	records := make([]QueryRecord, 0)
+
 	for rows.Next() {
 		record, err := scanQueryRecord(ctx, rows, filter)
 		if err != nil {
 			return nil, wrapLoggedError(ctx, slog.Default(), "read query rows", err)
 		}
+
 		records = append(records, record)
 	}
+
 	if err := rows.Err(); err != nil {
 		return nil, wrapLoggedError(ctx, slog.Default(), "iterate intake query rows", err)
 	}
+
 	return records, nil
 }
 
 func intakeQuerySelect(filter QueryFilter) string {
-	query := strings.ReplaceAll(querySQL2, "{{normalized}}", strconv.FormatBool(filter.IncludeNormalized))
+	query := strings.ReplaceAll(
+		querySQL2,
+		"{{normalized}}",
+		strconv.FormatBool(filter.IncludeNormalized),
+	)
 	return strings.ReplaceAll(query, "{{environment}}", strconv.FormatBool(filter.IncludeEnv))
 }
 
@@ -198,43 +257,59 @@ func intakeQueryWhere(filter QueryFilter) (string, []queryArgument) {
 	if !filter.Since.IsZero() {
 		add("e.recorded_at >= ?", auditstorage.FormatTime(filter.Since))
 	}
+
 	if !filter.Until.IsZero() {
 		add("e.recorded_at <= ?", auditstorage.FormatTime(filter.Until))
 	}
+
 	if filter.System != "" {
 		add("e.system = ?", filter.System)
 	}
+
 	if filter.SessionID != "" {
 		add("e.session_id = ?", filter.SessionID)
 	}
+
 	if filter.EventName != "" {
 		add("e.event_name = ?", filter.EventName)
 	}
+
 	if filter.ToolName != "" {
 		add("e.tool_name = ?", filter.ToolName)
 	}
+
 	if filter.EventID != "" {
 		add("e.event_id = ?", filter.EventID)
 	}
+
 	if filter.DeferredState != "" {
 		add("coalesce(d.state, ?) = ?", string(DeferredStateNone))
 		args = append(args, queryArgument{Value: filter.DeferredState})
 	}
+
 	if len(clauses) == 0 {
 		return "", args
 	}
+
 	return " where " + strings.Join(clauses, " and "), args
 }
 
-func queryIntakeRows(ctx context.Context, db *sql.DB, query string, args []queryArgument) (*sql.Rows, error) {
+func queryIntakeRows(
+	ctx context.Context,
+	db *sql.DB,
+	query string,
+	args []queryArgument,
+) (*sql.Rows, error) {
 	values := make([]any, 0, len(args))
 	for _, arg := range args {
 		values = append(values, arg.Value)
 	}
+
 	rows, err := db.QueryContext(ctx, query, values...)
 	if err != nil {
 		return nil, wrapLoggedError(ctx, slog.Default(), "query intake rows", err)
 	}
+
 	return rows, nil
 }
 
@@ -283,6 +358,7 @@ func scanQueryRecord(
 	if err != nil {
 		return QueryRecord{}, wrapLoggedError(ctx, slog.Default(), "scan intake query row", err)
 	}
+
 	record.Deferred.State = DeferredState(state)
 	record.Deferred.PendingAt = nullStringValue(pendingAt)
 	record.Deferred.CompletedAt = nullStringValue(completedAt)
@@ -291,23 +367,29 @@ func scanQueryRecord(
 	if filter.IncludeNormalized {
 		requested |= auditstorage.DetailNormalizedInput
 	}
+
 	if filter.IncludeEnv {
 		requested |= auditstorage.DetailEnvironmentEvidence
 	}
+
 	record.Detail = auditstorage.ProjectDetail(recordedClasses, availableClasses, requested)
 	if classification.Valid && classification.String != "" {
 		record.Classification = json.RawMessage(classification.String)
 	}
+
 	if filter.IncludeNormalized && normalized.Valid && normalized.String != "" {
 		record.NormalizedJSON = json.RawMessage(normalized.String)
 	}
+
 	if filter.IncludeEnv && envFingerprint.Valid && envFingerprint.String != "" {
 		env, err := unmarshalEnvFingerprint(envFingerprint.String)
 		if err != nil {
 			return QueryRecord{}, err
 		}
+
 		record.EnvFingerprint = env
 	}
+
 	return record, nil
 }
 
@@ -315,6 +397,7 @@ func nullStringValue(value sql.NullString) string {
 	if !value.Valid {
 		return ""
 	}
+
 	return value.String
 }
 

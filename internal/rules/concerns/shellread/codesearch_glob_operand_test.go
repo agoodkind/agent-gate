@@ -53,11 +53,14 @@ func TestRecursiveGlobDirsRejectsProgramSourceOperands(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := recursiveGlobDirs(tc.command, cwd)
-			if !slices.Equal(got, tc.want) {
-				t.Fatalf("recursiveGlobDirs(%q) = %v, want %v", tc.command, got, tc.want)
-			}
-		})
+		t.Run(
+			tc.name,
+			func(t *testing.T) {
+				got := recursiveGlobDirs(tc.command, cwd)
+				if !slices.Equal(got, tc.want) {
+					t.Fatalf("recursiveGlobDirs(%q) = %v, want %v", tc.command, got, tc.want)
+				}
+			},
+		)
 	}
 }

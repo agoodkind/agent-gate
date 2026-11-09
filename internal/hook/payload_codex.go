@@ -27,6 +27,7 @@ func (e CodexEnvelope) baseFields() rules.FieldSet {
 	fields.TranscriptPath = e.TranscriptPath
 	fields.CWD = e.Cwd
 	fields.Model = e.Model
+
 	return fields
 }
 
@@ -116,7 +117,13 @@ type CodexSubagentStopPayload struct {
 	LastAssistantMessage string `json:"last_assistant_message"`
 }
 
-func codexToolFields(base rules.FieldSet, turnID string, toolName string, toolUseID string, input CodexToolInput) rules.FieldSet {
+func codexToolFields(
+	base rules.FieldSet,
+	turnID string,
+	toolName string,
+	toolUseID string,
+	input CodexToolInput,
+) rules.FieldSet {
 	base.TurnID = turnID
 	base.ToolName = toolName
 	base.ToolUseID = toolUseID
@@ -133,6 +140,7 @@ func codexToolFields(base rules.FieldSet, turnID string, toolName string, toolUs
 	base.ToolInputPath = input.Path
 	base.ToolInputURL = input.URL
 	base.ToolInputQuery = input.Query
+
 	return base
 }
 
@@ -140,6 +148,7 @@ func codexToolFields(base rules.FieldSet, turnID string, toolName string, toolUs
 func (p CodexSessionStartPayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.Source = p.Source
+
 	return fields
 }
 
@@ -158,6 +167,7 @@ func (p CodexPermissionRequestPayload) Fields() rules.FieldSet {
 func (p CodexPostToolUsePayload) Fields() rules.FieldSet {
 	fields := codexToolFields(p.baseFields(), p.TurnID, p.ToolName, p.ToolUseID, p.ToolInput)
 	fields.ToolResponse = p.ToolResponse.SearchableText()
+
 	return fields
 }
 
@@ -166,6 +176,7 @@ func (p CodexUserPromptSubmitPayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.TurnID = p.TurnID
 	fields.Prompt = p.Prompt
+
 	return fields
 }
 
@@ -175,6 +186,7 @@ func (p CodexStopPayload) Fields() rules.FieldSet {
 	fields.TurnID = p.TurnID
 	fields.StopHookActive = boolString(p.StopHookActive)
 	fields.LastAssistantMessage = p.LastAssistantMessage
+
 	return fields
 }
 
@@ -183,6 +195,7 @@ func (p CodexPreCompactPayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.TurnID = p.TurnID
 	fields.Trigger = p.Trigger
+
 	return fields
 }
 
@@ -191,6 +204,7 @@ func (p CodexPostCompactPayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.TurnID = p.TurnID
 	fields.Trigger = p.Trigger
+
 	return fields
 }
 
@@ -201,6 +215,7 @@ func (p CodexSubagentStartPayload) Fields() rules.FieldSet {
 	fields.PermissionMode = p.PermissionMode
 	fields.AgentID = p.AgentID
 	fields.AgentType = p.AgentType
+
 	return fields
 }
 
@@ -214,5 +229,6 @@ func (p CodexSubagentStopPayload) Fields() rules.FieldSet {
 	fields.StopHookActive = boolString(p.StopHookActive)
 	fields.AgentTranscriptPath = p.AgentTranscriptPath
 	fields.LastAssistantMessage = p.LastAssistantMessage
+
 	return fields
 }

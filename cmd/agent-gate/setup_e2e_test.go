@@ -58,10 +58,12 @@ func TestSetupEndToEndVerifiesInstalledProviderCommands(t *testing.T) {
 
 	enabled := true
 	databasePath := filepath.Join(stateHome, "agent-gate", "sqlite", "audit.db")
-	cfg := &config.Config{Audit: config.Audit{
-		Enabled: &enabled,
-		Outputs: config.AuditOutput{SQLite: config.AuditSQLiteOutput{Path: databasePath}},
-	}}
+	cfg := &config.Config{
+		Audit: config.Audit{
+			Enabled: &enabled,
+			Outputs: config.AuditOutput{SQLite: config.AuditSQLiteOutput{Path: databasePath}},
+		},
+	}
 	if err := config.EnsureRuntimeDir(); err != nil {
 		t.Fatalf("EnsureRuntimeDir: %v", err)
 	}
@@ -95,14 +97,17 @@ func TestSetupEndToEndVerifiesInstalledProviderCommands(t *testing.T) {
 	}
 
 	setupID := "setup-e2e"
-	results, err := setup.VerifyInstalledHooks(t.Context(), setup.ProbeRequest{
-		SetupID:   setupID,
-		Providers: installer.AllProviders(),
-		HomeDir:   homeDir,
-		BinPath:   binaryPath,
-		Config:    cfg,
-		Timeout:   5 * time.Second,
-	})
+	results, err := setup.VerifyInstalledHooks(
+		t.Context(),
+		setup.ProbeRequest{
+			SetupID:   setupID,
+			Providers: installer.AllProviders(),
+			HomeDir:   homeDir,
+			BinPath:   binaryPath,
+			Config:    cfg,
+			Timeout:   5 * time.Second,
+		},
+	)
 	if err != nil {
 		t.Fatalf("VerifyInstalledHooks: %v", err)
 	}
@@ -135,9 +140,15 @@ func assertSetupDurableStateAfterClose(t *testing.T, cfg *config.Config, setupID
 	t.Helper()
 	for _, provider := range installer.AllProviders() {
 		system := string(provider)
-		intakeResult, err := intake.Query(context.Background(), cfg, intake.QueryFilter{
-			System: system, SessionID: setupID, Limit: 2,
-		})
+		intakeResult, err := intake.Query(
+			context.Background(),
+			cfg,
+			intake.QueryFilter{
+				System:    system,
+				SessionID: setupID,
+				Limit:     2,
+			},
+		)
 		if err != nil || len(intakeResult.Records) != 1 {
 			t.Fatalf("%s intake after close = %d, %v", provider, len(intakeResult.Records), err)
 		}
@@ -145,16 +156,26 @@ func assertSetupDurableStateAfterClose(t *testing.T, cfg *config.Config, setupID
 			context.Background(),
 			cfg,
 			evaluation.QueryFilter{
-				Mode: "hot", System: system, SessionID: setupID,
-				DetailMode: evaluation.QueryDetailSummary, Limit: 2,
+				Mode:       "hot",
+				System:     system,
+				SessionID:  setupID,
+				DetailMode: evaluation.QueryDetailSummary,
+				Limit:      2,
 			},
 		)
 		if err != nil || len(evaluationResult.Records) != 1 {
 			t.Fatalf("%s evaluation after close = %#v, %v", provider, evaluationResult.Records, err)
 		}
-		auditResult, _, err := audit.QueryReadOnly(context.Background(), cfg, audit.QueryFilter{
-			System: system, SessionID: setupID, Decision: "allow", Limit: 2,
-		})
+		auditResult, _, err := audit.QueryReadOnly(
+			context.Background(),
+			cfg,
+			audit.QueryFilter{
+				System:    system,
+				SessionID: setupID,
+				Decision:  "allow",
+				Limit:     2,
+			},
+		)
 		if err != nil || len(auditResult) != 1 {
 			t.Fatalf("%s audit after close = %d, %v", provider, len(auditResult), err)
 		}

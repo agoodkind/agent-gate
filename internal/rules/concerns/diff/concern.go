@@ -39,28 +39,40 @@ type MatchResult struct {
 // (for example "edits[*].old_string" / "edits[*].new_string"), the same
 // text-based comparison applies: a match is additive only if its text is
 // not present anywhere in the old joined view.
-func EvalDiffMatches(fields FieldAccessor, pair config.FieldPairSpec, re Matcher, diagnosticGroup uint32, limit int) []MatchResult {
+func EvalDiffMatches(
+	fields FieldAccessor,
+	pair config.FieldPairSpec,
+	re Matcher,
+	diagnosticGroup uint32,
+	limit int,
+) []MatchResult {
 	if re == nil || limit <= 0 {
 		return nil
 	}
+
 	if pair.NewField == config.FieldSelectorInvalid {
 		return nil
 	}
+
 	newText := fields.String(pair.NewField)
 	if newText == "" {
 		return nil
 	}
+
 	oldText := fields.String(pair.OldField)
 	newIndexes := collectIndexes(re, newText, diagnosticGroup, limit)
 	if len(newIndexes) == 0 {
 		return nil
 	}
+
 	oldStrings := findMatchingOldStrings(re, oldText, newIndexes, newText, diagnosticGroup)
 	additive := NewOnly(newIndexes, oldStrings, newText)
 	if len(additive) == 0 {
 		return nil
 	}
+
 	filePath := fields.FilePathValue()
+
 	out := make([]MatchResult, len(additive))
 	for i, idx := range additive {
 		out[i] = MatchResult{
@@ -71,6 +83,7 @@ func EvalDiffMatches(fields FieldAccessor, pair config.FieldPairSpec, re Matcher
 			End:       idx[1],
 		}
 	}
+
 	return out
 }
 
@@ -78,15 +91,28 @@ func collectIndexes(re Matcher, text string, diagnosticGroup uint32, limit int) 
 	if text == "" || limit == 0 {
 		return nil
 	}
+
 	indexes := make([][2]int, 0)
-	re.ForEachStringGroupIndex(text, limit, diagnosticGroup, func(start int, end int) bool {
-		indexes = append(indexes, [2]int{start, end})
-		return true
-	})
+	re.ForEachStringGroupIndex(
+		text,
+		limit,
+		diagnosticGroup,
+		func(start int, end int) bool {
+			indexes = append(indexes, [2]int{start, end})
+			return true
+		},
+	)
+
 	return indexes
 }
 
-func findMatchingOldStrings(re Matcher, text string, newIndexes [][2]int, newText string, diagnosticGroup uint32) []string {
+func findMatchingOldStrings(
+	re Matcher,
+	text string,
+	newIndexes [][2]int,
+	newText string,
+	diagnosticGroup uint32,
+) []string {
 	if text == "" {
 		return nil
 	}
@@ -95,21 +121,28 @@ func findMatchingOldStrings(re Matcher, text string, newIndexes [][2]int, newTex
 	for _, idx := range newIndexes {
 		pending[newText[idx[0]:idx[1]]] = struct{}{}
 	}
+
 	if len(pending) == 0 {
 		return nil
 	}
 
 	out := make([]string, 0, len(pending))
-	re.ForEachStringGroupIndex(text, -1, diagnosticGroup, func(start int, end int) bool {
-		matchedText := text[start:end]
-		if _, ok := pending[matchedText]; !ok {
-			return true
-		}
+	re.ForEachStringGroupIndex(
+		text,
+		-1,
+		diagnosticGroup,
+		func(start int, end int) bool {
+			matchedText := text[start:end]
+			if _, ok := pending[matchedText]; !ok {
+				return true
+			}
 
-		out = append(out, matchedText)
-		delete(pending, matchedText)
+			out = append(out, matchedText)
+			delete(pending, matchedText)
 
-		return len(pending) > 0
-	})
+			return len(pending) > 0
+		},
+	)
+
 	return out
 }

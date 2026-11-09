@@ -31,12 +31,14 @@ func (r *timeoutRecordingRunner) Run(
 	r.mu.Lock()
 	r.timeouts = append(r.timeouts, timeout)
 	r.mu.Unlock()
+
 	return execconcern.RunResult{ExitCode: 0, Stdout: ""}, r.runErr
 }
 
 func (r *timeoutRecordingRunner) seen() []time.Duration {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
 	return append([]time.Duration(nil), r.timeouts...)
 }
 
@@ -52,13 +54,19 @@ func TestBackgroundTimeoutDefaultsWithoutTheSetter(t *testing.T) {
 	runner := newTimeoutRunner(nil)
 	runtime := NewExecRuntime(runner, nil)
 	runtime.runExpandedCommandWithRetry(
-		context.Background(), "rule", &config.Condition{}, []string{"/bin/true"}, nil, nil,
+		context.Background(),
+		"rule",
+		&config.Condition{},
+		[]string{"/bin/true"},
+		nil,
+		nil,
 	)
 
 	seen := runner.seen()
 	if len(seen) == 0 {
 		t.Fatal("no validator run recorded")
 	}
+
 	want := config.DefaultExecBackgroundMs * time.Millisecond
 	if seen[0] != want {
 		t.Fatalf("background timeout = %s, want the documented default %s", seen[0], want)
@@ -72,13 +80,19 @@ func TestBackgroundTimeoutUsesTheConfiguredValue(t *testing.T) {
 	runtime := NewExecRuntime(runner, nil)
 	runtime.SetBackgroundTimeout(7 * time.Second)
 	runtime.runExpandedCommandWithRetry(
-		context.Background(), "rule", &config.Condition{}, []string{"/bin/true"}, nil, nil,
+		context.Background(),
+		"rule",
+		&config.Condition{},
+		[]string{"/bin/true"},
+		nil,
+		nil,
 	)
 
 	seen := runner.seen()
 	if len(seen) == 0 {
 		t.Fatal("no validator run recorded")
 	}
+
 	if seen[0] != 7*time.Second {
 		t.Fatalf("background timeout = %s, want 7s", seen[0])
 	}
@@ -95,13 +109,19 @@ func TestBackgroundTimeoutIsStableAcrossRetries(t *testing.T) {
 	runtime.SetBackgroundTimeout(5 * time.Second)
 	condition := &config.Condition{RetryCount: 2}
 	runtime.runExpandedCommandWithRetry(
-		context.Background(), "rule", condition, []string{"/bin/false"}, nil, nil,
+		context.Background(),
+		"rule",
+		condition,
+		[]string{"/bin/false"},
+		nil,
+		nil,
 	)
 
 	seen := runner.seen()
 	if len(seen) != 3 {
 		t.Fatalf("attempts = %d, want 3 (retry_count 2 plus the first try)", len(seen))
 	}
+
 	for attempt, timeout := range seen {
 		if timeout != 5*time.Second {
 			t.Fatalf("attempt %d timeout = %s, want 5s on every attempt", attempt, timeout)

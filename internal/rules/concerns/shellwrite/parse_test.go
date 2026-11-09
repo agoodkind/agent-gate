@@ -7,12 +7,16 @@ import (
 )
 
 // findTarget returns the first target whose Path equals path.
-func findTarget(targets []shellwriteconcern.WriteTarget, path string) (shellwriteconcern.WriteTarget, bool) {
+func findTarget(
+	targets []shellwriteconcern.WriteTarget,
+	path string,
+) (shellwriteconcern.WriteTarget, bool) {
 	for _, target := range targets {
 		if target.Path == path {
 			return target, true
 		}
 	}
+
 	return shellwriteconcern.WriteTarget{Path: "", Tool: "", Reason: "", Raw: ""}, false
 }
 
@@ -21,12 +25,15 @@ func TestExtractWriteTargets_AppendRedirect(t *testing.T) {
 	if len(targets) != 1 {
 		t.Fatalf("expected 1 target, got %d: %#v", len(targets), targets)
 	}
+
 	if targets[0].Path != "/tmp/log" {
 		t.Errorf("Path = %q, want /tmp/log", targets[0].Path)
 	}
+
 	if targets[0].Tool != shellwriteconcern.ToolRedirect {
 		t.Errorf("Tool = %q, want %q", targets[0].Tool, shellwriteconcern.ToolRedirect)
 	}
+
 	if targets[0].Reason != shellwriteconcern.ReasonOK {
 		t.Errorf("Reason = %q, want %q", targets[0].Reason, shellwriteconcern.ReasonOK)
 	}
@@ -37,6 +44,7 @@ func TestExtractWriteTargets_OverwriteRedirect(t *testing.T) {
 	if len(targets) != 1 {
 		t.Fatalf("expected 1 target, got %d", len(targets))
 	}
+
 	if targets[0].Path != "/tmp/log" {
 		t.Errorf("Path = %q, want /tmp/log", targets[0].Path)
 	}
@@ -54,6 +62,7 @@ func TestExtractWriteTargets_TeePositional(t *testing.T) {
 	if _, ok := findTarget(targets, "/tmp/log"); !ok {
 		t.Fatalf("expected /tmp/log target, got %#v", targets)
 	}
+
 	if _, ok := findTarget(targets, "/tmp/log2"); !ok {
 		t.Fatalf("expected /tmp/log2 target, got %#v", targets)
 	}
@@ -64,9 +73,11 @@ func TestExtractWriteTargets_SedInPlace(t *testing.T) {
 	if len(targets) != 1 {
 		t.Fatalf("expected 1 target, got %d: %#v", len(targets), targets)
 	}
+
 	if targets[0].Path != "/tmp/file" {
 		t.Errorf("Path = %q, want /tmp/file", targets[0].Path)
 	}
+
 	if targets[0].Tool != shellwriteconcern.ToolSed {
 		t.Errorf("Tool = %q, want sed", targets[0].Tool)
 	}
@@ -77,6 +88,7 @@ func TestExtractWriteTargets_SedInPlaceWithSuffix(t *testing.T) {
 	if len(targets) != 1 {
 		t.Fatalf("expected 1 target, got %d: %#v", len(targets), targets)
 	}
+
 	if targets[0].Path != "/tmp/file" {
 		t.Errorf("Path = %q, want /tmp/file", targets[0].Path)
 	}
@@ -94,6 +106,7 @@ func TestExtractWriteTargets_AwkInPlace(t *testing.T) {
 	if len(targets) != 1 {
 		t.Fatalf("expected 1 target, got %d", len(targets))
 	}
+
 	if targets[0].Tool != shellwriteconcern.ToolAwk {
 		t.Errorf("Tool = %q, want awk", targets[0].Tool)
 	}
@@ -160,8 +173,13 @@ func TestExtractWriteTargets_EvalIsUnparseable(t *testing.T) {
 	if len(targets) != 1 {
 		t.Fatalf("expected 1 sentinel target, got %d", len(targets))
 	}
+
 	if targets[0].Reason != shellwriteconcern.ReasonUnparsedCommandShape {
-		t.Errorf("Reason = %q, want %q", targets[0].Reason, shellwriteconcern.ReasonUnparsedCommandShape)
+		t.Errorf(
+			"Reason = %q, want %q",
+			targets[0].Reason,
+			shellwriteconcern.ReasonUnparsedCommandShape,
+		)
 	}
 }
 
@@ -170,8 +188,13 @@ func TestExtractWriteTargets_BashCIsUnparseable(t *testing.T) {
 	if len(targets) == 0 {
 		t.Fatalf("expected sentinel target from bash -c, got none")
 	}
+
 	if targets[0].Reason != shellwriteconcern.ReasonUnparsedCommandShape {
-		t.Errorf("first Reason = %q, want %q", targets[0].Reason, shellwriteconcern.ReasonUnparsedCommandShape)
+		t.Errorf(
+			"first Reason = %q, want %q",
+			targets[0].Reason,
+			shellwriteconcern.ReasonUnparsedCommandShape,
+		)
 	}
 }
 
@@ -180,8 +203,13 @@ func TestExtractWriteTargets_CommandSubstitutionUnparseable(t *testing.T) {
 	if len(targets) == 0 {
 		t.Fatalf("expected sentinel target from $() substitution, got none")
 	}
+
 	if targets[0].Reason != shellwriteconcern.ReasonUnparsedCommandShape {
-		t.Errorf("Reason = %q, want %q", targets[0].Reason, shellwriteconcern.ReasonUnparsedCommandShape)
+		t.Errorf(
+			"Reason = %q, want %q",
+			targets[0].Reason,
+			shellwriteconcern.ReasonUnparsedCommandShape,
+		)
 	}
 }
 
@@ -235,12 +263,19 @@ func TestExtractWriteTargets_EditorEmitsFileOperand(t *testing.T) {
 		"ruby -i -pe '$_.upcase!' config.go",
 	}
 	for _, command := range commands {
-		t.Run(command, func(t *testing.T) {
-			targets := shellwriteconcern.ExtractWriteTargets(command, "/repo")
-			if _, ok := findTarget(targets, "/repo/config.go"); !ok {
-				t.Fatalf("expected write target /repo/config.go for %q, got %#v", command, targets)
-			}
-		})
+		t.Run(
+			command,
+			func(t *testing.T) {
+				targets := shellwriteconcern.ExtractWriteTargets(command, "/repo")
+				if _, ok := findTarget(targets, "/repo/config.go"); !ok {
+					t.Fatalf(
+						"expected write target /repo/config.go for %q, got %#v",
+						command,
+						targets,
+					)
+				}
+			},
+		)
 	}
 }
 
@@ -264,12 +299,19 @@ func TestExtractWriteTargets_NonEditorNoFileTarget(t *testing.T) {
 		"ruby -rdigest config.go",
 	}
 	for _, command := range commands {
-		t.Run(command, func(t *testing.T) {
-			targets := shellwriteconcern.ExtractWriteTargets(command, "/repo")
-			if _, ok := findTarget(targets, "/repo/config.go"); ok {
-				t.Fatalf("unexpected write target /repo/config.go for %q: %#v", command, targets)
-			}
-		})
+		t.Run(
+			command,
+			func(t *testing.T) {
+				targets := shellwriteconcern.ExtractWriteTargets(command, "/repo")
+				if _, ok := findTarget(targets, "/repo/config.go"); ok {
+					t.Fatalf(
+						"unexpected write target /repo/config.go for %q: %#v",
+						command,
+						targets,
+					)
+				}
+			},
+		)
 	}
 }
 
@@ -282,12 +324,19 @@ func TestExtractWriteTargets_EditorPathQualified(t *testing.T) {
 		"/usr/bin/perl -i -pe 's/a/b/' config.go",
 	}
 	for _, command := range commands {
-		t.Run(command, func(t *testing.T) {
-			targets := shellwriteconcern.ExtractWriteTargets(command, "/repo")
-			if _, ok := findTarget(targets, "/repo/config.go"); !ok {
-				t.Fatalf("expected write target /repo/config.go for %q, got %#v", command, targets)
-			}
-		})
+		t.Run(
+			command,
+			func(t *testing.T) {
+				targets := shellwriteconcern.ExtractWriteTargets(command, "/repo")
+				if _, ok := findTarget(targets, "/repo/config.go"); !ok {
+					t.Fatalf(
+						"expected write target /repo/config.go for %q, got %#v",
+						command,
+						targets,
+					)
+				}
+			},
+		)
 	}
 }
 
@@ -301,12 +350,19 @@ func TestExtractWriteTargets_EditorInSubshell(t *testing.T) {
 		`bash -c "ex -s config.go '+wq'"`,
 	}
 	for _, command := range commands {
-		t.Run(command, func(t *testing.T) {
-			targets := shellwriteconcern.ExtractWriteTargets(command, "/repo")
-			if _, ok := findTarget(targets, "/repo/config.go"); !ok {
-				t.Fatalf("expected write target /repo/config.go for %q, got %#v", command, targets)
-			}
-		})
+		t.Run(
+			command,
+			func(t *testing.T) {
+				targets := shellwriteconcern.ExtractWriteTargets(command, "/repo")
+				if _, ok := findTarget(targets, "/repo/config.go"); !ok {
+					t.Fatalf(
+						"expected write target /repo/config.go for %q, got %#v",
+						command,
+						targets,
+					)
+				}
+			},
+		)
 	}
 }
 
@@ -319,11 +375,18 @@ func TestExtractWriteTargets_ClusteredInPlaceFlag(t *testing.T) {
 		"perl -i.bak -pe 's/a/b/' config.go",
 	}
 	for _, command := range commands {
-		t.Run(command, func(t *testing.T) {
-			targets := shellwriteconcern.ExtractWriteTargets(command, "/repo")
-			if _, ok := findTarget(targets, "/repo/config.go"); !ok {
-				t.Fatalf("expected write target /repo/config.go for %q, got %#v", command, targets)
-			}
-		})
+		t.Run(
+			command,
+			func(t *testing.T) {
+				targets := shellwriteconcern.ExtractWriteTargets(command, "/repo")
+				if _, ok := findTarget(targets, "/repo/config.go"); !ok {
+					t.Fatalf(
+						"expected write target /repo/config.go for %q, got %#v",
+						command,
+						targets,
+					)
+				}
+			},
+		)
 	}
 }

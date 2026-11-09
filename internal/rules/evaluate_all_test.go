@@ -18,6 +18,13 @@ func EvaluateAll(
 	getenv func(string) string,
 ) []Violation {
 	return EvaluateAllDetailed(
-		ctx, system, eventName, fields, rulesSlice, getenv, nil, "",
+		ctx,
+		system,
+		eventName,
+		fields,
+		rulesSlice,
+		getenv,
+		nil,
+		"",
 	).Violations
 }

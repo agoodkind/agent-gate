@@ -20,6 +20,7 @@ func (r *Rule) OutputText() string {
 	if r.output == "" {
 		return r.Output
 	}
+
 	return r.output
 }
 
@@ -31,6 +32,7 @@ func normalizeRuleAction(r *Rule) error {
 	if r.Action == "" {
 		r.Action = ActionBlock
 	}
+
 	switch r.Action {
 	case ActionBlock:
 		r.AuditOnly = false
@@ -41,38 +43,62 @@ func normalizeRuleAction(r *Rule) error {
 	default:
 		return fmt.Errorf(
 			"unknown action %q (expected %q, %q, %q, or %q)",
-			r.Action, ActionBlock, ActionAudit, ActionInject, ActionMutate,
+			r.Action,
+			ActionBlock,
+			ActionAudit,
+			ActionInject,
+			ActionMutate,
 		)
 	}
+
 	return nil
 }
 
 func resolveRuleOutput(log *slog.Logger, r *Rule, configDirectory string) error {
 	if !r.IsResponseAction() {
 		if r.Output != "" || r.OutputFile != "" {
-			return fmt.Errorf("output and output_file require action=%q or action=%q", ActionInject, ActionMutate)
+			return fmt.Errorf(
+				"output and output_file require action=%q or action=%q",
+				ActionInject,
+				ActionMutate,
+			)
 		}
+
 		return nil
 	}
+
 	if r.Output != "" && r.OutputFile != "" {
 		return errors.New("output and output_file are mutually exclusive")
 	}
+
 	r.output = r.Output
 	if r.OutputFile != "" {
 		if filepath.IsAbs(r.OutputFile) {
 			return errors.New("output_file must be relative to the config file")
 		}
+
 		path := filepath.Join(configDirectory, r.OutputFile)
 		contents, err := os.ReadFile(path)
 		if err != nil {
-			log.Error("read rule response output file failed", "rule", r.Name, "path", path, "err", err)
+			log.Error(
+				"read rule response output file failed",
+				"rule",
+				r.Name,
+				"path",
+				path,
+				"err",
+				err,
+			)
 			return fmt.Errorf("read output_file %q: %w", r.OutputFile, err)
 		}
+
 		r.output = string(contents)
 	}
+
 	if strings.TrimSpace(r.output) != "" || ruleHasExecCondition(r) {
 		return nil
 	}
+
 	return errors.New("inject and mutate rules require output, output_file, or an exec condition")
 }
 
@@ -82,5 +108,6 @@ func ruleHasExecCondition(r *Rule) bool {
 			return true
 		}
 	}
+
 	return false
 }

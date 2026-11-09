@@ -40,17 +40,22 @@ func TestEvaluateHookEnforcesBlockWithLargeRuleSet(t *testing.T) {
 		Rules: []config.Rule{blockingRule},
 	}
 	unsubscribedPattern := regex.MustCompile(`canary-pattern-without-a-match`)
+
 	for index := range largeRuleSetSize {
-		cfg.Rules = append(cfg.Rules, config.NewSimpleRule(
-			fmt.Sprintf("unsubscribed-canary-rule-with-a-long-identifier-%04d", index),
-			`canary-pattern-without-a-match`,
-			unsubscribedPattern,
-			[]string{"PostToolUse"},
-			[]string{"tool_input.command"},
-			"block",
-			"Canary rule for a large rule set.",
-		))
+		cfg.Rules = append(
+			cfg.Rules,
+			config.NewSimpleRule(
+				fmt.Sprintf("unsubscribed-canary-rule-with-a-long-identifier-%04d", index),
+				`canary-pattern-without-a-match`,
+				unsubscribedPattern,
+				[]string{"PostToolUse"},
+				[]string{"tool_input.command"},
+				"block",
+				"Canary rule for a large rule set.",
+			),
+		)
 	}
+
 	logger := slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil))
 	server, err := daemon.New(context.Background(), logger, cfg)
 	if err != nil {
@@ -59,12 +64,17 @@ func TestEvaluateHookEnforcesBlockWithLargeRuleSet(t *testing.T) {
 	defer server.Close()
 	server.StartAuditScheduler(context.Background())
 
-	response, err := server.EvaluateHook(context.Background(), &daemonpb.EvaluateHookRequest{
-		RawJson:        []byte(`{"session_id":"ledger-session","hook_event_name":"PreToolUse","tool_name":"Shell","tool_input":{"command":"go test ./..."}}`),
-		ProviderHint:   "codex",
-		Cwd:            t.TempDir(),
-		EnvFingerprint: map[string]string{"CODEX_THREAD_ID": "ledger-thread"},
-	})
+	response, err := server.EvaluateHook(
+		context.Background(),
+		&daemonpb.EvaluateHookRequest{
+			RawJson: []byte(
+				`{"session_id":"ledger-session","hook_event_name":"PreToolUse","tool_name":"Shell","tool_input":{"command":"go test ./..."}}`,
+			),
+			ProviderHint:   "codex",
+			Cwd:            t.TempDir(),
+			EnvFingerprint: map[string]string{"CODEX_THREAD_ID": "ledger-thread"},
+		},
+	)
 	if err != nil {
 		t.Fatalf("EvaluateHook: %v", err)
 	}
@@ -73,13 +83,16 @@ func TestEvaluateHookEnforcesBlockWithLargeRuleSet(t *testing.T) {
 	if strings.Contains(body, "no rule was enforced") {
 		t.Fatalf("response = %q, want an enforced block for a large rule set", body)
 	}
+
 	if !strings.Contains(body, "Use make test for full project runs.") {
 		t.Fatalf("response = %q, want the blocking rule message", body)
 	}
+
 	summary, err := daemon.FailOpenRecordSummary()
 	if err != nil {
 		t.Fatalf("summary: %v", err)
 	}
+
 	if summary.Count != 0 {
 		t.Fatalf("fail-open records = %d, want 0", summary.Count)
 	}

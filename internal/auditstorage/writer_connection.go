@@ -34,6 +34,7 @@ func (connection *SQLiteConnection) Close() error {
 		delete(connection.owner.connections, connection)
 		connection.owner.mu.Unlock()
 	})
+
 	return connection.closeError
 }
 
@@ -52,24 +53,35 @@ func (connector *writerConnector) Connect(ctx context.Context) (driver.Conn, err
 	if err := ctx.Err(); err != nil {
 		return nil, storageError("connect audit writer", err)
 	}
+
 	raw, err := connector.driver.Open(connector.location)
 	if err != nil {
 		return nil, storageError("open audit writer connection", err)
 	}
+
 	sqlite, ok := raw.(*sqlite3.SQLiteConn)
 	if !ok {
-		return nil, storageError("open typed audit writer", errors.Join(errors.New("audit writer requires a SQLite connection"), raw.Close()))
+		return nil, storageError(
+			"open typed audit writer",
+			errors.Join(errors.New("audit writer requires a SQLite connection"), raw.Close()),
+		)
 	}
+
 	connection := &SQLiteConnection{
-		SQLiteConn: sqlite, owner: connector.driver, invalid: atomic.Bool{},
-		closeOnce: sync.Once{}, closeError: nil,
+		SQLiteConn: sqlite,
+		owner:      connector.driver,
+		invalid:    atomic.Bool{},
+		closeOnce:  sync.Once{},
+		closeError: nil,
 	}
 	connector.driver.mu.Lock()
 	if connector.driver.connections == nil {
 		connector.driver.connections = make(map[*SQLiteConnection]struct{})
 	}
+
 	connector.driver.connections[connection] = struct{}{}
 	connector.driver.mu.Unlock()
+
 	return connection, nil
 }
 
@@ -89,13 +101,16 @@ func BorrowWriterConnection(ctx context.Context, database *sql.DB) (*WriterConne
 	if !ok {
 		return nil, errors.New("deferred retry requires an auditstorage.OpenWriter database")
 	}
+
 	if database.Stats().MaxOpenConnections != 1 {
 		return nil, errors.New("deferred retry requires exactly one open writer connection")
 	}
+
 	connection, err := database.Conn(ctx)
 	if err != nil {
 		return nil, storageError("borrow audit writer connection", err)
 	}
+
 	pool.mu.Lock()
 	var physical *SQLiteConnection
 	if len(pool.connections) == 1 {
@@ -103,10 +118,18 @@ func BorrowWriterConnection(ctx context.Context, database *sql.DB) (*WriterConne
 			physical = candidate
 		}
 	}
+
 	pool.mu.Unlock()
 	if physical == nil {
-		return nil, storageError("borrow audit writer", errors.Join(errors.New("deferred retry requires one physical writer connection"), connection.Close()))
+		return nil, storageError(
+			"borrow audit writer",
+			errors.Join(
+				errors.New("deferred retry requires one physical writer connection"),
+				connection.Close(),
+			),
+		)
 	}
+
 	return &WriterConnection{Conn: connection, physical: physical}, nil
 }
 
@@ -123,5 +146,6 @@ func (connection *WriterConnection) Discard() error {
 	if err := errors.Join(releaseError, closeError); err != nil {
 		return storageError("discard audit writer connection", err)
 	}
+
 	return nil
 }

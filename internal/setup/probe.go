@@ -50,24 +50,30 @@ func VerifyInstalledHooks(ctx context.Context, request ProbeRequest) ([]ProbeRes
 	if request.SetupID == "" {
 		return nil, errors.New("setup ID is required")
 	}
+
 	if request.Config == nil {
 		return nil, errors.New("setup configuration is required")
 	}
+
 	if request.BinPath == "" {
 		return nil, errors.New("expected binary path is required")
 	}
+
 	timeout := request.Timeout
 	if timeout <= 0 {
 		timeout = defaultProbeTimeout
 	}
+
 	results := make([]ProbeResult, 0, len(request.Providers))
 	for _, provider := range request.Providers {
 		result, err := verifyInstalledHook(ctx, request, provider, timeout)
 		if err != nil {
 			return nil, err
 		}
+
 		results = append(results, result)
 	}
+
 	return results, nil
 }
 
@@ -81,25 +87,40 @@ func verifyInstalledHook(
 }
 
 func verifyInstalledHookWithExecutor(
-	ctx context.Context, request ProbeRequest, provider installer.Provider, timeout time.Duration,
+	ctx context.Context,
+	request ProbeRequest,
+	provider installer.Provider,
+	timeout time.Duration,
 	execute func(context.Context, installer.ManagedHookCommand, []byte) (int, []byte, error),
 ) (ProbeResult, error) {
 	command, err := installer.ReadManagedLifecycleCommandContext(
 		ctx,
 		installer.HooksOptions{
-			BinPath: request.BinPath, TemplatesDir: "", HomeDir: request.HomeDir,
-			Stdout: nil, Providers: nil,
+			BinPath:      request.BinPath,
+			TemplatesDir: "",
+			HomeDir:      request.HomeDir,
+			Stdout:       nil,
+			Providers:    nil,
 		},
 		provider,
 	)
 	if err != nil {
-		slog.WarnContext(ctx, "read installed lifecycle command failed", "provider", provider, "err", err)
+		slog.WarnContext(
+			ctx,
+			"read installed lifecycle command failed",
+			"provider",
+			provider,
+			"err",
+			err,
+		)
 		return ProbeResult{}, fmt.Errorf("%s: read installed lifecycle command: %w", provider, err)
 	}
+
 	payload, err := marshalLifecycleProbePayload(provider, request.SetupID)
 	if err != nil {
 		return ProbeResult{}, err
 	}
+
 	probeCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	exitCode, output, err := execute(probeCtx, command, payload)
@@ -112,13 +133,21 @@ func verifyInstalledHookWithExecutor(
 			bytes.TrimSpace(output),
 		)
 	}
+
 	result := ProbeResult{
-		Provider: provider, BucketID: "", IntakeEventID: "", ReceiptID: 0, EvaluationID: "",
-		AuditEventID: "", Decision: "", ExitCode: exitCode,
+		Provider:      provider,
+		BucketID:      "",
+		IntakeEventID: "",
+		ReceiptID:     0,
+		EvaluationID:  "",
+		AuditEventID:  "",
+		Decision:      "",
+		ExitCode:      exitCode,
 	}
 	if err := waitForDurableProbe(probeCtx, request, command, &result); err != nil {
 		return ProbeResult{}, err
 	}
+
 	return result, nil
 }
 
@@ -134,15 +163,41 @@ func executeLifecycleProbe(
 	process.Stdin = bytes.NewReader(payload)
 	output, err := process.CombinedOutput()
 	if err == nil {
-		slog.DebugContext(ctx, "installed lifecycle command completed", "provider", command.Provider, "exit_code", 0)
+		slog.DebugContext(
+			ctx,
+			"installed lifecycle command completed",
+			"provider",
+			command.Provider,
+			"exit_code",
+			0,
+		)
 		return 0, output, nil
 	}
+
 	var exitError *exec.ExitError
 	if errors.As(err, &exitError) {
-		slog.WarnContext(ctx, "installed lifecycle command failed", "provider", command.Provider, "exit_code", exitError.ExitCode(), "err", err)
+		slog.WarnContext(
+			ctx,
+			"installed lifecycle command failed",
+			"provider",
+			command.Provider,
+			"exit_code",
+			exitError.ExitCode(),
+			"err",
+			err,
+		)
 		return exitError.ExitCode(), output, fmt.Errorf("run installed lifecycle command: %w", err)
 	}
-	slog.WarnContext(ctx, "start installed lifecycle command failed", "provider", command.Provider, "err", err)
+
+	slog.WarnContext(
+		ctx,
+		"start installed lifecycle command failed",
+		"provider",
+		command.Provider,
+		"err",
+		err,
+	)
+
 	return -1, output, fmt.Errorf("start installed lifecycle command: %w", err)
 }
 
@@ -160,11 +215,13 @@ func marshalLifecycleProbePayload(provider installer.Provider, setupID string) (
 	default:
 		return nil, fmt.Errorf("unknown provider %q", provider)
 	}
+
 	payload, err := json.Marshal(fields)
 	if err != nil {
 		slog.Warn("encode lifecycle probe failed", "provider", provider, "err", err)
 		return nil, fmt.Errorf("%s: encode lifecycle probe: %w", provider, err)
 	}
+
 	return payload, nil
 }
 
@@ -179,9 +236,11 @@ func waitForDurableProbe(
 		if err != nil {
 			return err
 		}
+
 		if complete {
 			return nil
 		}
+
 		select {
 		case <-ctx.Done():
 			return probeTimeoutError(command.Provider, result, request.Timeout)
@@ -199,12 +258,15 @@ func readDurableProbe(
 	if result.IntakeEventID == "" {
 		return readDurableIntake(ctx, request, command, result)
 	}
+
 	if result.EvaluationID == "" {
 		return readDurableEvaluation(ctx, request, command, result)
 	}
+
 	if result.AuditEventID == "" {
 		return readDurableAudit(ctx, request, command, result)
 	}
+
 	return true, nil
 }
 
@@ -215,25 +277,45 @@ func readDurableIntake(
 	result *ProbeResult,
 ) (bool, error) {
 	provider := string(command.Provider)
-	query, err := intake.Query(ctx, request.Config, intake.QueryFilter{
-		BucketID: "", Offset: 0,
-		Since: time.Time{}, Until: time.Time{}, System: provider,
-		SessionID: request.SetupID, EventName: command.EventName, ToolName: "",
-		DeferredState: "", EventID: "", Limit: 2,
-		IncludeNormalized: false, IncludeEnv: false,
-	})
+	query, err := intake.Query(
+		ctx,
+		request.Config,
+		intake.QueryFilter{
+			BucketID:          "",
+			Offset:            0,
+			Since:             time.Time{},
+			Until:             time.Time{},
+			System:            provider,
+			SessionID:         request.SetupID,
+			EventName:         command.EventName,
+			ToolName:          "",
+			DeferredState:     "",
+			EventID:           "",
+			Limit:             2,
+			IncludeNormalized: false,
+			IncludeEnv:        false,
+		},
+	)
 	if err != nil {
 		slog.WarnContext(ctx, "query durable intake failed", "provider", provider, "err", err)
 		return false, fmt.Errorf("%s: query durable intake: %w", provider, err)
 	}
+
 	if len(query.Records) == 0 {
 		return false, nil
 	}
+
 	if len(query.Records) != 1 {
-		return false, fmt.Errorf("%s: durable intake returned %d records", provider, len(query.Records))
+		return false, fmt.Errorf(
+			"%s: durable intake returned %d records",
+			provider,
+			len(query.Records),
+		)
 	}
+
 	result.IntakeEventID = query.Records[0].EventID
 	result.BucketID = query.Records[0].BucketID
+
 	return false, nil
 }
 
@@ -244,37 +326,81 @@ func readDurableEvaluation(
 	result *ProbeResult,
 ) (bool, error) {
 	provider := string(command.Provider)
+
 	for _, mode := range []string{"hot", "deferred", "deferred_replay"} {
-		query, err := evaluation.Query(ctx, request.Config, evaluation.QueryFilter{
-			BucketID:     result.BucketID,
-			EvaluationID: "", EventID: result.IntakeEventID, ReceiptID: 0, Mode: mode,
-			Since: time.Time{}, Until: time.Time{}, System: provider,
-			SessionID: request.SetupID, EventName: command.EventName, ToolName: "",
-			RuleName: "", LayerName: "", LayerKind: "", LayerOutcome: "", ModelName: "",
-			FinalVerdict: "", DetailMode: evaluation.QueryDetailSummary,
-			CompleteDetailOnly: false, Limit: 2, Offset: 0,
-		})
+		query, err := evaluation.Query(
+			ctx,
+			request.Config,
+			evaluation.QueryFilter{
+				BucketID:           result.BucketID,
+				EvaluationID:       "",
+				EventID:            result.IntakeEventID,
+				ReceiptID:          0,
+				Mode:               mode,
+				Since:              time.Time{},
+				Until:              time.Time{},
+				System:             provider,
+				SessionID:          request.SetupID,
+				EventName:          command.EventName,
+				ToolName:           "",
+				RuleName:           "",
+				LayerName:          "",
+				LayerKind:          "",
+				LayerOutcome:       "",
+				ModelName:          "",
+				FinalVerdict:       "",
+				DetailMode:         evaluation.QueryDetailSummary,
+				CompleteDetailOnly: false,
+				Limit:              2,
+				Offset:             0,
+			},
+		)
 		if err != nil {
-			slog.WarnContext(ctx, "query durable evaluation failed", "provider", provider, "mode", mode, "err", err)
+			slog.WarnContext(
+				ctx,
+				"query durable evaluation failed",
+				"provider",
+				provider,
+				"mode",
+				mode,
+				"err",
+				err,
+			)
 			return false, fmt.Errorf("%s: query durable evaluation: %w", provider, err)
 		}
+
 		if len(query.Records) == 0 {
 			continue
 		}
+
 		if len(query.Records) != 1 {
-			return false, fmt.Errorf("%s: durable evaluation returned %d %s records", provider, len(query.Records), mode)
+			return false, fmt.Errorf(
+				"%s: durable evaluation returned %d %s records",
+				provider,
+				len(query.Records),
+				mode,
+			)
 		}
+
 		record := query.Records[0]
 		if record.ReceiptID <= 0 || record.EvaluationID == "" || record.CompletedAt.IsZero() {
 			return false, nil
 		}
+
 		if record.FinalVerdict != "allow" {
-			return false, fmt.Errorf("%s: durable evaluation decision is %q, want allow", provider, record.FinalVerdict)
+			return false, fmt.Errorf(
+				"%s: durable evaluation decision is %q, want allow",
+				provider,
+				record.FinalVerdict,
+			)
 		}
+
 		result.ReceiptID = record.ReceiptID
 		result.EvaluationID = record.EvaluationID
+
 		return false, nil
 	}
+
 	return false, nil
 }
 
@@ -285,27 +411,48 @@ func readDurableAudit(
 	result *ProbeResult,
 ) (bool, error) {
 	provider := string(command.Provider)
-	records, _, err := audit.QueryReadOnly(ctx, request.Config, audit.QueryFilter{
-		BucketID: result.BucketID, EventID: "", Offset: 0,
-		Since: time.Time{}, Until: time.Time{}, System: provider,
-		SessionID: request.SetupID, EventName: command.EventName, ToolName: "",
-		Decision: "", Rule: "", Limit: 2,
-	})
+	records, _, err := audit.QueryReadOnly(
+		ctx,
+		request.Config,
+		audit.QueryFilter{
+			BucketID:  result.BucketID,
+			EventID:   "",
+			Offset:    0,
+			Since:     time.Time{},
+			Until:     time.Time{},
+			System:    provider,
+			SessionID: request.SetupID,
+			EventName: command.EventName,
+			ToolName:  "",
+			Decision:  "",
+			Rule:      "",
+			Limit:     2,
+		},
+	)
 	if err != nil {
 		slog.WarnContext(ctx, "query durable audit failed", "provider", provider, "err", err)
 		return false, fmt.Errorf("%s: query durable audit: %w", provider, err)
 	}
+
 	if len(records) == 0 {
 		return false, nil
 	}
+
 	if len(records) != 1 {
 		return false, fmt.Errorf("%s: durable audit returned %d records", provider, len(records))
 	}
+
 	if records[0].Decision.Kind != "allow" {
-		return false, fmt.Errorf("%s: durable audit decision is %q, want allow", provider, records[0].Decision.Kind)
+		return false, fmt.Errorf(
+			"%s: durable audit decision is %q, want allow",
+			provider,
+			records[0].Decision.Kind,
+		)
 	}
+
 	result.AuditEventID = records[0].EventID
 	result.Decision = records[0].Decision.Kind
+
 	return true, nil
 }
 
@@ -317,12 +464,15 @@ func probeTimeoutError(
 	if timeout <= 0 {
 		timeout = defaultProbeTimeout
 	}
+
 	stage := "intake"
 	if result.IntakeEventID != "" {
 		stage = "evaluation"
 	}
+
 	if result.EvaluationID != "" {
 		stage = "audit"
 	}
+
 	return fmt.Errorf("%s: durable %s was not recorded before %s", provider, stage, timeout)
 }

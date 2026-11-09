@@ -35,6 +35,7 @@ func (writer *sqliteWriter) Close() error {
 			return storageError("close audit writer", err)
 		}
 	}
+
 	return nil
 }
 
@@ -44,13 +45,16 @@ func WriteEvents(ctx context.Context, database *sql.DB, events []Event) error {
 	if err != nil {
 		return storageError("begin audit batch", err)
 	}
+
 	defer func() { _ = transaction.Rollback() }()
 	if err := WriteEventsInTx(ctx, transaction, events); err != nil {
 		return err
 	}
+
 	if err := transaction.Commit(); err != nil {
 		return storageError("commit audit batch", err)
 	}
+
 	return nil
 }
 
@@ -62,48 +66,91 @@ func WriteEventsInTx(ctx context.Context, transaction *sql.Tx, events []Event) e
 			if err != nil {
 				return storageError("parse audit event time", err)
 			}
+
 			event.Time = auditstorage.FormatTime(instant)
 		}
-		result, err := transaction.ExecContext(ctx, insertEventSQL,
-			event.EventID, event.SchemaVersion, event.Time, event.Level, event.Message,
-			event.System, event.SessionID, event.TurnID, event.EventName, event.ToolUseID,
-			event.ToolName, event.RawPayloadHash)
+
+		result, err := transaction.ExecContext(
+			ctx,
+			insertEventSQL,
+			event.EventID,
+			event.SchemaVersion,
+			event.Time,
+			event.Level,
+			event.Message,
+			event.System,
+			event.SessionID,
+			event.TurnID,
+			event.EventName,
+			event.ToolUseID,
+			event.ToolName,
+			event.RawPayloadHash,
+		)
 		if err != nil {
 			return storageError("insert audit event", err)
 		}
+
 		count, err := result.RowsAffected()
 		if err != nil {
 			return storageError("read audit insertion result", err)
 		}
+
 		if count == 0 {
 			continue
 		}
+
 		checked, err := json.Marshal(event.Decision.RulesChecked)
 		if err != nil {
 			return storageError("encode checked rules", err)
 		}
+
 		matched, err := json.Marshal(event.Decision.RulesMatched)
 		if err != nil {
 			return storageError("encode matched rules", err)
 		}
-		if _, err := transaction.ExecContext(ctx, insertOperationSQL, event.EventID,
-			event.Operation.CWD, event.Operation.EffectiveCWD, event.Operation.Command,
-			event.Operation.FilePath); err != nil {
+
+		if _, err := transaction.ExecContext(
+			ctx,
+			insertOperationSQL,
+			event.EventID,
+			event.Operation.CWD,
+			event.Operation.EffectiveCWD,
+			event.Operation.Command,
+			event.Operation.FilePath,
+		); err != nil {
 			return storageError("insert audit operation", err)
 		}
-		if _, err := transaction.ExecContext(ctx, insertDecisionSQL, event.EventID,
-			event.Decision.Kind, event.Decision.CanBlock, string(checked),
-			string(matched)); err != nil {
+
+		if _, err := transaction.ExecContext(
+			ctx,
+			insertDecisionSQL,
+			event.EventID,
+			event.Decision.Kind,
+			event.Decision.CanBlock,
+			string(checked),
+			string(matched),
+		); err != nil {
 			return storageError("insert audit decision", err)
 		}
+
 		for _, violation := range event.Violations {
-			if _, err := transaction.ExecContext(ctx, insertViolationSQL, event.EventID,
-				violation.Rule, violation.Mode, violation.FieldPath, violation.FilePath,
-				violation.Start, violation.End, violation.Message); err != nil {
+			if _, err := transaction.ExecContext(
+				ctx,
+				insertViolationSQL,
+				event.EventID,
+				violation.Rule,
+				violation.Mode,
+				violation.FieldPath,
+				violation.FilePath,
+				violation.Start,
+				violation.End,
+				violation.Message,
+			); err != nil {
 				return storageError("insert audit violation", err)
 			}
 		}
 	}
+
 	return nil
 }
 
@@ -111,5 +158,6 @@ func storageError(message string, err error) error {
 	if !auditstorage.CancellationOnly(err) {
 		slog.Warn(message, "err", err)
 	}
+
 	return fmt.Errorf("%s: %w", message, err)
 }

@@ -39,14 +39,29 @@ type Violation struct {
 
 // Evaluate iterates over all rules and returns the first Violation whose
 // pattern matches a typed field selected from payload, or nil if no rule fires.
-func Evaluate(ctx context.Context, system, eventName string, fields FieldSet, rules []config.Rule) *Violation {
+func Evaluate(
+	ctx context.Context,
+	system string,
+	eventName string,
+	fields FieldSet,
+	rules []config.Rule,
+) *Violation {
 	violations := EvaluateAllDetailed(
-		ctx, system, eventName, fields, rules, nil, nil, "",
+		ctx,
+		system,
+		eventName,
+		fields,
+		rules,
+		nil,
+		nil,
+		"",
 	).Violations
 	if len(violations) == 0 {
 		return nil
 	}
+
 	out := violations[0]
+
 	return &out
 }
 
@@ -59,18 +74,29 @@ type evaluationResult struct {
 	partialRules map[string]bool
 }
 
-func evaluateAll(ctx context.Context, system, eventName string, fields FieldSet, rulesSlice []config.Rule, getenv func(string) string) evaluationResult {
+func evaluateAll(
+	ctx context.Context,
+	system string,
+	eventName string,
+	fields FieldSet,
+	rulesSlice []config.Rule,
+	getenv func(string) string,
+) evaluationResult {
 	conditions := buildRuleRegexConditions(&fields, rulesSlice, system, eventName, getenv)
 	if len(conditions) == 0 {
 		return evaluationResult{violations: nil, effects: nil, partialRules: nil}
 	}
+
 	memo := newExecEventMemo(system, eventName)
 	evalCtx := withExecEventMemo(ctx, memo)
 	evalCtx = withInferEventMemo(evalCtx)
 	// Judge every fanout=batch rule in one inference call per model before the rule
 	// conditions run, so the eval matrix reads each rule's decision from the memo
 	// instead of issuing a call per rule.
-	evalCtx = withBatchInferenceMemo(evalCtx, runBatchInference(evalCtx, &fields, rulesSlice, system, eventName, getenv))
+	evalCtx = withBatchInferenceMemo(
+		evalCtx,
+		runBatchInference(evalCtx, &fields, rulesSlice, system, eventName, getenv),
+	)
 	orch := &pipeline.Orchestrator{
 		Conditions: conditions,
 		Scheduler:  pipeline.FixedScheduler{SlotCount: 1},
@@ -79,8 +105,11 @@ func evaluateAll(ctx context.Context, system, eventName string, fields FieldSet,
 	results, _ := orch.Run(evalCtx, pipeline.Input{})
 	violations := aggregateResults(results, fields, memo)
 	filtered, effects := responseEffectsFromMatches(violations, rulesSlice, memo)
+
 	return evaluationResult{
-		violations: filtered, effects: effects, partialRules: memo.partialRuleNames(),
+		violations:   filtered,
+		effects:      effects,
+		partialRules: memo.partialRuleNames(),
 	}
 }
 
@@ -91,11 +120,13 @@ func envGuardFires(getenv func(string) string, keys []string) bool {
 	if getenv == nil || len(keys) == 0 {
 		return false
 	}
+
 	for _, key := range keys {
 		if getenv(key) != "" {
 			return true
 		}
 	}
+
 	return false
 }
 
@@ -114,14 +145,17 @@ func aggregateResults(results []pipeline.Result, fields FieldSet, memo *execEven
 	ruleStateByPtr := map[*config.Rule]*ruleState{}
 
 	var violations []Violation
+
 	for i := range results {
 		if results[i].Outcome == nil {
 			continue
 		}
+
 		out, ok := results[i].Outcome.(ruleOutcome)
 		if !ok {
 			continue
 		}
+
 		if out.rule != nil && out.isConditionBased {
 			rs, exists := ruleStateByPtr[out.rule]
 			if !exists {
@@ -129,11 +163,13 @@ func aggregateResults(results []pipeline.Result, fields FieldSet, memo *execEven
 				ruleStateByPtr[out.rule] = rs
 				gateRules = append(gateRules, rs)
 			}
+
 			if out.gateMatched {
 				rs.matchedGate = true
 				rs.matchCount += len(out.violations)
 			}
 		}
+
 		violations = append(violations, out.violations...)
 	}
 
@@ -144,7 +180,9 @@ func aggregateResults(results []pipeline.Result, fields FieldSet, memo *execEven
 			violations = append(violations, conditionFallbackViolation(fields, rs.rule))
 		}
 	}
+
 	applyExecMessageOverrides(violations, memo)
+
 	return violations
 }
 
@@ -155,6 +193,7 @@ func applyExecMessageOverrides(violations []Violation, memo *execEventMemo) {
 	if memo == nil {
 		return
 	}
+
 	for i := range violations {
 		if msg, ok := memo.overrideFor(violations[i].RuleName); ok && msg != "" {
 			violations[i].Message = msg
@@ -172,76 +211,111 @@ func applyExecMessageOverrides(violations []Violation, memo *execEventMemo) {
 // Rules whose [config.Rule.DisableIfEnv] guard fires are skipped.
 // Non-applicable rules are skipped.
 // fields is passed by pointer so all Conditions share the single EvaluateAll-owned copy.
-func buildRuleRegexConditions(fields *FieldSet, rulesSlice []config.Rule, system, eventName string, getenv func(string) string) []pipeline.Condition {
+func buildRuleRegexConditions(
+	fields *FieldSet,
+	rulesSlice []config.Rule,
+	system string,
+	eventName string,
+	getenv func(string) string,
+) []pipeline.Condition {
 	var conditions []pipeline.Condition
+
 	for i := range rulesSlice {
 		rule := &rulesSlice[i]
 		budget := newRuleMatchBudget(concernlimit.MaxCollectedMatchesPerEvaluation)
 		if !appliesToEvent(rule, system, eventName) {
 			continue
 		}
+
 		if envGuardFires(getenv, rule.DisableIfEnv) {
 			continue
 		}
+
 		if len(rule.Eval) > 0 {
 			// A rule that declares an evaluator matrix is evaluated through it
 			// instead of the implicit AND over its conditions. The deterministic
 			// evaluator runs the rule's condition block; role and combine decide
 			// the verdict.
-			conditions = append(conditions, &evalMatrixCondition{
-				name:   rule.Name,
-				fields: fields,
-				rule:   rule,
-			})
+			conditions = append(
+				conditions,
+				&evalMatrixCondition{
+					name:   rule.Name,
+					fields: fields,
+					rule:   rule,
+				},
+			)
 			continue
 		}
+
 		if len(rule.Conditions) == 0 {
 			if rule.IsResponseAction() && rule.Pattern == "" && rule.NotPattern == "" {
-				conditions = append(conditions, &ruleRegexCondition{
-					name: rule.Name, fields: fields, rule: rule, condIdx: -3, budget: nil,
-				})
+				conditions = append(
+					conditions,
+					&ruleRegexCondition{
+						name:    rule.Name,
+						fields:  fields,
+						rule:    rule,
+						condIdx: -3,
+						budget:  nil,
+					},
+				)
 				continue
 			}
-			conditions = append(conditions, &ruleRegexCondition{
-				name:    rule.Name,
-				fields:  fields,
-				rule:    rule,
-				condIdx: -1,
-				budget:  budget,
-			})
+
+			conditions = append(
+				conditions,
+				&ruleRegexCondition{
+					name:    rule.Name,
+					fields:  fields,
+					rule:    rule,
+					condIdx: -1,
+					budget:  budget,
+				},
+			)
 			continue
 		}
 
 		matchingCondCount := 0
+
 		for j := range rule.Conditions {
 			if !isMatchingConditionKind(&rule.Conditions[j]) {
 				continue
 			}
-			if conditionKind(&rule.Conditions[j]) == config.ConditionKindRegex && rule.Conditions[j].CompiledPattern() == nil {
+
+			if conditionKind(&rule.Conditions[j]) == config.ConditionKindRegex &&
+				rule.Conditions[j].CompiledPattern() == nil {
 				continue
 			}
-			conditions = append(conditions, &ruleRegexCondition{
-				name:    rule.Name,
-				fields:  fields,
-				rule:    rule,
-				condIdx: j,
-				budget:  budget,
-			})
+
+			conditions = append(
+				conditions,
+				&ruleRegexCondition{
+					name:    rule.Name,
+					fields:  fields,
+					rule:    rule,
+					condIdx: j,
+					budget:  budget,
+				},
+			)
 			matchingCondCount++
 		}
 
 		if matchingCondCount == 0 {
 			// Rule has only gate-only conditions (command, project). One
 			// fallback Condition represents it.
-			conditions = append(conditions, &ruleRegexCondition{
-				name:    rule.Name,
-				fields:  fields,
-				rule:    rule,
-				condIdx: -2,
-				budget:  nil,
-			})
+			conditions = append(
+				conditions,
+				&ruleRegexCondition{
+					name:    rule.Name,
+					fields:  fields,
+					rule:    rule,
+					condIdx: -2,
+					budget:  nil,
+				},
+			)
 		}
 	}
+
 	return conditions
 }
 
@@ -252,7 +326,10 @@ func buildRuleRegexConditions(fields *FieldSet, rulesSlice []config.Rule, system
 // explicit decision here.
 func isMatchingConditionKind(c *config.Condition) bool {
 	switch conditionKind(c) {
-	case config.ConditionKindRegex, config.ConditionKindDiff, config.ConditionKindShellRead, config.ConditionKindShellWrite:
+	case config.ConditionKindRegex,
+		config.ConditionKindDiff,
+		config.ConditionKindShellRead,
+		config.ConditionKindShellWrite:
 		return true
 	case config.ConditionKindCommand, config.ConditionKindProject, config.ConditionKindExec,
 		config.ConditionKindGitDefaultBranch,
@@ -291,11 +368,14 @@ func newRuleMatchBudget(limit int) *ruleMatchBudget {
 		budget.remaining.Store(0)
 		return budget
 	}
+
 	if limit > math.MaxInt32 {
 		budget.remaining.Store(math.MaxInt32)
 		return budget
 	}
+
 	budget.remaining.Store(int32(limit))
+
 	return budget
 }
 
@@ -308,6 +388,7 @@ func (b *ruleMatchBudget) Remaining() int {
 	if remaining < 0 {
 		return 0
 	}
+
 	return int(remaining)
 }
 
@@ -326,6 +407,7 @@ func (b *ruleMatchBudget) Consume(count int) {
 			if b.remaining.CompareAndSwap(current, 0) {
 				return
 			}
+
 			continue
 		}
 
@@ -357,10 +439,14 @@ func (r *ruleRegexCondition) Profile() pipeline.Profile {
 	}
 }
 
-func (r *ruleRegexCondition) Execute(ctx context.Context, _ pipeline.Input) (pipeline.Outcome, error) {
+func (r *ruleRegexCondition) Execute(
+	ctx context.Context,
+	_ pipeline.Input,
+) (pipeline.Outcome, error) {
 	if outcome, handled := r.simpleOutcome(ctx); handled {
 		return outcome, nil
 	}
+
 	// condIdx >= 0: one matching-kind condition. The full gate must pass before
 	// matches are evaluated. aggregateResults adds a single fallback when all
 	// matching conditions for the rule produce zero violations in aggregate.
@@ -372,26 +458,37 @@ func (r *ruleRegexCondition) Execute(ctx context.Context, _ pipeline.Input) (pip
 			gateMatched:      false,
 		}, nil
 	}
+
 	c := &r.rule.Conditions[r.condIdx]
 	matchLimit := r.budget.Remaining()
 	if matchLimit == 0 {
 		return matchedRuleOutcome(r.rule, nil), nil
 	}
+
 	switch conditionKind(c) {
 	case config.ConditionKindRegex:
 		accessor := conditionFieldAccessor{fields: r.fields, condition: c}
-		matches := regexconcern.EvalFieldMatches(accessor, c.Selectors(), c.CompiledPattern(), c.DiagnosticGroup, matchLimit)
+		matches := regexconcern.EvalFieldMatches(
+			accessor,
+			c.Selectors(),
+			c.CompiledPattern(),
+			c.DiagnosticGroup,
+			matchLimit,
+		)
 		r.budget.Consume(len(matches))
+
 		return matchedRuleOutcome(r.rule, matchesToViolations(matches, r.rule)), nil
 	case config.ConditionKindDiff:
 		violations := evalDiffCondition(r.fields, c, r.rule, matchLimit)
 		r.budget.Consume(len(violations))
+
 		return matchedRuleOutcome(r.rule, violations), nil
 	case config.ConditionKindShellWrite:
 		return matchedRuleOutcome(r.rule, evalShellWriteCondition(r.fields, c, r.rule)), nil
 	case config.ConditionKindShellRead:
 		violations := evalShellReadCondition(r.fields, c, r.rule, matchLimit)
 		r.budget.Consume(len(violations))
+
 		return matchedRuleOutcome(r.rule, violations), nil
 	case config.ConditionKindCommand, config.ConditionKindProject, config.ConditionKindExec,
 		config.ConditionKindGitDefaultBranch,
@@ -415,6 +512,7 @@ func (r *ruleRegexCondition) simpleOutcome(ctx context.Context) (ruleOutcome, bo
 			gateMatched:      false,
 		}, true
 	}
+
 	if r.condIdx == -3 {
 		return ruleOutcome{
 			violations:       []Violation{conditionFallbackViolation(*r.fields, r.rule)},
@@ -423,6 +521,7 @@ func (r *ruleRegexCondition) simpleOutcome(ctx context.Context) (ruleOutcome, bo
 			gateMatched:      true,
 		}, true
 	}
+
 	// condIdx == -2: rule whose conditions are all non-regex (command, project).
 	// The fallback violation is returned inline when the gate passes; aggregateResults
 	// sees matchCount > 0 and does not add another fallback.
@@ -435,6 +534,7 @@ func (r *ruleRegexCondition) simpleOutcome(ctx context.Context) (ruleOutcome, bo
 				gateMatched:      false,
 			}, true
 		}
+
 		return ruleOutcome{
 			violations:       []Violation{conditionFallbackViolation(*r.fields, r.rule)},
 			rule:             r.rule,
@@ -442,6 +542,7 @@ func (r *ruleRegexCondition) simpleOutcome(ctx context.Context) (ruleOutcome, bo
 			gateMatched:      true,
 		}, true
 	}
+
 	return ruleOutcome{
 		violations:       nil,
 		rule:             nil,
@@ -461,7 +562,12 @@ func matchedRuleOutcome(rule *config.Rule, violations []Violation) ruleOutcome {
 
 // evalDiffCondition runs the diff Condition for one condition and returns its
 // match violations in the rules.Violation shape.
-func evalDiffCondition(fields *FieldSet, c *config.Condition, rule *config.Rule, limit int) []Violation {
+func evalDiffCondition(
+	fields *FieldSet,
+	c *config.Condition,
+	rule *config.Rule,
+	limit int,
+) []Violation {
 	if limit <= 0 {
 		return nil
 	}
@@ -469,29 +575,38 @@ func evalDiffCondition(fields *FieldSet, c *config.Condition, rule *config.Rule,
 	pairs := c.FieldPairs()
 	if len(pairs) == 0 {
 		// Default to old_string/new_string when field_pair is unset.
-		pairs = []config.FieldPairSpec{{
-			OldPath:  "tool_input.old_string",
-			NewPath:  "tool_input.new_string",
-			OldField: config.FieldToolInputOldString,
-			NewField: config.FieldToolInputNewString,
-		}}
+		pairs = []config.FieldPairSpec{
+			{
+				OldPath:  "tool_input.old_string",
+				NewPath:  "tool_input.new_string",
+				OldField: config.FieldToolInputOldString,
+				NewField: config.FieldToolInputNewString,
+			},
+		}
 	}
+
 	pattern := c.CompiledPattern()
 	if pattern == nil {
 		return nil
 	}
+
 	group, ok := safeDiagnosticGroup(c.DiagnosticGroup)
 	if !ok {
 		return nil
 	}
+
 	var matches []diffconcern.MatchResult
+
 	for _, pair := range pairs {
 		remaining := limit - len(matches)
 		if remaining == 0 {
 			break
 		}
 
-		matches = append(matches, diffconcern.EvalDiffMatches(fields, pair, pattern, group, remaining)...)
+		matches = append(
+			matches,
+			diffconcern.EvalDiffMatches(fields, pair, pattern, group, remaining)...,
+		)
 		// Fallback: when the configured new field is empty but edits[*] has
 		// content, apply the same pattern against the joined edits view so
 		// a single condition covers both Edit and MultiEdit shapes.
@@ -500,15 +615,20 @@ func evalDiffCondition(fields *FieldSet, c *config.Condition, rule *config.Rule,
 			if remaining == 0 {
 				break
 			}
+
 			batchPair := config.FieldPairSpec{
 				OldPath:  "edits[*].old_string",
 				NewPath:  "edits[*].new_string",
 				OldField: config.FieldEditsOldString,
 				NewField: config.FieldEditsNewString,
 			}
-			matches = append(matches, diffconcern.EvalDiffMatches(fields, batchPair, pattern, group, remaining)...)
+			matches = append(
+				matches,
+				diffconcern.EvalDiffMatches(fields, batchPair, pattern, group, remaining)...,
+			)
 		}
 	}
+
 	return diffMatchesToViolations(matches, rule)
 }
 
@@ -516,6 +636,7 @@ func diffMatchesToViolations(matches []diffconcern.MatchResult, rule *config.Rul
 	if len(matches) == 0 {
 		return nil
 	}
+
 	out := make([]Violation, len(matches))
 	for i, m := range matches {
 		out[i] = Violation{
@@ -531,6 +652,7 @@ func diffMatchesToViolations(matches []diffconcern.MatchResult, rule *config.Rul
 			End:              m.End,
 		}
 	}
+
 	return out
 }
 
@@ -538,16 +660,25 @@ func diffMatchesToViolations(matches []diffconcern.MatchResult, rule *config.Rul
 // returns its match violations in the rules.Violation shape.
 func evalShellWriteCondition(fields *FieldSet, c *config.Condition, rule *config.Rule) []Violation {
 	commandSelector := config.FieldToolInputCommand
+
 	for _, sel := range c.Selectors() {
 		if sel.Selector != config.FieldSelectorInvalid {
 			commandSelector = sel.Selector
 			break
 		}
 	}
-	matches := shellwriteconcern.EvalShellWriteMatchesWithSpecs(fields, commandSelector, c.Globs, c.WriteSpecs, c.MatchUnresolved == nil || *c.MatchUnresolved)
+
+	matches := shellwriteconcern.EvalShellWriteMatchesWithSpecs(
+		fields,
+		commandSelector,
+		c.Globs,
+		c.WriteSpecs,
+		c.MatchUnresolved == nil || *c.MatchUnresolved,
+	)
 	if len(matches) == 0 {
 		return nil
 	}
+
 	out := make([]Violation, len(matches))
 	for i, m := range matches {
 		out[i] = Violation{
@@ -563,22 +694,31 @@ func evalShellWriteCondition(fields *FieldSet, c *config.Condition, rule *config
 			End:              m.End,
 		}
 	}
+
 	return out
 }
 
 // evalShellReadCondition runs the shell_read_secret Condition for one
 // condition and returns its match violations in the rules.Violation shape.
-func evalShellReadCondition(fields *FieldSet, c *config.Condition, rule *config.Rule, limit int) []Violation {
+func evalShellReadCondition(
+	fields *FieldSet,
+	c *config.Condition,
+	rule *config.Rule,
+	limit int,
+) []Violation {
 	if limit <= 0 {
 		return nil
 	}
+
 	commandSelector := config.FieldToolInputCommand
+
 	for _, sel := range c.Selectors() {
 		if sel.Selector != config.FieldSelectorInvalid {
 			commandSelector = sel.Selector
 			break
 		}
 	}
+
 	matches := shellreadconcern.EvalShellReadSecretMatches(
 		fields,
 		commandSelector,
@@ -591,9 +731,11 @@ func evalShellReadCondition(fields *FieldSet, c *config.Condition, rule *config.
 	if len(matches) == 0 {
 		return nil
 	}
+
 	if len(matches) > limit {
 		matches = matches[:limit]
 	}
+
 	out := make([]Violation, len(matches))
 	for i, m := range matches {
 		out[i] = Violation{
@@ -609,6 +751,7 @@ func evalShellReadCondition(fields *FieldSet, c *config.Condition, rule *config.
 			End:              m.End,
 		}
 	}
+
 	return out
 }
 
@@ -617,7 +760,15 @@ func evalSimpleRule(fields *FieldSet, rule *config.Rule, limit int) []Violation 
 	if simpleRuleNotPatternMatches(fields, rule) {
 		return nil
 	}
-	matches := regexconcern.EvalFieldMatches(fields, rule.Selectors(), rule.Compiled(), rule.DiagnosticGroup, limit)
+
+	matches := regexconcern.EvalFieldMatches(
+		fields,
+		rule.Selectors(),
+		rule.Compiled(),
+		rule.DiagnosticGroup,
+		limit,
+	)
+
 	return matchesToViolations(matches, rule)
 }
 
@@ -626,12 +777,14 @@ func simpleRuleNotPatternMatches(fields *FieldSet, rule *config.Rule) bool {
 	if notPattern == nil {
 		return false
 	}
+
 	for _, selector := range rule.Selectors() {
 		value := fields.String(selector.Selector)
 		if value != "" && notPattern.MatchString(value) {
 			return true
 		}
 	}
+
 	return false
 }
 
@@ -641,6 +794,7 @@ func matchesToViolations(matches []regexconcern.MatchResult, rule *config.Rule) 
 	if len(matches) == 0 {
 		return nil
 	}
+
 	violations := make([]Violation, len(matches))
 	for i, m := range matches {
 		violations[i] = Violation{
@@ -656,21 +810,28 @@ func matchesToViolations(matches []regexconcern.MatchResult, rule *config.Rule) 
 			End:              m.End,
 		}
 	}
+
 	return violations
 }
 
 func conditionFallbackViolation(fields FieldSet, rule *config.Rule) Violation {
 	fieldPath := "payload"
+
 	value := rule.Name
 	for i := range rule.Conditions {
 		condition := &rule.Conditions[i]
-		if path, extracted := fields.FirstStringForCondition(condition.Selectors(), condition); extracted != "" {
+		if path, extracted := fields.FirstStringForCondition(
+			condition.Selectors(),
+			condition,
+		); extracted != "" {
 			fieldPath = path
 			value = extracted
 			break
 		}
 	}
+
 	end := min(len(value), 1)
+
 	return Violation{
 		RuleName:         rule.Name,
 		Message:          rule.ViolationMessage,
@@ -692,7 +853,12 @@ func conditionFallbackViolation(fields FieldSet, rule *config.Rule) Violation {
 //
 // Empty extracted values are handled only by Pattern and NotPattern, so optional
 // fields (for example tool_name when absent) can use not_pattern alone.
-func allConditionsMatch(ctx context.Context, fields FieldSet, rule *config.Rule, conditions []config.Condition) bool {
+func allConditionsMatch(
+	ctx context.Context,
+	fields FieldSet,
+	rule *config.Rule,
+	conditions []config.Condition,
+) bool {
 	condCtx := conditionContext{commandCwds: nil}
 	if !collectCommandConditionContext(fields, conditions, &condCtx) {
 		collectRemainingInferenceSkips(ctx, rule, conditions, 0)
@@ -704,12 +870,14 @@ func allConditionsMatch(ctx context.Context, fields FieldSet, rule *config.Rule,
 			collectRemainingInferenceSkips(ctx, rule, conditions, i)
 			return false
 		}
+
 		c := &conditions[i]
 		if !conditionGateMatches(ctx, fields, rule, i, c, condCtx) {
 			collectRemainingInferenceSkips(ctx, rule, conditions, i+1)
 			return false
 		}
 	}
+
 	return true
 }
 
@@ -758,8 +926,12 @@ func conditionGateMatches(
 	case config.ConditionKindGitDefaultBranch, config.ConditionKindGitPrimaryCheckout,
 		config.ConditionKindGitRefMove:
 		fields = structuralCommandFields(ctx, fields)
+
 		return gitConditionMatch(
-			fields, condition, conditionContextValue, gitStateReaderFromContext(ctx),
+			fields,
+			condition,
+			conditionContextValue,
+			gitStateReaderFromContext(ctx),
 		)
 	case config.ConditionKindExec:
 		return execConditionGateMatch(ctx, fields, rule, conditionIndex, condition)
@@ -770,18 +942,25 @@ func conditionGateMatches(
 	}
 }
 
-func collectCommandConditionContext(fields FieldSet, conditions []config.Condition, condCtx *conditionContext) bool {
+func collectCommandConditionContext(
+	fields FieldSet,
+	conditions []config.Condition,
+	condCtx *conditionContext,
+) bool {
 	for i := range conditions {
 		c := &conditions[i]
 		if conditionKind(c) != config.ConditionKindCommand {
 			continue
 		}
+
 		cwds, ok := commandConditionCwds(fields, c)
 		if !ok {
 			return false
 		}
+
 		condCtx.commandCwds = append(condCtx.commandCwds, cwds...)
 	}
+
 	return true
 }
 
@@ -792,35 +971,43 @@ func diffConditionGateMatch(fields FieldSet, c *config.Condition) bool {
 	if _, ok := safeDiagnosticGroup(c.DiagnosticGroup); !ok {
 		return false
 	}
-	return len(evalDiffCondition(&fields, c, &config.Rule{
-		Name:              "",
-		Description:       "",
-		Events:            nil,
-		ClaudeEvents:      nil,
-		CursorEvents:      nil,
-		CodexEvents:       nil,
-		CopilotEvents:     nil,
-		GeminiEvents:      nil,
-		DisableProviders:  nil,
-		AllEvents:         false,
-		Conditions:        nil,
-		Eval:              nil,
-		Intent:            "",
-		JudgeContext:      nil,
-		EvalInference:     nil,
-		FieldPaths:        nil,
-		Pattern:           "",
-		NotPattern:        "",
-		Action:            config.ActionBlock,
-		Output:            "",
-		OutputFile:        "",
-		ViolationMessage:  "",
-		DiagnosticGroup:   0,
-		DiagnosticFormat:  config.DiagnosticFormatDetailed,
-		RedactDiagnostics: false,
-		AuditOnly:         false,
-		DisableIfEnv:      nil,
-	}, 1)) > 0
+
+	return len(
+		evalDiffCondition(
+			&fields,
+			c,
+			&config.Rule{
+				Name:              "",
+				Description:       "",
+				Events:            nil,
+				ClaudeEvents:      nil,
+				CursorEvents:      nil,
+				CodexEvents:       nil,
+				CopilotEvents:     nil,
+				GeminiEvents:      nil,
+				DisableProviders:  nil,
+				AllEvents:         false,
+				Conditions:        nil,
+				Eval:              nil,
+				Intent:            "",
+				JudgeContext:      nil,
+				EvalInference:     nil,
+				FieldPaths:        nil,
+				Pattern:           "",
+				NotPattern:        "",
+				Action:            config.ActionBlock,
+				Output:            "",
+				OutputFile:        "",
+				ViolationMessage:  "",
+				DiagnosticGroup:   0,
+				DiagnosticFormat:  config.DiagnosticFormatDetailed,
+				RedactDiagnostics: false,
+				AuditOnly:         false,
+				DisableIfEnv:      nil,
+			},
+			1,
+		),
+	) > 0
 }
 
 // safeDiagnosticGroup converts an int diagnostic group value to uint32,
@@ -833,6 +1020,7 @@ func safeDiagnosticGroup(group int) (uint32, bool) {
 	if group < 0 || group > maxGroup {
 		return 0, false
 	}
+
 	return uint32(group), true
 }
 
@@ -840,47 +1028,64 @@ func safeDiagnosticGroup(group int) (uint32, bool) {
 // would emit any match for the current fields.
 func shellWriteConditionGateMatch(fields FieldSet, c *config.Condition) bool {
 	commandSelector := config.FieldToolInputCommand
+
 	for _, sel := range c.Selectors() {
 		if sel.Selector != config.FieldSelectorInvalid {
 			commandSelector = sel.Selector
 			break
 		}
 	}
-	return len(shellwriteconcern.EvalShellWriteMatchesWithSpecs(&fields, commandSelector, c.Globs, c.WriteSpecs, c.MatchUnresolved == nil || *c.MatchUnresolved)) > 0
+
+	return len(
+		shellwriteconcern.EvalShellWriteMatchesWithSpecs(
+			&fields,
+			commandSelector,
+			c.Globs,
+			c.WriteSpecs,
+			c.MatchUnresolved == nil || *c.MatchUnresolved,
+		),
+	) > 0
 }
 
 // shellReadConditionGateMatch reports whether the shell-read condition would
 // emit any match for the current fields.
 func shellReadConditionGateMatch(fields FieldSet, c *config.Condition) bool {
-	return len(evalShellReadCondition(&fields, c, &config.Rule{
-		Name:              "",
-		Description:       "",
-		Events:            nil,
-		ClaudeEvents:      nil,
-		CursorEvents:      nil,
-		CodexEvents:       nil,
-		CopilotEvents:     nil,
-		GeminiEvents:      nil,
-		DisableProviders:  nil,
-		AllEvents:         false,
-		Conditions:        nil,
-		Eval:              nil,
-		Intent:            "",
-		JudgeContext:      nil,
-		EvalInference:     nil,
-		FieldPaths:        nil,
-		Pattern:           "",
-		NotPattern:        "",
-		Action:            config.ActionBlock,
-		Output:            "",
-		OutputFile:        "",
-		ViolationMessage:  "",
-		DiagnosticGroup:   0,
-		DiagnosticFormat:  config.DiagnosticFormatDetailed,
-		RedactDiagnostics: false,
-		AuditOnly:         false,
-		DisableIfEnv:      nil,
-	}, 1)) > 0
+	return len(
+		evalShellReadCondition(
+			&fields,
+			c,
+			&config.Rule{
+				Name:              "",
+				Description:       "",
+				Events:            nil,
+				ClaudeEvents:      nil,
+				CursorEvents:      nil,
+				CodexEvents:       nil,
+				CopilotEvents:     nil,
+				GeminiEvents:      nil,
+				DisableProviders:  nil,
+				AllEvents:         false,
+				Conditions:        nil,
+				Eval:              nil,
+				Intent:            "",
+				JudgeContext:      nil,
+				EvalInference:     nil,
+				FieldPaths:        nil,
+				Pattern:           "",
+				NotPattern:        "",
+				Action:            config.ActionBlock,
+				Output:            "",
+				OutputFile:        "",
+				ViolationMessage:  "",
+				DiagnosticGroup:   0,
+				DiagnosticFormat:  config.DiagnosticFormatDetailed,
+				RedactDiagnostics: false,
+				AuditOnly:         false,
+				DisableIfEnv:      nil,
+			},
+			1,
+		),
+	) > 0
 }
 
 type conditionContext struct {
@@ -891,6 +1096,7 @@ func conditionKind(c *config.Condition) config.ConditionKind {
 	if c.Kind == "" {
 		return config.ConditionKindRegex
 	}
+
 	return config.ConditionKind(c.Kind)
 }
 
@@ -903,6 +1109,7 @@ func CheckedRuleNames(system, eventName string, rules []config.Rule) []string {
 			names = append(names, rules[i].Name)
 		}
 	}
+
 	return names
 }
 
@@ -912,6 +1119,7 @@ func appliesToEvent(rule *config.Rule, system, eventName string) bool {
 	if rule.ProviderDisabled(system) {
 		return false
 	}
+
 	if rule.AllEvents {
 		return true
 	}
@@ -960,6 +1168,7 @@ func ReadUserHomeDir() (string, error) {
 		slog.Warn("read user home dir failed", "error", err)
 		return "", fmt.Errorf("read user home dir: %w", err)
 	}
+
 	return homeDir, nil
 }
 
@@ -978,5 +1187,6 @@ func effectiveCwdAfterChain(startCwd, homeDir, command string) string {
 	if cwd == "" {
 		return startCwd
 	}
+
 	return cwd
 }

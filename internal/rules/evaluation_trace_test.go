@@ -22,10 +22,38 @@ import (
 )
 
 func TestDetailedDeterministicTraceListsRulesInDeclarationOrder(t *testing.T) {
-	matched := loadRule(t, "matched", "bad", []string{"PreToolUse"}, []string{"tool_input.command"}, "blocked")
-	nonmatched := loadRule(t, "nonmatched", "never", []string{"PreToolUse"}, []string{"tool_input.command"}, "blocked")
-	inapplicable := loadRule(t, "inapplicable", "bad", []string{"Stop"}, []string{"assistant_message"}, "blocked")
-	disabled := loadRule(t, "disabled", "bad", []string{"PreToolUse"}, []string{"tool_input.command"}, "blocked")
+	matched := loadRule(
+		t,
+		"matched",
+		"bad",
+		[]string{"PreToolUse"},
+		[]string{"tool_input.command"},
+		"blocked",
+	)
+	nonmatched := loadRule(
+		t,
+		"nonmatched",
+		"never",
+		[]string{"PreToolUse"},
+		[]string{"tool_input.command"},
+		"blocked",
+	)
+	inapplicable := loadRule(
+		t,
+		"inapplicable",
+		"bad",
+		[]string{"Stop"},
+		[]string{"assistant_message"},
+		"blocked",
+	)
+	disabled := loadRule(
+		t,
+		"disabled",
+		"bad",
+		[]string{"PreToolUse"},
+		[]string{"tool_input.command"},
+		"blocked",
+	)
 	disabled.DisableIfEnv = []string{"TRACE_DISABLED"}
 	inputJSON := json.RawMessage(`{"tool_input":{"command":"bad"}}`)
 
@@ -39,6 +67,7 @@ func TestDetailedDeterministicTraceListsRulesInDeclarationOrder(t *testing.T) {
 			if key == "TRACE_DISABLED" {
 				return "1"
 			}
+
 			return ""
 		},
 		inputJSON,
@@ -50,19 +79,24 @@ func TestDetailedDeterministicTraceListsRulesInDeclarationOrder(t *testing.T) {
 	if len(detailed.Trace.Deterministic.CheckedRules) != len(wantStatuses) {
 		t.Fatalf("checked rules = %+v", detailed.Trace.Deterministic.CheckedRules)
 	}
+
 	for i, decision := range detailed.Trace.Deterministic.CheckedRules {
 		if decision.RuleName != []string{"matched", "nonmatched", "inapplicable", "disabled"}[i] ||
 			decision.Status != wantStatuses[i] || decision.SkipReason != wantReasons[i] {
 			t.Fatalf("decision %d = %+v", i, decision)
 		}
 	}
+
 	if string(detailed.Trace.Deterministic.InputJSON) != string(inputJSON) ||
 		detailed.Trace.Deterministic.InputHash != traceHash(inputJSON) ||
 		detailed.Trace.Deterministic.ServiceVersion != "v-test" {
 		t.Fatalf("deterministic trace = %+v", detailed.Trace.Deterministic)
 	}
+
 	if !json.Valid(detailed.Trace.Deterministic.OutputJSON) ||
-		detailed.Trace.Deterministic.OutputHash != traceHash(detailed.Trace.Deterministic.OutputJSON) {
+		detailed.Trace.Deterministic.OutputHash != traceHash(
+			detailed.Trace.Deterministic.OutputJSON,
+		) {
 		t.Fatalf("deterministic output = %s", detailed.Trace.Deterministic.OutputJSON)
 	}
 }
@@ -70,23 +104,29 @@ func TestDetailedDeterministicTraceListsRulesInDeclarationOrder(t *testing.T) {
 func TestInferTraceRecordsAttemptThenSkippedDeclaration(t *testing.T) {
 	var modelsMu sync.Mutex
 	var models []string
-	fake := &inferenceFake{handler: func(_ context.Context, request *inferencepb.InferRequest) (*inferencepb.InferReply, error) {
-		modelsMu.Lock()
-		models = append(models, request.GetModel())
-		modelsMu.Unlock()
-		decision := "allow"
-		if request.GetModel() == "gpt-5.4-mini" {
-			decision = "block"
-		}
-		return &inferencepb.InferReply{
-			OutputJson: `{"decision":"` + decision + `"}`,
-			Status:     inferencepb.InferenceStatus_INFERENCE_STATUS_COMPLETE,
-			Metadata: &inferencepb.InvocationMetadata{
-				RequestId:   "request-" + request.GetModel(),
-				ActualModel: request.GetModel() + "-actual",
-			},
-		}, nil
-	}}
+	fake := &inferenceFake{
+		handler: func(_ context.Context, request *inferencepb.InferRequest) (
+			*inferencepb.InferReply,
+			error,
+		) {
+			modelsMu.Lock()
+			models = append(models, request.GetModel())
+			modelsMu.Unlock()
+			decision := "allow"
+			if request.GetModel() == "gpt-5.4-mini" {
+				decision = "block"
+			}
+
+			return &inferencepb.InferReply{
+				OutputJson: `{"decision":"` + decision + `"}`,
+				Status:     inferencepb.InferenceStatus_INFERENCE_STATUS_COMPLETE,
+				Metadata: &inferencepb.InvocationMetadata{
+					RequestId:   "request-" + request.GetModel(),
+					ActualModel: request.GetModel() + "-actual",
+				},
+			}, nil
+		},
+	}
 	endpoint, _ := startInferenceServer(t, fake)
 	runtime := rules.NewInferRuntimeWithCache(nil, nil)
 	t.Cleanup(runtime.Close)
@@ -96,8 +136,11 @@ func TestInferTraceRecordsAttemptThenSkippedDeclaration(t *testing.T) {
 	if fake.count() != 1 || len(nonmatch.Trace.Layers) != 2 {
 		t.Fatalf("calls/layers = %d/%+v", fake.count(), nonmatch.Trace.Layers)
 	}
-	if nonmatch.Trace.Layers[0].LayerName != "v4" || nonmatch.Trace.Layers[0].Status != "complete" ||
-		nonmatch.Trace.Layers[1].LayerName != "mini-high" || nonmatch.Trace.Layers[1].Status != "skipped" ||
+
+	if nonmatch.Trace.Layers[0].LayerName != "v4" ||
+		nonmatch.Trace.Layers[0].Status != "complete" ||
+		nonmatch.Trace.Layers[1].LayerName != "mini-high" ||
+		nonmatch.Trace.Layers[1].Status != "skipped" ||
 		nonmatch.Trace.Layers[1].SkipReason != "prior_condition_nonmatch" ||
 		nonmatch.Trace.Layers[1].VerifiedProvenance.ReportedPromptHashStatus != "absent" ||
 		nonmatch.Trace.Layers[1].VerifiedProvenance.ReportedSchemaHashStatus != "absent" {
@@ -108,10 +151,14 @@ func TestInferTraceRecordsAttemptThenSkippedDeclaration(t *testing.T) {
 	models = nil
 	modelsMu.Unlock()
 	fake.requests = nil
-	fake.handler = func(_ context.Context, request *inferencepb.InferRequest) (*inferencepb.InferReply, error) {
+	fake.handler = func(_ context.Context, request *inferencepb.InferRequest) (
+		*inferencepb.InferReply,
+		error,
+	) {
 		modelsMu.Lock()
 		models = append(models, request.GetModel())
 		modelsMu.Unlock()
+
 		return &inferencepb.InferReply{
 			OutputJson: `{"decision":"block"}`,
 			Status:     inferencepb.InferenceStatus_INFERENCE_STATUS_COMPLETE,
@@ -119,7 +166,10 @@ func TestInferTraceRecordsAttemptThenSkippedDeclaration(t *testing.T) {
 	}
 	matched := evaluateInferDetailed(t, runtime, rule, "different")
 	if len(matched.Trace.Layers) != 2 || matched.Trace.Layers[0].Status != "complete" ||
-		matched.Trace.Layers[1].Status != "complete" || strings.Join(models, ",") != "v4,gpt-5.4-mini" {
+		matched.Trace.Layers[1].Status != "complete" || strings.Join(
+		models,
+		",",
+	) != "v4,gpt-5.4-mini" {
 		t.Fatalf("match models/layers = %v/%+v", models, matched.Trace.Layers)
 	}
 }
@@ -127,12 +177,17 @@ func TestInferTraceRecordsAttemptThenSkippedDeclaration(t *testing.T) {
 func TestInferContextTraceRecordsExactJSONAndEmptyPolicyError(t *testing.T) {
 	clyde := &clydeFake{}
 	clydeEndpoint, _ := startClydeServer(t, clyde)
-	inference := &inferenceFake{handler: func(_ context.Context, request *inferencepb.InferRequest) (*inferencepb.InferReply, error) {
-		return &inferencepb.InferReply{
-			OutputJson: `{"decision":"block"}`,
-			Status:     inferencepb.InferenceStatus_INFERENCE_STATUS_COMPLETE,
-		}, nil
-	}}
+	inference := &inferenceFake{
+		handler: func(_ context.Context, request *inferencepb.InferRequest) (
+			*inferencepb.InferReply,
+			error,
+		) {
+			return &inferencepb.InferReply{
+				OutputJson: `{"decision":"block"}`,
+				Status:     inferencepb.InferenceStatus_INFERENCE_STATUS_COMPLETE,
+			}, nil
+		},
+	}
 	endpoint, _ := startInferenceServer(t, inference)
 	extra := "context_source = \"clyde_recent_turns\"\ncontext_endpoint = \"" + clydeEndpoint + "\"\ncontext_workspace_field = \"cwd\"\ncontext_session_field = \"session_id\"\ncontext_turn_budget = 3\ncontext_max_chars_per_turn = 120\ncontext_on_error = \"empty\""
 	rule := loadInferRule(t, endpoint, extra)
@@ -145,33 +200,50 @@ func TestInferContextTraceRecordsExactJSONAndEmptyPolicyError(t *testing.T) {
 		*success.Trace.Layers[1].ParentTraceIndex != 1 {
 		t.Fatalf("context layers = %+v", success.Trace.Layers)
 	}
-	if string(success.Trace.Layers[0].OutputJSON) != `{"turns":[{"role":"user","text":"hello","ts":"now"}]}` ||
+
+	if string(
+		success.Trace.Layers[0].OutputJSON,
+	) != `{"turns":[{"role":"user","text":"hello","ts":"now"}]}` ||
 		!strings.Contains(string(success.Trace.Layers[0].InputJSON), `"workspace":"/workspace"`) {
-		t.Fatalf("context JSON = %s / %s", success.Trace.Layers[0].InputJSON, success.Trace.Layers[0].OutputJSON)
+		t.Fatalf(
+			"context JSON = %s / %s",
+			success.Trace.Layers[0].InputJSON,
+			success.Trace.Layers[0].OutputJSON,
+		)
 	}
 
 	clyde.err = errors.New("context secret")
 	failure := evaluateInferDetailed(t, runtime, rule, "second")
 	if failure.Trace.Layers[0].Status != "error" || failure.Trace.Layers[0].ErrorCode == "" ||
-		string(failure.Trace.Layers[0].OutputJSON) != `{}` || failure.Trace.Layers[1].Status != "complete" {
+		string(
+			failure.Trace.Layers[0].OutputJSON,
+		) != `{}` || failure.Trace.Layers[1].Status != "complete" {
 		t.Fatalf("empty-policy layers = %+v", failure.Trace.Layers)
 	}
+
 	if strings.Contains(failure.Trace.Layers[0].ErrorMessage, "context secret") {
 		t.Fatalf("raw context error leaked: %+v", failure.Trace.Layers[0])
 	}
 }
 
 func TestInferCacheTracePreservesOutputMetadataVersionAndExpiry(t *testing.T) {
-	fake := &inferenceFake{handler: func(_ context.Context, _ *inferencepb.InferRequest) (*inferencepb.InferReply, error) {
-		return &inferencepb.InferReply{
-			OutputJson: `{"decision":"block","proof":"exact"}`,
-			Status:     inferencepb.InferenceStatus_INFERENCE_STATUS_COMPLETE,
-			Metadata: &inferencepb.InvocationMetadata{
-				RequestId: "request-cache", ActualModel: "model-cache", BackendVersion: "backend-cache",
-				PromptTokens: int64Pointer(0),
-			},
-		}, nil
-	}}
+	fake := &inferenceFake{
+		handler: func(_ context.Context, _ *inferencepb.InferRequest) (
+			*inferencepb.InferReply,
+			error,
+		) {
+			return &inferencepb.InferReply{
+				OutputJson: `{"decision":"block","proof":"exact"}`,
+				Status:     inferencepb.InferenceStatus_INFERENCE_STATUS_COMPLETE,
+				Metadata: &inferencepb.InvocationMetadata{
+					RequestId:      "request-cache",
+					ActualModel:    "model-cache",
+					BackendVersion: "backend-cache",
+					PromptTokens:   int64Pointer(0),
+				},
+			}, nil
+		},
+	}
 	endpoint, _ := startInferenceServer(t, fake)
 	cache := hotkv.New(hotkv.Options{})
 	t.Cleanup(cache.Close)
@@ -195,24 +267,32 @@ func TestInferCacheTracePreservesOutputMetadataVersionAndExpiry(t *testing.T) {
 }
 
 func TestInferTraceBoundsRawMetadataAndRetainsHashTruth(t *testing.T) {
-	fake := &inferenceFake{handler: func(context.Context, *inferencepb.InferRequest) (*inferencepb.InferReply, error) {
-		return &inferencepb.InferReply{
-			OutputJson: `{"decision":"block"}`,
-			Status:     inferencepb.InferenceStatus_INFERENCE_STATUS_COMPLETE,
-			Metadata: &inferencepb.InvocationMetadata{
-				RequestId:    strings.Repeat("x", 5000),
-				PromptSha256: traceHash([]byte("Classify")),
-				SchemaSha256: strings.Repeat("spoofed", 1000),
-			},
-		}, nil
-	}}
+	fake := &inferenceFake{
+		handler: func(context.Context, *inferencepb.InferRequest) (*inferencepb.InferReply, error) {
+			return &inferencepb.InferReply{
+				OutputJson: `{"decision":"block"}`,
+				Status:     inferencepb.InferenceStatus_INFERENCE_STATUS_COMPLETE,
+				Metadata: &inferencepb.InvocationMetadata{
+					RequestId:    strings.Repeat("x", 5000),
+					PromptSha256: traceHash([]byte("Classify")),
+					SchemaSha256: strings.Repeat("spoofed", 1000),
+				},
+			}, nil
+		},
+	}
 	endpoint, _ := startInferenceServer(t, fake)
 	runtime := rules.NewInferRuntimeWithCache(nil, nil)
 	t.Cleanup(runtime.Close)
-	layer := evaluateInferDetailed(t, runtime, loadInferRule(t, endpoint, ""), "input").Trace.Layers[0]
+	layer := evaluateInferDetailed(
+		t,
+		runtime,
+		loadInferRule(t, endpoint, ""),
+		"input",
+	).Trace.Layers[0]
 	if layer.UpstreamMetadata.Status != "omitted_oversize" || len(layer.UpstreamMetadata.Raw) != 0 {
 		t.Fatalf("upstream metadata = %+v", layer.UpstreamMetadata)
 	}
+
 	if layer.VerifiedProvenance.ReportedPromptHashStatus != "match" ||
 		layer.VerifiedProvenance.ReportedSchemaHashStatus != "mismatch" ||
 		layer.VerifiedProvenance.PromptSHA256 != traceHash([]byte("Classify")) ||
@@ -224,11 +304,17 @@ func TestInferTraceBoundsRawMetadataAndRetainsHashTruth(t *testing.T) {
 func TestInferCacheTraceMarksSingleflightFollowerCoalesced(t *testing.T) {
 	release := make(chan struct{})
 	started := make(chan struct{})
-	fake := &inferenceFake{handler: func(_ context.Context, _ *inferencepb.InferRequest) (*inferencepb.InferReply, error) {
-		close(started)
-		<-release
-		return &inferencepb.InferReply{OutputJson: `{"decision":"block"}`, Status: 1}, nil
-	}}
+	fake := &inferenceFake{
+		handler: func(_ context.Context, _ *inferencepb.InferRequest) (
+			*inferencepb.InferReply,
+			error,
+		) {
+			close(started)
+			<-release
+
+			return &inferencepb.InferReply{OutputJson: `{"decision":"block"}`, Status: 1}, nil
+		},
+	}
 	endpoint, _ := startInferenceServer(t, fake)
 	runtime := rules.NewInferRuntimeWithCache(nil, nil)
 	t.Cleanup(runtime.Close)
@@ -248,38 +334,67 @@ func TestInferCacheTraceMarksSingleflightFollowerCoalesced(t *testing.T) {
 }
 
 func TestInferTraceSanitizesGRPCErrorAndRejectsHashMismatch(t *testing.T) {
-	t.Run("grpc", func(t *testing.T) {
-		fake := &inferenceFake{handler: func(context.Context, *inferencepb.InferRequest) (*inferencepb.InferReply, error) {
-			return nil, status.Error(codes.Unavailable, "secret backend response")
-		}}
-		endpoint, _ := startInferenceServer(t, fake)
-		runtime := rules.NewInferRuntimeWithCache(nil, nil)
-		t.Cleanup(runtime.Close)
-		layer := evaluateInferDetailed(t, runtime, loadInferRule(t, endpoint, ""), "input").Trace.Layers[0]
-		if layer.Status != "error" || layer.ErrorCode != "unavailable" ||
-			strings.Contains(layer.ErrorMessage, "secret backend response") ||
-			layer.UpstreamMetadata.Status != "absent" {
-			t.Fatalf("grpc layer = %+v", layer)
-		}
-	})
+	t.Run(
+		"grpc",
+		func(t *testing.T) {
+			fake := &inferenceFake{
+				handler: func(context.Context, *inferencepb.InferRequest) (
+					*inferencepb.InferReply,
+					error,
+				) {
+					return nil, status.Error(codes.Unavailable, "secret backend response")
+				},
+			}
+			endpoint, _ := startInferenceServer(t, fake)
+			runtime := rules.NewInferRuntimeWithCache(nil, nil)
+			t.Cleanup(runtime.Close)
+			layer := evaluateInferDetailed(
+				t,
+				runtime,
+				loadInferRule(t, endpoint, ""),
+				"input",
+			).Trace.Layers[0]
+			if layer.Status != "error" || layer.ErrorCode != "unavailable" ||
+				strings.Contains(layer.ErrorMessage, "secret backend response") ||
+				layer.UpstreamMetadata.Status != "absent" {
+				t.Fatalf("grpc layer = %+v", layer)
+			}
+		},
+	)
 
-	t.Run("hash mismatch", func(t *testing.T) {
-		fake := &inferenceFake{handler: func(context.Context, *inferencepb.InferRequest) (*inferencepb.InferReply, error) {
-			return &inferencepb.InferReply{
-				OutputJson: `{"decision":"block"}`,
-				Status:     inferencepb.InferenceStatus_INFERENCE_STATUS_COMPLETE,
-				Metadata:   &inferencepb.InvocationMetadata{PromptSha256: "wrong", SchemaSha256: "also-wrong"},
-			}, nil
-		}}
-		endpoint, _ := startInferenceServer(t, fake)
-		runtime := rules.NewInferRuntimeWithCache(nil, nil)
-		t.Cleanup(runtime.Close)
-		layer := evaluateInferDetailed(t, runtime, loadInferRule(t, endpoint, ""), "input").Trace.Layers[0]
-		if layer.Status != "error" || layer.ErrorCode != "hash_mismatch" ||
-			string(layer.OutputJSON) != `{"decision":"block"}` {
-			t.Fatalf("mismatch layer = %+v", layer)
-		}
-	})
+	t.Run(
+		"hash mismatch",
+		func(t *testing.T) {
+			fake := &inferenceFake{
+				handler: func(context.Context, *inferencepb.InferRequest) (
+					*inferencepb.InferReply,
+					error,
+				) {
+					return &inferencepb.InferReply{
+						OutputJson: `{"decision":"block"}`,
+						Status:     inferencepb.InferenceStatus_INFERENCE_STATUS_COMPLETE,
+						Metadata: &inferencepb.InvocationMetadata{
+							PromptSha256: "wrong",
+							SchemaSha256: "also-wrong",
+						},
+					}, nil
+				},
+			}
+			endpoint, _ := startInferenceServer(t, fake)
+			runtime := rules.NewInferRuntimeWithCache(nil, nil)
+			t.Cleanup(runtime.Close)
+			layer := evaluateInferDetailed(
+				t,
+				runtime,
+				loadInferRule(t, endpoint, ""),
+				"input",
+			).Trace.Layers[0]
+			if layer.Status != "error" || layer.ErrorCode != "hash_mismatch" ||
+				string(layer.OutputJSON) != `{"decision":"block"}` {
+				t.Fatalf("mismatch layer = %+v", layer)
+			}
+		},
+	)
 }
 
 func TestInferTracePreservesErroredReplyOutput(t *testing.T) {
@@ -291,57 +406,79 @@ func TestInferTracePreservesErroredReplyOutput(t *testing.T) {
 		errorCode  string
 	}{
 		{
-			name: "non-complete", outputJSON: `{"decision":"partial"}`,
-			status:    inferencepb.InferenceStatus_INFERENCE_STATUS_UNSPECIFIED,
-			errorCode: "non_complete", wantRaw: true,
+			name:       "non-complete",
+			outputJSON: `{"decision":"partial"}`,
+			status:     inferencepb.InferenceStatus_INFERENCE_STATUS_UNSPECIFIED,
+			errorCode:  "non_complete",
+			wantRaw:    true,
 		},
 		{
-			name: "invalid response", outputJSON: `{`,
-			status:    inferencepb.InferenceStatus_INFERENCE_STATUS_COMPLETE,
-			errorCode: "invalid_response",
+			name:       "invalid response",
+			outputJSON: `{`,
+			status:     inferencepb.InferenceStatus_INFERENCE_STATUS_COMPLETE,
+			errorCode:  "invalid_response",
 		},
 		{
-			name: "missing response field", outputJSON: `{}`,
-			status:    inferencepb.InferenceStatus_INFERENCE_STATUS_COMPLETE,
-			errorCode: "invalid_response",
+			name:       "missing response field",
+			outputJSON: `{}`,
+			status:     inferencepb.InferenceStatus_INFERENCE_STATUS_COMPLETE,
+			errorCode:  "invalid_response",
 		},
 	}
 	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			fake := &inferenceFake{handler: func(context.Context, *inferencepb.InferRequest) (*inferencepb.InferReply, error) {
-				return &inferencepb.InferReply{
-					OutputJson: test.outputJSON, Status: test.status,
-					Metadata: &inferencepb.InvocationMetadata{RequestId: "errored-request"},
-				}, nil
-			}}
-			endpoint, _ := startInferenceServer(t, fake)
-			runtime := rules.NewInferRuntimeWithCache(nil, nil)
-			t.Cleanup(runtime.Close)
-			layer := evaluateInferDetailed(
-				t,
-				runtime,
-				loadInferRule(t, endpoint, ""),
-				"input",
-			).Trace.Layers[0]
-			if layer.Status != "error" || layer.ErrorCode != test.errorCode ||
-				layer.UpstreamMetadata.Status != "present" ||
-				!strings.Contains(string(layer.UpstreamMetadata.Raw), `"request_id":"errored-request"`) {
-				t.Fatalf("errored layer = %+v", layer)
-			}
-			if test.wantRaw && string(layer.OutputJSON) != test.outputJSON {
-				t.Fatalf("errored output = %s, want %s", layer.OutputJSON, test.outputJSON)
-			}
-			if !test.wantRaw && (!json.Valid(layer.OutputJSON) ||
-				!strings.Contains(string(layer.OutputJSON), `"code":"invalid_response"`) ||
-				!strings.Contains(
-					string(layer.OutputJSON), `"byte_length":`+strconv.Itoa(len(test.outputJSON)),
-				) ||
-				!strings.Contains(
-					string(layer.OutputJSON), `"sha256":"`+traceHash([]byte(test.outputJSON))+`"`,
-				)) {
-				t.Fatalf("sanitized error output = %s", layer.OutputJSON)
-			}
-		})
+		t.Run(
+			test.name,
+			func(t *testing.T) {
+				fake := &inferenceFake{
+					handler: func(context.Context, *inferencepb.InferRequest) (
+						*inferencepb.InferReply,
+						error,
+					) {
+						return &inferencepb.InferReply{
+							OutputJson: test.outputJSON,
+							Status:     test.status,
+							Metadata: &inferencepb.InvocationMetadata{
+								RequestId: "errored-request",
+							},
+						}, nil
+					},
+				}
+				endpoint, _ := startInferenceServer(t, fake)
+				runtime := rules.NewInferRuntimeWithCache(nil, nil)
+				t.Cleanup(runtime.Close)
+				layer := evaluateInferDetailed(
+					t,
+					runtime,
+					loadInferRule(t, endpoint, ""),
+					"input",
+				).Trace.Layers[0]
+				if layer.Status != "error" || layer.ErrorCode != test.errorCode ||
+					layer.UpstreamMetadata.Status != "present" ||
+					!strings.Contains(
+						string(layer.UpstreamMetadata.Raw),
+						`"request_id":"errored-request"`,
+					) {
+					t.Fatalf("errored layer = %+v", layer)
+				}
+
+				if test.wantRaw && string(layer.OutputJSON) != test.outputJSON {
+					t.Fatalf("errored output = %s, want %s", layer.OutputJSON, test.outputJSON)
+				}
+
+				if !test.wantRaw && (!json.Valid(layer.OutputJSON) ||
+					!strings.Contains(string(layer.OutputJSON), `"code":"invalid_response"`) ||
+					!strings.Contains(
+						string(layer.OutputJSON),
+						`"byte_length":`+strconv.Itoa(len(test.outputJSON)),
+					) ||
+					!strings.Contains(
+						string(layer.OutputJSON),
+						`"sha256":"`+traceHash([]byte(test.outputJSON))+`"`,
+					)) {
+					t.Fatalf("sanitized error output = %s", layer.OutputJSON)
+				}
+			},
+		)
 	}
 }
 
@@ -352,6 +489,7 @@ func evaluateInferDetailed(
 	command string,
 ) rules.DetailedEvaluation {
 	t.Helper()
+
 	return rules.EvaluateAllDetailed(
 		rules.WithInferRuntime(context.Background(), runtime),
 		"claude",

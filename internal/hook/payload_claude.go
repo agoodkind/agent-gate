@@ -42,6 +42,7 @@ func (e ClaudeEnvelope) baseFields() rules.FieldSet {
 	fields.Model = e.Model
 	fields.TurnID = e.TurnID
 	fields.Timestamp = e.Timestamp
+
 	return fields
 }
 
@@ -291,7 +292,12 @@ type ClaudeMessageDisplayPayload struct {
 	Delta     string `json:"delta"`
 }
 
-func claudeToolFields(base rules.FieldSet, toolName string, toolUseID string, input ClaudeToolInput) rules.FieldSet {
+func claudeToolFields(
+	base rules.FieldSet,
+	toolName string,
+	toolUseID string,
+	input ClaudeToolInput,
+) rules.FieldSet {
 	base.ToolName = toolName
 	base.ToolUseID = toolUseID
 	base.ToolInputCommand = input.Command
@@ -306,6 +312,7 @@ func claudeToolFields(base rules.FieldSet, toolName string, toolUseID string, in
 	base.ToolInputPath = input.Path
 	base.ToolInputURL = input.URL
 	base.ToolInputQuery = input.Query
+
 	return base
 }
 
@@ -313,6 +320,7 @@ func claudeToolFields(base rules.FieldSet, toolName string, toolUseID string, in
 func (p ClaudeSessionStartPayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.Source = p.Source
+
 	return fields
 }
 
@@ -320,6 +328,7 @@ func (p ClaudeSessionStartPayload) Fields() rules.FieldSet {
 func (p ClaudeSessionEndPayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.Reason = p.Reason
+
 	return fields
 }
 
@@ -327,6 +336,7 @@ func (p ClaudeSessionEndPayload) Fields() rules.FieldSet {
 func (p ClaudeSetupPayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.Trigger = p.Trigger
+
 	return fields
 }
 
@@ -339,6 +349,7 @@ func (p ClaudePreToolUsePayload) Fields() rules.FieldSet {
 func (p ClaudePostToolUsePayload) Fields() rules.FieldSet {
 	fields := claudeToolFields(p.baseFields(), p.ToolName, p.ToolUseID, p.ToolInput)
 	fields.ToolResponse = p.ToolResponse.SearchableText()
+
 	return fields
 }
 
@@ -348,6 +359,7 @@ func (p ClaudePostToolUseFailurePayload) Fields() rules.FieldSet {
 	fields.Error = p.Error
 	fields.ErrorType = p.ErrorType
 	fields.IsInterrupt = boolString(p.IsInterrupt)
+
 	return fields
 }
 
@@ -360,6 +372,7 @@ func (p ClaudePermissionRequestPayload) Fields() rules.FieldSet {
 func (p ClaudePermissionDeniedPayload) Fields() rules.FieldSet {
 	fields := claudeToolFields(p.baseFields(), p.ToolName, p.ToolUseID, p.ToolInput)
 	fields.Reason = p.Reason
+
 	return fields
 }
 
@@ -368,6 +381,7 @@ func (p ClaudeUserPromptSubmitPayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.Prompt = p.Prompt
 	fields.SessionTitle = p.SessionTitle
+
 	return fields
 }
 
@@ -376,6 +390,7 @@ func (p ClaudeStopPayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.StopHookActive = boolString(p.StopHookActive)
 	fields.LastAssistantMessage = p.LastAssistantOutput.String()
+
 	return fields
 }
 
@@ -385,6 +400,7 @@ func (p ClaudeStopFailurePayload) Fields() rules.FieldSet {
 	fields.Error = p.Error
 	fields.ErrorDetails = p.ErrorDetails
 	fields.LastAssistantMessage = p.LastAssistantMessage
+
 	return fields
 }
 
@@ -397,6 +413,7 @@ func (p ClaudeSubagentStopPayload) Fields() rules.FieldSet {
 	fields.StopHookActive = boolString(p.StopHookActive)
 	fields.AgentTranscriptPath = p.AgentTranscriptPath
 	fields.LastAssistantMessage = p.LastAssistantMessage
+
 	return fields
 }
 
@@ -408,6 +425,7 @@ func (p ClaudeTaskCreatedPayload) Fields() rules.FieldSet {
 	fields.TaskDescription = p.TaskDescription
 	fields.TeammateName = p.TeammateName
 	fields.TeamName = p.TeamName
+
 	return fields
 }
 
@@ -422,6 +440,7 @@ func (p ClaudeNotificationPayload) Fields() rules.FieldSet {
 	fields.NotificationType = p.NotificationType
 	fields.Message = p.Message
 	fields.Title = p.Title
+
 	return fields
 }
 
@@ -430,6 +449,7 @@ func (p ClaudePreCompactPayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.Trigger = p.Trigger
 	fields.CustomInstructions = p.CustomInstructions
+
 	return fields
 }
 
@@ -438,6 +458,7 @@ func (p ClaudePostCompactPayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.Trigger = p.Trigger
 	fields.CompactSummary = p.CompactSummary
+
 	return fields
 }
 
@@ -449,6 +470,7 @@ func (p ClaudeInstructionsLoadedPayload) Fields() rules.FieldSet {
 	fields.LoadReason = p.LoadReason
 	fields.TriggerFilePath = p.TriggerFilePath
 	fields.ParentFilePath = p.ParentFilePath
+
 	return fields
 }
 
@@ -457,6 +479,7 @@ func (p ClaudeConfigChangePayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.Source = p.Source
 	fields.FilePath = p.FilePath
+
 	return fields
 }
 
@@ -465,6 +488,7 @@ func (p ClaudeCwdChangedPayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.OldCWD = p.OldCWD
 	fields.NewCWD = p.NewCWD
+
 	return fields
 }
 
@@ -473,6 +497,7 @@ func (p ClaudeFileChangedPayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.FilePath = p.FilePath
 	fields.Event = p.Event
+
 	return fields
 }
 
@@ -480,6 +505,7 @@ func (p ClaudeFileChangedPayload) Fields() rules.FieldSet {
 func (p ClaudeWorktreeCreatePayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.Name = p.Name
+
 	return fields
 }
 
@@ -487,6 +513,7 @@ func (p ClaudeWorktreeCreatePayload) Fields() rules.FieldSet {
 func (p ClaudeWorktreeRemovePayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.WorktreePath = p.WorktreePath
+
 	return fields
 }
 
@@ -499,6 +526,7 @@ func (p ClaudeElicitationPayload) Fields() rules.FieldSet {
 	fields.URL = p.URL
 	fields.ToolInputURL = p.URL
 	fields.ElicitationID = p.ElicitationID
+
 	return fields
 }
 
@@ -509,6 +537,7 @@ func (p ClaudeElicitationResultPayload) Fields() rules.FieldSet {
 	fields.ElicitationID = p.ElicitationID
 	fields.Mode = p.Mode
 	fields.Action = p.Action
+
 	return fields
 }
 
@@ -517,6 +546,7 @@ func (p ClaudeTeammateIdlePayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.TeammateName = p.TeammateName
 	fields.TeamName = p.TeamName
+
 	return fields
 }
 
@@ -527,9 +557,11 @@ func (p ClaudePostToolBatchPayload) Fields() rules.FieldSet {
 	if len(p.ToolCalls) == 0 {
 		return p.baseFields()
 	}
+
 	first := p.ToolCalls[0]
 	fields := claudeToolFields(p.baseFields(), first.ToolName, first.ToolUseID, first.ToolInput)
 	fields.ToolResponse = first.ToolResponse.SearchableText()
+
 	return fields
 }
 
@@ -537,6 +569,7 @@ func (p ClaudePostToolBatchPayload) Fields() rules.FieldSet {
 func (p ClaudeUserPromptExpansionPayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.Prompt = p.Prompt
+
 	return fields
 }
 
@@ -546,6 +579,7 @@ func (p ClaudeMessageDisplayPayload) Fields() rules.FieldSet {
 	fields := p.baseFields()
 	fields.Text = p.Delta
 	fields.AssistantMessage = p.Delta
+
 	return fields
 }
 
@@ -553,5 +587,6 @@ func boolString(value bool) string {
 	if value {
 		return "true"
 	}
+
 	return "false"
 }

@@ -48,6 +48,7 @@ func daemonTestConfig(t testing.TB) *config.Config {
 	if err != nil {
 		t.Fatalf("compile regex: %v", err)
 	}
+
 	rule := config.NewSimpleRule(
 		"no-broad-go-test",
 		`go test \./\.\.\.`,
@@ -58,6 +59,7 @@ func daemonTestConfig(t testing.TB) *config.Config {
 		"Use make test for full project runs.",
 	)
 	rule.AllEvents = true
+
 	return &config.Config{
 		Audit: config.Audit{Enabled: boolPtr(false)},
 		Rules: []config.Rule{rule},
@@ -80,15 +82,18 @@ func (r *daemonInputRunner) Run(
 	if err := json.Unmarshal(stdin, &input); err != nil {
 		return execconcern.RunResult{}, err
 	}
+
 	r.mu.Lock()
 	r.input = input
 	r.mu.Unlock()
+
 	return execconcern.RunResult{ExitCode: 0}, nil
 }
 
 func (r *daemonInputRunner) Input() execconcern.Input {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
 	return r.input
 }
 
@@ -109,6 +114,7 @@ func (r *daemonSequenceRunner) Run(
 	if err := json.Unmarshal(stdin, &input); err != nil {
 		return execconcern.RunResult{}, err
 	}
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.inputs = append(r.inputs, input)
@@ -116,12 +122,14 @@ func (r *daemonSequenceRunner) Run(
 	if index >= len(r.responses) {
 		index = len(r.responses) - 1
 	}
+
 	return r.responses[index], nil
 }
 
 func (r *daemonSequenceRunner) Inputs() []execconcern.Input {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
 	return append([]execconcern.Input(nil), r.inputs...)
 }
 
@@ -141,6 +149,7 @@ func (r *cursorTemporalRunner) Run(
 	if err := json.Unmarshal(stdin, &input); err != nil {
 		return execconcern.RunResult{}, err
 	}
+
 	r.mu.Lock()
 	r.inputs = append(r.inputs, input)
 	r.mu.Unlock()
@@ -150,9 +159,11 @@ func (r *cursorTemporalRunner) Run(
 	if lastResponseOutput.Available == nil || !*lastResponseOutput.Available {
 		return execconcern.RunResult{ExitCode: 0, Stdout: "Continue"}, nil
 	}
+
 	if lastUserMessage.Value == lastResponseOutput.Value {
 		return execconcern.RunResult{ExitCode: 1}, nil
 	}
+
 	return execconcern.RunResult{
 		ExitCode: 0,
 		Stdout:   "Continue " + lastUserMessage.Value,
@@ -162,6 +173,7 @@ func (r *cursorTemporalRunner) Run(
 func (r *cursorTemporalRunner) Inputs() []execconcern.Input {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
 	return append([]execconcern.Input(nil), r.inputs...)
 }
 
@@ -171,6 +183,7 @@ func matchedField(input execconcern.Input, name string) (execconcern.FieldValue,
 			return field, true
 		}
 	}
+
 	return execconcern.FieldValue{}, false
 }
 
@@ -180,17 +193,22 @@ func temporalDaemonConfig(t testing.TB, body string) *config.Config {
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
+
 	cfg, err := config.LoadExisting(path)
 	if err != nil {
 		t.Fatalf("LoadExisting: %v", err)
 	}
+
 	cfg.Audit.Enabled = boolPtr(false)
+
 	return cfg
 }
 
 func TestEvaluateHookObservesCurrentPromptBeforeExec(t *testing.T) {
 	setDaemonTestDirs(t)
-	cfg := temporalDaemonConfig(t, `
+	cfg := temporalDaemonConfig(
+		t,
+		`
 [[rules]]
 name = "prompt-validator"
 cursor_events = ["beforeSubmitPrompt"]
@@ -202,7 +220,8 @@ kind = "exec"
 command = ["/bin/validator"]
 field_paths = ["last_user_message"]
 cache_ttl_ms = 0
-`)
+`,
+	)
 	server, err := newReadyTestServer(newDiscardLogger(), cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -215,13 +234,16 @@ cache_ttl_ms = 0
 		server.hotKV,
 	)
 
-	_, err = server.EvaluateHook(context.Background(), &daemonpb.EvaluateHookRequest{
-		RawJson: []byte(
-			`{"hook_event_name":"beforeSubmitPrompt","conversation_id":"c1",` +
-				`"prompt":"current prompt"}`,
-		),
-		ProviderHint: hook.SystemCursor.String(),
-	})
+	_, err = server.EvaluateHook(
+		context.Background(),
+		&daemonpb.EvaluateHookRequest{
+			RawJson: []byte(
+				`{"hook_event_name":"beforeSubmitPrompt","conversation_id":"c1",` +
+					`"prompt":"current prompt"}`,
+			),
+			ProviderHint: hook.SystemCursor.String(),
+		},
+	)
 	if err != nil {
 		t.Fatalf("EvaluateHook: %v", err)
 	}
@@ -235,7 +257,9 @@ cache_ttl_ms = 0
 
 func TestEvaluateHookRecordsResponseAfterCommitForNextExec(t *testing.T) {
 	setDaemonTestDirs(t)
-	cfg := temporalDaemonConfig(t, `
+	cfg := temporalDaemonConfig(
+		t,
+		`
 [[rules]]
 name = "stop-validator"
 cursor_events = ["stop"]
@@ -247,7 +271,8 @@ kind = "exec"
 command = ["/bin/validator"]
 field_paths = ["last_response_output"]
 cache_ttl_ms = 0
-`)
+`,
+	)
 	server, err := newReadyTestServer(newDiscardLogger(), cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -276,6 +301,7 @@ cache_ttl_ms = 0
 	if err != nil {
 		t.Fatalf("first EvaluateHook: %v", err)
 	}
+
 	if !strings.Contains(string(first.StdoutData), `"followup_message":"first response"`) {
 		t.Fatalf(
 			"first response = %q; exec inputs = %#v",
@@ -283,6 +309,7 @@ cache_ttl_ms = 0
 			runner.Inputs(),
 		)
 	}
+
 	_, err = server.EvaluateHook(context.Background(), request)
 	if err != nil {
 		t.Fatalf("second EvaluateHook: %v", err)
@@ -292,6 +319,7 @@ cache_ttl_ms = 0
 	if len(inputs) != 2 {
 		t.Fatalf("exec inputs = %d, want 2", len(inputs))
 	}
+
 	previous := inputs[1].Matched[0]
 	if previous.Value != "first response" || previous.Available == nil || !*previous.Available {
 		t.Fatalf("second last_response_output = %#v", previous)
@@ -300,7 +328,9 @@ cache_ttl_ms = 0
 
 func TestEvaluateHookCursorTemporalResponseSequence(t *testing.T) {
 	setDaemonTestDirs(t)
-	cfg := temporalDaemonConfig(t, `
+	cfg := temporalDaemonConfig(
+		t,
+		`
 [[rules]]
 name = "stop-validator"
 cursor_events = ["stop"]
@@ -317,7 +347,8 @@ field_paths = [
     "loop_count",
 ]
 cache_ttl_ms = 0
-`)
+`,
+	)
 	server, err := newReadyTestServer(newDiscardLogger(), cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -342,6 +373,7 @@ cache_ttl_ms = 0
 		if evaluateErr != nil {
 			t.Fatalf("EvaluateHook: %v", evaluateErr)
 		}
+
 		return response
 	}
 
@@ -388,6 +420,7 @@ cache_ttl_ms = 0
 	if len(inputs) != 3 {
 		t.Fatalf("exec inputs = %d, want three stop evaluations", len(inputs))
 	}
+
 	assertDaemonMatchedField(t, inputs[0], "last_user_message", "initial request", true)
 	assertDaemonMatchedField(t, inputs[0], "last_response_output", "", false)
 	assertDaemonMatchedField(t, inputs[0], "response_output", "configured fallback", true)
@@ -434,6 +467,7 @@ func TestRuntimeSnapshotsShareInferenceRuntime(t *testing.T) {
 	if first == nil || first.inferRuntime == nil {
 		t.Fatal("initial snapshot does not create an inference runtime")
 	}
+
 	second, err := server.snapshotForBucket(context.Background(), cfg, server.catalog, first.bucket)
 	if err != nil {
 		t.Fatalf("newRuntimeSnapshot: %v", err)
@@ -451,6 +485,7 @@ func emdashDaemonTestConfig(t testing.TB) *config.Config {
 	if err != nil {
 		t.Fatalf("compile emdash regex: %v", err)
 	}
+
 	rule := config.NewSimpleRule(
 		"no-emdashes",
 		pattern,
@@ -461,6 +496,7 @@ func emdashDaemonTestConfig(t testing.TB) *config.Config {
 		"No typographic dashes.",
 	)
 	rule.AllEvents = true
+
 	return &config.Config{
 		Audit: config.Audit{Enabled: boolPtr(false)},
 		Rules: []config.Rule{rule},
@@ -473,6 +509,7 @@ func codexStopAuditDaemonTestConfig(t testing.TB) *config.Config {
 	if err != nil {
 		t.Fatalf("compile regex: %v", err)
 	}
+
 	return &config.Config{
 		Audit: config.Audit{Enabled: boolPtr(true)},
 		Rules: []config.Rule{
@@ -493,26 +530,27 @@ func codexStopAuditDaemonTestConfig(t testing.TB) *config.Config {
 // which begins with a NUL byte. The intake record must store the unknown
 // directory as an empty string, not leak the marker into SQLite.
 func TestBuildIntakeRecordMapsUnresolvableCwdToEmpty(t *testing.T) {
-	raw := []byte(`{
+	raw := []byte(
+		`{
 		"hook_event_name": "PreToolUse",
 		"session_id": "test-session",
 		"cwd": "/tmp",
 		"tool_name": "Bash",
 		"tool_input": {"command": "cd \"$(echo /tmp)\" && grep -rn x ."}
-	}`)
+	}`,
+	)
 
 	classification := hook.Classify(raw, hook.SystemClaude, nil, nil)
-	record, err := buildClassifiedIntakeRecord(
-		raw,
-		raw,
-		classification,
-		nil,
-	)
+	record, err := buildClassifiedIntakeRecord(raw, raw, classification, nil)
 	if err != nil {
 		t.Fatalf("buildIntakeRecord: %v", err)
 	}
+
 	if record.Operation.EffectiveCWD != "" {
-		t.Fatalf("EffectiveCWD = %q, want empty for an unresolvable cwd", record.Operation.EffectiveCWD)
+		t.Fatalf(
+			"EffectiveCWD = %q, want empty for an unresolvable cwd",
+			record.Operation.EffectiveCWD,
+		)
 	}
 }
 
@@ -524,16 +562,22 @@ func TestEvaluateHookPreservesWireInput(t *testing.T) {
 	}
 	defer srv.Close()
 
-	wireInput := []byte(`{"hook_event_name":"preToolUse","conversation_id":"cursor-wire","cursor_version":"1.0","cwd":"/payload","tool_name":"Shell","tool_input":{"command":"true"}}`)
+	wireInput := []byte(
+		`{"hook_event_name":"preToolUse","conversation_id":"cursor-wire","cursor_version":"1.0","cwd":"/payload","tool_name":"Shell","tool_input":{"command":"true"}}`,
+	)
 	requestCWD := filepath.Join(t.TempDir(), "request-cwd")
-	response, err := srv.EvaluateHook(context.Background(), &daemonpb.EvaluateHookRequest{
-		RawJson: wireInput,
-		Cwd:     requestCWD,
-		Argv:    []string{"agent-gate"},
-	})
+	response, err := srv.EvaluateHook(
+		context.Background(),
+		&daemonpb.EvaluateHookRequest{
+			RawJson: wireInput,
+			Cwd:     requestCWD,
+			Argv:    []string{"agent-gate"},
+		},
+	)
 	if err != nil {
 		t.Fatalf("EvaluateHook: %v", err)
 	}
+
 	if response.ExitCode != 0 {
 		t.Fatalf("exit code = %d, want 0", response.ExitCode)
 	}
@@ -542,23 +586,24 @@ func TestEvaluateHookPreservesWireInput(t *testing.T) {
 	if !bytes.Equal(record.RawPayload, wireInput) {
 		t.Fatalf("raw payload changed: got %q want %q", record.RawPayload, wireInput)
 	}
+
 	var normalized map[string]json.RawMessage
 	if err := json.Unmarshal(record.NormalizedJSON, &normalized); err != nil {
 		t.Fatalf("decode normalized payload: %v", err)
 	}
+
 	var normalizedCWD string
 	if err := json.Unmarshal(normalized["cwd"], &normalizedCWD); err != nil {
 		t.Fatalf("decode normalized cwd: %v", err)
 	}
+
 	if normalizedCWD != requestCWD {
 		t.Fatalf("normalized cwd = %q, want %q", normalizedCWD, requestCWD)
 	}
+
 	classification := decodeClassification(t, record.ClassificationJSON)
 	if classification.ResolvedSystem() != hook.SystemCursor {
-		t.Fatalf(
-			"resolved system = %q, want cursor",
-			classification.ResolvedSystem(),
-		)
+		t.Fatalf("resolved system = %q, want cursor", classification.ResolvedSystem())
 	}
 }
 
@@ -570,18 +615,25 @@ func TestEvaluateHookPreservesCopilotWireInput(t *testing.T) {
 	}
 	defer srv.Close()
 
-	wireInput := []byte(`{"sessionId":"copilot-wire","toolName":"run_in_terminal","toolUseId":"tool-1","toolInput":{"command":"true"}}`)
-	_, err = srv.EvaluateHook(context.Background(), &daemonpb.EvaluateHookRequest{
-		RawJson: wireInput,
-		Cwd:     t.TempDir(),
-		Argv:    []string{"agent-gate", "managed-hook", "copilot", "preToolUse"},
-		InvocationContext: invocationContextToProto(hook.InvocationContext{
-			ManagedRegistration: hook.ObservedValue{
-				Value: "copilot", Source: "managed_registration", Provenance: "hook_tag",
-				Status: hook.SignalStatusObserved,
-			},
-		}),
-	})
+	wireInput := []byte(
+		`{"sessionId":"copilot-wire","toolName":"run_in_terminal","toolUseId":"tool-1","toolInput":{"command":"true"}}`,
+	)
+	_, err = srv.EvaluateHook(
+		context.Background(),
+		&daemonpb.EvaluateHookRequest{
+			RawJson: wireInput,
+			Cwd:     t.TempDir(),
+			Argv:    []string{"agent-gate", "managed-hook", "copilot", "preToolUse"},
+			InvocationContext: invocationContextToProto(hook.InvocationContext{
+				ManagedRegistration: hook.ObservedValue{
+					Value:      "copilot",
+					Source:     "managed_registration",
+					Provenance: "hook_tag",
+					Status:     hook.SignalStatusObserved,
+				},
+			}),
+		},
+	)
 	if err != nil {
 		t.Fatalf("EvaluateHook: %v", err)
 	}
@@ -590,13 +642,16 @@ func TestEvaluateHookPreservesCopilotWireInput(t *testing.T) {
 	if !bytes.Equal(record.RawPayload, wireInput) {
 		t.Fatalf("raw payload changed: got %q want %q", record.RawPayload, wireInput)
 	}
+
 	var normalized map[string]json.RawMessage
 	if err := json.Unmarshal(record.NormalizedJSON, &normalized); err != nil {
 		t.Fatalf("decode normalized payload: %v", err)
 	}
+
 	if _, ok := normalized["session_id"]; !ok {
 		t.Fatalf("normalized payload missing session_id: %s", record.NormalizedJSON)
 	}
+
 	if _, ok := normalized["hook_event_name"]; !ok {
 		t.Fatalf("normalized payload missing hook_event_name: %s", record.NormalizedJSON)
 	}
@@ -610,13 +665,17 @@ func TestEvaluateHookPersistsGenuineEmptyInput(t *testing.T) {
 	}
 	defer srv.Close()
 
-	response, err := srv.EvaluateHook(context.Background(), &daemonpb.EvaluateHookRequest{
-		RawJson: []byte{},
-		Argv:    []string{"agent-gate"},
-	})
+	response, err := srv.EvaluateHook(
+		context.Background(),
+		&daemonpb.EvaluateHookRequest{
+			RawJson: []byte{},
+			Argv:    []string{"agent-gate"},
+		},
+	)
 	if err != nil {
 		t.Fatalf("EvaluateHook: %v", err)
 	}
+
 	if response.ExitCode != 2 {
 		t.Fatalf("exit code = %d, want invalid hook exit 2", response.ExitCode)
 	}
@@ -625,15 +684,14 @@ func TestEvaluateHookPersistsGenuineEmptyInput(t *testing.T) {
 	if record.ReceiptID == 0 {
 		t.Fatal("receipt id = 0, want durable receipt")
 	}
+
 	if len(record.RawPayload) != 0 {
 		t.Fatalf("raw payload length = %d, want 0", len(record.RawPayload))
 	}
+
 	classification := decodeClassification(t, record.ClassificationJSON)
 	if classification.Result != hook.ClassificationResultInvalid {
-		t.Fatalf(
-			"classification result = %q, want invalid",
-			classification.Result,
-		)
+		t.Fatalf("classification result = %q, want invalid", classification.Result)
 	}
 
 	sqliteStore := daemonSQLiteStore(t, srv)
@@ -642,10 +700,13 @@ func TestEvaluateHookPersistsGenuineEmptyInput(t *testing.T) {
 		context.Background(),
 		readDaemonSQLFixture(t, "wire_input_type.sql"),
 		record.EventID,
-	).Scan(&payloadType)
+	).Scan(
+		&payloadType,
+	)
 	if err != nil {
 		t.Fatalf("query raw payload type: %v", err)
 	}
+
 	if payloadType != "blob" {
 		t.Fatalf("raw payload type = %q, want blob", payloadType)
 	}
@@ -659,15 +720,20 @@ func TestEvaluateHookClassifiesInheritedMarkers(t *testing.T) {
 	}
 	defer srv.Close()
 
-	wireInput := []byte(`{"hook_event_name":"preToolUse","conversation_id":"cursor-inherited","cursor_version":"1.0","tool_name":"Shell","tool_input":{"command":"true"}}`)
-	_, err = srv.EvaluateHook(context.Background(), &daemonpb.EvaluateHookRequest{
-		RawJson: wireInput,
-		Argv:    []string{"agent-gate"},
-		EnvFingerprint: map[string]string{
-			"CLAUDE_CODE_ENTRYPOINT": "cli",
-			"CODEX_THREAD_ID":        "inherited",
+	wireInput := []byte(
+		`{"hook_event_name":"preToolUse","conversation_id":"cursor-inherited","cursor_version":"1.0","tool_name":"Shell","tool_input":{"command":"true"}}`,
+	)
+	_, err = srv.EvaluateHook(
+		context.Background(),
+		&daemonpb.EvaluateHookRequest{
+			RawJson: wireInput,
+			Argv:    []string{"agent-gate"},
+			EnvFingerprint: map[string]string{
+				"CLAUDE_CODE_ENTRYPOINT": "cli",
+				"CODEX_THREAD_ID":        "inherited",
+			},
 		},
-	})
+	)
 	if err != nil {
 		t.Fatalf("EvaluateHook: %v", err)
 	}
@@ -676,6 +742,7 @@ func TestEvaluateHookClassifiesInheritedMarkers(t *testing.T) {
 	if record.System != hook.SystemCursor.String() {
 		t.Fatalf("record system = %q, want cursor", record.System)
 	}
+
 	classification := decodeClassification(t, record.ClassificationJSON)
 	assertClassificationConflict(t, classification, hook.SystemClaude.String())
 	assertClassificationConflict(t, classification, hook.SystemCodex.String())
@@ -696,13 +763,17 @@ func TestEvaluateHookPersistsCompleteClassificationEvidence(t *testing.T) {
 			invocation: func(*testing.T) hook.InvocationContext {
 				return hook.InvocationContext{
 					WorkingDirectory: hook.ObservedValue{
-						Source: "working_directory", Provenance: "operating_system",
-						Status: hook.SignalStatusMissing,
+						Source:     "working_directory",
+						Provenance: "operating_system",
+						Status:     hook.SignalStatusMissing,
 					},
-					CollectionIssues: []hook.CollectionIssue{{
-						Source: "working_directory", Status: hook.SignalStatusMissing,
-						Detail: "working directory was unavailable",
-					}},
+					CollectionIssues: []hook.CollectionIssue{
+						{
+							Source: "working_directory",
+							Status: hook.SignalStatusMissing,
+							Detail: "working directory was unavailable",
+						},
+					},
 				}
 			},
 			wantProvider: hook.SystemUnknown,
@@ -710,28 +781,43 @@ func TestEvaluateHookPersistsCompleteClassificationEvidence(t *testing.T) {
 			verify: func(t *testing.T, classification hook.Classification) {
 				t.Helper()
 				if len(classification.Input.Invocation.CollectionIssues) != 1 {
-					t.Fatalf("collection issues = %#v", classification.Input.Invocation.CollectionIssues)
+					t.Fatalf(
+						"collection issues = %#v",
+						classification.Input.Invocation.CollectionIssues,
+					)
 				}
 			},
 		},
 		{
-			name:    "mixed inherited and conflicting evidence",
-			rawJSON: []byte(`{"hook_event_name":"preToolUse","conversation_id":"c1","cursor_version":"1.0"}`),
+			name: "mixed inherited and conflicting evidence",
+			rawJSON: []byte(
+				`{"hook_event_name":"preToolUse","conversation_id":"c1","cursor_version":"1.0"}`,
+			),
 			invocation: func(t *testing.T) hook.InvocationContext {
 				return hook.InvocationContext{
 					ManagedRegistration: hook.ObservedValue{
-						Value: "claude", Source: "managed_registration", Provenance: "hook_tag",
-						Status: hook.SignalStatusObserved,
+						Value:      "claude",
+						Source:     "managed_registration",
+						Provenance: "hook_tag",
+						Status:     hook.SignalStatusObserved,
 					},
 					ParentProcess: hook.ProcessEvidence{
-						Name: "codex", ExecutablePath: t.TempDir(), Source: "parent_process",
-						Provenance: "operating_system", Status: hook.SignalStatusObserved,
+						Name:           "codex",
+						ExecutablePath: t.TempDir(),
+						Source:         "parent_process",
+						Provenance:     "operating_system",
+						Status:         hook.SignalStatusObserved,
 					},
-					Environment: []hook.EnvironmentEvidence{{
-						Name: "CLAUDE_CODE_ENTRYPOINT", Value: "cli",
-						Category: "provider_environment", Source: "environment",
-						Provenance: "inherited_environment", Status: hook.SignalStatusObserved,
-					}},
+					Environment: []hook.EnvironmentEvidence{
+						{
+							Name:       "CLAUDE_CODE_ENTRYPOINT",
+							Value:      "cli",
+							Category:   "provider_environment",
+							Source:     "environment",
+							Provenance: "inherited_environment",
+							Status:     hook.SignalStatusObserved,
+						},
+					},
 				}
 			},
 			wantProvider: hook.SystemCursor,
@@ -750,24 +836,34 @@ func TestEvaluateHookPersistsCompleteClassificationEvidence(t *testing.T) {
 			rawJSON: []byte(`{"session_id":"s1"}`),
 			invocation: func(*testing.T) hook.InvocationContext {
 				return hook.InvocationContext{
-					Environment: []hook.EnvironmentEvidence{{
-						Name: "AGENT_GATE_HOOK_PROVIDER", Value: "copilot",
-						Category: "hook_environment", Source: "environment",
-						Provenance: "hook_injected", Status: hook.SignalStatusObserved,
-					}},
+					Environment: []hook.EnvironmentEvidence{
+						{
+							Name:       "AGENT_GATE_HOOK_PROVIDER",
+							Value:      "copilot",
+							Category:   "hook_environment",
+							Source:     "environment",
+							Provenance: "hook_injected",
+							Status:     hook.SignalStatusObserved,
+						},
+					},
 				}
 			},
 			wantProvider: hook.SystemCopilot,
 			wantResult:   hook.ClassificationResultResolved,
 			verify: func(t *testing.T, classification hook.Classification) {
 				t.Helper()
+
 				for _, evidence := range classification.Evidence {
 					if evidence.Signal == "AGENT_GATE_HOOK_PROVIDER" &&
 						evidence.Provenance == "hook_injected" && evidence.Result == "match" {
 						return
 					}
 				}
-				t.Fatalf("stored injected evidence does not explain result: %#v", classification.Evidence)
+
+				t.Fatalf(
+					"stored injected evidence does not explain result: %#v",
+					classification.Evidence,
+				)
 			},
 		},
 		{
@@ -779,7 +875,10 @@ func TestEvaluateHookPersistsCompleteClassificationEvidence(t *testing.T) {
 			verify: func(t *testing.T, classification hook.Classification) {
 				t.Helper()
 				if len(classification.Evidence) != 2 {
-					t.Fatalf("ambiguous evidence = %#v, want two candidates", classification.Evidence)
+					t.Fatalf(
+						"ambiguous evidence = %#v, want two candidates",
+						classification.Evidence,
+					)
 				}
 			},
 		},
@@ -800,31 +899,47 @@ func TestEvaluateHookPersistsCompleteClassificationEvidence(t *testing.T) {
 	}
 
 	for _, testCase := range tests {
-		t.Run(testCase.name, func(t *testing.T) {
-			setDaemonTestDirs(t)
-			srv, err := newReadyTestServer(newDiscardLogger(), daemonTestConfig(t))
-			if err != nil {
-				t.Fatalf("New: %v", err)
-			}
-			defer srv.Close()
+		t.Run(
+			testCase.name,
+			func(t *testing.T) {
+				setDaemonTestDirs(t)
+				srv, err := newReadyTestServer(newDiscardLogger(), daemonTestConfig(t))
+				if err != nil {
+					t.Fatalf("New: %v", err)
+				}
+				defer srv.Close()
 
-			_, err = srv.EvaluateHook(context.Background(), &daemonpb.EvaluateHookRequest{
-				RawJson:           testCase.rawJSON,
-				Argv:              []string{"agent-gate", "managed-hook", "claude"},
-				InvocationContext: invocationContextToProto(testCase.invocation(t)),
-			})
-			if err != nil {
-				t.Fatalf("EvaluateHook: %v", err)
-			}
-			classification := decodeClassification(t, onlyIntakeRecord(t, srv).ClassificationJSON)
-			if classification.ResolvedSystem() != testCase.wantProvider {
-				t.Fatalf("resolved provider = %q, want %q", classification.ResolvedSystem(), testCase.wantProvider)
-			}
-			if classification.Result != testCase.wantResult {
-				t.Fatalf("result = %q, want %q", classification.Result, testCase.wantResult)
-			}
-			testCase.verify(t, classification)
-		})
+				_, err = srv.EvaluateHook(
+					context.Background(),
+					&daemonpb.EvaluateHookRequest{
+						RawJson:           testCase.rawJSON,
+						Argv:              []string{"agent-gate", "managed-hook", "claude"},
+						InvocationContext: invocationContextToProto(testCase.invocation(t)),
+					},
+				)
+				if err != nil {
+					t.Fatalf("EvaluateHook: %v", err)
+				}
+
+				classification := decodeClassification(
+					t,
+					onlyIntakeRecord(t, srv).ClassificationJSON,
+				)
+				if classification.ResolvedSystem() != testCase.wantProvider {
+					t.Fatalf(
+						"resolved provider = %q, want %q",
+						classification.ResolvedSystem(),
+						testCase.wantProvider,
+					)
+				}
+
+				if classification.Result != testCase.wantResult {
+					t.Fatalf("result = %q, want %q", classification.Result, testCase.wantResult)
+				}
+
+				testCase.verify(t, classification)
+			},
+		)
 	}
 }
 
@@ -834,10 +949,12 @@ func daemonSQLiteStore(t *testing.T, srv *Server) *intake.Store {
 	if snapshot == nil {
 		t.Fatal("runtime snapshot is nil")
 	}
+
 	store, ok := snapshot.intakeStore.(*sqliteIntakeStore)
 	if !ok || store.store == nil {
 		t.Fatalf("intake store = %T, want sqlite store", snapshot.intakeStore)
 	}
+
 	return store.store
 }
 
@@ -849,17 +966,23 @@ func onlyIntakeRecord(t *testing.T, srv *Server) intake.Record {
 	err := store.Handle().QueryRowContext(
 		context.Background(),
 		`select min(event_id), count(*) from intake_events`,
-	).Scan(&eventID, &count)
+	).Scan(
+		&eventID,
+		&count,
+	)
 	if err != nil {
 		t.Fatalf("query intake event: %v", err)
 	}
+
 	if count != 1 {
 		t.Fatalf("intake event count = %d, want 1", count)
 	}
+
 	record, err := store.Get(context.Background(), eventID)
 	if err != nil {
 		t.Fatalf("Get intake event: %v", err)
 	}
+
 	return record
 }
 
@@ -872,6 +995,7 @@ func decodeClassification(
 	if err := json.Unmarshal(rawClassification, &classification); err != nil {
 		t.Fatalf("decode classification: %v", err)
 	}
+
 	return classification
 }
 
@@ -881,11 +1005,13 @@ func assertClassificationConflict(
 	provider string,
 ) {
 	t.Helper()
+
 	for _, evidence := range classification.Evidence {
 		if evidence.Provider == provider && evidence.Result == "conflict" {
 			return
 		}
 	}
+
 	t.Fatalf("classification missing %s conflict: %#v", provider, classification.Evidence)
 }
 
@@ -897,35 +1023,47 @@ func TestEvaluateHook_DaemonOwnsEnforcement(t *testing.T) {
 	}
 	defer srv.Close()
 
-	resp, err := srv.EvaluateHook(context.Background(), &daemonpb.EvaluateHookRequest{
-		RawJson:      []byte(`{"session_id":"s1","hook_event_name":"PreToolUse","tool_name":"Shell","tool_input":{"command":"go test ./..."}}`),
-		ProviderHint: "codex",
-		Cwd:          t.TempDir(),
-	})
+	resp, err := srv.EvaluateHook(
+		context.Background(),
+		&daemonpb.EvaluateHookRequest{
+			RawJson: []byte(
+				`{"session_id":"s1","hook_event_name":"PreToolUse","tool_name":"Shell","tool_input":{"command":"go test ./..."}}`,
+			),
+			ProviderHint: "codex",
+			Cwd:          t.TempDir(),
+		},
+	)
 	if err != nil {
 		t.Fatalf("EvaluateHook: %v", err)
 	}
+
 	if resp.ExitCode != 0 {
 		t.Fatalf("exit_code = %d, want 0 for Codex JSON-deny response", resp.ExitCode)
 	}
-	if got := string(resp.StdoutData); !strings.Contains(got, `"permissionDecision":"deny"`) || !strings.Contains(got, "no-broad-go-test") {
+
+	if got := string(resp.StdoutData); !strings.Contains(got, `"permissionDecision":"deny"`) ||
+		!strings.Contains(got, "no-broad-go-test") {
 		t.Fatalf("stdout missing Codex deny response: %s", got)
 	}
 }
 
 func TestResolveHookEnvironment_DaemonOwnsPayloadParsing(t *testing.T) {
 	server := &Server{}
-	rawJSON := []byte(`{"session_id":"s1","hook_event_name":"PreToolUse","tool_name":"Shell","tool_input":{"command":"cat \"` + "$" + `TARGET\" ` + "$" + `SECOND"}}`)
+	rawJSON := []byte(
+		`{"session_id":"s1","hook_event_name":"PreToolUse","tool_name":"Shell","tool_input":{"command":"cat \"` + "$" + `TARGET\" ` + "$" + `SECOND"}}`,
+	)
 
 	response, err := server.ResolveHookEnvironment(
 		context.Background(),
 		&daemonpb.ResolveHookEnvironmentRequest{
-			RawJson: rawJSON, ProviderHint: "codex",
+			RawJson:      rawJSON,
+			ProviderHint: "codex",
 		},
 	)
 	if err != nil {
 		t.Fatalf("ResolveHookEnvironment: %v", err)
 	}
+
 	want := []string{"TARGET"}
 	if fmt.Sprint(response.ReferencedNames) != fmt.Sprint(want) {
 		t.Fatalf("referenced names = %v, want %v", response.ReferencedNames, want)
@@ -940,13 +1078,18 @@ func TestEvaluateHook_InvalidJSONFailsClosed(t *testing.T) {
 	}
 	defer srv.Close()
 
-	resp, err := srv.EvaluateHook(context.Background(), &daemonpb.EvaluateHookRequest{RawJson: []byte(`{`)})
+	resp, err := srv.EvaluateHook(
+		context.Background(),
+		&daemonpb.EvaluateHookRequest{RawJson: []byte(`{`)},
+	)
 	if err != nil {
 		t.Fatalf("EvaluateHook: %v", err)
 	}
+
 	if resp.ExitCode != 2 {
 		t.Fatalf("exit_code = %d, want 2", resp.ExitCode)
 	}
+
 	if !strings.Contains(string(resp.StderrData), "parse stdin JSON") {
 		t.Fatalf("stderr missing parse error: %q", string(resp.StderrData))
 	}
@@ -964,20 +1107,28 @@ func TestEvaluateHook_OverloadFailsOpen(t *testing.T) {
 	snapshot.evaluateSlots <- struct{}{}
 
 	start := time.Now()
-	resp, err := srv.EvaluateHook(context.Background(), &daemonpb.EvaluateHookRequest{
-		RawJson:      []byte(`{"session_id":"s1","hook_event_name":"PreToolUse","tool_name":"Shell","tool_input":{"command":"go test ./..."}}`),
-		ProviderHint: "codex",
-		Cwd:          t.TempDir(),
-	})
+	resp, err := srv.EvaluateHook(
+		context.Background(),
+		&daemonpb.EvaluateHookRequest{
+			RawJson: []byte(
+				`{"session_id":"s1","hook_event_name":"PreToolUse","tool_name":"Shell","tool_input":{"command":"go test ./..."}}`,
+			),
+			ProviderHint: "codex",
+			Cwd:          t.TempDir(),
+		},
+	)
 	if err != nil {
 		t.Fatalf("EvaluateHook: %v", err)
 	}
+
 	if elapsed := time.Since(start); elapsed > 100*time.Millisecond {
 		t.Fatalf("EvaluateHook overload took %s, want bounded wait", elapsed)
 	}
+
 	if resp.ExitCode != 0 {
 		t.Fatalf("exit_code = %d, want fail-open exit 0", resp.ExitCode)
 	}
+
 	// An overloaded queue means the call was let through without being
 	// evaluated, so it says so rather than looking like a clean allow.
 	assertSaysUnevaluated(t, resp, hook.FailOpenReasonOverloaded)
@@ -996,30 +1147,39 @@ func TestEvaluateHook_ConcurrentBurstCompletes(t *testing.T) {
 	const requestCount = 64
 	cwd := t.TempDir()
 	var wg sync.WaitGroup
+
 	errs := make(chan error, requestCount)
 	for i := 0; i < requestCount; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			resp, err := srv.EvaluateHook(context.Background(), &daemonpb.EvaluateHookRequest{
-				RawJson:      []byte(`{"session_id":"s1","hook_event_name":"PreToolUse","tool_name":"Shell","tool_input":{"command":"echo ok"}}`),
-				ProviderHint: "codex",
-				Cwd:          cwd,
-				EnvFingerprint: map[string]string{
-					"CODEX_THREAD_ID": "test-thread",
+			resp, err := srv.EvaluateHook(
+				context.Background(),
+				&daemonpb.EvaluateHookRequest{
+					RawJson: []byte(
+						`{"session_id":"s1","hook_event_name":"PreToolUse","tool_name":"Shell","tool_input":{"command":"echo ok"}}`,
+					),
+					ProviderHint: "codex",
+					Cwd:          cwd,
+					EnvFingerprint: map[string]string{
+						"CODEX_THREAD_ID": "test-thread",
+					},
 				},
-			})
+			)
 			if err != nil {
 				errs <- err
 				return
 			}
+
 			if resp.ExitCode != 0 {
 				errs <- fmt.Errorf("unexpected non-zero exit: %d", resp.ExitCode)
 			}
 		}()
 	}
+
 	wg.Wait()
 	close(errs)
+
 	for err := range errs {
 		if err != nil {
 			t.Fatalf("concurrent EvaluateHook: %v", err)
@@ -1048,6 +1208,7 @@ func TestServerCloseWaitsForAdmittedEvaluation(t *testing.T) {
 		) hook.HotEvaluation {
 			close(evaluationEntered)
 			<-releaseEvaluation
+
 			return defaultHotEvaluate(ctx, input, cfg, getenv, eventID)
 		},
 	)
@@ -1055,10 +1216,15 @@ func TestServerCloseWaitsForAdmittedEvaluation(t *testing.T) {
 	evaluationDone := make(chan struct{})
 	go func() {
 		defer close(evaluationDone)
-		_, _ = server.EvaluateHook(context.Background(), &daemonpb.EvaluateHookRequest{
-			RawJson:      []byte(`{"session_id":"s1","hook_event_name":"PreToolUse","tool_name":"Shell","tool_input":{"command":"echo ok"}}`),
-			ProviderHint: "codex",
-		})
+		_, _ = server.EvaluateHook(
+			context.Background(),
+			&daemonpb.EvaluateHookRequest{
+				RawJson: []byte(
+					`{"session_id":"s1","hook_event_name":"PreToolUse","tool_name":"Shell","tool_input":{"command":"echo ok"}}`,
+				),
+				ProviderHint: "codex",
+			},
+		)
 	}()
 	<-evaluationEntered
 
@@ -1074,6 +1240,7 @@ func TestServerCloseWaitsForAdmittedEvaluation(t *testing.T) {
 		closedBeforeRelease = true
 	case <-time.After(50 * time.Millisecond):
 	}
+
 	close(releaseEvaluation)
 	<-evaluationDone
 	<-closeDone
@@ -1094,80 +1261,117 @@ func TestKVHotStoreRPCs(t *testing.T) {
 	}
 	defer srv.Close()
 
-	setResp, err := srv.KVSet(context.Background(), &daemonpb.KVSetRequest{
-		Namespace: "test",
-		Key:       "repo",
-		Value:     []byte("indexed"),
-		Mode:      "NX",
-		TtlMs:     1000,
-	})
+	setResp, err := srv.KVSet(
+		context.Background(),
+		&daemonpb.KVSetRequest{
+			Namespace: "test",
+			Key:       "repo",
+			Value:     []byte("indexed"),
+			Mode:      "NX",
+			TtlMs:     1000,
+		},
+	)
 	if err != nil {
 		t.Fatalf("KVSet: %v", err)
 	}
+
 	if !setResp.GetStored() {
 		t.Fatal("KVSet stored = false, want true")
 	}
 
-	skipped, err := srv.KVSet(context.Background(), &daemonpb.KVSetRequest{
-		Namespace: "test",
-		Key:       "repo",
-		Value:     []byte("other"),
-		Mode:      "NX",
-	})
+	skipped, err := srv.KVSet(
+		context.Background(),
+		&daemonpb.KVSetRequest{
+			Namespace: "test",
+			Key:       "repo",
+			Value:     []byte("other"),
+			Mode:      "NX",
+		},
+	)
 	if err != nil {
 		t.Fatalf("KVSet NX existing: %v", err)
 	}
+
 	if skipped.GetStored() {
 		t.Fatal("KVSet NX existing stored = true, want false")
 	}
 
-	getResp, err := srv.KVGet(context.Background(), &daemonpb.KVGetRequest{Namespace: "test", Key: "repo"})
+	getResp, err := srv.KVGet(
+		context.Background(),
+		&daemonpb.KVGetRequest{Namespace: "test", Key: "repo"},
+	)
 	if err != nil {
 		t.Fatalf("KVGet: %v", err)
 	}
+
 	if !getResp.GetFound() || string(getResp.GetEntry().GetValue()) != "indexed" {
-		t.Fatalf("KVGet found=%v value=%q, want indexed", getResp.GetFound(), string(getResp.GetEntry().GetValue()))
+		t.Fatalf(
+			"KVGet found=%v value=%q, want indexed",
+			getResp.GetFound(),
+			string(getResp.GetEntry().GetValue()),
+		)
 	}
+
 	if getResp.GetEntry().GetPttlMs() <= 0 {
 		t.Fatalf("PTTL = %d, want positive", getResp.GetEntry().GetPttlMs())
 	}
 
-	ttlResp, err := srv.KVTTL(context.Background(), &daemonpb.KVGetRequest{Namespace: "test", Key: "repo"})
+	ttlResp, err := srv.KVTTL(
+		context.Background(),
+		&daemonpb.KVGetRequest{Namespace: "test", Key: "repo"},
+	)
 	if err != nil {
 		t.Fatalf("KVTTL: %v", err)
 	}
+
 	if ttlResp.GetTtl() < 0 {
 		t.Fatalf("KVTTL ttl = %d, want non-negative active TTL", ttlResp.GetTtl())
 	}
 
-	pttlResp, err := srv.KVPTTL(context.Background(), &daemonpb.KVGetRequest{Namespace: "test", Key: "repo"})
+	pttlResp, err := srv.KVPTTL(
+		context.Background(),
+		&daemonpb.KVGetRequest{Namespace: "test", Key: "repo"},
+	)
 	if err != nil {
 		t.Fatalf("KVPTTL: %v", err)
 	}
+
 	if pttlResp.GetPttl() <= 0 {
 		t.Fatalf("KVPTTL pttl = %d, want positive", pttlResp.GetPttl())
 	}
 
-	exists, err := srv.KVExists(context.Background(), &daemonpb.KVExistsRequest{Namespace: "test", Key: "repo"})
+	exists, err := srv.KVExists(
+		context.Background(),
+		&daemonpb.KVExistsRequest{Namespace: "test", Key: "repo"},
+	)
 	if err != nil {
 		t.Fatalf("KVExists: %v", err)
 	}
+
 	if !exists.GetExists() {
 		t.Fatal("KVExists = false, want true")
 	}
 
-	deleted, err := srv.KVDelete(context.Background(), &daemonpb.KVDeleteRequest{Namespace: "test", Key: "repo"})
+	deleted, err := srv.KVDelete(
+		context.Background(),
+		&daemonpb.KVDeleteRequest{Namespace: "test", Key: "repo"},
+	)
 	if err != nil {
 		t.Fatalf("KVDelete: %v", err)
 	}
+
 	if !deleted.GetDeleted() {
 		t.Fatal("KVDelete = false, want true")
 	}
 
-	missingTTL, err := srv.KVTTL(context.Background(), &daemonpb.KVGetRequest{Namespace: "test", Key: "repo"})
+	missingTTL, err := srv.KVTTL(
+		context.Background(),
+		&daemonpb.KVGetRequest{Namespace: "test", Key: "repo"},
+	)
 	if err != nil {
 		t.Fatalf("KVTTL missing: %v", err)
 	}
+
 	if missingTTL.GetTtl() != -2 {
 		t.Fatalf("KVTTL missing = %d, want -2", missingTTL.GetTtl())
 	}
@@ -1175,7 +1379,9 @@ func TestKVHotStoreRPCs(t *testing.T) {
 
 func TestPublicKVRPCsRejectTemporalInternalNamespace(t *testing.T) {
 	setDaemonTestDirs(t)
-	cfg := temporalDaemonConfig(t, `
+	cfg := temporalDaemonConfig(
+		t,
+		`
 [[rules]]
 name = "temporal-validator"
 cursor_events = ["stop"]
@@ -1187,7 +1393,8 @@ kind = "exec"
 command = ["/bin/validator"]
 field_paths = ["last_user_message", "last_response_output"]
 cache_ttl_ms = 0
-`)
+`,
+	)
 	server, err := newReadyTestServer(newDiscardLogger(), cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -1196,15 +1403,27 @@ cache_ttl_ms = 0
 	runner := &daemonInputRunner{mu: sync.Mutex{}}
 	runtime := rules.NewExecRuntimeWithCache(runner, newDiscardLogger(), server.hotKV)
 	fields := rules.FieldSet{ConversationID: "conversation-1"}
-	if !runtime.ObserveUserPromptOrdered("cursor", fields, hotkv.ObservationOrder{Generation: server.runtime.Load().assignmentGeneration, ReceiptID: 10}, "private prompt") {
+	if !runtime.ObserveUserPromptOrdered(
+		"cursor",
+		fields,
+		hotkv.ObservationOrder{
+			Generation: server.runtime.Load().assignmentGeneration,
+			ReceiptID:  10,
+		},
+		"private prompt",
+	) {
 		t.Fatal("ObserveUserPrompt did not store the prompt")
 	}
+
 	if !runtime.ObserveResponseOutputOrdered(
 		"cursor",
 		fields,
 		"stop",
 		"context",
-		hotkv.ObservationOrder{Generation: server.runtime.Load().assignmentGeneration, ReceiptID: 9},
+		hotkv.ObservationOrder{
+			Generation: server.runtime.Load().assignmentGeneration,
+			ReceiptID:  9,
+		},
 		"private response",
 	) {
 		t.Fatal("ObserveResponseOutput did not store the response")
@@ -1215,13 +1434,16 @@ cache_ttl_ms = 0
 	if err != nil {
 		t.Fatalf("List internal temporal entries: %v", err)
 	}
+
 	if len(originalEntries) != 2 {
 		t.Fatalf("internal temporal entries = %d, want 2", len(originalEntries))
 	}
+
 	key := originalEntries[0].Key
 	keyPrefix := key[:8]
 
 	ctx := context.Background()
+
 	operations := []struct {
 		name string
 		call func() error
@@ -1233,17 +1455,22 @@ cache_ttl_ms = 0
 					ctx,
 					&daemonpb.KVGetRequest{Namespace: namespace, Key: key},
 				)
+
 				return callErr
 			},
 		},
 		{
 			name: "set",
 			call: func() error {
-				_, callErr := server.KVSet(ctx, &daemonpb.KVSetRequest{
-					Namespace: namespace,
-					Key:       key,
-					Value:     []byte("corrupt"),
-				})
+				_, callErr := server.KVSet(
+					ctx,
+					&daemonpb.KVSetRequest{
+						Namespace: namespace,
+						Key:       key,
+						Value:     []byte("corrupt"),
+					},
+				)
+
 				return callErr
 			},
 		},
@@ -1254,6 +1481,7 @@ cache_ttl_ms = 0
 					ctx,
 					&daemonpb.KVDeleteRequest{Namespace: namespace, Key: key},
 				)
+
 				return callErr
 			},
 		},
@@ -1264,6 +1492,7 @@ cache_ttl_ms = 0
 					ctx,
 					&daemonpb.KVExistsRequest{Namespace: namespace, Key: key},
 				)
+
 				return callErr
 			},
 		},
@@ -1274,6 +1503,7 @@ cache_ttl_ms = 0
 					ctx,
 					&daemonpb.KVGetRequest{Namespace: namespace, Key: key},
 				)
+
 				return callErr
 			},
 		},
@@ -1284,17 +1514,22 @@ cache_ttl_ms = 0
 					ctx,
 					&daemonpb.KVGetRequest{Namespace: namespace, Key: key},
 				)
+
 				return callErr
 			},
 		},
 		{
 			name: "expire",
 			call: func() error {
-				_, callErr := server.KVExpire(ctx, &daemonpb.KVExpireRequest{
-					Namespace: namespace,
-					Key:       key,
-					TtlMs:     1000,
-				})
+				_, callErr := server.KVExpire(
+					ctx,
+					&daemonpb.KVExpireRequest{
+						Namespace: namespace,
+						Key:       key,
+						TtlMs:     1000,
+					},
+				)
+
 				return callErr
 			},
 		},
@@ -1305,50 +1540,59 @@ cache_ttl_ms = 0
 					ctx,
 					&daemonpb.KVGetDeleteRequest{Namespace: namespace, Key: key},
 				)
+
 				return callErr
 			},
 		},
 		{
 			name: "list-all-keys",
 			call: func() error {
-				_, callErr := server.KVList(ctx, &daemonpb.KVListRequest{
-					Namespace:     namespace,
-					IncludeValues: true,
-				})
+				_, callErr := server.KVList(
+					ctx,
+					&daemonpb.KVListRequest{
+						Namespace:     namespace,
+						IncludeValues: true,
+					},
+				)
+
 				return callErr
 			},
 		},
 		{
 			name: "list-key-prefix",
 			call: func() error {
-				_, callErr := server.KVList(ctx, &daemonpb.KVListRequest{
-					Namespace:     namespace,
-					Prefix:        keyPrefix,
-					IncludeValues: true,
-				})
+				_, callErr := server.KVList(
+					ctx,
+					&daemonpb.KVListRequest{
+						Namespace:     namespace,
+						Prefix:        keyPrefix,
+						IncludeValues: true,
+					},
+				)
+
 				return callErr
 			},
 		},
 	}
 	for _, operation := range operations {
-		t.Run(operation.name, func(t *testing.T) {
-			callErr := operation.call()
-			if status.Code(callErr) != codes.PermissionDenied {
-				t.Fatalf(
-					"status = %v, want %v",
-					status.Code(callErr),
-					codes.PermissionDenied,
-				)
-			}
-			const wantMessage = "internal namespace is not available through public KV RPCs"
-			if status.Convert(callErr).Message() != wantMessage {
-				t.Fatalf(
-					"message = %q, want %q",
-					status.Convert(callErr).Message(),
-					wantMessage,
-				)
-			}
-		})
+		t.Run(
+			operation.name,
+			func(t *testing.T) {
+				callErr := operation.call()
+				if status.Code(callErr) != codes.PermissionDenied {
+					t.Fatalf("status = %v, want %v", status.Code(callErr), codes.PermissionDenied)
+				}
+
+				const wantMessage = "internal namespace is not available through public KV RPCs"
+				if status.Convert(callErr).Message() != wantMessage {
+					t.Fatalf(
+						"message = %q, want %q",
+						status.Convert(callErr).Message(),
+						wantMessage,
+					)
+				}
+			},
+		)
 	}
 
 	evaluationContext := rules.WithExecRuntime(context.Background(), runtime)
@@ -1356,16 +1600,7 @@ cache_ttl_ms = 0
 		evaluationContext,
 		func(string) string { return "context" },
 	)
-	rules.EvaluateAllDetailed(
-		evaluationContext,
-		"cursor",
-		"stop",
-		fields,
-		cfg.Rules,
-		nil,
-		nil,
-		"",
-	)
+	rules.EvaluateAllDetailed(evaluationContext, "cursor", "stop", fields, cfg.Rules, nil, nil, "")
 	input := runner.Input()
 	assertDaemonMatchedField(t, input, "last_user_message", "private prompt", true)
 	assertDaemonMatchedField(t, input, "last_response_output", "private response", true)
@@ -1379,12 +1614,15 @@ func TestKVSetRejectsInvalidMode(t *testing.T) {
 	}
 	defer srv.Close()
 
-	_, err = srv.KVSet(context.Background(), &daemonpb.KVSetRequest{
-		Namespace: "test",
-		Key:       "repo",
-		Value:     []byte("indexed"),
-		Mode:      "BAD",
-	})
+	_, err = srv.KVSet(
+		context.Background(),
+		&daemonpb.KVSetRequest{
+			Namespace: "test",
+			Key:       "repo",
+			Value:     []byte("indexed"),
+			Mode:      "BAD",
+		},
+	)
 	if status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("KVSet invalid mode status = %v, want %v", status.Code(err), codes.InvalidArgument)
 	}
@@ -1398,12 +1636,19 @@ func TestKVListRejectsNegativeLimit(t *testing.T) {
 	}
 	defer srv.Close()
 
-	_, err = srv.KVList(context.Background(), &daemonpb.KVListRequest{
-		Namespace: "test",
-		Limit:     -1,
-	})
+	_, err = srv.KVList(
+		context.Background(),
+		&daemonpb.KVListRequest{
+			Namespace: "test",
+			Limit:     -1,
+		},
+	)
 	if status.Code(err) != codes.InvalidArgument {
-		t.Fatalf("KVList negative limit status = %v, want %v", status.Code(err), codes.InvalidArgument)
+		t.Fatalf(
+			"KVList negative limit status = %v, want %v",
+			status.Code(err),
+			codes.InvalidArgument,
+		)
 	}
 }
 
@@ -1418,17 +1663,23 @@ func TestEvaluateHook_DeferredWorkerCompletesFreshEvent(t *testing.T) {
 	}
 	defer srv.Close()
 
-	resp, err := srv.EvaluateHook(context.Background(), &daemonpb.EvaluateHookRequest{
-		RawJson:      []byte(`{"session_id":"s1","hook_event_name":"PreToolUse","tool_name":"Shell","tool_input":{"command":"echo ok"}}`),
-		ProviderHint: "codex",
-		Cwd:          t.TempDir(),
-		EnvFingerprint: map[string]string{
-			"CODEX_THREAD_ID": "test-thread",
+	resp, err := srv.EvaluateHook(
+		context.Background(),
+		&daemonpb.EvaluateHookRequest{
+			RawJson: []byte(
+				`{"session_id":"s1","hook_event_name":"PreToolUse","tool_name":"Shell","tool_input":{"command":"echo ok"}}`,
+			),
+			ProviderHint: "codex",
+			Cwd:          t.TempDir(),
+			EnvFingerprint: map[string]string{
+				"CODEX_THREAD_ID": "test-thread",
+			},
 		},
-	})
+	)
 	if err != nil {
 		t.Fatalf("EvaluateHook: %v", err)
 	}
+
 	if resp.ExitCode != 0 {
 		t.Fatalf("exit_code = %d, want 0", resp.ExitCode)
 	}
@@ -1445,29 +1696,47 @@ func TestHotPathBlocksBeforeDeferredQueue(t *testing.T) {
 	defer srv.Close()
 
 	hotCalled := false
-	setHotEvaluatorForTest(t, srv, func(ctx context.Context, input hook.EvaluationInput, cfg *config.Config, getenv func(string) string, eventID string) hook.HotEvaluation {
-		hotCalled = true
-		return hook.EvaluateClassifiedHotWithEventID(ctx, input, cfg, getenv, eventID)
-	})
+	setHotEvaluatorForTest(
+		t,
+		srv,
+		func(
+			ctx context.Context,
+			input hook.EvaluationInput,
+			cfg *config.Config,
+			getenv func(string) string,
+			eventID string,
+		) hook.HotEvaluation {
+			hotCalled = true
+			return hook.EvaluateClassifiedHotWithEventID(ctx, input, cfg, getenv, eventID)
+		},
+	)
 	replaceIntakeStoreForTest(t, srv, failingIntakeStore{})
 
-	resp, err := srv.EvaluateHook(context.Background(), &daemonpb.EvaluateHookRequest{
-		RawJson:      []byte(`{"session_id":"s1","hook_event_name":"PreToolUse","tool_name":"Shell","tool_input":{"command":"go test ./..."}}`),
-		ProviderHint: "codex",
-		Cwd:          t.TempDir(),
-		EnvFingerprint: map[string]string{
-			"CODEX_THREAD_ID": "test-thread",
+	resp, err := srv.EvaluateHook(
+		context.Background(),
+		&daemonpb.EvaluateHookRequest{
+			RawJson: []byte(
+				`{"session_id":"s1","hook_event_name":"PreToolUse","tool_name":"Shell","tool_input":{"command":"go test ./..."}}`,
+			),
+			ProviderHint: "codex",
+			Cwd:          t.TempDir(),
+			EnvFingerprint: map[string]string{
+				"CODEX_THREAD_ID": "test-thread",
+			},
 		},
-	})
+	)
 	if err != nil {
 		t.Fatalf("EvaluateHook: %v", err)
 	}
+
 	if hotCalled {
 		t.Fatal("hot evaluator ran after intake append failed, want append-before-eval fail-open")
 	}
+
 	if resp.ExitCode != 0 {
 		t.Fatalf("exit_code = %d, want fail-open exit 0", resp.ExitCode)
 	}
+
 	assertSaysUnevaluated(t, resp, hook.FailOpenReasonIntakeWriteFailed)
 }
 
@@ -1482,31 +1751,41 @@ func TestDeferredReplayAfterRestart(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	resp, err := srv.EvaluateHook(context.Background(), &daemonpb.EvaluateHookRequest{
-		RawJson:      []byte(`{"session_id":"s1","hook_event_name":"PreToolUse","tool_name":"Shell","tool_input":{"command":"echo ok"}}`),
-		ProviderHint: "codex",
-		Cwd:          t.TempDir(),
-		EnvFingerprint: map[string]string{
-			"CODEX_THREAD_ID": "test-thread",
+	resp, err := srv.EvaluateHook(
+		context.Background(),
+		&daemonpb.EvaluateHookRequest{
+			RawJson: []byte(
+				`{"session_id":"s1","hook_event_name":"PreToolUse","tool_name":"Shell","tool_input":{"command":"echo ok"}}`,
+			),
+			ProviderHint: "codex",
+			Cwd:          t.TempDir(),
+			EnvFingerprint: map[string]string{
+				"CODEX_THREAD_ID": "test-thread",
+			},
 		},
-	})
+	)
 	if err != nil {
 		t.Fatalf("EvaluateHook: %v", err)
 	}
+
 	if resp.ExitCode != 0 {
 		t.Fatalf("exit_code = %d, want 0", resp.ExitCode)
 	}
+
 	snapshot := srv.runtime.Load()
 	if snapshot == nil {
 		t.Fatal("runtime snapshot is nil")
 	}
+
 	pendingBeforeClose, err := snapshot.intakeStore.ListPending(context.Background())
 	if err != nil {
 		t.Fatalf("ListPending before close: %v", err)
 	}
+
 	if len(pendingBeforeClose) != 1 {
 		t.Fatalf("pending before close = %d, want 1", len(pendingBeforeClose))
 	}
+
 	srv.Close()
 
 	cfg.Performance.Hook.DeferredWorkers = 1
@@ -1521,6 +1800,7 @@ func TestDeferredReplayAfterRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListPending after replay: %v", err)
 	}
+
 	if len(pendingAfterReplay) != 0 {
 		t.Fatalf("pending after replay = %d, want 0", len(pendingAfterReplay))
 	}
@@ -1538,18 +1818,25 @@ func TestSyncAndDeferredRulesStaySeparated(t *testing.T) {
 	}
 	defer srv.Close()
 
-	resp, err := srv.EvaluateHook(context.Background(), &daemonpb.EvaluateHookRequest{
-		RawJson:      []byte(`{"session_id":"s1","hook_event_name":"PreToolUse","tool_name":"Shell","tool_input":{"command":"go test ./..."}}`),
-		ProviderHint: "codex",
-		Cwd:          t.TempDir(),
-		EnvFingerprint: map[string]string{
-			"CODEX_THREAD_ID": "test-thread",
+	resp, err := srv.EvaluateHook(
+		context.Background(),
+		&daemonpb.EvaluateHookRequest{
+			RawJson: []byte(
+				`{"session_id":"s1","hook_event_name":"PreToolUse","tool_name":"Shell","tool_input":{"command":"go test ./..."}}`,
+			),
+			ProviderHint: "codex",
+			Cwd:          t.TempDir(),
+			EnvFingerprint: map[string]string{
+				"CODEX_THREAD_ID": "test-thread",
+			},
 		},
-	})
+	)
 	if err != nil {
 		t.Fatalf("EvaluateHook: %v", err)
 	}
-	if got := string(resp.StdoutData); !strings.Contains(got, `"permissionDecision":"deny"`) || !strings.Contains(got, "no-broad-go-test") {
+
+	if got := string(resp.StdoutData); !strings.Contains(got, `"permissionDecision":"deny"`) ||
+		!strings.Contains(got, "no-broad-go-test") {
 		t.Fatalf("stdout missing Codex deny response: %s", got)
 	}
 
@@ -1578,19 +1865,26 @@ func TestEvaluateHook_BlocksCopilotVSCodeReplaceStringNewString(t *testing.T) {
 	defer srv.Close()
 
 	dash := string(rune(0x2014))
-	rawJSON := []byte(`{"session_id":"s1","hook_event_name":"PreToolUse","tool_name":"replace_string_in_file","tool_input":{"filePath":"/tmp/page.zig","oldString":"old","newString":"new text ` + dash + ` blocked"}}`)
-	resp, err := srv.EvaluateHook(context.Background(), &daemonpb.EvaluateHookRequest{
-		RawJson: rawJSON,
-		EnvFingerprint: map[string]string{
-			"COPILOT_OTEL_ENABLED": "true",
+	rawJSON := []byte(
+		`{"session_id":"s1","hook_event_name":"PreToolUse","tool_name":"replace_string_in_file","tool_input":{"filePath":"/tmp/page.zig","oldString":"old","newString":"new text ` + dash + ` blocked"}}`,
+	)
+	resp, err := srv.EvaluateHook(
+		context.Background(),
+		&daemonpb.EvaluateHookRequest{
+			RawJson: rawJSON,
+			EnvFingerprint: map[string]string{
+				"COPILOT_OTEL_ENABLED": "true",
+			},
 		},
-	})
+	)
 	if err != nil {
 		t.Fatalf("EvaluateHook: %v", err)
 	}
+
 	if resp.ExitCode != 2 {
 		t.Fatalf("exit_code = %d, want 2", resp.ExitCode)
 	}
+
 	if !strings.Contains(string(resp.StderrData), "no-emdashes") {
 		t.Fatalf("stderr missing no-emdashes diagnostic: %s", string(resp.StderrData))
 	}
@@ -1605,19 +1899,26 @@ func TestEvaluateHook_BlocksCopilotVSCodeMultiReplaceNewString(t *testing.T) {
 	defer srv.Close()
 
 	dash := string(rune(0x2014))
-	rawJSON := []byte(`{"session_id":"s1","hook_event_name":"PreToolUse","tool_name":"multi_replace_string_in_file","tool_input":{"replacements":[{"filePath":"/tmp/page.zig","oldString":"old","newString":"clean"},{"filePath":"/tmp/list.zig","oldString":"old","newString":"new text ` + dash + ` blocked"}]}}`)
-	resp, err := srv.EvaluateHook(context.Background(), &daemonpb.EvaluateHookRequest{
-		RawJson: rawJSON,
-		EnvFingerprint: map[string]string{
-			"COPILOT_OTEL_ENABLED": "true",
+	rawJSON := []byte(
+		`{"session_id":"s1","hook_event_name":"PreToolUse","tool_name":"multi_replace_string_in_file","tool_input":{"replacements":[{"filePath":"/tmp/page.zig","oldString":"old","newString":"clean"},{"filePath":"/tmp/list.zig","oldString":"old","newString":"new text ` + dash + ` blocked"}]}}`,
+	)
+	resp, err := srv.EvaluateHook(
+		context.Background(),
+		&daemonpb.EvaluateHookRequest{
+			RawJson: rawJSON,
+			EnvFingerprint: map[string]string{
+				"COPILOT_OTEL_ENABLED": "true",
+			},
 		},
-	})
+	)
 	if err != nil {
 		t.Fatalf("EvaluateHook: %v", err)
 	}
+
 	if resp.ExitCode != 2 {
 		t.Fatalf("exit_code = %d, want 2", resp.ExitCode)
 	}
+
 	if !strings.Contains(string(resp.StderrData), "no-emdashes") {
 		t.Fatalf("stderr missing no-emdashes diagnostic: %s", string(resp.StderrData))
 	}
@@ -1628,10 +1929,13 @@ func TestEvaluateHook_CopilotStopTranscriptAssistantTextIsEvaluated(t *testing.T
 	dir := t.TempDir()
 	transcript := dir + "/copilot.jsonl"
 	dash := string(rune(0x2014))
-	lines := strings.Join([]string{
-		`{"type":"assistant.message","data":{"content":"Clean response."}}`,
-		`{"type":"assistant.message","data":{"content":"Final response ` + dash + ` blocked."}}`,
-	}, "\n") + "\n"
+	lines := strings.Join(
+		[]string{
+			`{"type":"assistant.message","data":{"content":"Clean response."}}`,
+			`{"type":"assistant.message","data":{"content":"Final response ` + dash + ` blocked."}}`,
+		},
+		"\n",
+	) + "\n"
 	if err := os.WriteFile(transcript, []byte(lines), 0o600); err != nil {
 		t.Fatalf("write transcript: %v", err)
 	}
@@ -1642,19 +1946,26 @@ func TestEvaluateHook_CopilotStopTranscriptAssistantTextIsEvaluated(t *testing.T
 	}
 	defer srv.Close()
 
-	rawJSON := []byte(`{"session_id":"s1","hook_event_name":"Stop","transcript_path":"` + transcript + `","stop_hook_active":false}`)
-	resp, err := srv.EvaluateHook(context.Background(), &daemonpb.EvaluateHookRequest{
-		RawJson: rawJSON,
-		EnvFingerprint: map[string]string{
-			"COPILOT_OTEL_ENABLED": "true",
+	rawJSON := []byte(
+		`{"session_id":"s1","hook_event_name":"Stop","transcript_path":"` + transcript + `","stop_hook_active":false}`,
+	)
+	resp, err := srv.EvaluateHook(
+		context.Background(),
+		&daemonpb.EvaluateHookRequest{
+			RawJson: rawJSON,
+			EnvFingerprint: map[string]string{
+				"COPILOT_OTEL_ENABLED": "true",
+			},
 		},
-	})
+	)
 	if err != nil {
 		t.Fatalf("EvaluateHook: %v", err)
 	}
+
 	if resp.ExitCode != 0 {
 		t.Fatalf("exit_code = %d, want 0 because Copilot Stop is not blockable", resp.ExitCode)
 	}
+
 	if !strings.Contains(string(resp.StdoutData), "{}") {
 		t.Fatalf("stdout = %q, want Claude allow response", string(resp.StdoutData))
 	}
@@ -1669,25 +1980,37 @@ func TestEvaluateHook_CodexStopBlockingRuleDowngradesToAudit(t *testing.T) {
 	}
 	defer srv.Close()
 
-	rawJSON := []byte(`{"session_id":"s1","hook_event_name":"Stop","turn_id":"t1","cwd":"/repo","stop_hook_active":false,"last_assistant_message":"this--is ugly"}`)
-	resp, err := srv.EvaluateHook(context.Background(), &daemonpb.EvaluateHookRequest{
-		RawJson:        rawJSON,
-		ProviderHint:   "codex",
-		Cwd:            "/repo",
-		EnvFingerprint: map[string]string{"CODEX_THREAD_ID": "test-thread"},
-	})
+	rawJSON := []byte(
+		`{"session_id":"s1","hook_event_name":"Stop","turn_id":"t1","cwd":"/repo","stop_hook_active":false,"last_assistant_message":"this--is ugly"}`,
+	)
+	resp, err := srv.EvaluateHook(
+		context.Background(),
+		&daemonpb.EvaluateHookRequest{
+			RawJson:        rawJSON,
+			ProviderHint:   "codex",
+			Cwd:            "/repo",
+			EnvFingerprint: map[string]string{"CODEX_THREAD_ID": "test-thread"},
+		},
+	)
 	if err != nil {
 		t.Fatalf("EvaluateHook: %v", err)
 	}
+
 	if string(resp.StdoutData) != "{}\n" {
 		t.Fatalf("stdout = %q, want allow response", string(resp.StdoutData))
 	}
+
 	waitForNoPendingIntake(t, srv)
 	waitForAuditMessages(t, srv, "hook.audit_violation", "hook.allowed")
-	events, _, err := audit.QueryReadOnly(t.Context(), currentAuditConfig(srv), audit.QueryFilter{Limit: 20})
+	events, _, err := audit.QueryReadOnly(
+		t.Context(),
+		currentAuditConfig(srv),
+		audit.QueryFilter{Limit: 20},
+	)
 	if err != nil {
 		t.Fatalf("audit.Query: %v", err)
 	}
+
 	for _, event := range events {
 		if event.Message == "hook.blocked" {
 			t.Fatalf("unexpected hook.blocked event: %+v", event)
@@ -1707,9 +2030,11 @@ func TestStatusReportsProcessMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Status: %v", err)
 	}
+
 	if resp.Pid != int64(os.Getpid()) {
 		t.Fatalf("pid = %d, want %d", resp.Pid, os.Getpid())
 	}
+
 	if resp.ExecutablePath == "" || resp.SocketPath == "" {
 		t.Fatalf("status missing metadata: %+v", resp)
 	}
@@ -1718,7 +2043,10 @@ func TestStatusReportsProcessMetadata(t *testing.T) {
 func TestReloadConfigValidSwap(t *testing.T) {
 	setDaemonTestDirs(t)
 	configPath := config.Path()
-	writeConfig(t, configPath, `
+	writeConfig(
+		t,
+		configPath,
+		`
 [audit]
 enabled = false
 
@@ -1729,12 +2057,14 @@ field_paths = ["tool_input.command"]
 pattern = "alpha"
 action = "block"
 violation_message = "alpha blocked"
-`)
+`,
+	)
 
 	cfg, err := config.Load()
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
+
 	srv, err := newReadyTestServer(newDiscardLogger(), cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -1744,7 +2074,10 @@ violation_message = "alpha blocked"
 	assertCommandDecision(t, srv, "alpha", 0, "block-alpha")
 	assertCommandDecision(t, srv, "beta", 0, "")
 
-	writeConfig(t, configPath, `
+	writeConfig(
+		t,
+		configPath,
+		`
 [audit]
 enabled = false
 
@@ -1755,7 +2088,8 @@ field_paths = ["tool_input.command"]
 pattern = "beta"
 action = "block"
 violation_message = "beta blocked"
-`)
+`,
+	)
 	if err := srv.reloadConfig(context.Background()); err != nil {
 		t.Fatalf("reloadConfig: %v", err)
 	}
@@ -1767,7 +2101,10 @@ violation_message = "beta blocked"
 func TestReloadConfigInvalidKeepsPreviousConfig(t *testing.T) {
 	setDaemonTestDirs(t)
 	configPath := config.Path()
-	writeConfig(t, configPath, `
+	writeConfig(
+		t,
+		configPath,
+		`
 [audit]
 enabled = false
 
@@ -1778,19 +2115,24 @@ field_paths = ["tool_input.command"]
 pattern = "alpha"
 action = "block"
 violation_message = "alpha blocked"
-`)
+`,
+	)
 
 	cfg, err := config.Load()
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
+
 	srv, err := newReadyTestServer(newDiscardLogger(), cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
 	defer srv.Close()
 
-	writeConfig(t, configPath, `
+	writeConfig(
+		t,
+		configPath,
+		`
 [audit]
 enabled = false
 
@@ -1801,7 +2143,8 @@ field_paths = ["tool_input.command"]
 pattern = "["
 action = "block"
 violation_message = "invalid"
-`)
+`,
+	)
 	if err := srv.reloadConfig(context.Background()); err == nil {
 		t.Fatal("reloadConfig succeeded, want error")
 	}
@@ -1813,7 +2156,10 @@ violation_message = "invalid"
 func TestReloadConfigInvalidAuditStorageKeepsPreviousSnapshot(t *testing.T) {
 	setDaemonTestDirs(t)
 	configPath := config.Path()
-	writeConfig(t, configPath, `
+	writeConfig(
+		t,
+		configPath,
+		`
 [audit]
 enabled = false
 
@@ -1824,12 +2170,14 @@ field_paths = ["tool_input.command"]
 pattern = "alpha"
 action = "block"
 violation_message = "alpha blocked"
-`)
+`,
+	)
 
 	cfg, err := config.Load()
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
+
 	srv, err := newReadyTestServer(newDiscardLogger(), cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -1837,7 +2185,10 @@ violation_message = "alpha blocked"
 	defer srv.Close()
 	previousSnapshot := srv.runtime.Load()
 
-	writeConfig(t, configPath, `
+	writeConfig(
+		t,
+		configPath,
+		`
 [audit]
 enabled = false
 
@@ -1851,10 +2202,12 @@ field_paths = ["tool_input.command"]
 pattern = "beta"
 action = "block"
 violation_message = "beta blocked"
-`)
+`,
+	)
 	if err := srv.reloadConfig(context.Background()); err == nil {
 		t.Fatal("reloadConfig succeeded, want audit storage error")
 	}
+
 	if currentSnapshot := srv.runtime.Load(); currentSnapshot != previousSnapshot {
 		t.Fatal("reloadConfig replaced the active runtime snapshot")
 	}
@@ -1866,7 +2219,10 @@ violation_message = "beta blocked"
 func TestReloadConfigWrongTypeAuditStorageKeepsPreviousSnapshot(t *testing.T) {
 	setDaemonTestDirs(t)
 	configPath := config.Path()
-	writeConfig(t, configPath, `
+	writeConfig(
+		t,
+		configPath,
+		`
 [audit]
 enabled = false
 
@@ -1877,12 +2233,14 @@ field_paths = ["tool_input.command"]
 pattern = "alpha"
 action = "block"
 violation_message = "alpha blocked"
-`)
+`,
+	)
 
 	cfg, err := config.Load()
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
+
 	srv, err := newReadyTestServer(newDiscardLogger(), cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -1890,14 +2248,19 @@ violation_message = "alpha blocked"
 	defer srv.Close()
 	previousSnapshot := srv.runtime.Load()
 
-	writeConfig(t, configPath, `
+	writeConfig(
+		t,
+		configPath,
+		`
 [audit.storage]
 retention_buckets = "25"
-`)
+`,
+	)
 	reloadErr := srv.reloadConfig(context.Background())
 	if reloadErr == nil {
 		t.Error("reloadConfig succeeded, want document decode error")
 	}
+
 	if currentSnapshot := srv.runtime.Load(); currentSnapshot != previousSnapshot {
 		t.Error("reloadConfig replaced the active runtime snapshot")
 	}
@@ -1908,7 +2271,10 @@ retention_buckets = "25"
 func TestReloadConfigMissingFileKeepsPreviousConfig(t *testing.T) {
 	setDaemonTestDirs(t)
 	configPath := config.Path()
-	writeConfig(t, configPath, `
+	writeConfig(
+		t,
+		configPath,
+		`
 [audit]
 enabled = false
 
@@ -1919,12 +2285,14 @@ field_paths = ["tool_input.command"]
 pattern = "alpha"
 action = "block"
 violation_message = "alpha blocked"
-`)
+`,
+	)
 
 	cfg, err := config.Load()
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
+
 	srv, err := newReadyTestServer(newDiscardLogger(), cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -1934,6 +2302,7 @@ violation_message = "alpha blocked"
 	if err := os.Remove(configPath); err != nil {
 		t.Fatalf("remove config: %v", err)
 	}
+
 	if err := srv.reloadConfig(context.Background()); err == nil {
 		t.Fatal("reloadConfig succeeded, want error")
 	}
@@ -1947,47 +2316,71 @@ func writeConfig(t *testing.T, path string, body string) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatalf("mkdir config dir: %v", err)
 	}
+
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 }
 
-func assertCommandDecision(t *testing.T, srv *Server, command string, exitCode int32, ruleName string) {
+func assertCommandDecision(
+	t *testing.T,
+	srv *Server,
+	command string,
+	exitCode int32,
+	ruleName string,
+) {
 	t.Helper()
-	resp, err := srv.EvaluateHook(context.Background(), &daemonpb.EvaluateHookRequest{
-		RawJson:      []byte(`{"session_id":"s1","hook_event_name":"PreToolUse","tool_name":"Shell","tool_input":{"command":"` + command + `"}}`),
-		ProviderHint: "codex",
-		Cwd:          t.TempDir(),
-		EnvFingerprint: map[string]string{
-			"CODEX_THREAD_ID": "test-thread",
+	resp, err := srv.EvaluateHook(
+		context.Background(),
+		&daemonpb.EvaluateHookRequest{
+			RawJson: []byte(
+				`{"session_id":"s1","hook_event_name":"PreToolUse","tool_name":"Shell","tool_input":{"command":"` + command + `"}}`,
+			),
+			ProviderHint: "codex",
+			Cwd:          t.TempDir(),
+			EnvFingerprint: map[string]string{
+				"CODEX_THREAD_ID": "test-thread",
+			},
 		},
-	})
+	)
 	if err != nil {
 		t.Fatalf("EvaluateHook: %v", err)
 	}
+
 	if resp.ExitCode != exitCode {
 		t.Fatalf("exit_code = %d, want %d", resp.ExitCode, exitCode)
 	}
+
 	stdout := string(resp.StdoutData)
 	if ruleName == "" {
 		if strings.Contains(stdout, `"permissionDecision":"deny"`) {
 			t.Fatalf("stdout has deny response: %s", stdout)
 		}
+
 		return
 	}
-	if !strings.Contains(stdout, `"permissionDecision":"deny"`) || !strings.Contains(stdout, ruleName) {
+
+	if !strings.Contains(stdout, `"permissionDecision":"deny"`) ||
+		!strings.Contains(stdout, ruleName) {
 		t.Fatalf("stdout missing deny response for %q: %s", ruleName, stdout)
 	}
 }
 
-func setEvaluateAdmissionForTest(t testing.TB, srv *Server, concurrency int, wait time.Duration) *runtimeSnapshot {
+func setEvaluateAdmissionForTest(
+	t testing.TB,
+	srv *Server,
+	concurrency int,
+	wait time.Duration,
+) *runtimeSnapshot {
 	t.Helper()
 	snapshot := srv.runtime.Load()
 	if snapshot == nil {
 		t.Fatal("runtime snapshot is nil")
 	}
+
 	snapshot.evaluateSlots = make(chan struct{}, concurrency)
 	snapshot.evaluateQueueWait = wait
+
 	return snapshot
 }
 
@@ -2059,6 +2452,7 @@ func replaceIntakeStoreForTest(t testing.TB, srv *Server, store intakeStore) {
 	if snapshot == nil {
 		t.Fatal("runtime snapshot is nil")
 	}
+
 	snapshot.intakeStore = store
 }
 
@@ -2070,9 +2464,11 @@ func replaceDeferredProcessorForTest(t testing.TB, srv *Server, queueLimit int, 
 	if snapshot == nil {
 		t.Fatal("runtime snapshot is nil")
 	}
+
 	if snapshot.deferredProcessor != nil {
 		snapshot.deferredProcessor.Close()
 	}
+
 	snapshot.deferredProcessor = newDeferredProcessor(
 		context.Background(),
 		snapshot.intakeStore,
@@ -2096,23 +2492,37 @@ func fillDeferredProcessorQueue(t testing.TB, srv *Server) {
 	if snapshot == nil || snapshot.deferredProcessor == nil {
 		t.Fatal("deferred processor is nil")
 	}
+
 	if _, err := srv.EvaluateHook(t.Context(), replayRequest()); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := srv.dispatchRetainedReplay(t.Context(), srv.now()); err != nil {
 		t.Fatal(err)
 	}
+
 	if len(snapshot.deferredProcessor.events) != cap(snapshot.deferredProcessor.events) {
 		t.Fatal("durable receipt did not fill deferred queue")
 	}
 }
 
-func setHotEvaluatorForTest(t testing.TB, srv *Server, evaluator func(context.Context, hook.EvaluationInput, *config.Config, func(string) string, string) hook.HotEvaluation) {
+func setHotEvaluatorForTest(
+	t testing.TB,
+	srv *Server,
+	evaluator func(
+		context.Context,
+		hook.EvaluationInput,
+		*config.Config,
+		func(string) string,
+		string,
+	) hook.HotEvaluation,
+) {
 	t.Helper()
 	snapshot := srv.runtime.Load()
 	if snapshot == nil {
 		t.Fatal("runtime snapshot is nil")
 	}
+
 	snapshot.hotEvaluate = evaluator
 }
 
@@ -2130,6 +2540,7 @@ func auditOnlyDaemonTestConfig(t testing.TB) *config.Config {
 	)
 	rule.Action = config.ActionAudit
 	rule.AuditOnly = true
+
 	return &config.Config{
 		Audit: config.Audit{Enabled: boolPtr(true)},
 		Rules: []config.Rule{rule},
@@ -2160,6 +2571,7 @@ func mixedSyncDeferredDaemonTestConfig(t testing.TB) *config.Config {
 	)
 	auditRule.Action = config.ActionAudit
 	auditRule.AuditOnly = true
+
 	return &config.Config{
 		Audit: config.Audit{Enabled: boolPtr(true)},
 		Rules: []config.Rule{blockRule, auditRule},
@@ -2168,53 +2580,70 @@ func mixedSyncDeferredDaemonTestConfig(t testing.TB) *config.Config {
 
 func waitForAuditMessages(t testing.TB, server *Server, messages ...string) {
 	t.Helper()
+
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		events, _, err := audit.QueryReadOnly(t.Context(), currentAuditConfig(server), audit.QueryFilter{Limit: 50})
+		events, _, err := audit.QueryReadOnly(
+			t.Context(),
+			currentAuditConfig(server),
+			audit.QueryFilter{Limit: 50},
+		)
 		if err == nil {
 			found := make(map[string]bool, len(messages))
+
 			for _, event := range events {
 				found[event.Message] = true
 			}
+
 			allFound := true
+
 			for _, message := range messages {
 				if !found[message] {
 					allFound = false
 					break
 				}
 			}
+
 			if allFound {
 				return
 			}
 		}
+
 		time.Sleep(25 * time.Millisecond)
 	}
+
 	t.Fatalf("timed out waiting for audit messages %v", messages)
 }
 
 func waitForNoPendingIntake(t testing.TB, srv *Server) {
 	t.Helper()
+
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		snapshot := srv.runtime.Load()
 		if snapshot == nil {
 			t.Fatal("runtime snapshot is nil")
 		}
+
 		pending, err := snapshot.intakeStore.ListPending(context.Background())
 		if err != nil {
 			t.Fatalf("ListPending: %v", err)
 		}
+
 		if len(pending) == 0 {
 			return
 		}
+
 		time.Sleep(25 * time.Millisecond)
 	}
+
 	t.Fatal("timed out waiting for pending intake records to complete")
 }
 
 func currentAuditConfig(server *Server) *config.Config {
 	snapshot := server.runtime.Load()
 	cfg := *snapshot.cfg
+
 	return &cfg
 }
 
@@ -2223,5 +2652,6 @@ func newReadyTestServer(log *slog.Logger, cfg *config.Config) (*Server, error) {
 	if err == nil {
 		server.StartAuditScheduler(context.Background())
 	}
+
 	return server, err
 }

@@ -35,146 +35,221 @@ func bench19Rules(b *testing.B) []config.Rule {
 		if err != nil {
 			b.Fatalf("compile %q: %v", pattern, err)
 		}
+
 		return re
 	}
 
 	return []config.Rule{
-		config.NewSimpleRule("no-shell-redirection",
+		config.NewSimpleRule(
+			"no-shell-redirection",
 			`(\d+>&\d+|>&\d+|&>|\|&|>/dev/null|2>/dev/null|>>/dev/null|2>>/dev/null|&>/dev/null)`,
-			compile(`(\d+>&\d+|>&\d+|&>|\|&|>/dev/null|2>/dev/null|>>/dev/null|2>>/dev/null|&>/dev/null)`),
-			[]string{"PreToolUse"}, []string{"tool_input.command", "command"}, "block", "Shell redirection blocked."),
+			compile(
+				`(\d+>&\d+|>&\d+|&>|\|&|>/dev/null|2>/dev/null|>>/dev/null|2>>/dev/null|&>/dev/null)`,
+			),
+			[]string{
+				"PreToolUse",
+			},
+			[]string{"tool_input.command", "command"},
+			"block",
+			"Shell redirection blocked.",
+		),
 
-		config.NewSimpleRule("no-emdashes",
+		config.NewSimpleRule(
+			"no-emdashes",
 			`[\x{2010}-\x{2015}\x{2212}\x{2E3A}\x{2E3B}\x{FE31}\x{FE32}\x{FE58}\x{FE63}\x{FF0D}]`,
-			compile(`[\x{2010}-\x{2015}\x{2212}\x{2E3A}\x{2E3B}\x{FE31}\x{FE32}\x{FE58}\x{FE63}\x{FF0D}]`),
+			compile(
+				`[\x{2010}-\x{2015}\x{2212}\x{2E3A}\x{2E3B}\x{FE31}\x{FE32}\x{FE58}\x{FE63}\x{FF0D}]`,
+			),
 			[]string{"PreToolUse", "Stop"},
-			[]string{"tool_input.content", "tool_input.new_string", "tool_input.command", "tool_input.description", "command", "assistant_message"},
-			"block", "Unicode dashes blocked."),
+			[]string{
+				"tool_input.content",
+				"tool_input.new_string",
+				"tool_input.command",
+				"tool_input.description",
+				"command",
+				"assistant_message",
+			},
+			"block",
+			"Unicode dashes blocked.",
+		),
 
-		config.NewSimpleRule("no-aws-key",
+		config.NewSimpleRule(
+			"no-aws-key",
 			`(?i)AKIA[0-9A-Z]{16}`,
 			compile(`(?i)AKIA[0-9A-Z]{16}`),
 			[]string{"PreToolUse"},
 			[]string{"tool_input.content", "tool_input.new_string", "tool_input.command"},
-			"block", "AWS key blocked."),
+			"block",
+			"AWS key blocked.",
+		),
 
-		config.NewSimpleRule("no-private-key",
+		config.NewSimpleRule(
+			"no-private-key",
 			`-----BEGIN (RSA |EC |OPENSSH |DSA |PGP )?PRIVATE KEY`,
 			compile(`-----BEGIN (RSA |EC |OPENSSH |DSA |PGP )?PRIVATE KEY`),
 			[]string{"PreToolUse"},
 			[]string{"tool_input.content", "tool_input.new_string"},
-			"block", "Private key blocked."),
+			"block",
+			"Private key blocked.",
+		),
 
-		config.NewSimpleRule("no-github-token",
+		config.NewSimpleRule(
+			"no-github-token",
 			`gh[pousr]_[A-Za-z0-9]{36}`,
 			compile(`gh[pousr]_[A-Za-z0-9]{36}`),
 			[]string{"PreToolUse"},
 			[]string{"tool_input.content", "tool_input.new_string"},
-			"block", "GitHub token blocked."),
+			"block",
+			"GitHub token blocked.",
+		),
 
-		config.NewSimpleRule("no-slack-token",
+		config.NewSimpleRule(
+			"no-slack-token",
 			`xox[baprs]-[0-9A-Za-z\-]{10,72}`,
 			compile(`xox[baprs]-[0-9A-Za-z\-]{10,72}`),
 			[]string{"PreToolUse"},
 			[]string{"tool_input.content", "tool_input.new_string"},
-			"block", "Slack token blocked."),
+			"block",
+			"Slack token blocked.",
+		),
 
-		config.NewSimpleRule("no-heroku-key",
+		config.NewSimpleRule(
+			"no-heroku-key",
 			`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`,
 			compile(`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`),
 			[]string{"PreToolUse"},
 			[]string{"tool_input.content"},
-			"block", "UUID-like token blocked."),
+			"block",
+			"UUID-like token blocked.",
+		),
 
-		config.NewSimpleRule("no-stripe-key",
+		config.NewSimpleRule(
+			"no-stripe-key",
 			`(sk|pk)_(test|live)_[0-9a-zA-Z]{24,99}`,
 			compile(`(sk|pk)_(test|live)_[0-9a-zA-Z]{24,99}`),
 			[]string{"PreToolUse"},
 			[]string{"tool_input.content", "tool_input.new_string"},
-			"block", "Stripe key blocked."),
+			"block",
+			"Stripe key blocked.",
+		),
 
-		config.NewSimpleRule("no-twilio-token",
+		config.NewSimpleRule(
+			"no-twilio-token",
 			`SK[0-9a-fA-F]{32}`,
 			compile(`SK[0-9a-fA-F]{32}`),
 			[]string{"PreToolUse"},
 			[]string{"tool_input.content", "tool_input.new_string"},
-			"block", "Twilio token blocked."),
+			"block",
+			"Twilio token blocked.",
+		),
 
-		config.NewSimpleRule("no-sendgrid-key",
+		config.NewSimpleRule(
+			"no-sendgrid-key",
 			`SG\.[0-9A-Za-z\-_]{22}\.[0-9A-Za-z\-_]{43}`,
 			compile(`SG\.[0-9A-Za-z\-_]{22}\.[0-9A-Za-z\-_]{43}`),
 			[]string{"PreToolUse"},
 			[]string{"tool_input.content", "tool_input.new_string"},
-			"block", "SendGrid key blocked."),
+			"block",
+			"SendGrid key blocked.",
+		),
 
-		config.NewSimpleRule("no-mailgun-key",
+		config.NewSimpleRule(
+			"no-mailgun-key",
 			`key-[0-9a-zA-Z]{32}`,
 			compile(`key-[0-9a-zA-Z]{32}`),
 			[]string{"PreToolUse"},
 			[]string{"tool_input.content"},
-			"block", "Mailgun key blocked."),
+			"block",
+			"Mailgun key blocked.",
+		),
 
-		config.NewSimpleRule("no-square-token",
+		config.NewSimpleRule(
+			"no-square-token",
 			`sq0[a-z]{3}-[0-9A-Za-z\-_]{22,43}`,
 			compile(`sq0[a-z]{3}-[0-9A-Za-z\-_]{22,43}`),
 			[]string{"PreToolUse"},
 			[]string{"tool_input.content", "tool_input.new_string"},
-			"block", "Square token blocked."),
+			"block",
+			"Square token blocked.",
+		),
 
-		config.NewSimpleRule("no-paypal-token",
+		config.NewSimpleRule(
+			"no-paypal-token",
 			`access_token\$production\$[0-9a-z]{16}\$[0-9a-f]{32}`,
 			compile(`access_token\$production\$[0-9a-z]{16}\$[0-9a-f]{32}`),
 			[]string{"PreToolUse"},
 			[]string{"tool_input.content"},
-			"block", "PayPal token blocked."),
+			"block",
+			"PayPal token blocked.",
+		),
 
-		config.NewSimpleRule("no-datadog-key",
+		config.NewSimpleRule(
+			"no-datadog-key",
 			`[a-f0-9]{32}`,
 			compile(`[a-f0-9]{32}`),
 			[]string{"PreToolUse"},
 			[]string{"tool_input.content"},
-			"block", "Datadog key blocked."),
+			"block",
+			"Datadog key blocked.",
+		),
 
-		config.NewSimpleRule("no-npm-token",
+		config.NewSimpleRule(
+			"no-npm-token",
 			`npm_[A-Za-z0-9]{36}`,
 			compile(`npm_[A-Za-z0-9]{36}`),
 			[]string{"PreToolUse"},
 			[]string{"tool_input.content", "tool_input.new_string"},
-			"block", "NPM token blocked."),
+			"block",
+			"NPM token blocked.",
+		),
 
-		config.NewSimpleRule("no-jwt-token",
+		config.NewSimpleRule(
+			"no-jwt-token",
 			`eyJ[A-Za-z0-9\-_=]+\.eyJ[A-Za-z0-9\-_=]+\.[A-Za-z0-9\-_=]+`,
 			compile(`eyJ[A-Za-z0-9\-_=]+\.eyJ[A-Za-z0-9\-_=]+\.[A-Za-z0-9\-_=]+`),
 			[]string{"PreToolUse"},
 			[]string{"tool_input.content", "tool_input.new_string"},
-			"block", "JWT token blocked."),
+			"block",
+			"JWT token blocked.",
+		),
 
-		config.NewSimpleRule("no-gcp-key",
+		config.NewSimpleRule(
+			"no-gcp-key",
 			`AIza[0-9A-Za-z\-_]{35}`,
 			compile(`AIza[0-9A-Za-z\-_]{35}`),
 			[]string{"PreToolUse"},
 			[]string{"tool_input.content", "tool_input.new_string"},
-			"block", "GCP API key blocked."),
+			"block",
+			"GCP API key blocked.",
+		),
 
-		config.NewSimpleRule("no-azure-connection-string",
+		config.NewSimpleRule(
+			"no-azure-connection-string",
 			`DefaultEndpointsProtocol=https;AccountName=[^;]+;AccountKey=[A-Za-z0-9+/=]+;`,
 			compile(`DefaultEndpointsProtocol=https;AccountName=[^;]+;AccountKey=[A-Za-z0-9+/=]+;`),
 			[]string{"PreToolUse"},
 			[]string{"tool_input.content", "tool_input.new_string"},
-			"block", "Azure connection string blocked."),
+			"block",
+			"Azure connection string blocked.",
+		),
 
-		config.NewSimpleRule("no-double-hyphen-prose",
+		config.NewSimpleRule(
+			"no-double-hyphen-prose",
 			`(?m)(?|(?:`+"`"+`[^`+"`"+`\n]+`+"`"+`|\b(?!(?:bash|sh|zsh|fish|exec|command|env|xargs|sudo|go|git|make|npm)\b)[A-Za-z][A-Za-z0-9_./-]*)\s+(--)`+
 				`(?=\s+[A-Za-z][A-Za-z0-9_./-]*)(?![^\n]*\s--[A-Za-z0-9_][A-Za-z0-9_-]*(?:=|\b))|`+
 				`(?<!-)\b(?!(?:bash|sh|zsh|fish|exec|command|env|xargs|sudo|go|git|make|npm)\b)[A-Za-z][A-Za-z0-9_./-]*(--)`+
 				`(?=[A-Za-z][A-Za-z0-9_./-]*))`,
-			compile(`(?m)(?|(?:`+"`"+`[^`+"`"+`\n]+`+"`"+`|\b(?!(?:bash|sh|zsh|fish|exec|command|env|xargs|sudo|go|git|make|npm)\b)[A-Za-z][A-Za-z0-9_./-]*)\s+(--)`+
-				`(?=\s+[A-Za-z][A-Za-z0-9_./-]*)(?![^\n]*\s--[A-Za-z0-9_][A-Za-z0-9_-]*(?:=|\b))|`+
-				`(?<!-)\b(?!(?:bash|sh|zsh|fish|exec|command|env|xargs|sudo|go|git|make|npm)\b)[A-Za-z][A-Za-z0-9_./-]*(--)`+
-				`(?=[A-Za-z][A-Za-z0-9_./-]*))`),
+			compile(
+				`(?m)(?|(?:`+"`"+`[^`+"`"+`\n]+`+"`"+`|\b(?!(?:bash|sh|zsh|fish|exec|command|env|xargs|sudo|go|git|make|npm)\b)[A-Za-z][A-Za-z0-9_./-]*)\s+(--)`+
+					`(?=\s+[A-Za-z][A-Za-z0-9_./-]*)(?![^\n]*\s--[A-Za-z0-9_][A-Za-z0-9_-]*(?:=|\b))|`+
+					`(?<!-)\b(?!(?:bash|sh|zsh|fish|exec|command|env|xargs|sudo|go|git|make|npm)\b)[A-Za-z][A-Za-z0-9_./-]*(--)`+
+					`(?=[A-Za-z][A-Za-z0-9_./-]*))`,
+			),
 			[]string{"PreToolUse", "Stop"},
 			[]string{"tool_input.content", "tool_input.new_string", "assistant_message"},
-			"block", "Double hyphen prose blocked."),
+			"block",
+			"Double hyphen prose blocked.",
+		),
 	}
 }
 
@@ -184,6 +259,7 @@ func benchFields() rules.FieldSet {
 		"function processPayment(amount: number, currency: string): Promise<void> { " +
 		"const result = await stripe.charges.create({ amount, currency }); " +
 		"return result; }"
+
 	return rules.FieldSet{
 		ToolInputContent:   content,
 		ToolInputNewString: "updated: " + content,
@@ -206,6 +282,7 @@ func BenchmarkEvaluateAll_19RegexHotPath(b *testing.B) {
 
 	b.ResetTimer()
 	b.ReportAllocs()
+
 	for range b.N {
 		got := rules.EvaluateAll(ctx, "claude", "PreToolUse", fields, rulesSlice, nil)
 		if len(got) != 0 {

@@ -18,24 +18,37 @@ func TestCacheAggregateLimitDefaultsOverridesAndValidation(t *testing.T) {
 		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 			t.Fatal(err)
 		}
+
 		cfg, err := config.LoadExisting(path)
 		if err != nil {
 			t.Fatal(err)
 		}
+
 		expected := value
 		if expected == 0 {
 			expected = hotkv.DefaultMaxBytes
 		}
+
 		if cfg.HookCacheMaxBytes() != expected {
 			t.Fatalf("limit = %d, want %d", cfg.HookCacheMaxBytes(), expected)
 		}
 	}
+
 	path := filepath.Join(t.TempDir(), "config.toml")
-	if err := os.WriteFile(path, []byte("[performance.hook.cache]\nmax_bytes = -1\n"), 0o600); err != nil {
+	if err := os.WriteFile(
+		path,
+		[]byte("[performance.hook.cache]\nmax_bytes = -1\n"),
+		0o600,
+	); err != nil {
 		t.Fatal(err)
 	}
-	for _, load := range []func(string) (*config.Config, error){config.LoadExisting, config.LoadDegradedPath} {
-		if _, err := load(path); err == nil || !strings.Contains(err.Error(), "performance.hook.cache.max_bytes") {
+
+	for _, load := range []func(string) (*config.Config, error){
+		config.LoadExisting,
+		config.LoadDegradedPath,
+	} {
+		if _, err := load(path); err == nil ||
+			!strings.Contains(err.Error(), "performance.hook.cache.max_bytes") {
 			t.Fatalf("invalid aggregate limit did not fail explicitly: %v", err)
 		}
 	}

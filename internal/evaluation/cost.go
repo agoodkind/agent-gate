@@ -71,6 +71,7 @@ func (s DedupCacheStats) HitRate() float64 {
 	if total == 0 {
 		return 0
 	}
+
 	return float64(s.Hits) / float64(total)
 }
 
@@ -108,13 +109,19 @@ type callAggregate struct {
 // micro-dollars. cachedTokens bill at the provider cached-input rate and the
 // remaining prompt tokens at the full input rate; when cachedTokens is zero or
 // unknown every prompt token bills at the full rate, an upper bound on input cost.
-func estimatedCostMicros(promptTokens, cachedTokens, completionTokens int64, price ModelPricing) int64 {
+func estimatedCostMicros(
+	promptTokens int64,
+	cachedTokens int64,
+	completionTokens int64,
+	price ModelPricing,
+) int64 {
 	cached := max(cachedTokens, 0)
 	cached = min(cached, promptTokens)
 	uncached := promptTokens - cached
 	micros := float64(uncached)*price.InputPerMillion +
 		float64(cached)*price.CachedInputPerMillion +
 		float64(completionTokens)*price.OutputPerMillion
+
 	return int64(math.Round(micros))
 }
 
@@ -146,13 +153,16 @@ func CostReport(
 	if err != nil {
 		return CostReportResult{}, wrapError("read retained costs", err)
 	}
+
 	defer func() { _ = set.Close() }()
 	merged := make(map[string]callAggregate)
+
 	for _, handle := range set.Handles {
 		aggregates, err := queryCostAggregates(ctx, handle.Database, filter)
 		if err != nil {
 			return CostReportResult{}, err
 		}
+
 		for _, item := range aggregates {
 			key := item.day + "\x00" + item.model
 			value := merged[key]
@@ -165,27 +175,36 @@ func CostReport(
 			value.latest = laterTime(value.latest, item.latest)
 			merged[key] = value
 		}
+
 		cache, err := queryDedupCacheStats(ctx, handle.Database, filter)
 		if err != nil {
 			return CostReportResult{}, err
 		}
+
 		result.DedupCache.Hits += cache.Hits
 		result.DedupCache.Misses += cache.Misses
 	}
+
 	aggregates := make([]callAggregate, 0, len(merged))
 	for _, item := range merged {
 		aggregates = append(aggregates, item)
 	}
-	slices.SortFunc(aggregates, func(left, right callAggregate) int {
-		if order := strings.Compare(left.day, right.day); order != 0 {
-			return order
-		}
-		return strings.Compare(left.model, right.model)
-	})
+
+	slices.SortFunc(
+		aggregates,
+		func(left, right callAggregate) int {
+			if order := strings.Compare(left.day, right.day); order != 0 {
+				return order
+			}
+
+			return strings.Compare(left.model, right.model)
+		},
+	)
 	buildCostReport(&result, aggregates, pricing)
 	if len(result.Models) == 0 && result.Note == "" {
 		result.Note = "no judge calls with recorded token usage in range"
 	}
+
 	return result, nil
 }
 
@@ -203,34 +222,46 @@ func queryCostAggregates(
 	if err != nil {
 		return nil, wrapError("query judge cost aggregates", err)
 	}
+
 	defer func() {
 		_ = rows.Close()
 	}()
 	aggregates := make([]callAggregate, 0)
+
 	for rows.Next() {
 		var aggregate callAggregate
 		var earliest string
 		var latest string
 		if err := rows.Scan(
-			&aggregate.model, &aggregate.day, &aggregate.calls,
-			&aggregate.promptTokens, &aggregate.completionTokens, &aggregate.cachedTokens,
-			&earliest, &latest,
+			&aggregate.model,
+			&aggregate.day,
+			&aggregate.calls,
+			&aggregate.promptTokens,
+			&aggregate.completionTokens,
+			&aggregate.cachedTokens,
+			&earliest,
+			&latest,
 		); err != nil {
 			return nil, wrapError("scan judge cost aggregate", err)
 		}
+
 		aggregate.earliest, err = parseTime(earliest)
 		if err != nil {
 			return nil, err
 		}
+
 		aggregate.latest, err = parseTime(latest)
 		if err != nil {
 			return nil, err
 		}
+
 		aggregates = append(aggregates, aggregate)
 	}
+
 	if err := rows.Err(); err != nil {
 		return nil, wrapError("iterate judge cost aggregates", err)
 	}
+
 	return aggregates, nil
 }
 
@@ -248,26 +279,32 @@ func queryDedupCacheStats(
 	if err != nil {
 		return DedupCacheStats{}, wrapError("query judge dedup cache stats", err)
 	}
+
 	defer func() {
 		_ = rows.Close()
 	}()
 	var stats DedupCacheStats
+
 	for rows.Next() {
 		var status string
 		var count int64
 		if err := rows.Scan(&status, &count); err != nil {
 			return DedupCacheStats{}, wrapError("scan judge dedup cache stats", err)
 		}
+
 		if status == "hit" {
 			stats.Hits = count
 		}
+
 		if status == "miss" {
 			stats.Misses = count
 		}
 	}
+
 	if err := rows.Err(); err != nil {
 		return DedupCacheStats{}, wrapError("iterate judge dedup cache stats", err)
 	}
+
 	return stats, nil
 }
 
@@ -279,10 +316,12 @@ func costWindowArgs(filter CostFilter) (string, string) {
 	if !filter.Since.IsZero() {
 		since = formatTime(filter.Since)
 	}
+
 	until := ""
 	if !filter.Until.IsZero() {
 		until = formatTime(filter.Until)
 	}
+
 	return since, until
 }
 
@@ -298,15 +337,24 @@ func buildCostReport(
 	order := make([]string, 0)
 	var earliest time.Time
 	var latest time.Time
+
 	for _, aggregate := range aggregates {
 		price, priced := pricing[aggregate.model]
 		cost := estimatedCostMicros(
-			aggregate.promptTokens, aggregate.cachedTokens, aggregate.completionTokens, price,
+			aggregate.promptTokens,
+			aggregate.cachedTokens,
+			aggregate.completionTokens,
+			price,
 		)
-		result.Daily = append(result.Daily, DailyCost{
-			Day: aggregate.day, Model: aggregate.model,
-			Calls: aggregate.calls, EstimatedCostMicros: cost,
-		})
+		result.Daily = append(
+			result.Daily,
+			DailyCost{
+				Day:                 aggregate.day,
+				Model:               aggregate.model,
+				Calls:               aggregate.calls,
+				EstimatedCostMicros: cost,
+			},
+		)
 		summary, ok := models[aggregate.model]
 		if !ok {
 			summary = &ModelCost{
@@ -321,6 +369,7 @@ func buildCostReport(
 			models[aggregate.model] = summary
 			order = append(order, aggregate.model)
 		}
+
 		summary.Calls += aggregate.calls
 		summary.PromptTokens += aggregate.promptTokens
 		summary.CachedTokens += aggregate.cachedTokens
@@ -330,12 +379,15 @@ func buildCostReport(
 		if aggregate.cachedTokens > 0 {
 			result.CachedTokensAvailable = true
 		}
+
 		earliest = earliestTime(earliest, aggregate.earliest)
 		latest = laterTime(latest, aggregate.latest)
 	}
+
 	for _, model := range order {
 		result.Models = append(result.Models, *models[model])
 	}
+
 	result.WindowDays = observedWindowDays(result.Since, result.Until, earliest, latest)
 	if result.WindowDays > 0 {
 		perDay := float64(result.TotalBilledCostMicros) / result.WindowDays
@@ -352,16 +404,20 @@ func observedWindowDays(since, until, earliest, latest time.Time) float64 {
 	if start.IsZero() {
 		start = earliest
 	}
+
 	if end.IsZero() {
 		end = latest
 	}
+
 	if start.IsZero() || end.IsZero() {
 		return 1
 	}
+
 	span := end.Sub(start).Hours() / 24.0
 	if span < 1 {
 		return 1
 	}
+
 	return span
 }
 
@@ -369,9 +425,11 @@ func earliestTime(current, candidate time.Time) time.Time {
 	if candidate.IsZero() {
 		return current
 	}
+
 	if current.IsZero() || candidate.Before(current) {
 		return candidate
 	}
+
 	return current
 }
 
@@ -379,6 +437,7 @@ func laterTime(current, candidate time.Time) time.Time {
 	if candidate.After(current) {
 		return candidate
 	}
+
 	return current
 }
 

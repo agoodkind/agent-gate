@@ -45,6 +45,7 @@ func TestFindAllStringIndex(t *testing.T) {
 	if len(got) != len(want) {
 		t.Fatalf("expected %d matches, got %#v", len(want), got)
 	}
+
 	for i := range want {
 		if got[i] != want[i] {
 			t.Fatalf("match %d = %#v, want %#v", i, got[i], want[i])
@@ -61,6 +62,7 @@ func TestFindAllStringIndexHonorsKeepReset(t *testing.T) {
 	if len(got) != len(want) {
 		t.Fatalf("expected %d matches, got %#v", len(want), got)
 	}
+
 	for i := range want {
 		if got[i] != want[i] {
 			t.Fatalf("match %d = %#v, want %#v", i, got[i], want[i])
@@ -77,6 +79,7 @@ func TestFindAllStringGroupIndex(t *testing.T) {
 	if len(got) != len(want) {
 		t.Fatalf("expected %d matches, got %#v", len(want), got)
 	}
+
 	for i := range want {
 		if got[i] != want[i] {
 			t.Fatalf("match %d = %#v, want %#v", i, got[i], want[i])
@@ -92,6 +95,7 @@ func TestFindAllStringGroupIndexSkipsUnsetGroup(t *testing.T) {
 	if len(got) != len(want) {
 		t.Fatalf("expected %d matches, got %#v", len(want), got)
 	}
+
 	for i := range want {
 		if got[i] != want[i] {
 			t.Fatalf("match %d = %#v, want %#v", i, got[i], want[i])
@@ -104,15 +108,21 @@ func TestForEachStringGroupIndexStopsEarly(t *testing.T) {
 	subject := "x xx xxx xxxx"
 	var got [][2]int
 
-	re.ForEachStringGroupIndex(subject, -1, 0, func(start int, end int) bool {
-		got = append(got, [2]int{start, end})
-		return len(got) < 2
-	})
+	re.ForEachStringGroupIndex(
+		subject,
+		-1,
+		0,
+		func(start int, end int) bool {
+			got = append(got, [2]int{start, end})
+			return len(got) < 2
+		},
+	)
 
 	want := [][2]int{{0, 1}, {2, 4}}
 	if len(got) != len(want) {
 		t.Fatalf("expected %d matches, got %#v", len(want), got)
 	}
+
 	for i := range want {
 		if got[i] != want[i] {
 			t.Fatalf("match %d = %#v, want %#v", i, got[i], want[i])
@@ -126,6 +136,7 @@ func TestRegexpConcurrentMatchAndGroupAccess(t *testing.T) {
 	const iterations = 100
 
 	var wg sync.WaitGroup
+
 	errs := make(chan string, workerCount)
 	for range workerCount {
 		wg.Go(func() {
@@ -134,6 +145,7 @@ func TestRegexpConcurrentMatchAndGroupAccess(t *testing.T) {
 					errs <- "MatchString returned false"
 					return
 				}
+
 				got := re.FindAllStringGroupIndex("alpha one && alpha two", -1, 2)
 				if len(got) != 2 {
 					errs <- "FindAllStringGroupIndex returned wrong count"
@@ -142,8 +154,10 @@ func TestRegexpConcurrentMatchAndGroupAccess(t *testing.T) {
 			}
 		})
 	}
+
 	wg.Wait()
 	close(errs)
+
 	for err := range errs {
 		t.Fatal(err)
 	}

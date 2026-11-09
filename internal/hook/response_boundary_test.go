@@ -32,34 +32,38 @@ func TestFailOpenResponseRendering(t *testing.T) {
 	}
 
 	for _, testCase := range tests {
-		t.Run(testCase.name, func(t *testing.T) {
-			response := hook.FailOpenResponse(
-				testCase.system,
-				"PreToolUse",
-				"daemon unavailable",
-				hook.FailOpenReasonDaemonUnavailable,
-			)
-			if response.ExitCode != 0 {
-				t.Fatalf("ExitCode = %d, want 0; a fail-open must not block", response.ExitCode)
-			}
-			switch testCase.noticeIn {
-			case "stdout":
-				if !strings.Contains(string(response.Stdout), "no rule was enforced") {
-					t.Fatalf("Stdout = %q, want the fail-open notice", response.Stdout)
-				}
-			case "stderr":
-				if !strings.Contains(string(response.Stderr), "no rule was enforced") {
-					t.Fatalf("Stderr = %q, want the fail-open notice", response.Stderr)
-				}
-			case "none":
-				// These providers have no channel for a non-blocking warning, so
-				// their fail-open stays a plain allow. The durable record in
-				// fail-open.jsonl is what makes the outage visible for them.
+		t.Run(
+			testCase.name,
+			func(t *testing.T) {
+				response := hook.FailOpenResponse(
+					testCase.system,
+					"PreToolUse",
+					"daemon unavailable",
+					hook.FailOpenReasonDaemonUnavailable,
+				)
 				if response.ExitCode != 0 {
-					t.Fatalf("ExitCode = %d, want 0", response.ExitCode)
+					t.Fatalf("ExitCode = %d, want 0; a fail-open must not block", response.ExitCode)
 				}
-			}
-		})
+
+				switch testCase.noticeIn {
+				case "stdout":
+					if !strings.Contains(string(response.Stdout), "no rule was enforced") {
+						t.Fatalf("Stdout = %q, want the fail-open notice", response.Stdout)
+					}
+				case "stderr":
+					if !strings.Contains(string(response.Stderr), "no rule was enforced") {
+						t.Fatalf("Stderr = %q, want the fail-open notice", response.Stderr)
+					}
+				case "none":
+					// These providers have no channel for a non-blocking warning, so
+					// their fail-open stays a plain allow. The durable record in
+					// fail-open.jsonl is what makes the outage visible for them.
+					if response.ExitCode != 0 {
+						t.Fatalf("ExitCode = %d, want 0", response.ExitCode)
+					}
+				}
+			},
+		)
 	}
 }
 
@@ -112,18 +116,31 @@ func TestRenderResponseBlocksRemainProviderSpecific(t *testing.T) {
 	}
 
 	for _, testCase := range tests {
-		t.Run(testCase.name, func(t *testing.T) {
-			response := hook.RenderResponse(testCase.request)
-			if response.ExitCode != testCase.wantExitCode {
-				t.Fatalf("ExitCode = %d, want %d", response.ExitCode, testCase.wantExitCode)
-			}
-			if !strings.Contains(string(response.Stdout), testCase.wantStdout) {
-				t.Fatalf("Stdout = %q, want substring %q", string(response.Stdout), testCase.wantStdout)
-			}
-			if !strings.Contains(string(response.Stderr), testCase.wantStderr) {
-				t.Fatalf("Stderr = %q, want substring %q", string(response.Stderr), testCase.wantStderr)
-			}
-		})
+		t.Run(
+			testCase.name,
+			func(t *testing.T) {
+				response := hook.RenderResponse(testCase.request)
+				if response.ExitCode != testCase.wantExitCode {
+					t.Fatalf("ExitCode = %d, want %d", response.ExitCode, testCase.wantExitCode)
+				}
+
+				if !strings.Contains(string(response.Stdout), testCase.wantStdout) {
+					t.Fatalf(
+						"Stdout = %q, want substring %q",
+						string(response.Stdout),
+						testCase.wantStdout,
+					)
+				}
+
+				if !strings.Contains(string(response.Stderr), testCase.wantStderr) {
+					t.Fatalf(
+						"Stderr = %q, want substring %q",
+						string(response.Stderr),
+						testCase.wantStderr,
+					)
+				}
+			},
+		)
 	}
 }
 
@@ -142,18 +159,26 @@ func TestRenderResponseBlockIncludesEventID(t *testing.T) {
 	}
 
 	for _, testCase := range tests {
-		t.Run(testCase.name, func(t *testing.T) {
-			request := blockRequest(testCase.system, testCase.eventName)
-			request.EventID = "intake_test"
-			response := hook.RenderResponse(request)
-			haystack := string(response.Stderr)
-			if testCase.wantStdout {
-				haystack = string(response.Stdout)
-			}
-			if !strings.Contains(haystack, "agent-gate event_id: intake_test") {
-				t.Fatalf("response missing event_id: stdout=%q stderr=%q", string(response.Stdout), string(response.Stderr))
-			}
-		})
+		t.Run(
+			testCase.name,
+			func(t *testing.T) {
+				request := blockRequest(testCase.system, testCase.eventName)
+				request.EventID = "intake_test"
+				response := hook.RenderResponse(request)
+				haystack := string(response.Stderr)
+				if testCase.wantStdout {
+					haystack = string(response.Stdout)
+				}
+
+				if !strings.Contains(haystack, "agent-gate event_id: intake_test") {
+					t.Fatalf(
+						"response missing event_id: stdout=%q stderr=%q",
+						string(response.Stdout),
+						string(response.Stderr),
+					)
+				}
+			},
+		)
 	}
 }
 
@@ -197,20 +222,28 @@ func TestRenderResponseInjectsLifecycleContext(t *testing.T) {
 	}
 
 	for _, testCase := range tests {
-		t.Run(testCase.name, func(t *testing.T) {
-			response := hook.RenderResponse(hook.ResponseRequest{
-				System:      testCase.system,
-				EventName:   testCase.eventName,
-				Decision:    hook.ResponseDecisionAllow,
-				ContextText: "start context",
-			})
-			if response.ExitCode != 0 {
-				t.Fatalf("ExitCode = %d, want 0", response.ExitCode)
-			}
-			if !strings.Contains(string(response.Stdout), testCase.wantJSON) {
-				t.Fatalf("Stdout = %q, want substring %q", string(response.Stdout), testCase.wantJSON)
-			}
-		})
+		t.Run(
+			testCase.name,
+			func(t *testing.T) {
+				response := hook.RenderResponse(hook.ResponseRequest{
+					System:      testCase.system,
+					EventName:   testCase.eventName,
+					Decision:    hook.ResponseDecisionAllow,
+					ContextText: "start context",
+				})
+				if response.ExitCode != 0 {
+					t.Fatalf("ExitCode = %d, want 0", response.ExitCode)
+				}
+
+				if !strings.Contains(string(response.Stdout), testCase.wantJSON) {
+					t.Fatalf(
+						"Stdout = %q, want substring %q",
+						string(response.Stdout),
+						testCase.wantJSON,
+					)
+				}
+			},
+		)
 	}
 }
 
@@ -224,62 +257,87 @@ func TestRenderResponseMutatesEverySupportedTarget(t *testing.T) {
 		wantJSON  []string
 	}{
 		{
-			name: "claude tool input", system: hook.SystemClaude, eventName: "PreToolUse",
-			mutation: `{"command":"make test"}`,
+			name:      "claude tool input",
+			system:    hook.SystemClaude,
+			eventName: "PreToolUse",
+			mutation:  `{"command":"make test"}`,
 			wantJSON: []string{
 				`"permissionDecision":"allow"`,
 				`"updatedInput":{"command":"make test"}`,
 			},
 		},
 		{
-			name: "claude tool output", system: hook.SystemClaude, eventName: "PostToolUse",
-			mutation: `{"content":"safe"}`, wantJSON: []string{`"updatedToolOutput":{"content":"safe"}`},
+			name:      "claude tool output",
+			system:    hook.SystemClaude,
+			eventName: "PostToolUse",
+			mutation:  `{"content":"safe"}`,
+			wantJSON:  []string{`"updatedToolOutput":{"content":"safe"}`},
 		},
 		{
-			name: "codex tool input", system: hook.SystemCodex, eventName: "PreToolUse",
-			mutation: `{"command":"make test"}`,
+			name:      "codex tool input",
+			system:    hook.SystemCodex,
+			eventName: "PreToolUse",
+			mutation:  `{"command":"make test"}`,
 			wantJSON: []string{
 				`"permissionDecision":"allow"`,
 				`"updatedInput":{"command":"make test"}`,
 			},
 		},
 		{
-			name: "cursor MCP output", system: hook.SystemCursor, eventName: "postToolUse",
-			mutation: `{"content":"safe"}`, wantJSON: []string{`"updated_mcp_tool_output":{"content":"safe"}`},
+			name:      "cursor MCP output",
+			system:    hook.SystemCursor,
+			eventName: "postToolUse",
+			mutation:  `{"content":"safe"}`,
+			wantJSON:  []string{`"updated_mcp_tool_output":{"content":"safe"}`},
 		},
 		{
-			name: "copilot tool input", system: hook.SystemCopilot, eventName: "preToolUse",
-			mutation: `{"command":"make test"}`, wantJSON: []string{`"modifiedArgs":{"command":"make test"}`},
+			name:      "copilot tool input",
+			system:    hook.SystemCopilot,
+			eventName: "preToolUse",
+			mutation:  `{"command":"make test"}`,
+			wantJSON:  []string{`"modifiedArgs":{"command":"make test"}`},
 		},
 		{
-			name: "copilot tool output", system: hook.SystemCopilot, eventName: "postToolUse",
-			mutation: `{"resultType":"success","textResultForLlm":"safe"}`,
-			wantJSON: []string{`"modifiedResult":{"resultType":"success","textResultForLlm":"safe"}`},
+			name:      "copilot tool output",
+			system:    hook.SystemCopilot,
+			eventName: "postToolUse",
+			mutation:  `{"resultType":"success","textResultForLlm":"safe"}`,
+			wantJSON: []string{
+				`"modifiedResult":{"resultType":"success","textResultForLlm":"safe"}`,
+			},
 		},
 		{
-			name: "copilot prompt", system: hook.SystemCopilot, eventName: "userPromptTransformed",
-			mutation: "replacement prompt", prompt: "original prompt", wantJSON: []string{`"modifiedTransformedPrompt":"replacement prompt"`},
+			name:      "copilot prompt",
+			system:    hook.SystemCopilot,
+			eventName: "userPromptTransformed",
+			mutation:  "replacement prompt",
+			prompt:    "original prompt",
+			wantJSON:  []string{`"modifiedTransformedPrompt":"replacement prompt"`},
 		},
 	}
 
 	for _, testCase := range tests {
-		t.Run(testCase.name, func(t *testing.T) {
-			response := hook.RenderResponse(hook.ResponseRequest{
-				System:       testCase.system,
-				EventName:    testCase.eventName,
-				Decision:     hook.ResponseDecisionAllow,
-				MutationText: testCase.mutation,
-				PromptText:   testCase.prompt,
-			})
-			if response.ExitCode != 0 {
-				t.Fatalf("ExitCode = %d, want 0", response.ExitCode)
-			}
-			for _, wantJSON := range testCase.wantJSON {
-				if !strings.Contains(string(response.Stdout), wantJSON) {
-					t.Fatalf("Stdout = %q, want substring %q", response.Stdout, wantJSON)
+		t.Run(
+			testCase.name,
+			func(t *testing.T) {
+				response := hook.RenderResponse(hook.ResponseRequest{
+					System:       testCase.system,
+					EventName:    testCase.eventName,
+					Decision:     hook.ResponseDecisionAllow,
+					MutationText: testCase.mutation,
+					PromptText:   testCase.prompt,
+				})
+				if response.ExitCode != 0 {
+					t.Fatalf("ExitCode = %d, want 0", response.ExitCode)
 				}
-			}
-		})
+
+				for _, wantJSON := range testCase.wantJSON {
+					if !strings.Contains(string(response.Stdout), wantJSON) {
+						t.Fatalf("Stdout = %q, want substring %q", response.Stdout, wantJSON)
+					}
+				}
+			},
+		)
 	}
 }
 
@@ -303,7 +361,10 @@ func TestRenderResponseComposesCopilotPromptInjection(t *testing.T) {
 		ContextText: "turn context",
 		PromptText:  "transformed prompt",
 	})
-	if !strings.Contains(string(response.Stdout), `"modifiedTransformedPrompt":"turn context\n\ntransformed prompt"`) {
+	if !strings.Contains(
+		string(response.Stdout),
+		`"modifiedTransformedPrompt":"turn context\n\ntransformed prompt"`,
+	) {
 		t.Fatalf("Stdout = %q", response.Stdout)
 	}
 }
@@ -311,17 +372,22 @@ func TestRenderResponseComposesCopilotPromptInjection(t *testing.T) {
 func TestRenderResponseNoOpsUnsupportedOrInvalidEffects(t *testing.T) {
 	tests := []hook.ResponseRequest{
 		{
-			System: hook.SystemCursor, EventName: "beforeSubmitPrompt",
-			Decision: hook.ResponseDecisionAllow, ContextText: "not supported",
+			System:      hook.SystemCursor,
+			EventName:   "beforeSubmitPrompt",
+			Decision:    hook.ResponseDecisionAllow,
+			ContextText: "not supported",
 		},
 		{
-			System: hook.SystemCodex, EventName: "PreToolUse",
-			Decision: hook.ResponseDecisionAllow, MutationText: "not JSON",
+			System:       hook.SystemCodex,
+			EventName:    "PreToolUse",
+			Decision:     hook.ResponseDecisionAllow,
+			MutationText: "not JSON",
 		},
 	}
 	for _, request := range tests {
 		response := hook.RenderResponse(request)
-		if string(response.Stdout) == "" || strings.Contains(string(response.Stdout), "not supported") {
+		if string(response.Stdout) == "" ||
+			strings.Contains(string(response.Stdout), "not supported") {
 			t.Fatalf("unsupported response = %q", response.Stdout)
 		}
 	}

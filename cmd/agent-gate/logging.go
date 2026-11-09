@@ -22,7 +22,10 @@ func openBoundedLog(component string) (*slog.Logger, func()) {
 	}
 	logger, _ := gklog.New(gklog.Config{
 		Handlers: []slog.Handler{
-			slog.NewJSONHandler(diagnosticErrorWriter{writer}, &slog.HandlerOptions{Level: slog.LevelInfo}),
+			slog.NewJSONHandler(
+				diagnosticErrorWriter{writer},
+				&slog.HandlerOptions{Level: slog.LevelInfo},
+			),
 		},
 	})
 	if maintenanceErr != nil {

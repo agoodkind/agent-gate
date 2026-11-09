@@ -47,11 +47,13 @@ func Connect(ctx context.Context) (*Client, error) {
 	conn.Connect()
 	probeCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
 	defer cancel()
+
 	for {
 		state := conn.GetState()
 		if state == connectivity.Ready {
 			break
 		}
+
 		if !conn.WaitForStateChange(probeCtx, state) {
 			_ = conn.Close()
 			return nil, fmt.Errorf("daemon at %s is not ready", socketPath)
@@ -68,6 +70,7 @@ func (c *Client) Close() error {
 		log.Warn("close daemon client failed", slog.Any("err", err))
 		return fmt.Errorf("close daemon client: %w", err)
 	}
+
 	return nil
 }
 
@@ -84,14 +87,18 @@ func (c *Client) ResolveHookEnvironment(
 	response, err := c.rpc.ResolveHookEnvironment(
 		ctx,
 		&daemonpb.ResolveHookEnvironmentRequest{
-			RawJson: rawJSON, ProviderHint: providerHint, Argv: argv,
-			EnvFingerprint: env, InvocationContext: invocationContextToProto(invocationContext),
+			RawJson:           rawJSON,
+			ProviderHint:      providerHint,
+			Argv:              argv,
+			EnvFingerprint:    env,
+			InvocationContext: invocationContextToProto(invocationContext),
 		},
 	)
 	if err != nil {
 		slog.WarnContext(ctx, "daemon ResolveHookEnvironment rpc failed", slog.Any("err", err))
 		return nil, fmt.Errorf("daemon ResolveHookEnvironment rpc: %w", err)
 	}
+
 	return response.GetReferencedNames(), nil
 }
 
@@ -108,18 +115,22 @@ func (c *Client) EvaluateHook(
 	defer cancel()
 	log := slog.Default()
 
-	resp, err := c.rpc.EvaluateHook(ctx, &daemonpb.EvaluateHookRequest{
-		RawJson:           rawJSON,
-		ProviderHint:      providerHint,
-		Cwd:               cwd,
-		Argv:              argv,
-		EnvFingerprint:    env,
-		InvocationContext: invocationContextToProto(invocationContext),
-	})
+	resp, err := c.rpc.EvaluateHook(
+		ctx,
+		&daemonpb.EvaluateHookRequest{
+			RawJson:           rawJSON,
+			ProviderHint:      providerHint,
+			Cwd:               cwd,
+			Argv:              argv,
+			EnvFingerprint:    env,
+			InvocationContext: invocationContextToProto(invocationContext),
+		},
+	)
 	if err != nil {
 		log.WarnContext(ctx, "daemon EvaluateHook rpc failed", slog.Any("err", err))
 		return nil, fmt.Errorf("daemon EvaluateHook rpc: %w", err)
 	}
+
 	return resp, nil
 }
 
@@ -127,6 +138,7 @@ func (c *Client) EvaluateHook(
 func (c *Client) Status() (*daemonpb.StatusResponse, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+
 	return c.StatusContext(ctx)
 }
 
@@ -138,9 +150,12 @@ func (c *Client) StatusContext(ctx context.Context) (*daemonpb.StatusResponse, e
 		if ctx.Err() != nil {
 			err = ctx.Err()
 		}
+
 		log.WarnContext(ctx, "daemon Status rpc failed", slog.Any("err", err))
+
 		return nil, fmt.Errorf("daemon Status rpc: %w", err)
 	}
+
 	return resp, nil
 }
 
@@ -153,24 +168,35 @@ func (c *Client) KVGet(namespace string, key string) (*daemonpb.KVGetResponse, e
 		slog.WarnContext(ctx, "daemon KVGet rpc failed", slog.Any("err", err))
 		return nil, fmt.Errorf("daemon KVGet rpc: %w", err)
 	}
+
 	return resp, nil
 }
 
 // KVSet stores one daemon hot cache entry.
-func (c *Client) KVSet(namespace string, key string, value []byte, mode string, ttlMs int64) (*daemonpb.KVSetResponse, error) {
+func (c *Client) KVSet(
+	namespace string,
+	key string,
+	value []byte,
+	mode string,
+	ttlMs int64,
+) (*daemonpb.KVSetResponse, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	resp, err := c.rpc.KVSet(ctx, &daemonpb.KVSetRequest{
-		Namespace: namespace,
-		Key:       key,
-		Value:     value,
-		Mode:      mode,
-		TtlMs:     ttlMs,
-	})
+	resp, err := c.rpc.KVSet(
+		ctx,
+		&daemonpb.KVSetRequest{
+			Namespace: namespace,
+			Key:       key,
+			Value:     value,
+			Mode:      mode,
+			TtlMs:     ttlMs,
+		},
+	)
 	if err != nil {
 		slog.WarnContext(ctx, "daemon KVSet rpc failed", slog.Any("err", err))
 		return nil, fmt.Errorf("daemon KVSet rpc: %w", err)
 	}
+
 	return resp, nil
 }
 
@@ -183,6 +209,7 @@ func (c *Client) KVDelete(namespace string, key string) (*daemonpb.KVDeleteRespo
 		slog.WarnContext(ctx, "daemon KVDelete rpc failed", slog.Any("err", err))
 		return nil, fmt.Errorf("daemon KVDelete rpc: %w", err)
 	}
+
 	return resp, nil
 }
 
@@ -195,6 +222,7 @@ func (c *Client) KVExists(namespace string, key string) (*daemonpb.KVExistsRespo
 		slog.WarnContext(ctx, "daemon KVExists rpc failed", slog.Any("err", err))
 		return nil, fmt.Errorf("daemon KVExists rpc: %w", err)
 	}
+
 	return resp, nil
 }
 
@@ -207,6 +235,7 @@ func (c *Client) KVTTL(namespace string, key string) (*daemonpb.KVTTLResponse, e
 		slog.WarnContext(ctx, "daemon KVTTL rpc failed", slog.Any("err", err))
 		return nil, fmt.Errorf("daemon KVTTL rpc: %w", err)
 	}
+
 	return resp, nil
 }
 
@@ -219,18 +248,27 @@ func (c *Client) KVPTTL(namespace string, key string) (*daemonpb.KVPTTLResponse,
 		slog.WarnContext(ctx, "daemon KVPTTL rpc failed", slog.Any("err", err))
 		return nil, fmt.Errorf("daemon KVPTTL rpc: %w", err)
 	}
+
 	return resp, nil
 }
 
 // KVExpire updates one daemon hot cache entry expiry.
-func (c *Client) KVExpire(namespace string, key string, ttlMs int64) (*daemonpb.KVExpireResponse, error) {
+func (c *Client) KVExpire(
+	namespace string,
+	key string,
+	ttlMs int64,
+) (*daemonpb.KVExpireResponse, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	resp, err := c.rpc.KVExpire(ctx, &daemonpb.KVExpireRequest{Namespace: namespace, Key: key, TtlMs: ttlMs})
+	resp, err := c.rpc.KVExpire(
+		ctx,
+		&daemonpb.KVExpireRequest{Namespace: namespace, Key: key, TtlMs: ttlMs},
+	)
 	if err != nil {
 		slog.WarnContext(ctx, "daemon KVExpire rpc failed", slog.Any("err", err))
 		return nil, fmt.Errorf("daemon KVExpire rpc: %w", err)
 	}
+
 	return resp, nil
 }
 
@@ -238,28 +276,41 @@ func (c *Client) KVExpire(namespace string, key string, ttlMs int64) (*daemonpb.
 func (c *Client) KVGetDelete(namespace string, key string) (*daemonpb.KVGetDeleteResponse, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	resp, err := c.rpc.KVGetDelete(ctx, &daemonpb.KVGetDeleteRequest{Namespace: namespace, Key: key})
+	resp, err := c.rpc.KVGetDelete(
+		ctx,
+		&daemonpb.KVGetDeleteRequest{Namespace: namespace, Key: key},
+	)
 	if err != nil {
 		slog.WarnContext(ctx, "daemon KVGetDelete rpc failed", slog.Any("err", err))
 		return nil, fmt.Errorf("daemon KVGetDelete rpc: %w", err)
 	}
+
 	return resp, nil
 }
 
 // KVList lists daemon hot cache entries for one namespace and prefix.
-func (c *Client) KVList(namespace string, prefix string, limit int, includeValues bool) (*daemonpb.KVListResponse, error) {
+func (c *Client) KVList(
+	namespace string,
+	prefix string,
+	limit int,
+	includeValues bool,
+) (*daemonpb.KVListResponse, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	resp, err := c.rpc.KVList(ctx, &daemonpb.KVListRequest{
-		Namespace:     namespace,
-		Prefix:        prefix,
-		Limit:         boundedInt32(limit),
-		IncludeValues: includeValues,
-	})
+	resp, err := c.rpc.KVList(
+		ctx,
+		&daemonpb.KVListRequest{
+			Namespace:     namespace,
+			Prefix:        prefix,
+			Limit:         boundedInt32(limit),
+			IncludeValues: includeValues,
+		},
+	)
 	if err != nil {
 		slog.WarnContext(ctx, "daemon KVList rpc failed", slog.Any("err", err))
 		return nil, fmt.Errorf("daemon KVList rpc: %w", err)
 	}
+
 	return resp, nil
 }
 
@@ -268,8 +319,10 @@ func boundedInt32(value int) int32 {
 	if value < 0 {
 		return 0
 	}
+
 	if value > maxInt32 {
 		return int32(maxInt32)
 	}
+
 	return int32(value)
 }

@@ -27,11 +27,13 @@ type auditTraceCategory struct {
 
 func benchmarkRequest(sequence uint64, payload string) *daemonpb.EvaluateHookRequest {
 	return &daemonpb.EvaluateHookRequest{
-		RawJson: []byte(fmt.Sprintf(
-			`{"session_id":"performance","tool_use_id":"%d","hook_event_name":"PreToolUse","tool_name":"Shell","tool_input":{"command":%q}}`,
-			sequence,
-			payload,
-		)),
+		RawJson: []byte(
+			fmt.Sprintf(
+				`{"session_id":"performance","tool_use_id":"%d","hook_event_name":"PreToolUse","tool_name":"Shell","tool_input":{"command":%q}}`,
+				sequence,
+				payload,
+			),
+		),
 		ProviderHint: "codex",
 		EnvFingerprint: map[string]string{
 			"CODEX_THREAD_ID": "performance",
@@ -45,26 +47,35 @@ func auditPerformanceTrace() []*daemonpb.EvaluateHookRequest {
 		{marker: "performance-block", count: auditTraceBlockRequests},
 		{marker: "performance-deferred", count: auditTraceDeferredRequests},
 	}
-	requests := make([]*daemonpb.EvaluateHookRequest, 0,
-		auditTraceAllowRequests+auditTraceBlockRequests+auditTraceDeferredRequests)
+	requests := make(
+		[]*daemonpb.EvaluateHookRequest,
+		0,
+		auditTraceAllowRequests+auditTraceBlockRequests+auditTraceDeferredRequests,
+	)
 	var sequence uint64
+
 	for _, category := range categories {
 		for index := range category.count {
 			sequence++
 			targetSize := auditTraceInputSizes[index%len(auditTraceInputSizes)]
-			requests = append(requests,
-				auditTraceRequest(sequence, category.marker, targetSize))
+			requests = append(requests, auditTraceRequest(sequence, category.marker, targetSize))
 		}
 	}
+
 	return requests
 }
 
-func auditTraceRequest(sequence uint64, marker string, targetSize int) *daemonpb.EvaluateHookRequest {
+func auditTraceRequest(
+	sequence uint64,
+	marker string,
+	targetSize int,
+) *daemonpb.EvaluateHookRequest {
 	request := benchmarkRequest(sequence, marker)
 	paddingSize := targetSize - len(request.RawJson)
 	if paddingSize < 0 {
 		panic("audit trace target is smaller than request envelope")
 	}
+
 	return benchmarkRequest(sequence, marker+strings.Repeat("x", paddingSize))
 }
 
@@ -72,10 +83,12 @@ func auditPerformanceTraceDigest(requests []*daemonpb.EvaluateHookRequest) strin
 	digest := sha256.New()
 	_, _ = digest.Write([]byte(auditTraceFixtureVersion))
 	_, _ = digest.Write([]byte{10})
+
 	for _, request := range requests {
 		_, _ = digest.Write(request.RawJson)
 		_, _ = digest.Write([]byte{'\n'})
 	}
+
 	return hex.EncodeToString(digest.Sum(nil))
 }
 
@@ -86,6 +99,7 @@ func TestAuditPerformanceTraceIsFixed(t *testing.T) {
 	if len(requests) != wantCount {
 		t.Fatalf("requests = %d, want %d", len(requests), wantCount)
 	}
+
 	for index, request := range requests {
 		categoryIndex := index
 		if index >= auditTraceAllowRequests+auditTraceBlockRequests {
@@ -93,11 +107,13 @@ func TestAuditPerformanceTraceIsFixed(t *testing.T) {
 		} else if index >= auditTraceAllowRequests {
 			categoryIndex -= auditTraceAllowRequests
 		}
+
 		wantSize := auditTraceInputSizes[categoryIndex%len(auditTraceInputSizes)]
 		if got := len(request.GetRawJson()); got != wantSize {
 			t.Fatalf("request %d bytes = %d, want %d", index, got, wantSize)
 		}
 	}
+
 	if got := auditPerformanceTraceDigest(requests); got != auditTraceDigest {
 		t.Fatalf("trace digest = %q, want %q", got, auditTraceDigest)
 	}

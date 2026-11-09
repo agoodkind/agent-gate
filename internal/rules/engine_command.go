@@ -25,15 +25,18 @@ func commandConditionCwds(fields FieldSet, c *config.Condition) ([]string, bool)
 	if command == "" || base == "" {
 		return nil, false
 	}
+
 	home, err := os.UserHomeDir()
 	if err != nil {
 		home = base
 	}
+
 	// Parse the raw command: shelldecomp handles heredocs natively (the body is an
 	// embedded region, not split on), so no pre-stripping is needed.
 	decomposition := shelldecomp.Parse(shellparse.ExpandLiteralAssignments(command), base, home)
 
 	var matches []string
+
 	for _, parsed := range decomposition.Commands() {
 		argv0 := filepath.Base(parsed.Argv0)
 		words := parsed.Args
@@ -41,30 +44,37 @@ func commandConditionCwds(fields FieldSet, c *config.Condition) ([]string, bool)
 		if c.Argv0 != "" && argv0 != c.Argv0 {
 			continue
 		}
+
 		cwd := parsed.Cwd
 		if cwd == "" {
 			cwd = base
 		}
+
 		var cwdResolved bool
 		cwd, words, cwdResolved = applyCwdFlagWords(cwd, words, c.CwdFlags)
 		if !cwdResolved {
 			continue
 		}
+
 		if len(c.Subcommands) == 0 {
 			if conditionTextMatch(wordsTail(words), c) {
 				matches = append(matches, cwd)
 			}
+
 			continue
 		}
+
 		// Normalize the tail to start at the resolved subcommand so an anchored
 		// pattern (for example ^commit) is not defeated by leading global flags
 		// like `git -c name=value` or `git -C path` that precede the subcommand.
-		if sub, idx := commandSubcommand(argv0, words); sub != "" && slices.Contains(c.Subcommands, sub) {
+		if sub, idx := commandSubcommand(argv0, words); sub != "" &&
+			slices.Contains(c.Subcommands, sub) {
 			if conditionTextMatch(wordsTail(words[idx:]), c) {
 				matches = append(matches, cwd)
 			}
 		}
 	}
+
 	return matches, len(matches) > 0
 }
 
@@ -74,9 +84,15 @@ func commandConditionCwds(fields FieldSet, c *config.Condition) ([]string, bool)
 // the flag word and its value word. The =form (--git-dir=/x) is a single flag
 // word handled by the generic flag skip.
 var gitGlobalValueFlags = map[string]bool{
-	"-c": true, "-C": true, "--exec-path": true, "--git-dir": true,
-	"--work-tree": true, "--namespace": true, "--super-prefix": true,
-	"--config-env": true, "--attr-source": true,
+	"-c":             true,
+	"-C":             true,
+	"--exec-path":    true,
+	"--git-dir":      true,
+	"--work-tree":    true,
+	"--namespace":    true,
+	"--super-prefix": true,
+	"--config-env":   true,
+	"--attr-source":  true,
 }
 
 // commandSubcommand interprets the effective subcommand from the AST's
@@ -89,16 +105,20 @@ var gitGlobalValueFlags = map[string]bool{
 // string with index -1 means no subcommand.
 func commandSubcommand(argv0 string, words []shelldecomp.Word) (string, int) {
 	isGit := argv0 == "git"
+
 	for i := 0; i < len(words); i++ {
 		word := words[i]
 		if word.Kind == shelldecomp.WordKindFlag {
 			if isGit && gitGlobalValueFlags[word.Value] {
 				i++ // the flag's value is a separate word; skip it too
 			}
+
 			continue
 		}
+
 		return word.Value, i
 	}
+
 	return "", -1
 }
 
@@ -106,31 +126,45 @@ func commandSubcommand(argv0 string, words []shelldecomp.Word) (string, int) {
 // doas, xargs) that shelldecomp keeps as the command's argv0, promoting the next
 // word to argv0. shelldecomp already drops env assignments and sudo, so those
 // need no handling here.
-func stripCommandWrappers(argv0 string, words []shelldecomp.Word, stripArgs []string) (string, []shelldecomp.Word) {
+func stripCommandWrappers(
+	argv0 string,
+	words []shelldecomp.Word,
+	stripArgs []string,
+) (string, []shelldecomp.Word) {
 	for slices.Contains(stripArgs, argv0) && len(words) > 0 {
 		// Skip the wrapper's own leading option words (time -p, command -p) and
 		// the -- end-of-options marker so argv0 lands on the wrapped command
 		// rather than an option like -p, which would defeat the argv0 match.
 		i := 0
-		for i < len(words) && (words[i].Kind == shelldecomp.WordKindFlag || words[i].Value == "--") {
+		for i < len(
+			words,
+		) && (words[i].Kind == shelldecomp.WordKindFlag || words[i].Value == "--") {
 			i++
 		}
+
 		if i == len(words) {
 			break // nothing but options after the wrapper; leave argv0 as the wrapper
 		}
+
 		argv0 = filepath.Base(words[i].Value)
 		words = words[i+1:]
 	}
+
 	return argv0, words
 }
 
 // applyCwdFlagWords resolves a cwd-redirecting flag (for example git/make -C, or
 // swift --package-path) from the command's words, returning the redirected cwd
 // and the words with the flag (and its separate value) removed.
-func applyCwdFlagWords(cwd string, words []shelldecomp.Word, flags []string) (string, []shelldecomp.Word, bool) {
+func applyCwdFlagWords(
+	cwd string,
+	words []shelldecomp.Word,
+	flags []string,
+) (string, []shelldecomp.Word, bool) {
 	if len(flags) == 0 {
 		return cwd, words, true
 	}
+
 	out := make([]shelldecomp.Word, 0, len(words))
 	for i := 0; i < len(words); i++ {
 		word := words[i]
@@ -140,24 +174,30 @@ func applyCwdFlagWords(cwd string, words []shelldecomp.Word, flags []string) (st
 		if word.Kind == shelldecomp.WordKindFlag {
 			value, ok = splitCwdFlag(word.Value, flags)
 		}
+
 		if !ok {
 			out = append(out, word)
 			continue
 		}
+
 		if !word.Resolvable {
 			return "", nil, false
 		}
+
 		if value == "" && i+1 < len(words) {
 			if !words[i+1].Resolvable {
 				return "", nil, false
 			}
+
 			value = words[i+1].Value
 			i++
 		}
+
 		if value != "" {
 			cwd = resolvePath(cwd, value)
 		}
 	}
+
 	return cwd, out, true
 }
 
@@ -168,6 +208,7 @@ func wordsTail(words []shelldecomp.Word) string {
 	for i, word := range words {
 		parts[i] = word.Value
 	}
+
 	return strings.Join(parts, " ")
 }
 
@@ -204,10 +245,12 @@ func splitCwdFlag(field string, flags []string) (string, bool) {
 		if field == flag {
 			return "", true
 		}
+
 		if after, ok := strings.CutPrefix(field, flag+"="); ok {
 			return after, true
 		}
 	}
+
 	return "", false
 }
 
@@ -218,12 +261,14 @@ func resolvePath(cwd, path string) string {
 		if err != nil {
 			return cwd
 		}
+
 		return home
 	case len(path) >= 2 && path[0] == '~' && path[1] == '/':
 		home, err := os.UserHomeDir()
 		if err != nil {
 			return cwd
 		}
+
 		return filepath.Join(home, path[2:])
 	case filepath.IsAbs(path):
 		return path
@@ -239,6 +284,7 @@ func projectConditionMatch(fields FieldSet, c *config.Condition, ctx conditionCo
 			cwds = []string{cwd}
 		}
 	}
+
 	if len(cwds) == 0 {
 		return false
 	}
@@ -248,6 +294,7 @@ func projectConditionMatch(fields FieldSet, c *config.Condition, ctx conditionCo
 			return true
 		}
 	}
+
 	return false
 }
 
@@ -258,15 +305,18 @@ func projectConditionMatchCwd(cwd string, c *config.Condition) bool {
 		if !ok {
 			return false
 		}
+
 		root = found
 	}
 
 	if len(c.RequireAny) > 0 && !anyPathExists(root, c.RequireAny) {
 		return false
 	}
+
 	if len(c.RequireAll) > 0 && !allPathsExist(root, c.RequireAll) {
 		return false
 	}
+
 	if len(c.ForbidAny) > 0 && anyPathExists(root, c.ForbidAny) {
 		return false
 	}
@@ -284,6 +334,7 @@ func stripHeredocBodies(command string) string {
 			if pending[0].matches(line) {
 				pending = pending[1:]
 			}
+
 			continue
 		}
 
@@ -303,18 +354,23 @@ func (delimiter heredocDelimiter) matches(line string) bool {
 	if delimiter.stripTabs {
 		line = strings.TrimLeft(line, "\t")
 	}
+
 	return line == delimiter.value
 }
 
 func heredocDeclarations(line string) []heredocDelimiter {
 	fields := shellFields(line)
 	var out []heredocDelimiter
+
 	for i := 0; i < len(fields); i++ {
 		field := fields[i]
 		switch {
 		case field == "<<" || field == "<<-":
 			if i+1 < len(fields) {
-				out = append(out, heredocDelimiter{value: fields[i+1], stripTabs: strings.HasSuffix(field, "-")})
+				out = append(
+					out,
+					heredocDelimiter{value: fields[i+1], stripTabs: strings.HasSuffix(field, "-")},
+				)
 				i++
 			}
 		case strings.HasPrefix(field, "<<-") && len(field) > len("<<-"):
@@ -323,11 +379,13 @@ func heredocDeclarations(line string) []heredocDelimiter {
 			out = append(out, heredocDelimiter{value: field[2:], stripTabs: false})
 		}
 	}
+
 	return out
 }
 
 func findProjectRoot(start string, markers []string) (string, bool) {
 	dir := filepath.Clean(start)
+
 	for {
 		if anyPathExists(dir, markers) {
 			return dir, true
@@ -337,6 +395,7 @@ func findProjectRoot(start string, markers []string) (string, bool) {
 		if parent == dir {
 			return "", false
 		}
+
 		dir = parent
 	}
 }
@@ -347,6 +406,7 @@ func anyPathExists(root string, paths []string) bool {
 			return true
 		}
 	}
+
 	return false
 }
 
@@ -356,6 +416,7 @@ func allPathsExist(root string, paths []string) bool {
 			return false
 		}
 	}
+
 	return true
 }
 
@@ -374,6 +435,7 @@ func shellFields(s string) []string {
 		if b.Len() == 0 {
 			return
 		}
+
 		fields = append(fields, b.String())
 		b.Reset()
 	}
@@ -384,18 +446,22 @@ func shellFields(s string) []string {
 			escaped = false
 			continue
 		}
+
 		if r == '\\' && quote != '\'' {
 			escaped = true
 			continue
 		}
+
 		if quote != 0 {
 			if r == quote {
 				quote = 0
 				continue
 			}
+
 			b.WriteRune(r)
 			continue
 		}
+
 		switch {
 		case r == '\'' || r == '"':
 			quote = r
@@ -405,6 +471,8 @@ func shellFields(s string) []string {
 			b.WriteRune(r)
 		}
 	}
+
 	flush()
+
 	return fields
 }

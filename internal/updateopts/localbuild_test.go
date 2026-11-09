@@ -22,6 +22,7 @@ func TestLocalDeployIsNeverAutoReplaced(t *testing.T) {
 	if !isLocalBuild(localBuildVersion, false) {
 		t.Fatalf("isLocalBuild(%q, dirty=false) = false, want true", localBuildVersion)
 	}
+
 	if isLocalBuild(releaseBuildVersion, false) {
 		t.Fatalf("isLocalBuild(%q, dirty=false) = true, want false", releaseBuildVersion)
 	}
@@ -50,13 +51,21 @@ func TestIsLocalBuild(t *testing.T) {
 		{"count field is not a number", "202607301700-b6-x-gabc1234", false, false},
 	}
 	for _, testCase := range cases {
-		t.Run(testCase.name, func(t *testing.T) {
-			got := isLocalBuild(testCase.version, testCase.dirty)
-			if got != testCase.want {
-				t.Fatalf("isLocalBuild(%q, %v) = %v, want %v",
-					testCase.version, testCase.dirty, got, testCase.want)
-			}
-		})
+		t.Run(
+			testCase.name,
+			func(t *testing.T) {
+				got := isLocalBuild(testCase.version, testCase.dirty)
+				if got != testCase.want {
+					t.Fatalf(
+						"isLocalBuild(%q, %v) = %v, want %v",
+						testCase.version,
+						testCase.dirty,
+						got,
+						testCase.want,
+					)
+				}
+			},
+		)
 	}
 }
 

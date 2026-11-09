@@ -30,14 +30,17 @@ func (r *perTargetRunner) Run(
 ) (execconcern.RunResult, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
 	for _, argument := range command {
 		if r.failOn != "" && argument == r.failOn {
 			return execconcern.RunResult{ExitCode: 0, Stdout: ""}, errors.New("spawn failed")
 		}
+
 		if argument == r.blockOn {
 			return execconcern.RunResult{ExitCode: 1, Stdout: ""}, nil
 		}
 	}
+
 	return execconcern.RunResult{ExitCode: 0, Stdout: ""}, nil
 }
 
@@ -66,10 +69,12 @@ search_tools = ["grep"]
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
+
 	cfg, err := config.LoadExisting(path)
 	if err != nil {
 		t.Fatalf("LoadExisting: %v", err)
 	}
+
 	return &cfg.Rules[0].Conditions[0]
 }
 
@@ -81,24 +86,33 @@ search_tools = ["grep"]
 // The verdict itself must not change: letting one unresolvable target veto the
 // rest is the veto bug AGATE-6 fixed.
 func TestBlockingVerdictReportsAnUnclassifiedSibling(t *testing.T) {
-	runner := &perTargetRunner{mu: sync.Mutex{}, failOn: "/repo/unreadable", blockOn: "/repo/indexed"}
+	runner := &perTargetRunner{
+		mu:      sync.Mutex{},
+		failOn:  "/repo/unreadable",
+		blockOn: "/repo/indexed",
+	}
 	runtime := NewExecRuntime(runner, nil)
 
 	verdict := runtime.runExpandedCommands(
-		context.Background(), "partial", forEachCondition(t),
+		context.Background(),
+		"partial",
+		forEachCondition(t),
 		[][]string{
 			{"/bin/validator", "/repo/unreadable"},
 			{"/bin/validator", "/repo/indexed"},
 		},
-		nil, nil,
+		nil,
+		nil,
 	)
 
 	if !verdict.Block {
 		t.Fatal("the classifiable target should still block")
 	}
+
 	if verdict.Errored {
 		t.Fatal("Errored must stay false; one unclassified target does not veto the rest")
 	}
+
 	if !verdict.PartialError {
 		t.Fatal("PartialError = false, so the record claims the whole expansion was probed")
 	}
@@ -111,17 +125,21 @@ func TestFullyProbedExpansionReportsNoPartialError(t *testing.T) {
 	runtime := NewExecRuntime(runner, nil)
 
 	verdict := runtime.runExpandedCommands(
-		context.Background(), "partial", forEachCondition(t),
+		context.Background(),
+		"partial",
+		forEachCondition(t),
 		[][]string{
 			{"/bin/validator", "/repo/clean"},
 			{"/bin/validator", "/repo/indexed"},
 		},
-		nil, nil,
+		nil,
+		nil,
 	)
 
 	if !verdict.Block {
 		t.Fatal("the blocking target should block")
 	}
+
 	if verdict.PartialError {
 		t.Fatal("PartialError = true for an expansion where every target was classified")
 	}

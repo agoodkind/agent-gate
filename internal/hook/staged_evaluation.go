@@ -31,10 +31,23 @@ func evaluateStagedRules(
 ) stagedRuleEvaluation {
 	if len(ruleSet) == 0 {
 		detailed := rules.EvaluateAllDetailed(
-			ctx, system, eventName, fields, ruleSet, getenv, normalizedJSON, gkversion.Version,
+			ctx,
+			system,
+			eventName,
+			fields,
+			ruleSet,
+			getenv,
+			normalizedJSON,
+			gkversion.Version,
 		)
-		return stagedRuleEvaluation{violations: detailed.Violations, effects: detailed.Effects, trace: detailed.Trace}
+
+		return stagedRuleEvaluation{
+			violations: detailed.Violations,
+			effects:    detailed.Effects,
+			trace:      detailed.Trace,
+		}
 	}
+
 	deterministicRules, inferenceRules := partitionInferenceRules(ruleSet)
 	deterministic := rules.EvaluateAllDetailed(
 		ctx,
@@ -62,21 +75,26 @@ func evaluateStagedRules(
 			trace.Layers = append(
 				trace.Layers,
 				skippedStagedInferenceLayers(
-					inferenceRules, len(trace.Layers), "prior_condition_nonmatch",
+					inferenceRules,
+					len(trace.Layers),
+					"prior_condition_nonmatch",
 				)...,
 			)
 		}
+
 		return stagedRuleEvaluation{violations: violations, effects: effects, trace: trace}
 	}
 
 	inferenceCtx, cancel := context.WithTimeout(ctx, cfg.HookInferencePhaseTimeout())
 	defer cancel()
+
 	firstUnprocessed := len(inferenceRules)
 	for i := range inferenceRules {
 		if inferenceCtx.Err() != nil {
 			firstUnprocessed = i
 			break
 		}
+
 		inference := rules.EvaluateAllDetailed(
 			inferenceCtx,
 			system,
@@ -91,6 +109,7 @@ func evaluateStagedRules(
 		violations = append(violations, inference.Violations...)
 		effects = append(effects, inference.Effects...)
 	}
+
 	trace := mergeStagedDecisionTrace(
 		deterministic.Trace,
 		ruleSet,
@@ -104,13 +123,21 @@ func evaluateStagedRules(
 		trace.Layers = append(
 			trace.Layers,
 			skippedStagedInferenceLayers(
-				unprocessed, len(trace.Layers), "inference_phase_timeout",
+				unprocessed,
+				len(trace.Layers),
+				"inference_phase_timeout",
 			)...,
 		)
 		setStagedRuleSkipReason(
-			&trace, unprocessed, "inference_phase_timeout", violations, system, eventName,
+			&trace,
+			unprocessed,
+			"inference_phase_timeout",
+			violations,
+			system,
+			eventName,
 		)
 	}
+
 	return stagedRuleEvaluation{
 		violations: violations,
 		effects:    effects,
@@ -123,6 +150,7 @@ func compactTraceJSON(value []byte) json.RawMessage {
 	if json.Compact(&compacted, value) != nil {
 		return json.RawMessage(`{}`)
 	}
+
 	return compacted.Bytes()
 }
 
@@ -135,36 +163,48 @@ func mergeStagedDecisionTrace(
 	eventName string,
 ) rules.DecisionTrace {
 	decisionsByName := make(map[string]rules.RuleDecision)
+
 	for resultIndex, result := range results {
 		for _, decision := range result.Trace.Deterministic.CheckedRules {
 			decisionsByName[decision.RuleName] = decision
 		}
+
 		if resultIndex == 0 {
 			continue
 		}
+
 		layerOffset := len(deterministic.Layers)
 		for _, layer := range result.Trace.Layers {
 			if layer.ParentTraceIndex != nil && *layer.ParentTraceIndex > 0 {
 				parent := *layer.ParentTraceIndex + layerOffset
 				layer.ParentTraceIndex = &parent
 			}
+
 			deterministic.Layers = append(deterministic.Layers, layer)
 		}
 	}
+
 	decisions := make([]rules.RuleDecision, 0, len(ruleSet))
 	for i := range ruleSet {
 		if decision, ok := decisionsByName[ruleSet[i].Name]; ok {
 			decisions = append(decisions, decision)
 			continue
 		}
-		decisions = append(decisions, rules.RuleDecision{
-			RuleName: ruleSet[i].Name, Status: "skipped",
-			SkipReason: "prior_condition_nonmatch", Matched: false,
-			// A rule skipped before its conditions ran probed nothing, so it
-			// cannot have partially probed an expansion.
-			PartialError: false,
-		})
+
+		decisions = append(
+			decisions,
+			rules.RuleDecision{
+				RuleName:   ruleSet[i].Name,
+				Status:     "skipped",
+				SkipReason: "prior_condition_nonmatch",
+				Matched:    false,
+				// A rule skipped before its conditions ran probed nothing, so it
+				// cannot have partially probed an expansion.
+				PartialError: false,
+			},
+		)
 	}
+
 	deterministic.Deterministic.CheckedRules = decisions
 	deterministic.Deterministic.OutputJSON = stagedDeterministicOutput(
 		decisions,
@@ -172,6 +212,7 @@ func mergeStagedDecisionTrace(
 		LookupCapability(SystemFromString(system), eventName).String(),
 	)
 	deterministic.Deterministic.OutputHash = hookTraceHash(deterministic.Deterministic.OutputJSON)
+
 	return deterministic
 }
 
@@ -203,29 +244,39 @@ func stagedDeterministicOutput(
 	for i := range decisions {
 		outputRules[i].RuleDecision = decisions[i]
 		outputRules[i].ViolationIdentities = make([]stagedViolationIdentity, 0)
+
 		for _, violation := range violations {
 			if violation.RuleName != decisions[i].RuleName {
 				continue
 			}
+
 			outputRules[i].ViolationIdentities = append(
 				outputRules[i].ViolationIdentities,
 				stagedViolationIdentity{
-					RuleName: violation.RuleName, FieldPath: violation.FieldPath,
-					FilePath: violation.FilePath, Start: violation.Start, End: violation.End,
+					RuleName:  violation.RuleName,
+					FieldPath: violation.FieldPath,
+					FilePath:  violation.FilePath,
+					Start:     violation.Start,
+					End:       violation.End,
 				},
 			)
 		}
 	}
+
 	result := "allow"
 	if len(violations) > 0 {
 		result = "block"
 	}
+
 	encoded, err := json.Marshal(stagedRuleOutput{
-		Rules: outputRules, ProviderBlockingCapability: capability, Result: result,
+		Rules:                      outputRules,
+		ProviderBlockingCapability: capability,
+		Result:                     result,
 	})
 	if err != nil {
 		return json.RawMessage(`{}`)
 	}
+
 	return encoded
 }
 
@@ -235,6 +286,7 @@ func skippedStagedInferenceLayers(
 	skipReason string,
 ) []rules.LayerTrace {
 	layers := make([]rules.LayerTrace, 0)
+
 	for ruleIndex := range ruleSet {
 		rule := &ruleSet[ruleIndex]
 		for conditionIndex := range rule.Conditions {
@@ -242,25 +294,39 @@ func skippedStagedInferenceLayers(
 			if config.ConditionKind(condition.Kind) != config.ConditionKindInfer {
 				continue
 			}
+
 			parent := 0
 			if condition.ContextSource != "" {
-				layers = append(layers, skippedStagedLayer(
+				layers = append(
+					layers,
+					skippedStagedLayer(
+						rule.Name,
+						conditionIndex,
+						rule.Name+"/"+condition.LayerName+"/context",
+						"context",
+						condition.Model,
+						parent,
+						skipReason,
+					),
+				)
+				parent = layerOffset + len(layers)
+			}
+
+			layers = append(
+				layers,
+				skippedStagedLayer(
 					rule.Name,
 					conditionIndex,
-					rule.Name+"/"+condition.LayerName+"/context",
-					"context",
+					condition.LayerName,
+					"inference",
 					condition.Model,
 					parent,
 					skipReason,
-				))
-				parent = layerOffset + len(layers)
-			}
-			layers = append(layers, skippedStagedLayer(
-				rule.Name, conditionIndex, condition.LayerName, "inference", condition.Model, parent,
-				skipReason,
-			))
+				),
+			)
 		}
 	}
+
 	return layers
 }
 
@@ -274,25 +340,48 @@ func skippedStagedLayer(
 	skipReason string,
 ) rules.LayerTrace {
 	emptyJSON := json.RawMessage(`{}`)
+
 	return rules.LayerTrace{
-		RuleName: ruleName, ConditionIndex: conditionIndex, LayerName: layerName,
-		Kind: kind, Status: "skipped", Outcome: "", SkipReason: skipReason,
-		ParentTraceIndex: &parent, StartedAt: time.Time{}, CompletedAt: time.Time{},
-		InputReference: "intake.normalized_json", InputJSON: emptyJSON, OutputJSON: emptyJSON,
-		InputHash: hookTraceHash(emptyJSON), OutputHash: hookTraceHash(emptyJSON),
-		ServiceName: "", ServiceVersion: "",
+		RuleName:         ruleName,
+		ConditionIndex:   conditionIndex,
+		LayerName:        layerName,
+		Kind:             kind,
+		Status:           "skipped",
+		Outcome:          "",
+		SkipReason:       skipReason,
+		ParentTraceIndex: &parent,
+		StartedAt:        time.Time{},
+		CompletedAt:      time.Time{},
+		InputReference:   "intake.normalized_json",
+		InputJSON:        emptyJSON,
+		OutputJSON:       emptyJSON,
+		InputHash:        hookTraceHash(emptyJSON),
+		OutputHash:       hookTraceHash(emptyJSON),
+		ServiceName:      "",
+		ServiceVersion:   "",
 		VerifiedProvenance: rules.VerifiedProvenance{
-			RequestedModel: model, EndpointHash: "", CacheKeyHash: "", InputHash: "",
-			PromptSHA256: "", SchemaSHA256: "", ReportedPromptHashStatus: "absent",
+			RequestedModel:           model,
+			EndpointHash:             "",
+			CacheKeyHash:             "",
+			InputHash:                "",
+			PromptSHA256:             "",
+			SchemaSHA256:             "",
+			ReportedPromptHashStatus: "absent",
 			ReportedSchemaHashStatus: "absent",
 		},
-		CacheStatus:  "",
-		CacheKeyHash: "", CacheEntryVersion: nil, CacheExpiresAt: nil,
+		CacheStatus:       "",
+		CacheKeyHash:      "",
+		CacheEntryVersion: nil,
+		CacheExpiresAt:    nil,
 		UpstreamMetadata: rules.UpstreamMetadata{
-			Source: "inference_reply", Trust: "untrusted",
-			Status: rules.UpstreamMetadataAbsent, Raw: nil,
+			Source: "inference_reply",
+			Trust:  "untrusted",
+			Status: rules.UpstreamMetadataAbsent,
+			Raw:    nil,
 		},
-		ErrorCode: "", ErrorMessage: "", RetryCount: 0,
+		ErrorCode:    "",
+		ErrorMessage: "",
+		RetryCount:   0,
 	}
 }
 
@@ -308,15 +397,18 @@ func setStagedRuleSkipReason(
 	for i := range ruleSet {
 		skippedRules[ruleSet[i].Name] = true
 	}
+
 	for i := range trace.Deterministic.CheckedRules {
 		decision := &trace.Deterministic.CheckedRules[i]
 		if !skippedRules[decision.RuleName] {
 			continue
 		}
+
 		decision.Status = "skipped"
 		decision.SkipReason = skipReason
 		decision.Matched = false
 	}
+
 	trace.Deterministic.OutputJSON = stagedDeterministicOutput(
 		trace.Deterministic.CheckedRules,
 		violations,

@@ -29,16 +29,19 @@ func (s *Server) StartAuditScheduler(ctx context.Context) {
 	if s.closing {
 		return
 	}
+
 	select {
 	case <-s.shutdown:
 		return
 	default:
 	}
+
 	s.auditRequested = true
 	snapshot := s.runtime.Load()
 	if snapshot == nil || snapshot.cfg.Unusable() {
 		return
 	}
+
 	s.auditOnce.Do(func() {
 		workerContext, cancel := context.WithCancel(ctx)
 		s.auditCancel = cancel
@@ -63,38 +66,51 @@ func (s *Server) auditScheduler(ctx context.Context) {
 		defer ticker.Stop()
 		ticks = ticker.C
 	}
+
 	var retryAt time.Time
 	attempt := 0
 	started := false
 	now := s.now()
 	reconcile := true
 	var maintenance auditMaintenance
+
 	for {
 		if ctx.Err() != nil {
 			return
 		}
+
 		if reconcile {
 			if err := logstorage.Maintain(config.DefaultStateDir()); err != nil {
 				s.log.WarnContext(ctx, "maintain local logs failed", "err", err)
 			}
 		}
+
 		if reconcile && !now.Before(retryAt) {
 			err := maintenance.run(ctx, s, now)
 			if err != nil && ctx.Err() == nil {
 				attempt++
 				retryAt = now.Add(auditRetryDelay(attempt))
-				s.log.WarnContext(ctx, "audit reconciliation failed; retrying", "err", err, "retry_at", retryAt)
+				s.log.WarnContext(
+					ctx,
+					"audit reconciliation failed; retrying",
+					"err",
+					err,
+					"retry_at",
+					retryAt,
+				)
 			} else {
 				attempt = 0
 				retryAt = time.Time{}
 			}
 		}
+
 		reconcile = false
 		if !started {
 			_ = s.dispatchRetainedReplay(ctx, now)
 			close(s.auditStarted)
 			started = true
 		}
+
 		s.deferredProcessor.recoveryTick(now)
 		select {
 		case <-ctx.Done():
@@ -111,12 +127,14 @@ func (s *Server) dispatchRetainedReplay(ctx context.Context, now time.Time) erro
 	if err := ctx.Err(); err != nil {
 		return wrapServerError("request retained recovery", err)
 	}
+
 	p := s.deferredProcessor
 	p.service.mu.Lock()
 	p.service.recovery.ready = true
 	p.service.recovery.historyGeneration++
 	p.service.mu.Unlock()
 	p.recoveryTick(now)
+
 	return nil
 }
 
@@ -126,6 +144,7 @@ func (p *deferredProcessor) submit(bucket auditstorage.Bucket, receiptID int64) 
 		p.markDiscoveryLocked(bucket)
 		p.service.mu.Unlock()
 	}
+
 	p.wakeWorkers()
 }
 
@@ -139,19 +158,36 @@ func (p *deferredProcessor) dispatch(bucket auditstorage.Bucket, receiptID int64
 	if p.stopping.Load() {
 		return false
 	}
+
 	if _, exists := p.queued[key]; exists {
 		return true
 	}
-	if p.service.paused || p.service.recovery.creditReserved || slices.Contains(p.service.excluded, bucket.Path) || len(p.events) >= p.service.queueLimit {
+
+	if p.service.paused || p.service.recovery.creditReserved ||
+		slices.Contains(p.service.excluded, bucket.Path) ||
+		len(p.events) >= p.service.queueLimit {
 		return false
 	}
+
 	if p.queuedBytes+size > replayDispatchBytes {
 		return false
 	}
+
 	select {
-	case p.events <- deferredWork{receiptID: receiptID, bucket: bucket, epoch: p.service.epoch, probe: false}:
-		p.queued[key] = queuedReplay{size: size, epoch: p.service.epoch, revisit: false, complete: false}
+	case p.events <- deferredWork{
+		receiptID: receiptID,
+		bucket:    bucket,
+		epoch:     p.service.epoch,
+		probe:     false,
+	}:
+		p.queued[key] = queuedReplay{
+			size:     size,
+			epoch:    p.service.epoch,
+			revisit:  false,
+			complete: false,
+		}
 		p.queuedBytes += size
+
 		return true
 	default:
 		return false
@@ -166,10 +202,12 @@ func (p *deferredProcessor) finishDispatch(work deferredWork) {
 		if queued.revisit && !queued.complete {
 			p.markDiscoveryLocked(work.bucket)
 		}
+
 		p.queuedBytes -= queued.size
 		delete(p.queued, key)
 		p.service.recovery.capacityBlocked = false
 	}
+
 	p.queueMu.Unlock()
 	p.service.mu.Unlock()
 	if p.notify != nil {
@@ -181,16 +219,21 @@ func (p *deferredProcessor) processDispatch(ctx context.Context, work deferredWo
 	if ctx.Err() != nil {
 		return false
 	}
+
 	policy := p.cfg.AuditStoragePolicy()
 	if policy.RetentionBuckets > 0 {
-		expires := work.bucket.Start.Add(time.Duration(policy.RetentionBuckets) * policy.BucketInterval)
+		expires := work.bucket.Start.Add(
+			time.Duration(policy.RetentionBuckets) * policy.BucketInterval,
+		)
 		remaining := expires.Sub(p.now())
 		if remaining <= 0 {
 			return false
 		}
+
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, remaining)
 		defer cancel()
 	}
+
 	return p.processEvent(ctx, work)
 }

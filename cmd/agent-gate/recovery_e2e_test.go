@@ -16,307 +16,391 @@ const recoveryTestToken = "test-recovery-token"
 func TestConfigRecoveryThroughCLI(t *testing.T) {
 	binaryPath := buildRecoveryTestBinary(t)
 
-	t.Run("hook permits exact recovery command without daemon", func(t *testing.T) {
-		home := newRecoveryTestHome(t)
-		candidatePath := filepath.Join(home, "candidate.toml")
-		writeRecoveryTestFile(t, candidatePath, "[log]\nlevel = \"debug\"\n")
-		commandText := recoveryShellCommand(candidatePath)
+	t.Run(
+		"hook permits exact recovery command without daemon",
+		func(t *testing.T) {
+			home := newRecoveryTestHome(t)
+			candidatePath := filepath.Join(home, "candidate.toml")
+			writeRecoveryTestFile(t, candidatePath, "[log]\nlevel = \"debug\"\n")
+			commandText := recoveryShellCommand(candidatePath)
 
-		exitCode, stdout, stderr := runRecoveryHook(
-			t, binaryPath, home, recoveryTestToken, commandText,
-		)
-
-		if exitCode != 0 {
-			t.Fatalf("exit code = %d, want 0; stderr = %q", exitCode, stderr)
-		}
-		if stdout == "" {
-			t.Fatal("stdout is empty, want a provider allow response")
-		}
-		if strings.Contains(stdout+stderr, "no rule was enforced") {
-			t.Fatalf(
-				"output contains fail-open warning: stdout = %q stderr = %q",
-				stdout,
-				stderr,
+			exitCode, stdout, stderr := runRecoveryHook(
+				t,
+				binaryPath,
+				home,
+				recoveryTestToken,
+				commandText,
 			)
-		}
-	})
 
-	t.Run("hook requires recovery token", func(t *testing.T) {
-		home := newRecoveryTestHome(t)
-		commandText := recoveryShellCommand(filepath.Join(home, "candidate.toml"))
+			if exitCode != 0 {
+				t.Fatalf("exit code = %d, want 0; stderr = %q", exitCode, stderr)
+			}
+			if stdout == "" {
+				t.Fatal("stdout is empty, want a provider allow response")
+			}
+			if strings.Contains(stdout+stderr, "no rule was enforced") {
+				t.Fatalf(
+					"output contains fail-open warning: stdout = %q stderr = %q",
+					stdout,
+					stderr,
+				)
+			}
+		},
+	)
 
-		exitCode, _, stderr := runRecoveryHook(t, binaryPath, home, "", commandText)
+	t.Run(
+		"hook requires recovery token",
+		func(t *testing.T) {
+			home := newRecoveryTestHome(t)
+			commandText := recoveryShellCommand(filepath.Join(home, "candidate.toml"))
 
-		if exitCode != 0 {
-			t.Fatalf("exit code = %d, want fail-open exit 0", exitCode)
-		}
-		if !strings.Contains(stderr, "no rule was enforced") {
-			t.Fatalf("stderr = %q, want daemon-unavailable warning", stderr)
-		}
-	})
+			exitCode, _, stderr := runRecoveryHook(t, binaryPath, home, "", commandText)
 
-	t.Run("hook reads recovery token file", func(t *testing.T) {
-		home := newRecoveryTestHome(t)
-		writeRecoveryTestTokenFile(t, home)
-		commandText := recoveryShellCommand(filepath.Join(home, "candidate.toml"))
+			if exitCode != 0 {
+				t.Fatalf("exit code = %d, want fail-open exit 0", exitCode)
+			}
+			if !strings.Contains(stderr, "no rule was enforced") {
+				t.Fatalf("stderr = %q, want daemon-unavailable warning", stderr)
+			}
+		},
+	)
 
-		exitCode, stdout, stderr := runRecoveryHook(t, binaryPath, home, "", commandText)
+	t.Run(
+		"hook reads recovery token file",
+		func(t *testing.T) {
+			home := newRecoveryTestHome(t)
+			writeRecoveryTestTokenFile(t, home)
+			commandText := recoveryShellCommand(filepath.Join(home, "candidate.toml"))
 
-		if exitCode != 0 {
-			t.Fatalf("exit code = %d, want 0; stderr = %q", exitCode, stderr)
-		}
-		if stdout == "" {
-			t.Fatal("stdout is empty, want a provider allow response")
-		}
-		if strings.Contains(stdout+stderr, "no rule was enforced") {
-			t.Fatalf(
-				"output contains fail-open warning: stdout = %q stderr = %q",
-				stdout,
-				stderr,
+			exitCode, stdout, stderr := runRecoveryHook(t, binaryPath, home, "", commandText)
+
+			if exitCode != 0 {
+				t.Fatalf("exit code = %d, want 0; stderr = %q", exitCode, stderr)
+			}
+			if stdout == "" {
+				t.Fatal("stdout is empty, want a provider allow response")
+			}
+			if strings.Contains(stdout+stderr, "no rule was enforced") {
+				t.Fatalf(
+					"output contains fail-open warning: stdout = %q stderr = %q",
+					stdout,
+					stderr,
+				)
+			}
+		},
+	)
+
+	t.Run(
+		"hook rejects readable recovery token file",
+		func(t *testing.T) {
+			home := newRecoveryTestHome(t)
+			tokenPath := writeRecoveryTestTokenFile(t, home)
+			if err := os.Chmod(tokenPath, 0o644); err != nil {
+				t.Fatalf("change token file mode: %v", err)
+			}
+			commandText := recoveryShellCommand(filepath.Join(home, "candidate.toml"))
+
+			exitCode, _, stderr := runRecoveryHook(t, binaryPath, home, "", commandText)
+
+			if exitCode != 0 {
+				t.Fatalf("exit code = %d, want fail-open exit 0", exitCode)
+			}
+			if !strings.Contains(stderr, "no rule was enforced") {
+				t.Fatalf("stderr = %q, want daemon-unavailable warning", stderr)
+			}
+		},
+	)
+
+	t.Run(
+		"hook rejects chained command",
+		func(t *testing.T) {
+			home := newRecoveryTestHome(t)
+			commandText := recoveryShellCommand(filepath.Join(home, "candidate.toml")) +
+				" && touch rejected"
+
+			exitCode, _, stderr := runRecoveryHook(
+				t,
+				binaryPath,
+				home,
+				recoveryTestToken,
+				commandText,
 			)
-		}
-	})
 
-	t.Run("hook rejects readable recovery token file", func(t *testing.T) {
-		home := newRecoveryTestHome(t)
-		tokenPath := writeRecoveryTestTokenFile(t, home)
-		if err := os.Chmod(tokenPath, 0o644); err != nil {
-			t.Fatalf("change token file mode: %v", err)
-		}
-		commandText := recoveryShellCommand(filepath.Join(home, "candidate.toml"))
+			if exitCode != 0 {
+				t.Fatalf("exit code = %d, want fail-open exit 0", exitCode)
+			}
+			if !strings.Contains(stderr, "no rule was enforced") {
+				t.Fatalf("stderr = %q, want daemon-unavailable warning", stderr)
+			}
+		},
+	)
 
-		exitCode, _, stderr := runRecoveryHook(t, binaryPath, home, "", commandText)
+	t.Run(
+		"hook rejects literal token assignment",
+		func(t *testing.T) {
+			home := newRecoveryTestHome(t)
+			commandText := "AGENT_GATE_RECOVERY_TOKEN=guessed agent-gate config recover " +
+				strconv.Quote(filepath.Join(home, "candidate.toml"))
 
-		if exitCode != 0 {
-			t.Fatalf("exit code = %d, want fail-open exit 0", exitCode)
-		}
-		if !strings.Contains(stderr, "no rule was enforced") {
-			t.Fatalf("stderr = %q, want daemon-unavailable warning", stderr)
-		}
-	})
+			exitCode, _, stderr := runRecoveryHook(
+				t,
+				binaryPath,
+				home,
+				recoveryTestToken,
+				commandText,
+			)
 
-	t.Run("hook rejects chained command", func(t *testing.T) {
-		home := newRecoveryTestHome(t)
-		commandText := recoveryShellCommand(filepath.Join(home, "candidate.toml")) +
-			" && touch rejected"
+			if exitCode != 0 {
+				t.Fatalf("exit code = %d, want fail-open exit 0", exitCode)
+			}
+			if !strings.Contains(stderr, "no rule was enforced") {
+				t.Fatalf("stderr = %q, want daemon-unavailable warning", stderr)
+			}
+		},
+	)
 
-		exitCode, _, stderr := runRecoveryHook(
-			t, binaryPath, home, recoveryTestToken, commandText,
-		)
+	t.Run(
+		"hook rejects additional environment assignment",
+		func(t *testing.T) {
+			home := newRecoveryTestHome(t)
+			commandText := `AGENT_GATE_RECOVERY_TOKEN="$AGENT_GATE_RECOVERY_TOKEN" EXTRA=value agent-gate config recover ` +
+				strconv.Quote(filepath.Join(home, "candidate.toml"))
 
-		if exitCode != 0 {
-			t.Fatalf("exit code = %d, want fail-open exit 0", exitCode)
-		}
-		if !strings.Contains(stderr, "no rule was enforced") {
-			t.Fatalf("stderr = %q, want daemon-unavailable warning", stderr)
-		}
-	})
+			exitCode, _, stderr := runRecoveryHook(
+				t,
+				binaryPath,
+				home,
+				recoveryTestToken,
+				commandText,
+			)
 
-	t.Run("hook rejects literal token assignment", func(t *testing.T) {
-		home := newRecoveryTestHome(t)
-		commandText := "AGENT_GATE_RECOVERY_TOKEN=guessed agent-gate config recover " +
-			strconv.Quote(filepath.Join(home, "candidate.toml"))
+			if exitCode != 0 {
+				t.Fatalf("exit code = %d, want fail-open exit 0", exitCode)
+			}
+			if !strings.Contains(stderr, "no rule was enforced") {
+				t.Fatalf("stderr = %q, want daemon-unavailable warning", stderr)
+			}
+		},
+	)
 
-		exitCode, _, stderr := runRecoveryHook(
-			t, binaryPath, home, recoveryTestToken, commandText,
-		)
+	t.Run(
+		"hook rejects alternate executable path",
+		func(t *testing.T) {
+			home := newRecoveryTestHome(t)
+			commandText := `AGENT_GATE_RECOVERY_TOKEN="$AGENT_GATE_RECOVERY_TOKEN" /tmp/agent-gate config recover ` +
+				strconv.Quote(filepath.Join(home, "candidate.toml"))
 
-		if exitCode != 0 {
-			t.Fatalf("exit code = %d, want fail-open exit 0", exitCode)
-		}
-		if !strings.Contains(stderr, "no rule was enforced") {
-			t.Fatalf("stderr = %q, want daemon-unavailable warning", stderr)
-		}
-	})
+			exitCode, _, stderr := runRecoveryHook(
+				t,
+				binaryPath,
+				home,
+				recoveryTestToken,
+				commandText,
+			)
 
-	t.Run("hook rejects additional environment assignment", func(t *testing.T) {
-		home := newRecoveryTestHome(t)
-		commandText := `AGENT_GATE_RECOVERY_TOKEN="$AGENT_GATE_RECOVERY_TOKEN" EXTRA=value agent-gate config recover ` +
-			strconv.Quote(filepath.Join(home, "candidate.toml"))
+			if exitCode != 0 {
+				t.Fatalf("exit code = %d, want fail-open exit 0", exitCode)
+			}
+			if !strings.Contains(stderr, "no rule was enforced") {
+				t.Fatalf("stderr = %q, want daemon-unavailable warning", stderr)
+			}
+		},
+	)
 
-		exitCode, _, stderr := runRecoveryHook(
-			t, binaryPath, home, recoveryTestToken, commandText,
-		)
+	t.Run(
+		"hook rejects output redirection",
+		func(t *testing.T) {
+			home := newRecoveryTestHome(t)
+			commandText := recoveryShellCommand(filepath.Join(home, "candidate.toml")) +
+				" > recovery.log"
 
-		if exitCode != 0 {
-			t.Fatalf("exit code = %d, want fail-open exit 0", exitCode)
-		}
-		if !strings.Contains(stderr, "no rule was enforced") {
-			t.Fatalf("stderr = %q, want daemon-unavailable warning", stderr)
-		}
-	})
+			exitCode, _, stderr := runRecoveryHook(
+				t,
+				binaryPath,
+				home,
+				recoveryTestToken,
+				commandText,
+			)
 
-	t.Run("hook rejects alternate executable path", func(t *testing.T) {
-		home := newRecoveryTestHome(t)
-		commandText := `AGENT_GATE_RECOVERY_TOKEN="$AGENT_GATE_RECOVERY_TOKEN" /tmp/agent-gate config recover ` +
-			strconv.Quote(filepath.Join(home, "candidate.toml"))
+			if exitCode != 0 {
+				t.Fatalf("exit code = %d, want fail-open exit 0", exitCode)
+			}
+			if !strings.Contains(stderr, "no rule was enforced") {
+				t.Fatalf("stderr = %q, want daemon-unavailable warning", stderr)
+			}
+		},
+	)
 
-		exitCode, _, stderr := runRecoveryHook(
-			t, binaryPath, home, recoveryTestToken, commandText,
-		)
+	t.Run(
+		"hook rejects unresolved candidate path",
+		func(t *testing.T) {
+			home := newRecoveryTestHome(t)
+			commandText := `AGENT_GATE_RECOVERY_TOKEN="$AGENT_GATE_RECOVERY_TOKEN" agent-gate config recover "$(printf candidate.toml)"`
 
-		if exitCode != 0 {
-			t.Fatalf("exit code = %d, want fail-open exit 0", exitCode)
-		}
-		if !strings.Contains(stderr, "no rule was enforced") {
-			t.Fatalf("stderr = %q, want daemon-unavailable warning", stderr)
-		}
-	})
+			exitCode, _, stderr := runRecoveryHook(
+				t,
+				binaryPath,
+				home,
+				recoveryTestToken,
+				commandText,
+			)
 
-	t.Run("hook rejects output redirection", func(t *testing.T) {
-		home := newRecoveryTestHome(t)
-		commandText := recoveryShellCommand(filepath.Join(home, "candidate.toml")) +
-			" > recovery.log"
+			if exitCode != 0 {
+				t.Fatalf("exit code = %d, want fail-open exit 0", exitCode)
+			}
+			if !strings.Contains(stderr, "no rule was enforced") {
+				t.Fatalf("stderr = %q, want daemon-unavailable warning", stderr)
+			}
+		},
+	)
 
-		exitCode, _, stderr := runRecoveryHook(
-			t, binaryPath, home, recoveryTestToken, commandText,
-		)
+	t.Run(
+		"hook rejects truncated payload",
+		func(t *testing.T) {
+			home := newRecoveryTestHome(t)
 
-		if exitCode != 0 {
-			t.Fatalf("exit code = %d, want fail-open exit 0", exitCode)
-		}
-		if !strings.Contains(stderr, "no rule was enforced") {
-			t.Fatalf("stderr = %q, want daemon-unavailable warning", stderr)
-		}
-	})
+			exitCode, _, stderr := runRecoveryProcess(
+				t,
+				binaryPath,
+				home,
+				recoveryTestToken,
+				[]byte("{"),
+				"managed-hook",
+				"claude",
+			)
 
-	t.Run("hook rejects unresolved candidate path", func(t *testing.T) {
-		home := newRecoveryTestHome(t)
-		commandText := `AGENT_GATE_RECOVERY_TOKEN="$AGENT_GATE_RECOVERY_TOKEN" agent-gate config recover "$(printf candidate.toml)"`
+			if exitCode != 0 {
+				t.Fatalf("exit code = %d, want fail-open exit 0", exitCode)
+			}
+			if !strings.Contains(stderr, "no rule was enforced") {
+				t.Fatalf("stderr = %q, want daemon-unavailable warning", stderr)
+			}
+		},
+	)
 
-		exitCode, _, stderr := runRecoveryHook(
-			t, binaryPath, home, recoveryTestToken, commandText,
-		)
+	t.Run(
+		"hook rejects non-string command",
+		func(t *testing.T) {
+			home := newRecoveryTestHome(t)
+			payload := []byte(
+				`{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":["invalid"]}}`,
+			)
 
-		if exitCode != 0 {
-			t.Fatalf("exit code = %d, want fail-open exit 0", exitCode)
-		}
-		if !strings.Contains(stderr, "no rule was enforced") {
-			t.Fatalf("stderr = %q, want daemon-unavailable warning", stderr)
-		}
-	})
+			exitCode, _, stderr := runRecoveryProcess(
+				t,
+				binaryPath,
+				home,
+				recoveryTestToken,
+				payload,
+				"managed-hook",
+				"claude",
+			)
 
-	t.Run("hook rejects truncated payload", func(t *testing.T) {
-		home := newRecoveryTestHome(t)
+			if exitCode != 0 {
+				t.Fatalf("exit code = %d, want fail-open exit 0", exitCode)
+			}
+			if !strings.Contains(stderr, "no rule was enforced") {
+				t.Fatalf("stderr = %q, want daemon-unavailable warning", stderr)
+			}
+		},
+	)
 
-		exitCode, _, stderr := runRecoveryProcess(
-			t,
-			binaryPath,
-			home,
-			recoveryTestToken,
-			[]byte("{"),
-			"managed-hook",
-			"claude",
-		)
+	t.Run(
+		"command replaces valid configuration",
+		func(t *testing.T) {
+			home := newRecoveryTestHome(t)
+			configPath := writeRecoveryTestConfig(t, home, "[log]\nlevel = \"info\"\n")
+			candidatePath := filepath.Join(home, "candidate.toml")
+			want := "[log]\nlevel = \"debug\"\n"
+			writeRecoveryTestFile(t, candidatePath, want)
 
-		if exitCode != 0 {
-			t.Fatalf("exit code = %d, want fail-open exit 0", exitCode)
-		}
-		if !strings.Contains(stderr, "no rule was enforced") {
-			t.Fatalf("stderr = %q, want daemon-unavailable warning", stderr)
-		}
-	})
+			exitCode, stdout, stderr := runRecoveryCLI(
+				t,
+				binaryPath,
+				home,
+				recoveryTestToken,
+				candidatePath,
+			)
 
-	t.Run("hook rejects non-string command", func(t *testing.T) {
-		home := newRecoveryTestHome(t)
-		payload := []byte(
-			`{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":["invalid"]}}`,
-		)
+			if exitCode != 0 {
+				t.Fatalf("exit code = %d, want 0; stderr = %q", exitCode, stderr)
+			}
+			if !strings.Contains(stdout, "configuration recovered") {
+				t.Fatalf("stdout = %q, want recovery confirmation", stdout)
+			}
+			if strings.Contains(stderr, "failed") {
+				t.Fatalf("stderr = %q, want no failure", stderr)
+			}
+			assertRecoveryTestFile(t, configPath, want)
+		},
+	)
 
-		exitCode, _, stderr := runRecoveryProcess(
-			t,
-			binaryPath,
-			home,
-			recoveryTestToken,
-			payload,
-			"managed-hook",
-			"claude",
-		)
+	t.Run(
+		"command requires recovery token",
+		func(t *testing.T) {
+			home := newRecoveryTestHome(t)
+			original := "[log]\nlevel = \"info\"\n"
+			configPath := writeRecoveryTestConfig(t, home, original)
+			candidatePath := filepath.Join(home, "candidate.toml")
+			writeRecoveryTestFile(t, candidatePath, "[log]\nlevel = \"debug\"\n")
 
-		if exitCode != 0 {
-			t.Fatalf("exit code = %d, want fail-open exit 0", exitCode)
-		}
-		if !strings.Contains(stderr, "no rule was enforced") {
-			t.Fatalf("stderr = %q, want daemon-unavailable warning", stderr)
-		}
-	})
+			exitCode, _, stderr := runRecoveryCLI(t, binaryPath, home, "", candidatePath)
 
-	t.Run("command replaces valid configuration", func(t *testing.T) {
-		home := newRecoveryTestHome(t)
-		configPath := writeRecoveryTestConfig(t, home, "[log]\nlevel = \"info\"\n")
-		candidatePath := filepath.Join(home, "candidate.toml")
-		want := "[log]\nlevel = \"debug\"\n"
-		writeRecoveryTestFile(t, candidatePath, want)
+			if exitCode != 1 {
+				t.Fatalf("exit code = %d, want 1", exitCode)
+			}
+			if !strings.Contains(stderr, recoveryTokenEnvironment) {
+				t.Fatalf("stderr = %q, want recovery variable name", stderr)
+			}
+			assertRecoveryTestFile(t, configPath, original)
+		},
+	)
 
-		exitCode, stdout, stderr := runRecoveryCLI(
-			t, binaryPath, home, recoveryTestToken, candidatePath,
-		)
+	t.Run(
+		"command reads recovery token file",
+		func(t *testing.T) {
+			home := newRecoveryTestHome(t)
+			writeRecoveryTestTokenFile(t, home)
+			configPath := writeRecoveryTestConfig(t, home, "[log]\nlevel = \"info\"\n")
+			candidatePath := filepath.Join(home, "candidate.toml")
+			want := "[log]\nlevel = \"debug\"\n"
+			writeRecoveryTestFile(t, candidatePath, want)
 
-		if exitCode != 0 {
-			t.Fatalf("exit code = %d, want 0; stderr = %q", exitCode, stderr)
-		}
-		if !strings.Contains(stdout, "configuration recovered") {
-			t.Fatalf("stdout = %q, want recovery confirmation", stdout)
-		}
-		if strings.Contains(stderr, "failed") {
-			t.Fatalf("stderr = %q, want no failure", stderr)
-		}
-		assertRecoveryTestFile(t, configPath, want)
-	})
+			exitCode, _, stderr := runRecoveryCLI(t, binaryPath, home, "", candidatePath)
 
-	t.Run("command requires recovery token", func(t *testing.T) {
-		home := newRecoveryTestHome(t)
-		original := "[log]\nlevel = \"info\"\n"
-		configPath := writeRecoveryTestConfig(t, home, original)
-		candidatePath := filepath.Join(home, "candidate.toml")
-		writeRecoveryTestFile(t, candidatePath, "[log]\nlevel = \"debug\"\n")
+			if exitCode != 0 {
+				t.Fatalf("exit code = %d, want 0; stderr = %q", exitCode, stderr)
+			}
+			assertRecoveryTestFile(t, configPath, want)
+		},
+	)
 
-		exitCode, _, stderr := runRecoveryCLI(t, binaryPath, home, "", candidatePath)
+	t.Run(
+		"command preserves configuration after validation failure",
+		func(t *testing.T) {
+			home := newRecoveryTestHome(t)
+			original := "[log]\nlevel = \"info\"\n"
+			configPath := writeRecoveryTestConfig(t, home, original)
+			candidatePath := filepath.Join(home, "candidate.toml")
+			writeRecoveryTestFile(t, candidatePath, "[[rules]\n")
 
-		if exitCode != 1 {
-			t.Fatalf("exit code = %d, want 1", exitCode)
-		}
-		if !strings.Contains(stderr, recoveryTokenEnvironment) {
-			t.Fatalf("stderr = %q, want recovery variable name", stderr)
-		}
-		assertRecoveryTestFile(t, configPath, original)
-	})
+			exitCode, _, stderr := runRecoveryCLI(
+				t,
+				binaryPath,
+				home,
+				recoveryTestToken,
+				candidatePath,
+			)
 
-	t.Run("command reads recovery token file", func(t *testing.T) {
-		home := newRecoveryTestHome(t)
-		writeRecoveryTestTokenFile(t, home)
-		configPath := writeRecoveryTestConfig(t, home, "[log]\nlevel = \"info\"\n")
-		candidatePath := filepath.Join(home, "candidate.toml")
-		want := "[log]\nlevel = \"debug\"\n"
-		writeRecoveryTestFile(t, candidatePath, want)
-
-		exitCode, _, stderr := runRecoveryCLI(t, binaryPath, home, "", candidatePath)
-
-		if exitCode != 0 {
-			t.Fatalf("exit code = %d, want 0; stderr = %q", exitCode, stderr)
-		}
-		assertRecoveryTestFile(t, configPath, want)
-	})
-
-	t.Run("command preserves configuration after validation failure", func(t *testing.T) {
-		home := newRecoveryTestHome(t)
-		original := "[log]\nlevel = \"info\"\n"
-		configPath := writeRecoveryTestConfig(t, home, original)
-		candidatePath := filepath.Join(home, "candidate.toml")
-		writeRecoveryTestFile(t, candidatePath, "[[rules]\n")
-
-		exitCode, _, stderr := runRecoveryCLI(
-			t, binaryPath, home, recoveryTestToken, candidatePath,
-		)
-
-		if exitCode != 1 {
-			t.Fatalf("exit code = %d, want 1", exitCode)
-		}
-		if !strings.Contains(stderr, "validation failed") {
-			t.Fatalf("stderr = %q, want validation failure", stderr)
-		}
-		assertRecoveryTestFile(t, configPath, original)
-	})
+			if exitCode != 1 {
+				t.Fatalf("exit code = %d, want 1", exitCode)
+			}
+			if !strings.Contains(stderr, "validation failed") {
+				t.Fatalf("stderr = %q, want validation failure", stderr)
+			}
+			assertRecoveryTestFile(t, configPath, original)
+		},
+	)
 }
 
 func buildRecoveryTestBinary(t *testing.T) string {
@@ -355,31 +439,25 @@ func runRecoveryHook(
 	commandText string,
 ) (int, string, string) {
 	t.Helper()
-	payload, err := json.Marshal(struct {
-		SessionID     string            `json:"session_id"`
-		HookEventName string            `json:"hook_event_name"`
-		ToolName      string            `json:"tool_name"`
-		CWD           string            `json:"cwd"`
-		ToolInput     map[string]string `json:"tool_input"`
-	}{
-		SessionID:     "recovery-test",
-		HookEventName: "PreToolUse",
-		ToolName:      "Bash",
-		CWD:           home,
-		ToolInput:     map[string]string{"command": commandText},
-	})
+	payload, err := json.Marshal(
+		struct {
+			SessionID     string            `json:"session_id"`
+			HookEventName string            `json:"hook_event_name"`
+			ToolName      string            `json:"tool_name"`
+			CWD           string            `json:"cwd"`
+			ToolInput     map[string]string `json:"tool_input"`
+		}{
+			SessionID:     "recovery-test",
+			HookEventName: "PreToolUse",
+			ToolName:      "Bash",
+			CWD:           home,
+			ToolInput:     map[string]string{"command": commandText},
+		},
+	)
 	if err != nil {
 		t.Fatalf("encode hook payload: %v", err)
 	}
-	return runRecoveryProcess(
-		t,
-		binaryPath,
-		home,
-		token,
-		payload,
-		"managed-hook",
-		"claude",
-	)
+	return runRecoveryProcess(t, binaryPath, home, token, payload, "managed-hook", "claude")
 }
 
 func runRecoveryCLI(
@@ -390,16 +468,7 @@ func runRecoveryCLI(
 	candidatePath string,
 ) (int, string, string) {
 	t.Helper()
-	return runRecoveryProcess(
-		t,
-		binaryPath,
-		home,
-		token,
-		nil,
-		"config",
-		"recover",
-		candidatePath,
-	)
+	return runRecoveryProcess(t, binaryPath, home, token, nil, "config", "recover", candidatePath)
 }
 
 func runRecoveryProcess(

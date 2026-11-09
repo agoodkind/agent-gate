@@ -44,6 +44,7 @@ func (c *Config) UpdateEnabled() bool {
 	if c != nil && c.Update.Enabled != nil {
 		return *c.Update.Enabled
 	}
+
 	return true
 }
 
@@ -52,6 +53,7 @@ func (c *Config) UpdateMode() string {
 	if c != nil && c.Update.Mode != "" {
 		return c.Update.Mode
 	}
+
 	return UpdateModeApply
 }
 
@@ -60,6 +62,7 @@ func (c *Config) UpdateRepo() string {
 	if c != nil && c.Update.Repo != "" {
 		return c.Update.Repo
 	}
+
 	return DefaultUpdateRepo
 }
 
@@ -71,6 +74,7 @@ func (c *Config) UpdateInterval() time.Duration {
 			return interval
 		}
 	}
+
 	return defaultUpdateInterval
 }
 
@@ -79,6 +83,7 @@ func (c *Config) UpdateAllowPrerelease() bool {
 	if c != nil && c.Update.AllowPrerelease != nil {
 		return *c.Update.AllowPrerelease
 	}
+
 	return true
 }
 
@@ -87,23 +92,34 @@ func normalizeUpdate(update *Update) error {
 	if update == nil {
 		return nil
 	}
+
 	if update.Mode != "" && update.Mode != UpdateModeApply && update.Mode != UpdateModeCheck {
-		err := fmt.Errorf("update.mode: expected %q or %q, got %q", UpdateModeCheck, UpdateModeApply, update.Mode)
+		err := fmt.Errorf(
+			"update.mode: expected %q or %q, got %q",
+			UpdateModeCheck,
+			UpdateModeApply,
+			update.Mode,
+		)
 		log.Warn("config update normalize failed", "err", err)
+
 		return err
 	}
+
 	if update.Interval != "" {
 		interval, err := time.ParseDuration(update.Interval)
 		if err != nil {
 			log.Warn("config update interval parse failed", "interval", update.Interval, "err", err)
 			return fmt.Errorf("update.interval %q: %w", update.Interval, err)
 		}
+
 		if interval <= 0 {
 			err := fmt.Errorf("update.interval must be positive")
 			log.Warn("config update interval rejected", "interval", update.Interval, "err", err)
+
 			return err
 		}
 	}
+
 	return nil
 }
 
@@ -113,6 +129,7 @@ func EnsureDefaults(options EnsureDefaultsOptions) (string, error) {
 	if err != nil {
 		return filepath.Clean(Path()), err
 	}
+
 	return ApplyDefaults(plan)
 }
 
@@ -124,6 +141,7 @@ func mergeUpdateDefaults(contents string, mode string) (string, error) {
 		log.Warn("config update merge decode failed", "err", err)
 		return "", fmt.Errorf("decode config before merge: %w", err)
 	}
+
 	// Whether the file already declares an [update] table decides between
 	// merging into it and appending a fresh one, so an absent table and a table
 	// present with default values must stay distinguishable. The previous
@@ -134,21 +152,26 @@ func mergeUpdateDefaults(contents string, mode string) (string, error) {
 	if hasUpdate && mode == "" {
 		return contents, nil
 	}
+
 	if !hasUpdate {
 		block := updateBlockForMode(mode)
 		separator := "\n"
 		if strings.HasSuffix(contents, "\n") {
 			separator = ""
 		}
+
 		return contents + separator + "\n" + block, nil
 	}
+
 	block := mergedUpdateBlock(decoded.Update, mode)
 	next, replaced := replaceTopLevelTable(contents, "update", block)
 	if !replaced {
 		err := fmt.Errorf("update table was detected but could not be replaced")
 		log.Warn("config update merge replace failed", "err", err)
+
 		return "", err
 	}
+
 	return next, nil
 }
 
@@ -158,17 +181,23 @@ func updateBlockForMode(mode string) string {
 	if resolvedMode == "" {
 		resolvedMode = UpdateModeApply
 	}
+
 	if resolvedMode == "off" {
 		enabled = "false"
 		resolvedMode = UpdateModeApply
 	}
-	return fmt.Sprintf(`[update]
+
+	return fmt.Sprintf(
+		`[update]
 enabled = %s
 mode = %q
 interval = "24h"
 repo = "agoodkind/agent-gate"
 allow_prerelease = true
-`, enabled, resolvedMode)
+`,
+		enabled,
+		resolvedMode,
+	)
 }
 
 func mergedUpdateBlock(existing Update, mode string) string {
@@ -177,18 +206,22 @@ func mergedUpdateBlock(existing Update, mode string) string {
 	if resolvedMode == "" {
 		resolvedMode = UpdateModeApply
 	}
+
 	interval := existing.Interval
 	if interval == "" {
 		interval = "24h"
 	}
+
 	repo := existing.Repo
 	if repo == "" {
 		repo = DefaultUpdateRepo
 	}
+
 	allowPrerelease := true
 	if existing.AllowPrerelease != nil {
 		allowPrerelease = *existing.AllowPrerelease
 	}
+
 	if mode == "off" {
 		enabled = false
 		resolvedMode = UpdateModeApply
@@ -196,47 +229,65 @@ func mergedUpdateBlock(existing Update, mode string) string {
 		enabled = true
 		resolvedMode = mode
 	}
-	return fmt.Sprintf(`[update]
+
+	return fmt.Sprintf(
+		`[update]
 enabled = %t
 mode = %q
 interval = %q
 repo = %q
 allow_prerelease = %t
-`, enabled, resolvedMode, interval, repo, allowPrerelease)
+`,
+		enabled,
+		resolvedMode,
+		interval,
+		repo,
+		allowPrerelease,
+	)
 }
 
 func replaceTopLevelTable(contents string, tableName string, replacement string) (string, bool) {
 	lines := strings.SplitAfter(contents, "\n")
 	structuralLines := tomlStructuralLines(lines)
 	start := -1
+
 	end := len(lines)
 	for i := range lines {
 		if !structuralLines[i] {
 			continue
 		}
+
 		if isTopLevelTableHeader(lines[i], tableName) {
 			start = i
 			continue
 		}
+
 		if start >= 0 && i > start && strings.HasPrefix(strings.TrimSpace(lines[i]), "[") {
 			end = i
 			break
 		}
 	}
+
 	if start < 0 {
 		return contents, false
 	}
+
 	var merged strings.Builder
+
 	for i := range start {
 		merged.WriteString(lines[i])
 	}
+
 	if merged.Len() > 0 && !strings.HasSuffix(merged.String(), "\n") {
 		merged.WriteByte('\n')
 	}
+
 	merged.WriteString(replacement)
+
 	for i := end; i < len(lines); i++ {
 		merged.WriteString(lines[i])
 	}
+
 	return merged.String(), true
 }
 
@@ -246,12 +297,14 @@ func replaceTopLevelTable(contents string, tableName string, replacement string)
 // table from a table of zero values.
 func topLevelTableDeclared(contents string, tableName string) bool {
 	lines := strings.SplitAfter(contents, "\n")
+
 	structuralLines := tomlStructuralLines(lines)
 	for i := range lines {
 		if structuralLines[i] && isTopLevelTableHeader(lines[i], tableName) {
 			return true
 		}
 	}
+
 	return false
 }
 

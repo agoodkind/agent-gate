@@ -23,13 +23,20 @@ func newQualificationServer(b *testing.B, cfg *config.Config) (*Server, func()) 
 		b.Fatal(err)
 	}
 	b.Cleanup(server.Close)
-	return server, func() { server.StartAuditScheduler(context.Background()); <-server.auditStarted }
+	return server, func() {
+		server.StartAuditScheduler(context.Background())
+		<-server.auditStarted
+	}
 }
 
 func qualificationSeedHistory(b *testing.B, server *Server, cfg *config.Config, pending bool) int {
 	b.Helper()
 	for day := 6; day >= 0; day-- {
-		bucket, err := server.catalog.EnsureCurrent(context.Background(), cfg.AuditStoragePolicy().Rotation(), time.Now().Add(-time.Duration(day)*24*time.Hour))
+		bucket, err := server.catalog.EnsureCurrent(
+			context.Background(),
+			cfg.AuditStoragePolicy().Rotation(),
+			time.Now().Add(-time.Duration(day)*24*time.Hour),
+		)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -37,7 +44,12 @@ func qualificationSeedHistory(b *testing.B, server *Server, cfg *config.Config, 
 		if err != nil {
 			b.Fatal(err)
 		}
-		store, err := intake.NewStore(context.Background(), handle.Database, cfg.AuditStoragePolicy(), newDiscardLogger())
+		store, err := intake.NewStore(
+			context.Background(),
+			handle.Database,
+			cfg.AuditStoragePolicy(),
+			newDiscardLogger(),
+		)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -57,7 +69,10 @@ func qualificationAttach(server *Server, recorder *qualificationRecorder) {
 
 func qualificationStatus(b *testing.B, server *Server, cfg *config.Config) {
 	b.Helper()
-	if _, err := server.catalog.Status(cfg.AuditStoragePolicy().Rotation(), time.Now()); err != nil {
+	if _, err := server.catalog.Status(
+		cfg.AuditStoragePolicy().Rotation(),
+		time.Now(),
+	); err != nil {
 		b.Fatal(err)
 	}
 }
@@ -66,13 +81,22 @@ func qualificationFlushHistory(b *testing.B, server *Server, cfg *config.Config)
 	b.Helper()
 	deadline := time.Now().Add(2 * time.Minute)
 	for time.Now().Before(deadline) {
-		readers, err := server.catalog.Read(context.Background(), cfg.AuditStoragePolicy().Rotation(), time.Now())
+		readers, err := server.catalog.Read(
+			context.Background(),
+			cfg.AuditStoragePolicy().Rotation(),
+			time.Now(),
+		)
 		if err != nil {
 			b.Fatal(err)
 		}
 		pending := 0
 		for _, handle := range readers.Handles {
-			store, err := intake.NewStore(context.Background(), handle.Database, cfg.AuditStoragePolicy(), newDiscardLogger())
+			store, err := intake.NewStore(
+				context.Background(),
+				handle.Database,
+				cfg.AuditStoragePolicy(),
+				newDiscardLogger(),
+			)
 			if err != nil {
 				b.Fatal(err)
 			}

@@ -22,39 +22,51 @@ func testFields(payload map[string]any) rules.FieldSet {
 	if value, ok := payload["cwd"].(string); ok {
 		fields.CWD = value
 	}
+
 	if value, ok := payload["effective_cwd"].(string); ok {
 		fields.EffectiveCWD = value
 	}
+
 	if value, ok := payload["command"].(string); ok {
 		fields.Command = value
 	}
+
 	if value, ok := payload["tool_input_command"].(string); ok {
 		fields.ToolInputCommand = value
 	}
+
 	if value, ok := payload["assistant_message"].(string); ok {
 		fields.AssistantMessage = value
 	}
+
 	if value, ok := payload["last_assistant_message"].(string); ok {
 		fields.LastAssistantMessage = value
 	}
+
 	if value, ok := payload["text"].(string); ok {
 		fields.Text = value
 	}
+
 	if value, ok := payload["tool_name"].(string); ok {
 		fields.ToolName = value
 	}
+
 	if value, ok := payload["file_path"].(string); ok {
 		fields.FilePath = value
 	}
+
 	if value, ok := payload["path"].(string); ok {
 		fields.Path = value
 	}
+
 	if value, ok := payload["tool_response"].(string); ok {
 		fields.ToolResponse = value
 	}
+
 	if value, ok := payload["tool_output"].(string); ok {
 		fields.ToolOutput = value
 	}
+
 	if value, ok := payload["tool_input"].(map[string]any); ok {
 		fields.ToolInputCommand = testString(value, "command")
 		fields.ToolInputFilePath = testString(value, "file_path")
@@ -66,16 +78,25 @@ func testFields(payload map[string]any) rules.FieldSet {
 		fields.ToolInputWorkdir = testString(value, "workdir")
 		fields.ToolInputPath = testString(value, "path")
 	}
+
 	if edits, ok := payload["edits"].([]any); ok {
 		for _, edit := range edits {
 			editFields, ok := edit.(map[string]any)
 			if !ok {
 				continue
 			}
-			fields.EditsNewString = append(fields.EditsNewString, testString(editFields, "new_string"))
-			fields.EditsOldString = append(fields.EditsOldString, testString(editFields, "old_string"))
+
+			fields.EditsNewString = append(
+				fields.EditsNewString,
+				testString(editFields, "new_string"),
+			)
+			fields.EditsOldString = append(
+				fields.EditsOldString,
+				testString(editFields, "old_string"),
+			)
 		}
 	}
+
 	return fields
 }
 
@@ -84,6 +105,7 @@ func testString(values map[string]any, key string) string {
 	if !ok {
 		return ""
 	}
+
 	return value
 }
 
@@ -175,23 +197,34 @@ func systemFor(event string) string {
 	if unicode.IsUpper(r) {
 		return "claude"
 	}
+
 	return "cursor"
 }
 
 // loadRule builds a single compiled Rule without touching the filesystem.
-func loadRule(t *testing.T, name, pattern string, events, fieldPaths []string, message string) config.Rule {
+func loadRule(
+	t *testing.T,
+	name string,
+	pattern string,
+	events []string,
+	fieldPaths []string,
+	message string,
+) config.Rule {
 	t.Helper()
 	re, err := regex.Compile(pattern)
 	if err != nil {
 		t.Fatalf("compile pattern %q: %v", pattern, err)
 	}
+
 	return config.NewSimpleRule(name, pattern, re, events, fieldPaths, "block", message)
 }
 
 // redirectionRule returns the canonical no-shell-redirection rule used in production.
 func redirectionRule(t *testing.T) config.Rule {
 	t.Helper()
-	return loadRule(t,
+
+	return loadRule(
+		t,
 		"no-shell-redirection",
 		`.+`,
 		[]string{"PreToolUse", "beforeShellExecution"},
@@ -210,13 +243,20 @@ func unboundedRootFindRule(t *testing.T) config.Rule {
 	if err != nil {
 		t.Fatalf("compile root find command condition: %v", err)
 	}
+
 	cmdCond.Kind = string(config.ConditionKindCommand)
 	cmdCond.Argv0 = "find"
 	cmdCond.StripEnv = true
 	cmdCond.StripArgs = []string{"sudo", "doas", "env", "time", "command"}
+
 	return config.Rule{
-		Name:             "no-unbounded-root-find",
-		Events:           []string{"PreToolUse", "beforeShellExecution", "preToolUse", "BeforeTool"},
+		Name: "no-unbounded-root-find",
+		Events: []string{
+			"PreToolUse",
+			"beforeShellExecution",
+			"preToolUse",
+			"BeforeTool",
+		},
 		Conditions:       []config.Condition{cmdCond},
 		Action:           "block",
 		ViolationMessage: "Do not run unbounded recursive find from filesystem root.",
@@ -282,12 +322,21 @@ func TestEvaluate_UnboundedRootFindBlocked(t *testing.T) {
 	}
 
 	for _, testCase := range cases {
-		t.Run(testCase.name, func(t *testing.T) {
-			v := rules.Evaluate(context.Background(), systemFor(testCase.event), testCase.event, testFields(testCase.payload), []config.Rule{rule})
-			if v == nil {
-				t.Fatalf("expected unbounded root find violation for %#v", testCase.payload)
-			}
-		})
+		t.Run(
+			testCase.name,
+			func(t *testing.T) {
+				v := rules.Evaluate(
+					context.Background(),
+					systemFor(testCase.event),
+					testCase.event,
+					testFields(testCase.payload),
+					[]config.Rule{rule},
+				)
+				if v == nil {
+					t.Fatalf("expected unbounded root find violation for %#v", testCase.payload)
+				}
+			},
+		)
 	}
 }
 
@@ -350,12 +399,21 @@ func TestEvaluate_RootFindWithExplicitBoundsAllowed(t *testing.T) {
 	}
 
 	for _, testCase := range cases {
-		t.Run(testCase.name, func(t *testing.T) {
-			v := rules.Evaluate(context.Background(), systemFor(testCase.event), testCase.event, testFields(testCase.payload), []config.Rule{rule})
-			if v != nil {
-				t.Fatalf("expected allow, got rule %q", v.RuleName)
-			}
-		})
+		t.Run(
+			testCase.name,
+			func(t *testing.T) {
+				v := rules.Evaluate(
+					context.Background(),
+					systemFor(testCase.event),
+					testCase.event,
+					testFields(testCase.payload),
+					[]config.Rule{rule},
+				)
+				if v != nil {
+					t.Fatalf("expected allow, got rule %q", v.RuleName)
+				}
+			},
+		)
 	}
 }
 
@@ -363,7 +421,9 @@ const lossyOutputSamplingPattern = `(?m)(?:[^;&\n|]+\|\s*(?:head|tail)\b|(?:^|[;
 
 func lossyOutputSamplingRule(t *testing.T) config.Rule {
 	t.Helper()
-	return loadRule(t,
+
+	return loadRule(
+		t,
 		"no-lossy-output-sampling",
 		lossyOutputSamplingPattern,
 		[]string{"PreToolUse", "preToolUse", "beforeShellExecution"},
@@ -426,7 +486,9 @@ func TestEvaluate_LossyOutputSamplingBlocked(t *testing.T) {
 			system: "codex",
 			event:  "PreToolUse",
 			payload: map[string]any{
-				"tool_input": map[string]any{"command": "echo checking && docker logs api | tail -100"},
+				"tool_input": map[string]any{
+					"command": "echo checking && docker logs api | tail -100",
+				},
 			},
 		},
 		{
@@ -434,7 +496,9 @@ func TestEvaluate_LossyOutputSamplingBlocked(t *testing.T) {
 			system: "claude",
 			event:  "PreToolUse",
 			payload: map[string]any{
-				"tool_input": map[string]any{"command": "ls /Users/agoodkind/Sites/clyde-dev/clyde 2>&1 | head -40"},
+				"tool_input": map[string]any{
+					"command": "ls /Users/agoodkind/Sites/clyde-dev/clyde 2>&1 | head -40",
+				},
 			},
 		},
 		{
@@ -448,12 +512,21 @@ func TestEvaluate_LossyOutputSamplingBlocked(t *testing.T) {
 	}
 
 	for _, testCase := range cases {
-		t.Run(testCase.name, func(t *testing.T) {
-			v := rules.Evaluate(context.Background(), testCase.system, testCase.event, testFields(testCase.payload), []config.Rule{rule})
-			if v == nil {
-				t.Fatalf("expected lossy output sampling violation for %#v", testCase.payload)
-			}
-		})
+		t.Run(
+			testCase.name,
+			func(t *testing.T) {
+				v := rules.Evaluate(
+					context.Background(),
+					testCase.system,
+					testCase.event,
+					testFields(testCase.payload),
+					[]config.Rule{rule},
+				)
+				if v == nil {
+					t.Fatalf("expected lossy output sampling violation for %#v", testCase.payload)
+				}
+			},
+		)
 	}
 }
 
@@ -503,7 +576,9 @@ func TestEvaluate_LossyOutputSamplingAllowed(t *testing.T) {
 			system: "claude",
 			event:  "PreToolUse",
 			payload: map[string]any{
-				"tool_input": map[string]any{"command": "git checkout HEAD -- internal/cli/logs/inventory.go"},
+				"tool_input": map[string]any{
+					"command": "git checkout HEAD -- internal/cli/logs/inventory.go",
+				},
 			},
 		},
 		{
@@ -511,24 +586,36 @@ func TestEvaluate_LossyOutputSamplingAllowed(t *testing.T) {
 			system: "claude",
 			event:  "PreToolUse",
 			payload: map[string]any{
-				"tool_input": map[string]any{"command": "git checkout head -- internal/cli/logs/inventory.go"},
+				"tool_input": map[string]any{
+					"command": "git checkout head -- internal/cli/logs/inventory.go",
+				},
 			},
 		},
 	}
 
 	for _, testCase := range cases {
-		t.Run(testCase.name, func(t *testing.T) {
-			v := rules.Evaluate(context.Background(), testCase.system, testCase.event, testFields(testCase.payload), []config.Rule{rule})
-			if v != nil {
-				t.Fatalf("expected allow, got rule %q", v.RuleName)
-			}
-		})
+		t.Run(
+			testCase.name,
+			func(t *testing.T) {
+				v := rules.Evaluate(
+					context.Background(),
+					testCase.system,
+					testCase.event,
+					testFields(testCase.payload),
+					[]config.Rule{rule},
+				)
+				if v != nil {
+					t.Fatalf("expected allow, got rule %q", v.RuleName)
+				}
+			},
+		)
 	}
 }
 
 func TestEvaluate_SimpleRuleNotPattern(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.toml")
-	configText := fmt.Sprintf(`
+	configText := fmt.Sprintf(
+		`
 [[rules]]
 name = "rg-requires-path"
 events = ["PreToolUse"]
@@ -537,61 +624,122 @@ pattern = '''%s'''
 not_pattern = '''%s'''
 action = "block"
 violation_message = "rg path required"
-`, rgPathRulePattern(), rgPathRuleNotPattern())
+`,
+		rgPathRulePattern(),
+		rgPathRuleNotPattern(),
+	)
 	if err := os.WriteFile(configPath, []byte(configText), 0o600); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
+
 	cfg, err := config.LoadExisting(configPath)
 	if err != nil {
 		t.Fatalf("LoadExisting: %v", err)
 	}
+
 	rule := cfg.Rules[0]
 
-	allowed := rules.Evaluate(context.Background(), "codex", "PreToolUse", testFields(map[string]any{
-		"tool_input": map[string]any{"command": `rg -n "config|secret" /Users/agoodkind/.codex/memories/MEMORY.md`},
-	}), []config.Rule{rule})
+	allowed := rules.Evaluate(
+		context.Background(),
+		"codex",
+		"PreToolUse",
+		testFields(map[string]any{
+			"tool_input": map[string]any{
+				"command": `rg -n "config|secret" /Users/agoodkind/.codex/memories/MEMORY.md`,
+			},
+		}),
+		[]config.Rule{rule},
+	)
 	if allowed != nil {
 		t.Fatalf("expected explicit path allow, got %q", allowed.RuleName)
 	}
 
-	allowedQuoted := rules.Evaluate(context.Background(), "codex", "PreToolUse", testFields(map[string]any{
-		"tool_input": map[string]any{"command": `rg -n "config.toml|secret|secrets|api_key|token|file path|file_path|path support|adapter\..*key" /Users/agoodkind/.codex/memories/MEMORY.md`},
-	}), []config.Rule{rule})
+	allowedQuoted := rules.Evaluate(
+		context.Background(),
+		"codex",
+		"PreToolUse",
+		testFields(map[string]any{
+			"tool_input": map[string]any{
+				"command": `rg -n "config.toml|secret|secrets|api_key|token|file path|file_path|path support|adapter\..*key" /Users/agoodkind/.codex/memories/MEMORY.md`,
+			},
+		}),
+		[]config.Rule{rule},
+	)
 	if allowedQuoted != nil {
 		t.Fatalf("expected quoted pattern with explicit path allow, got %q", allowedQuoted.RuleName)
 	}
 
-	allowedHomeEnv := rules.Evaluate(context.Background(), "codex", "PreToolUse", testFields(map[string]any{
-		"tool_input": map[string]any{"command": `rg -n "config|secret" $HOME/.codex/memories/MEMORY.md`},
-	}), []config.Rule{rule})
+	allowedHomeEnv := rules.Evaluate(
+		context.Background(),
+		"codex",
+		"PreToolUse",
+		testFields(map[string]any{
+			"tool_input": map[string]any{
+				"command": `rg -n "config|secret" $HOME/.codex/memories/MEMORY.md`,
+			},
+		}),
+		[]config.Rule{rule},
+	)
 	if allowedHomeEnv != nil {
 		t.Fatalf("expected $HOME path allow, got %q", allowedHomeEnv.RuleName)
 	}
 
-	allowedBraceHomeEnv := rules.Evaluate(context.Background(), "codex", "PreToolUse", testFields(map[string]any{
-		"tool_input": map[string]any{"command": `rg -n "config|secret" ${HOME}/.codex/memories/MEMORY.md`},
-	}), []config.Rule{rule})
+	allowedBraceHomeEnv := rules.Evaluate(
+		context.Background(),
+		"codex",
+		"PreToolUse",
+		testFields(map[string]any{
+			"tool_input": map[string]any{
+				"command": `rg -n "config|secret" ${HOME}/.codex/memories/MEMORY.md`,
+			},
+		}),
+		[]config.Rule{rule},
+	)
 	if allowedBraceHomeEnv != nil {
 		t.Fatalf("expected ${HOME} path allow, got %q", allowedBraceHomeEnv.RuleName)
 	}
 
-	allowedQuotedAbsolutePath := rules.Evaluate(context.Background(), "codex", "PreToolUse", testFields(map[string]any{
-		"tool_input": map[string]any{"command": `rg --line-number -- '^(Address|AllowedIPs|Endpoint|PersistentKeepalive)\b' '/Users/agoodkind/Sites/iphone-cell-tunnel/example.conf'`},
-	}), []config.Rule{rule})
+	allowedQuotedAbsolutePath := rules.Evaluate(
+		context.Background(),
+		"codex",
+		"PreToolUse",
+		testFields(map[string]any{
+			"tool_input": map[string]any{
+				"command": `rg --line-number -- '^(Address|AllowedIPs|Endpoint|PersistentKeepalive)\b' '/Users/agoodkind/Sites/iphone-cell-tunnel/example.conf'`,
+			},
+		}),
+		[]config.Rule{rule},
+	)
 	if allowedQuotedAbsolutePath != nil {
 		t.Fatalf("expected quoted absolute path allow, got %q", allowedQuotedAbsolutePath.RuleName)
 	}
 
-	allowedRelativePath := rules.Evaluate(context.Background(), "codex", "PreToolUse", testFields(map[string]any{
-		"tool_input": map[string]any{"command": `rg -n "ipv6|IPv6|AllowedIPs|Endpoint|route|packet" Daemon/internal/tunnel`},
-	}), []config.Rule{rule})
+	allowedRelativePath := rules.Evaluate(
+		context.Background(),
+		"codex",
+		"PreToolUse",
+		testFields(map[string]any{
+			"tool_input": map[string]any{
+				"command": `rg -n "ipv6|IPv6|AllowedIPs|Endpoint|route|packet" Daemon/internal/tunnel`,
+			},
+		}),
+		[]config.Rule{rule},
+	)
 	if allowedRelativePath != nil {
 		t.Fatalf("expected relative path allow, got %q", allowedRelativePath.RuleName)
 	}
 
-	allowedMultipleRelativeDirs := rules.Evaluate(context.Background(), "codex", "PreToolUse", testFields(map[string]any{
-		"tool_input": map[string]any{"command": `rg -n "print\(|debugPrint\(|dump\(" Apps Sources Tests Tools`},
-	}), []config.Rule{rule})
+	allowedMultipleRelativeDirs := rules.Evaluate(
+		context.Background(),
+		"codex",
+		"PreToolUse",
+		testFields(map[string]any{
+			"tool_input": map[string]any{
+				"command": `rg -n "print\(|debugPrint\(|dump\(" Apps Sources Tests Tools`,
+			},
+		}),
+		[]config.Rule{rule},
+	)
 	if allowedMultipleRelativeDirs != nil {
 		t.Fatalf("expected multiple path args allow, got %q", allowedMultipleRelativeDirs.RuleName)
 	}
@@ -604,24 +752,46 @@ violation_message = "rg path required"
 		`rg --help`,
 		`rg --version`,
 	} {
-		allowedFileMode := rules.Evaluate(context.Background(), "codex", "PreToolUse", testFields(map[string]any{
-			"tool_input": map[string]any{"command": command},
-		}), []config.Rule{rule})
+		allowedFileMode := rules.Evaluate(
+			context.Background(),
+			"codex",
+			"PreToolUse",
+			testFields(map[string]any{
+				"tool_input": map[string]any{"command": command},
+			}),
+			[]config.Rule{rule},
+		)
 		if allowedFileMode != nil {
-			t.Fatalf("expected file-list/help command %q to allow, got %q", command, allowedFileMode.RuleName)
+			t.Fatalf(
+				"expected file-list/help command %q to allow, got %q",
+				command,
+				allowedFileMode.RuleName,
+			)
 		}
 	}
 
-	blocked := rules.Evaluate(context.Background(), "codex", "PreToolUse", testFields(map[string]any{
-		"tool_input": map[string]any{"command": `rg -n "config|secret"`},
-	}), []config.Rule{rule})
+	blocked := rules.Evaluate(
+		context.Background(),
+		"codex",
+		"PreToolUse",
+		testFields(map[string]any{
+			"tool_input": map[string]any{"command": `rg -n "config|secret"`},
+		}),
+		[]config.Rule{rule},
+	)
 	if blocked == nil {
 		t.Fatalf("expected pathless rg violation")
 	}
 
-	blockedFilesWithMatches := rules.Evaluate(context.Background(), "codex", "PreToolUse", testFields(map[string]any{
-		"tool_input": map[string]any{"command": `rg --files-with-matches "config|secret"`},
-	}), []config.Rule{rule})
+	blockedFilesWithMatches := rules.Evaluate(
+		context.Background(),
+		"codex",
+		"PreToolUse",
+		testFields(map[string]any{
+			"tool_input": map[string]any{"command": `rg --files-with-matches "config|secret"`},
+		}),
+		[]config.Rule{rule},
+	)
 	if blockedFilesWithMatches == nil {
 		t.Fatalf("expected pathless rg --files-with-matches violation")
 	}
@@ -685,10 +855,12 @@ remote_sources = true
 	if err := os.WriteFile(configPath, []byte(configText), 0o600); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
+
 	cfg, err := config.LoadExisting(configPath)
 	if err != nil {
 		t.Fatalf("LoadExisting: %v", err)
 	}
+
 	return cfg.Rules[0]
 }
 
@@ -698,10 +870,16 @@ func TestEvaluate_ShellReadSecretBlocksLocalContent(t *testing.T) {
 	writeFile(t, secretConfig, "api_key = \"redacted\"\n")
 	rule := shellReadSecretRule(t)
 
-	v := rules.Evaluate(context.Background(), "codex", "PreToolUse", testFields(map[string]any{
-		"cwd":        root,
-		"tool_input": map[string]any{"command": "cat config.toml"},
-	}), []config.Rule{rule})
+	v := rules.Evaluate(
+		context.Background(),
+		"codex",
+		"PreToolUse",
+		testFields(map[string]any{
+			"cwd":        root,
+			"tool_input": map[string]any{"command": "cat config.toml"},
+		}),
+		[]config.Rule{rule},
+	)
 	if v == nil {
 		t.Fatal("expected local content violation")
 	}
@@ -712,10 +890,16 @@ func TestEvaluate_ShellReadSecretAllowsCleanLocalFile(t *testing.T) {
 	writeFile(t, filepath.Join(root, "README.md"), "public project notes\n")
 	rule := shellReadSecretRule(t)
 
-	v := rules.Evaluate(context.Background(), "codex", "PreToolUse", testFields(map[string]any{
-		"cwd":        root,
-		"tool_input": map[string]any{"command": "rg -n api_key README.md"},
-	}), []config.Rule{rule})
+	v := rules.Evaluate(
+		context.Background(),
+		"codex",
+		"PreToolUse",
+		testFields(map[string]any{
+			"cwd":        root,
+			"tool_input": map[string]any{"command": "rg -n api_key README.md"},
+		}),
+		[]config.Rule{rule},
+	)
 	if v != nil {
 		t.Fatalf("expected clean local file allow, got %q", v.RuleName)
 	}
@@ -725,10 +909,16 @@ func TestEvaluate_ShellReadSecretBlocksRiskyLocalProbeMiss(t *testing.T) {
 	root := t.TempDir()
 	rule := shellReadSecretRule(t)
 
-	v := rules.Evaluate(context.Background(), "codex", "PreToolUse", testFields(map[string]any{
-		"cwd":        root,
-		"tool_input": map[string]any{"command": "cat .env"},
-	}), []config.Rule{rule})
+	v := rules.Evaluate(
+		context.Background(),
+		"codex",
+		"PreToolUse",
+		testFields(map[string]any{
+			"cwd":        root,
+			"tool_input": map[string]any{"command": "cat .env"},
+		}),
+		[]config.Rule{rule},
+	)
 	if v == nil {
 		t.Fatal("expected risky path probe-miss violation")
 	}
@@ -737,10 +927,18 @@ func TestEvaluate_ShellReadSecretBlocksRiskyLocalProbeMiss(t *testing.T) {
 func TestEvaluate_ShellReadSecretBlocksRemoteRiskyPath(t *testing.T) {
 	rule := shellReadSecretRule(t)
 
-	v := rules.Evaluate(context.Background(), "codex", "PreToolUse", testFields(map[string]any{
-		"cwd":        "/work",
-		"tool_input": map[string]any{"command": "ssh -p 2222 host 'grep TOKEN ~/.config/clyde/config.toml'"},
-	}), []config.Rule{rule})
+	v := rules.Evaluate(
+		context.Background(),
+		"codex",
+		"PreToolUse",
+		testFields(map[string]any{
+			"cwd": "/work",
+			"tool_input": map[string]any{
+				"command": "ssh -p 2222 host 'grep TOKEN ~/.config/clyde/config.toml'",
+			},
+		}),
+		[]config.Rule{rule},
+	)
 	if v == nil {
 		t.Fatal("expected remote risky path violation")
 	}
@@ -749,10 +947,16 @@ func TestEvaluate_ShellReadSecretBlocksRemoteRiskyPath(t *testing.T) {
 func TestEvaluate_ShellReadSecretBlocksRemoteCopySource(t *testing.T) {
 	rule := shellReadSecretRule(t)
 
-	v := rules.Evaluate(context.Background(), "codex", "PreToolUse", testFields(map[string]any{
-		"cwd":        "/work",
-		"tool_input": map[string]any{"command": "scp host:~/.aws/credentials ."},
-	}), []config.Rule{rule})
+	v := rules.Evaluate(
+		context.Background(),
+		"codex",
+		"PreToolUse",
+		testFields(map[string]any{
+			"cwd":        "/work",
+			"tool_input": map[string]any{"command": "scp host:~/.aws/credentials ."},
+		}),
+		[]config.Rule{rule},
+	)
 	if v == nil {
 		t.Fatal("expected remote copy source violation")
 	}
@@ -761,10 +965,16 @@ func TestEvaluate_ShellReadSecretBlocksRemoteCopySource(t *testing.T) {
 func TestEvaluate_ShellReadSecretAllowsRemoteNonRiskyCommand(t *testing.T) {
 	rule := shellReadSecretRule(t)
 
-	v := rules.Evaluate(context.Background(), "codex", "PreToolUse", testFields(map[string]any{
-		"cwd":        "/work",
-		"tool_input": map[string]any{"command": "ssh host uptime"},
-	}), []config.Rule{rule})
+	v := rules.Evaluate(
+		context.Background(),
+		"codex",
+		"PreToolUse",
+		testFields(map[string]any{
+			"cwd":        "/work",
+			"tool_input": map[string]any{"command": "ssh host uptime"},
+		}),
+		[]config.Rule{rule},
+	)
 	if v != nil {
 		t.Fatalf("expected remote uptime allow, got %q", v.RuleName)
 	}
@@ -774,7 +984,9 @@ const secretReadPathPattern = `(?i)(?:(?:^|[/\\])[^/\\\n]*(?:1password|onepasswo
 
 func secretReadPathRule(t *testing.T) config.Rule {
 	t.Helper()
-	return loadRule(t,
+
+	return loadRule(
+		t,
 		"no-credential-file-reads",
 		secretReadPathPattern,
 		[]string{"PreToolUse", "preToolUse", "beforeReadFile", "beforeTabFileRead", "BeforeTool"},
@@ -785,7 +997,9 @@ func secretReadPathRule(t *testing.T) config.Rule {
 
 func secretOutputRule(t *testing.T) config.Rule {
 	t.Helper()
-	return loadRule(t,
+
+	return loadRule(
+		t,
 		"no-secrets-in-output",
 		deterministicSecretOutputPattern,
 		[]string{"PostToolUse", "postToolUse", "AfterTool"},
@@ -812,7 +1026,9 @@ func TestEvaluate_CredentialFileReadPathsBlocked(t *testing.T) {
 			name:  "codex p8 path",
 			event: "PreToolUse",
 			payload: map[string]any{
-				"tool_input": map[string]any{"path": "/Users/agoodkind/Downloads/AuthKey_ABC123.p8"},
+				"tool_input": map[string]any{
+					"path": "/Users/agoodkind/Downloads/AuthKey_ABC123.p8",
+				},
 			},
 		},
 		{
@@ -853,12 +1069,21 @@ func TestEvaluate_CredentialFileReadPathsBlocked(t *testing.T) {
 	}
 
 	for _, testCase := range cases {
-		t.Run(testCase.name, func(t *testing.T) {
-			v := rules.Evaluate(context.Background(), systemFor(testCase.event), testCase.event, testFields(testCase.payload), []config.Rule{rule})
-			if v == nil {
-				t.Fatalf("expected credential read path violation for %#v", testCase.payload)
-			}
-		})
+		t.Run(
+			testCase.name,
+			func(t *testing.T) {
+				v := rules.Evaluate(
+					context.Background(),
+					systemFor(testCase.event),
+					testCase.event,
+					testFields(testCase.payload),
+					[]config.Rule{rule},
+				)
+				if v == nil {
+					t.Fatalf("expected credential read path violation for %#v", testCase.payload)
+				}
+			},
+		)
 	}
 }
 
@@ -888,7 +1113,9 @@ func TestEvaluate_CredentialFileReadPathsAllowed(t *testing.T) {
 			name:  "secret phrase in non-credential extension",
 			event: "PreToolUse",
 			payload: map[string]any{
-				"tool_input": map[string]any{"file_path": "/Users/agoodkind/Sites/app/secret-notes.txt"},
+				"tool_input": map[string]any{
+					"file_path": "/Users/agoodkind/Sites/app/secret-notes.txt",
+				},
 			},
 		},
 		{
@@ -901,12 +1128,21 @@ func TestEvaluate_CredentialFileReadPathsAllowed(t *testing.T) {
 	}
 
 	for _, testCase := range cases {
-		t.Run(testCase.name, func(t *testing.T) {
-			v := rules.Evaluate(context.Background(), systemFor(testCase.event), testCase.event, testFields(testCase.payload), []config.Rule{rule})
-			if v != nil {
-				t.Fatalf("expected allow, got rule %q", v.RuleName)
-			}
-		})
+		t.Run(
+			testCase.name,
+			func(t *testing.T) {
+				v := rules.Evaluate(
+					context.Background(),
+					systemFor(testCase.event),
+					testCase.event,
+					testFields(testCase.payload),
+					[]config.Rule{rule},
+				)
+				if v != nil {
+					t.Fatalf("expected allow, got rule %q", v.RuleName)
+				}
+			},
+		)
 	}
 }
 
@@ -935,12 +1171,21 @@ func TestEvaluate_SecretOutputBlocksPrivateKey(t *testing.T) {
 	}
 
 	for _, testCase := range cases {
-		t.Run(testCase.name, func(t *testing.T) {
-			v := rules.Evaluate(context.Background(), systemFor(testCase.event), testCase.event, testFields(testCase.payload), []config.Rule{rule})
-			if v == nil {
-				t.Fatalf("expected secret output violation")
-			}
-		})
+		t.Run(
+			testCase.name,
+			func(t *testing.T) {
+				v := rules.Evaluate(
+					context.Background(),
+					systemFor(testCase.event),
+					testCase.event,
+					testFields(testCase.payload),
+					[]config.Rule{rule},
+				)
+				if v == nil {
+					t.Fatalf("expected secret output violation")
+				}
+			},
+		)
 	}
 }
 
@@ -958,11 +1203,20 @@ func TestEvaluate_SecretOutputBlocksDeterministicCredentialValues(t *testing.T) 
 	}
 
 	for _, value := range values {
-		v := rules.Evaluate(context.Background(), "codex", "PostToolUse", rules.FieldSet{
-			ToolResponse: "output: " + value,
-		}, []config.Rule{rule})
+		v := rules.Evaluate(
+			context.Background(),
+			"codex",
+			"PostToolUse",
+			rules.FieldSet{
+				ToolResponse: "output: " + value,
+			},
+			[]config.Rule{rule},
+		)
 		if v == nil {
-			t.Fatalf("expected deterministic credential violation for %q", value[:min(len(value), 12)])
+			t.Fatalf(
+				"expected deterministic credential violation for %q",
+				value[:min(len(value), 12)],
+			)
 		}
 	}
 }
@@ -1017,14 +1271,23 @@ func TestEvaluate_SecretOutputAllowsGenericSourceAndContractText(t *testing.T) {
 	}
 
 	for _, testCase := range cases {
-		t.Run(testCase.name, func(t *testing.T) {
-			v := rules.Evaluate(context.Background(), "codex", "PostToolUse", rules.FieldSet{
-				ToolResponse: testCase.value,
-			}, []config.Rule{rule})
-			if v != nil {
-				t.Fatalf("expected allow, got rule %q", v.RuleName)
-			}
-		})
+		t.Run(
+			testCase.name,
+			func(t *testing.T) {
+				v := rules.Evaluate(
+					context.Background(),
+					"codex",
+					"PostToolUse",
+					rules.FieldSet{
+						ToolResponse: testCase.value,
+					},
+					[]config.Rule{rule},
+				)
+				if v != nil {
+					t.Fatalf("expected allow, got rule %q", v.RuleName)
+				}
+			},
+		)
 	}
 }
 
@@ -1082,12 +1345,21 @@ func TestEvaluate_RedirectionBlocked(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			v := rules.Evaluate(context.Background(), systemFor(tc.event), tc.event, testFields(tc.payload), []config.Rule{rule})
-			if v == nil {
-				t.Errorf("expected violation for command %q, got nil", tc.payload)
-			}
-		})
+		t.Run(
+			tc.name,
+			func(t *testing.T) {
+				v := rules.Evaluate(
+					context.Background(),
+					systemFor(tc.event),
+					tc.event,
+					testFields(tc.payload),
+					[]config.Rule{rule},
+				)
+				if v == nil {
+					t.Errorf("expected violation for command %q, got nil", tc.payload)
+				}
+			},
+		)
 	}
 }
 
@@ -1132,7 +1404,11 @@ func TestEvaluate_CleanCommandAllowed(t *testing.T) {
 			name:  "heredoc script creation is allowed",
 			event: "PreToolUse",
 			payload: map[string]any{
-				"tool_input": map[string]any{"command": "cat <<EOF " + stdoutToFile("script.sh") + "\n#!/usr/bin/env bash\ncmd " + quietStdout() + "\nEOF"},
+				"tool_input": map[string]any{
+					"command": "cat <<EOF " + stdoutToFile(
+						"script.sh",
+					) + "\n#!/usr/bin/env bash\ncmd " + quietStdout() + "\nEOF",
+				},
 			},
 		},
 		{
@@ -1152,12 +1428,21 @@ func TestEvaluate_CleanCommandAllowed(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			v := rules.Evaluate(context.Background(), systemFor(tc.event), tc.event, testFields(tc.payload), []config.Rule{rule})
-			if v != nil {
-				t.Errorf("expected no violation, got rule %q: %s", v.RuleName, v.Message)
-			}
-		})
+		t.Run(
+			tc.name,
+			func(t *testing.T) {
+				v := rules.Evaluate(
+					context.Background(),
+					systemFor(tc.event),
+					tc.event,
+					testFields(tc.payload),
+					[]config.Rule{rule},
+				)
+				if v != nil {
+					t.Errorf("expected no violation, got rule %q: %s", v.RuleName, v.Message)
+				}
+			},
+		)
 	}
 }
 
@@ -1167,7 +1452,13 @@ func TestEvaluate_EventFilter(t *testing.T) {
 
 	// A redirect in a PostToolUse payload should not fire the rule
 	// because PostToolUse is not in the rule's events list.
-	v := rules.Evaluate(context.Background(), "claude", "PostToolUse", rules.FieldSet{ToolInputCommand: "ls 2>/dev/null"}, []config.Rule{rule})
+	v := rules.Evaluate(
+		context.Background(),
+		"claude",
+		"PostToolUse",
+		rules.FieldSet{ToolInputCommand: "ls 2>/dev/null"},
+		[]config.Rule{rule},
+	)
 
 	if v != nil {
 		t.Errorf("rule fired for non-matching event PostToolUse, expected nil")
@@ -1176,10 +1467,22 @@ func TestEvaluate_EventFilter(t *testing.T) {
 
 // TestEvaluate_EmptyEventList verifies that empty event lists without all_events match nothing.
 func TestEvaluate_EmptyEventList(t *testing.T) {
-	rule := loadRule(t, "no-events", `forbidden`, nil,
-		[]string{"command"}, "forbidden keyword")
+	rule := loadRule(
+		t,
+		"no-events",
+		`forbidden`,
+		nil,
+		[]string{"command"},
+		"forbidden keyword",
+	)
 
-	v := rules.Evaluate(context.Background(), "claude", "PreToolUse", rules.FieldSet{Command: "do something forbidden here"}, []config.Rule{rule})
+	v := rules.Evaluate(
+		context.Background(),
+		"claude",
+		"PreToolUse",
+		rules.FieldSet{Command: "do something forbidden here"},
+		[]config.Rule{rule},
+	)
 
 	if v != nil {
 		t.Errorf("expected no violation for rule with empty event lists, got %q", v.RuleName)
@@ -1187,11 +1490,23 @@ func TestEvaluate_EmptyEventList(t *testing.T) {
 }
 
 func TestEvaluate_AllEventsMatchesAnyEvent(t *testing.T) {
-	rule := loadRule(t, "catch-all", `forbidden`, nil,
-		[]string{"command"}, "forbidden keyword")
+	rule := loadRule(
+		t,
+		"catch-all",
+		`forbidden`,
+		nil,
+		[]string{"command"},
+		"forbidden keyword",
+	)
 	rule.AllEvents = true
 
-	v := rules.Evaluate(context.Background(), "unknown", "AnyEvent", rules.FieldSet{Command: "do something forbidden here"}, []config.Rule{rule})
+	v := rules.Evaluate(
+		context.Background(),
+		"unknown",
+		"AnyEvent",
+		rules.FieldSet{Command: "do something forbidden here"},
+		[]config.Rule{rule},
+	)
 
 	if v == nil {
 		t.Fatal("expected violation for all_events rule, got nil")
@@ -1199,39 +1514,80 @@ func TestEvaluate_AllEventsMatchesAnyEvent(t *testing.T) {
 }
 
 func TestEvaluate_DisableProvidersSkipsHarness(t *testing.T) {
-	t.Run("all_events", func(t *testing.T) {
-		rule := loadRule(t, "no-cursor", `forbidden`, nil,
-			[]string{"command"}, "forbidden keyword")
-		rule.AllEvents = true
-		rule.DisableProviders = []string{"cursor"}
+	t.Run(
+		"all_events",
+		func(t *testing.T) {
+			rule := loadRule(
+				t,
+				"no-cursor",
+				`forbidden`,
+				nil,
+				[]string{"command"},
+				"forbidden keyword",
+			)
+			rule.AllEvents = true
+			rule.DisableProviders = []string{"cursor"}
 
-		v := rules.Evaluate(context.Background(), "cursor", "preToolUse", rules.FieldSet{Command: "do something forbidden here"}, []config.Rule{rule})
-		if v != nil {
-			t.Fatalf("expected cursor to be skipped, got violation %q", v.RuleName)
-		}
+			v := rules.Evaluate(
+				context.Background(),
+				"cursor",
+				"preToolUse",
+				rules.FieldSet{Command: "do something forbidden here"},
+				[]config.Rule{rule},
+			)
+			if v != nil {
+				t.Fatalf("expected cursor to be skipped, got violation %q", v.RuleName)
+			}
 
-		v = rules.Evaluate(context.Background(), "claude", "PreToolUse", rules.FieldSet{Command: "do something forbidden here"}, []config.Rule{rule})
-		if v == nil {
-			t.Fatal("expected claude to match all_events rule, got nil")
-		}
-	})
+			v = rules.Evaluate(
+				context.Background(),
+				"claude",
+				"PreToolUse",
+				rules.FieldSet{Command: "do something forbidden here"},
+				[]config.Rule{rule},
+			)
+			if v == nil {
+				t.Fatal("expected claude to match all_events rule, got nil")
+			}
+		},
+	)
 
-	t.Run("listed events", func(t *testing.T) {
-		rule := loadRule(t, "no-cursor-listed", `forbidden`,
-			[]string{"PreToolUse", "preToolUse"},
-			[]string{"command"}, "forbidden keyword")
-		rule.DisableProviders = []string{"cursor"}
+	t.Run(
+		"listed events",
+		func(t *testing.T) {
+			rule := loadRule(
+				t,
+				"no-cursor-listed",
+				`forbidden`,
+				[]string{"PreToolUse", "preToolUse"},
+				[]string{"command"},
+				"forbidden keyword",
+			)
+			rule.DisableProviders = []string{"cursor"}
 
-		v := rules.Evaluate(context.Background(), "cursor", "preToolUse", rules.FieldSet{Command: "do something forbidden here"}, []config.Rule{rule})
-		if v != nil {
-			t.Fatalf("expected cursor to be skipped, got violation %q", v.RuleName)
-		}
+			v := rules.Evaluate(
+				context.Background(),
+				"cursor",
+				"preToolUse",
+				rules.FieldSet{Command: "do something forbidden here"},
+				[]config.Rule{rule},
+			)
+			if v != nil {
+				t.Fatalf("expected cursor to be skipped, got violation %q", v.RuleName)
+			}
 
-		v = rules.Evaluate(context.Background(), "claude", "PreToolUse", rules.FieldSet{Command: "do something forbidden here"}, []config.Rule{rule})
-		if v == nil {
-			t.Fatal("expected claude to match listed event, got nil")
-		}
-	})
+			v = rules.Evaluate(
+				context.Background(),
+				"claude",
+				"PreToolUse",
+				rules.FieldSet{Command: "do something forbidden here"},
+				[]config.Rule{rule},
+			)
+			if v == nil {
+				t.Fatal("expected claude to match listed event, got nil")
+			}
+		},
+	)
 }
 
 func TestEvaluate_ClaudeEventsOnlyDoesNotMatchCursor(t *testing.T) {
@@ -1247,15 +1603,36 @@ func TestEvaluate_ClaudeEventsOnlyDoesNotMatchCursor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("compile pattern: %v", err)
 	}
-	rule = config.NewSimpleRule(rule.Name, rule.Pattern, re, nil, rule.FieldPaths, rule.Action, rule.ViolationMessage)
+
+	rule = config.NewSimpleRule(
+		rule.Name,
+		rule.Pattern,
+		re,
+		nil,
+		rule.FieldPaths,
+		rule.Action,
+		rule.ViolationMessage,
+	)
 	rule.ClaudeEvents = []string{"PreToolUse"}
 
-	v := rules.Evaluate(context.Background(), "cursor", "preToolUse", rules.FieldSet{Command: "do something forbidden here"}, []config.Rule{rule})
+	v := rules.Evaluate(
+		context.Background(),
+		"cursor",
+		"preToolUse",
+		rules.FieldSet{Command: "do something forbidden here"},
+		[]config.Rule{rule},
+	)
 	if v != nil {
 		t.Fatalf("expected cursor to be skipped for claude_events-only rule, got %q", v.RuleName)
 	}
 
-	v = rules.Evaluate(context.Background(), "claude", "PreToolUse", rules.FieldSet{Command: "do something forbidden here"}, []config.Rule{rule})
+	v = rules.Evaluate(
+		context.Background(),
+		"claude",
+		"PreToolUse",
+		rules.FieldSet{Command: "do something forbidden here"},
+		[]config.Rule{rule},
+	)
 	if v == nil {
 		t.Fatal("expected claude PreToolUse to match, got nil")
 	}
@@ -1263,13 +1640,22 @@ func TestEvaluate_ClaudeEventsOnlyDoesNotMatchCursor(t *testing.T) {
 
 // TestEvaluate_UnknownFieldSelector verifies unknown selectors are ignored.
 func TestEvaluate_UnknownFieldSelector(t *testing.T) {
-	rule := loadRule(t, "deep-path", `secret`,
+	rule := loadRule(
+		t,
+		"deep-path",
+		`secret`,
 		[]string{"PreToolUse"},
 		[]string{"a.b.c"},
 		"found it",
 	)
 
-	v := rules.Evaluate(context.Background(), "claude", "PreToolUse", rules.FieldSet{}, []config.Rule{rule})
+	v := rules.Evaluate(
+		context.Background(),
+		"claude",
+		"PreToolUse",
+		rules.FieldSet{},
+		[]config.Rule{rule},
+	)
 	if v != nil {
 		t.Errorf("expected nil for unknown selector, got violation %q", v.RuleName)
 	}
@@ -1308,6 +1694,7 @@ func loadConditionRule(t *testing.T) config.Rule {
 	if err != nil {
 		t.Fatalf("compile effective_cwd condition: %v", err)
 	}
+
 	cmdCond, err := config.NewCondition(
 		[]string{"cmd_segments"},
 		`(?m)^git\s+(add|commit|push|reset|rm|mv|rebase|merge|stash|clean|restore|switch|tag)`,
@@ -1316,6 +1703,7 @@ func loadConditionRule(t *testing.T) config.Rule {
 	if err != nil {
 		t.Fatalf("compile cmd condition: %v", err)
 	}
+
 	return config.Rule{
 		Name:             "no-git-write-from-home-cwd",
 		Events:           []string{"PreToolUse", "preToolUse"},
@@ -1345,12 +1733,21 @@ func TestEvaluate_MultiCondition_HomeCWD(t *testing.T) {
 		"git status && git commit -m msg",
 	}
 	for _, cmd := range blocked {
-		t.Run("blocked/"+cmd, func(t *testing.T) {
-			v := rules.Evaluate(context.Background(), "claude", "PreToolUse", homePayload(cmd), []config.Rule{rule})
-			if v == nil {
-				t.Errorf("expected block for %q in home cwd, got nil", cmd)
-			}
-		})
+		t.Run(
+			"blocked/"+cmd,
+			func(t *testing.T) {
+				v := rules.Evaluate(
+					context.Background(),
+					"claude",
+					"PreToolUse",
+					homePayload(cmd),
+					[]config.Rule{rule},
+				)
+				if v == nil {
+					t.Errorf("expected block for %q in home cwd, got nil", cmd)
+				}
+			},
+		)
 	}
 
 	allowed := []struct {
@@ -1358,58 +1755,110 @@ func TestEvaluate_MultiCondition_HomeCWD(t *testing.T) {
 		payload map[string]any
 	}{
 		{
-			name:    "git with -C flag escapes home",
-			payload: map[string]any{"cwd": "/Users/agoodkind", "tool_input": map[string]any{"command": "git -C /Users/agoodkind/Sites/proj commit -m msg"}},
+			name: "git with -C flag escapes home",
+			payload: map[string]any{
+				"cwd": "/Users/agoodkind",
+				"tool_input": map[string]any{
+					"command": "git -C /Users/agoodkind/Sites/proj commit -m msg",
+				},
+			},
 		},
 		{
-			name:    "git with --git-dir escapes home",
-			payload: map[string]any{"cwd": "/Users/agoodkind", "tool_input": map[string]any{"command": "git --git-dir=/Users/agoodkind/Sites/proj/.git commit -m msg"}},
+			name: "git with --git-dir escapes home",
+			payload: map[string]any{
+				"cwd": "/Users/agoodkind",
+				"tool_input": map[string]any{
+					"command": "git --git-dir=/Users/agoodkind/Sites/proj/.git commit -m msg",
+				},
+			},
 		},
 		{
-			name:    "git with --work-tree escapes home",
-			payload: map[string]any{"cwd": "/Users/agoodkind", "tool_input": map[string]any{"command": "git --work-tree=/Users/agoodkind/Sites/proj commit -m msg"}},
+			name: "git with --work-tree escapes home",
+			payload: map[string]any{
+				"cwd": "/Users/agoodkind",
+				"tool_input": map[string]any{
+					"command": "git --work-tree=/Users/agoodkind/Sites/proj commit -m msg",
+				},
+			},
 		},
 		{
-			name:    "cwd is subdir not home",
-			payload: map[string]any{"cwd": "/Users/agoodkind/Sites/proj", "tool_input": map[string]any{"command": "git commit -m msg"}},
+			name: "cwd is subdir not home",
+			payload: map[string]any{
+				"cwd":        "/Users/agoodkind/Sites/proj",
+				"tool_input": map[string]any{"command": "git commit -m msg"},
+			},
 		},
 		{
-			name:    "read-only git op from home",
-			payload: map[string]any{"cwd": "/Users/agoodkind", "tool_input": map[string]any{"command": "git status"}},
+			name: "read-only git op from home",
+			payload: map[string]any{
+				"cwd":        "/Users/agoodkind",
+				"tool_input": map[string]any{"command": "git status"},
+			},
 		},
 		{
-			name:    "non-git command from home",
-			payload: map[string]any{"cwd": "/Users/agoodkind", "tool_input": map[string]any{"command": "ls -la"}},
+			name: "non-git command from home",
+			payload: map[string]any{
+				"cwd":        "/Users/agoodkind",
+				"tool_input": map[string]any{"command": "ls -la"},
+			},
 		},
 		// Regression: git subcommand appearing inside an argument must not be matched.
 		{
-			name:    "git log with grep for commit keyword",
-			payload: map[string]any{"cwd": "/Users/agoodkind", "tool_input": map[string]any{"command": `git log --grep="git commit"`}},
+			name: "git log with grep for commit keyword",
+			payload: map[string]any{
+				"cwd":        "/Users/agoodkind",
+				"tool_input": map[string]any{"command": `git log --grep="git commit"`},
+			},
 		},
 		{
-			name:    "cd to project subdir then commit",
-			payload: map[string]any{"cwd": "/Users/agoodkind", "tool_input": map[string]any{"command": "cd /Users/agoodkind/Sites/proj && git commit -m msg"}},
+			name: "cd to project subdir then commit",
+			payload: map[string]any{
+				"cwd": "/Users/agoodkind",
+				"tool_input": map[string]any{
+					"command": "cd /Users/agoodkind/Sites/proj && git commit -m msg",
+				},
+			},
 		},
 		{
-			name:    "cd tilde-path then commit",
-			payload: map[string]any{"cwd": "/Users/agoodkind", "tool_input": map[string]any{"command": "cd ~/Sites/proj && git commit -m msg"}},
+			name: "cd tilde-path then commit",
+			payload: map[string]any{
+				"cwd":        "/Users/agoodkind",
+				"tool_input": map[string]any{"command": "cd ~/Sites/proj && git commit -m msg"},
+			},
 		},
 		{
-			name:    "cd absolute non-home then commit",
-			payload: map[string]any{"cwd": "/Users/agoodkind", "tool_input": map[string]any{"command": "cd /tmp/work && git commit -m msg"}},
+			name: "cd absolute non-home then commit",
+			payload: map[string]any{
+				"cwd":        "/Users/agoodkind",
+				"tool_input": map[string]any{"command": "cd /tmp/work && git commit -m msg"},
+			},
 		},
 		{
-			name:    "ls then cd to project then commit",
-			payload: map[string]any{"cwd": "/Users/agoodkind", "tool_input": map[string]any{"command": "ls && cd ~/Sites/proj && git commit -m msg"}},
+			name: "ls then cd to project then commit",
+			payload: map[string]any{
+				"cwd": "/Users/agoodkind",
+				"tool_input": map[string]any{
+					"command": "ls && cd ~/Sites/proj && git commit -m msg",
+				},
+			},
 		},
 	}
 	for _, tc := range allowed {
-		t.Run("allowed/"+tc.name, func(t *testing.T) {
-			v := rules.Evaluate(context.Background(), "claude", "PreToolUse", testFields(tc.payload), []config.Rule{rule})
-			if v != nil {
-				t.Errorf("expected allow, got block: %s", v.Message)
-			}
-		})
+		t.Run(
+			"allowed/"+tc.name,
+			func(t *testing.T) {
+				v := rules.Evaluate(
+					context.Background(),
+					"claude",
+					"PreToolUse",
+					testFields(tc.payload),
+					[]config.Rule{rule},
+				)
+				if v != nil {
+					t.Errorf("expected allow, got block: %s", v.Message)
+				}
+			},
+		)
 	}
 }
 
@@ -1423,25 +1872,45 @@ func TestEvaluate_EffectiveCwd_StillHome(t *testing.T) {
 		payload map[string]any
 	}{
 		{
-			name:    "cd to home explicitly then commit",
-			payload: map[string]any{"cwd": "/Users/agoodkind", "tool_input": map[string]any{"command": "cd ~ && git commit -m msg"}},
+			name: "cd to home explicitly then commit",
+			payload: map[string]any{
+				"cwd":        "/Users/agoodkind",
+				"tool_input": map[string]any{"command": "cd ~ && git commit -m msg"},
+			},
 		},
 		{
-			name:    "cd to home absolute then commit",
-			payload: map[string]any{"cwd": "/Users/agoodkind", "tool_input": map[string]any{"command": "cd /Users/agoodkind && git commit -m msg"}},
+			name: "cd to home absolute then commit",
+			payload: map[string]any{
+				"cwd":        "/Users/agoodkind",
+				"tool_input": map[string]any{"command": "cd /Users/agoodkind && git commit -m msg"},
+			},
 		},
 		{
-			name:    "cd to project then cd back home then commit",
-			payload: map[string]any{"cwd": "/Users/agoodkind", "tool_input": map[string]any{"command": "cd ~/Sites/proj && cd ~ && git commit -m msg"}},
+			name: "cd to project then cd back home then commit",
+			payload: map[string]any{
+				"cwd": "/Users/agoodkind",
+				"tool_input": map[string]any{
+					"command": "cd ~/Sites/proj && cd ~ && git commit -m msg",
+				},
+			},
 		},
 	}
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			v := rules.Evaluate(context.Background(), "claude", "PreToolUse", testFields(tc.payload), []config.Rule{rule})
-			if v == nil {
-				t.Errorf("expected block (effective cwd is still home), got nil")
-			}
-		})
+		t.Run(
+			tc.name,
+			func(t *testing.T) {
+				v := rules.Evaluate(
+					context.Background(),
+					"claude",
+					"PreToolUse",
+					testFields(tc.payload),
+					[]config.Rule{rule},
+				)
+				if v == nil {
+					t.Errorf("expected block (effective cwd is still home), got nil")
+				}
+			},
+		)
 	}
 }
 
@@ -1455,6 +1924,7 @@ func TestApplyCdChain(t *testing.T) {
 	if err != nil {
 		t.Skipf("user home dir unavailable: %v", err)
 	}
+
 	start := home
 
 	cases := []struct {
@@ -1467,7 +1937,10 @@ func TestApplyCdChain(t *testing.T) {
 		{"cd ~ && git commit", home},
 		{"cd /tmp && cd ~/Sites && git commit", filepath.Join(home, "Sites")},
 		{"ls && cd ~/Sites && git commit", filepath.Join(home, "Sites")},
-		{"cd \"" + filepath.Join(home, "Sites/my proj") + "\" && git commit", filepath.Join(home, "Sites/my proj")},
+		{
+			"cd \"" + filepath.Join(home, "Sites/my proj") + "\" && git commit",
+			filepath.Join(home, "Sites/my proj"),
+		},
 		{"cd '../sibling'", filepath.Join(filepath.Dir(start), "sibling")},
 		// New contract: an unresolvable cd target (cd into an expansion) no
 		// longer fabricates start/$VAR; shelldecomp poisons the cwd to its
@@ -1476,13 +1949,16 @@ func TestApplyCdChain(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		t.Run(tc.command, func(t *testing.T) {
-			fields := rules.FieldSet{CWD: start, ToolInputCommand: tc.command}
-			got := fields.String(config.FieldEffectiveCWD)
-			if got != tc.want {
-				t.Errorf("effective_cwd(%q) = %q, want %q", tc.command, got, tc.want)
-			}
-		})
+		t.Run(
+			tc.command,
+			func(t *testing.T) {
+				fields := rules.FieldSet{CWD: start, ToolInputCommand: tc.command}
+				got := fields.String(config.FieldEffectiveCWD)
+				if got != tc.want {
+					t.Errorf("effective_cwd(%q) = %q, want %q", tc.command, got, tc.want)
+				}
+			},
+		)
 	}
 }
 
@@ -1503,11 +1979,29 @@ func TestEmdashDashPatternMatchesU2011(t *testing.T) {
 // emdashMainRule returns the broad no-emdashes rule (tool_input.prompt excluded; see emdashPromptUnlessSubagentLaunchRule).
 func emdashMainRule(t *testing.T) config.Rule {
 	t.Helper()
-	return loadRule(t,
+
+	return loadRule(
+		t,
 		"no-emdashes",
 		emdashDashPattern,
-		[]string{"PreToolUse", "preToolUse", "beforeShellExecution", "Stop", "SubagentStop", "afterAgentResponse"},
-		[]string{"tool_input.content", "tool_input.new_string", "tool_input.command", "tool_input.description", "command", "assistant_message", "last_assistant_message", "text"},
+		[]string{
+			"PreToolUse",
+			"preToolUse",
+			"beforeShellExecution",
+			"Stop",
+			"SubagentStop",
+			"afterAgentResponse",
+		},
+		[]string{
+			"tool_input.content",
+			"tool_input.new_string",
+			"tool_input.command",
+			"tool_input.description",
+			"command",
+			"assistant_message",
+			"last_assistant_message",
+			"text",
+		},
 		"Unicode dashes are not permitted.",
 	)
 }
@@ -1523,6 +2017,7 @@ func emdashPromptUnlessSubagentLaunchRule(t *testing.T) config.Rule {
 	if err != nil {
 		t.Fatalf("compile prompt condition: %v", err)
 	}
+
 	toolCond, err := config.NewCondition(
 		[]string{"tool_name"},
 		"",
@@ -1531,6 +2026,7 @@ func emdashPromptUnlessSubagentLaunchRule(t *testing.T) config.Rule {
 	if err != nil {
 		t.Fatalf("compile tool_name condition: %v", err)
 	}
+
 	return config.Rule{
 		Name:             "no-emdashes-tool-input-prompt-unless-subagent-launch",
 		ClaudeEvents:     []string{"PreToolUse"},
@@ -1688,12 +2184,21 @@ func TestEvaluate_EmdashBlocked(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			v := rules.Evaluate(context.Background(), systemFor(tc.event), tc.event, testFields(tc.payload), rulesSlice)
-			if v == nil {
-				t.Error("expected violation, got nil")
-			}
-		})
+		t.Run(
+			tc.name,
+			func(t *testing.T) {
+				v := rules.Evaluate(
+					context.Background(),
+					systemFor(tc.event),
+					tc.event,
+					testFields(tc.payload),
+					rulesSlice,
+				)
+				if v == nil {
+					t.Error("expected violation, got nil")
+				}
+			},
+		)
 	}
 }
 
@@ -1760,7 +2265,9 @@ func TestEvaluate_EmdashAllowed(t *testing.T) {
 			name:  "plain text no dashes",
 			event: "PreToolUse",
 			payload: map[string]any{
-				"tool_input": map[string]any{"content": "This is a normal sentence with no special dashes."},
+				"tool_input": map[string]any{
+					"content": "This is a normal sentence with no special dashes.",
+				},
 			},
 		},
 		{
@@ -1815,30 +2322,52 @@ func TestEvaluate_EmdashAllowed(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			v := rules.Evaluate(context.Background(), systemFor(tc.event), tc.event, testFields(tc.payload), rulesSlice)
-			if v != nil {
-				t.Errorf("expected no violation, got rule %q: %s", v.RuleName, v.Message)
-			}
-		})
+		t.Run(
+			tc.name,
+			func(t *testing.T) {
+				v := rules.Evaluate(
+					context.Background(),
+					systemFor(tc.event),
+					tc.event,
+					testFields(tc.payload),
+					rulesSlice,
+				)
+				if v != nil {
+					t.Errorf("expected no violation, got rule %q: %s", v.RuleName, v.Message)
+				}
+			},
+		)
 	}
 }
 
 func doubleHyphenProseRule(t *testing.T) config.Rule {
 	t.Helper()
-	rule := loadRule(t,
+	rule := loadRule(
+		t,
 		"no-double-hyphen-prose",
 		doubleHyphenProsePattern,
 		[]string{"PreToolUse", "preToolUse", "Stop", "afterAgentResponse"},
-		[]string{"tool_input.content", "tool_input.new_string", "tool_input.description", "edits[*].new_string", "cmd_comments", "cmd_double_hyphen_prose", "assistant_message", "last_assistant_message", "text"},
+		[]string{
+			"tool_input.content",
+			"tool_input.new_string",
+			"tool_input.description",
+			"edits[*].new_string",
+			"cmd_comments",
+			"cmd_double_hyphen_prose",
+			"assistant_message",
+			"last_assistant_message",
+			"text",
+		},
 		"ASCII double-hyphen is not permitted as a prose dash.",
 	)
 	rule.DiagnosticGroup = 1
+
 	return rule
 }
 
 func TestEvaluateAllUsesDiagnosticGroupSpan(t *testing.T) {
-	rule := loadRule(t,
+	rule := loadRule(
+		t,
 		"capture-only",
 		`prefix (bad) suffix`,
 		[]string{"Stop"},
@@ -1851,7 +2380,14 @@ func TestEvaluateAllUsesDiagnosticGroupSpan(t *testing.T) {
 		"assistant_message": value,
 	}
 
-	got := rules.EvaluateAll(context.Background(), "claude", "Stop", testFields(payload), []config.Rule{rule}, nil)
+	got := rules.EvaluateAll(
+		context.Background(),
+		"claude",
+		"Stop",
+		testFields(payload),
+		[]config.Rule{rule},
+		nil,
+	)
 	if len(got) != 1 {
 		t.Fatalf("EvaluateAll returned %d matches, want 1: %#v", len(got), got)
 	}
@@ -1872,6 +2408,7 @@ func TestEvaluateAllUsesConditionDiagnosticGroupSpan(t *testing.T) {
 	if err != nil {
 		t.Fatalf("compile condition: %v", err)
 	}
+
 	condition.DiagnosticGroup = 1
 	rule := config.Rule{
 		Name:             "condition-capture-only",
@@ -1885,7 +2422,14 @@ func TestEvaluateAllUsesConditionDiagnosticGroupSpan(t *testing.T) {
 		"assistant_message": value,
 	}
 
-	got := rules.EvaluateAll(context.Background(), "claude", "Stop", testFields(payload), []config.Rule{rule}, nil)
+	got := rules.EvaluateAll(
+		context.Background(),
+		"claude",
+		"Stop",
+		testFields(payload),
+		[]config.Rule{rule},
+		nil,
+	)
 	if len(got) != 1 {
 		t.Fatalf("EvaluateAll returned %d matches, want 1: %#v", len(got), got)
 	}
@@ -1922,14 +2466,18 @@ func TestEvaluate_DoubleHyphenProseBlocked(t *testing.T) {
 			name:  "sentence-shaped fused prose",
 			event: "PreToolUse",
 			payload: map[string]any{
-				"tool_input": map[string]any{"new_string": "this--is an ugly way of writing--it sounds unfinished"},
+				"tool_input": map[string]any{
+					"new_string": "this--is an ugly way of writing--it sounds unfinished",
+				},
 			},
 		},
 		{
 			name:  "backticked command label in prose",
 			event: "PreToolUse",
 			payload: map[string]any{
-				"tool_input": map[string]any{"new_string": "`mwan cutover` " + testDoubleHyphen() + " deprecated migration/rollback tooling"},
+				"tool_input": map[string]any{
+					"new_string": "`mwan cutover` " + testDoubleHyphen() + " deprecated migration/rollback tooling",
+				},
 			},
 		},
 		{
@@ -1979,12 +2527,21 @@ func TestEvaluate_DoubleHyphenProseBlocked(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			v := rules.Evaluate(context.Background(), systemFor(tc.event), tc.event, testFields(tc.payload), []config.Rule{rule})
-			if v == nil {
-				t.Fatal("expected violation, got nil")
-			}
-		})
+		t.Run(
+			tc.name,
+			func(t *testing.T) {
+				v := rules.Evaluate(
+					context.Background(),
+					systemFor(tc.event),
+					tc.event,
+					testFields(tc.payload),
+					[]config.Rule{rule},
+				)
+				if v == nil {
+					t.Fatal("expected violation, got nil")
+				}
+			},
+		)
 	}
 }
 
@@ -1995,7 +2552,14 @@ func TestEvaluate_DoubleHyphenProseMatchSpan(t *testing.T) {
 		"tool_input": map[string]any{"content": value},
 	}
 
-	got := rules.EvaluateAll(context.Background(), "claude", "PreToolUse", testFields(payload), []config.Rule{rule}, nil)
+	got := rules.EvaluateAll(
+		context.Background(),
+		"claude",
+		"PreToolUse",
+		testFields(payload),
+		[]config.Rule{rule},
+		nil,
+	)
 	if len(got) != 1 {
 		t.Fatalf("EvaluateAll returned %d matches, want 1: %#v", len(got), got)
 	}
@@ -2025,7 +2589,9 @@ func TestEvaluate_DoubleHyphenProseAllowed(t *testing.T) {
 			name:  "command field with version flag is ignored",
 			event: "PreToolUse",
 			payload: map[string]any{
-				"tool_input": map[string]any{"command": "/Users/agoodkind/.local/bin/clyde --version"},
+				"tool_input": map[string]any{
+					"command": "/Users/agoodkind/.local/bin/clyde --version",
+				},
 			},
 		},
 		{
@@ -2046,7 +2612,9 @@ func TestEvaluate_DoubleHyphenProseAllowed(t *testing.T) {
 			name:  "bundler option separator in prose field",
 			event: "PreToolUse",
 			payload: map[string]any{
-				"tool_input": map[string]any{"new_string": "Run bundle exec -- bin/arils for this task."},
+				"tool_input": map[string]any{
+					"new_string": "Run bundle exec -- bin/arils for this task.",
+				},
 			},
 		},
 		{
@@ -2060,32 +2628,47 @@ func TestEvaluate_DoubleHyphenProseAllowed(t *testing.T) {
 			name:  "regular hyphenated prose",
 			event: "PreToolUse",
 			payload: map[string]any{
-				"tool_input": map[string]any{"new_string": "Use well-formed words and kebab-case identifiers."},
+				"tool_input": map[string]any{
+					"new_string": "Use well-formed words and kebab-case identifiers.",
+				},
 			},
 		},
 		{
 			name:  "claude project path with doubled hyphen",
 			event: "PreToolUse",
 			payload: map[string]any{
-				"tool_input": map[string]any{"new_string": "~/.claude/projects/-Users-agoodkind--dotfiles/59d024c1-9a71-4668-928f-79655de2e53a.jsonl"},
+				"tool_input": map[string]any{
+					"new_string": "~/.claude/projects/-Users-agoodkind--dotfiles/59d024c1-9a71-4668-928f-79655de2e53a.jsonl",
+				},
 			},
 		},
 	}
 
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			v := rules.Evaluate(context.Background(), systemFor(tc.event), tc.event, testFields(tc.payload), []config.Rule{rule})
-			if v != nil {
-				t.Fatalf("expected allow, got %s", v.RuleName)
-			}
-		})
+		t.Run(
+			tc.name,
+			func(t *testing.T) {
+				v := rules.Evaluate(
+					context.Background(),
+					systemFor(tc.event),
+					tc.event,
+					testFields(tc.payload),
+					[]config.Rule{rule},
+				)
+				if v != nil {
+					t.Fatalf("expected allow, got %s", v.RuleName)
+				}
+			},
+		)
 	}
 }
 
 // arrayPathRule returns a rule that matches em dashes in edits[*].new_string.
 func arrayPathRule(t *testing.T) config.Rule {
 	t.Helper()
-	return loadRule(t,
+
+	return loadRule(
+		t,
 		"no-emdashes-in-edits",
 		`[\x{2010}-\x{2015}\x{2212}\x{2E3A}\x{2E3B}\x{FE31}\x{FE32}\x{FE58}\x{FE63}\x{FF0D}]`,
 		[]string{"afterFileEdit"},
@@ -2132,12 +2715,21 @@ func TestNavigatePath_ArrayWildcard(t *testing.T) {
 	}
 
 	for _, tc := range blocked {
-		t.Run("blocked/"+tc.name, func(t *testing.T) {
-			v := rules.Evaluate(context.Background(), "cursor", "afterFileEdit", testFields(tc.payload), []config.Rule{rule})
-			if v == nil {
-				t.Error("expected violation, got nil")
-			}
-		})
+		t.Run(
+			"blocked/"+tc.name,
+			func(t *testing.T) {
+				v := rules.Evaluate(
+					context.Background(),
+					"cursor",
+					"afterFileEdit",
+					testFields(tc.payload),
+					[]config.Rule{rule},
+				)
+				if v == nil {
+					t.Error("expected violation, got nil")
+				}
+			},
+		)
 	}
 
 	allowed := []struct {
@@ -2168,12 +2760,21 @@ func TestNavigatePath_ArrayWildcard(t *testing.T) {
 	}
 
 	for _, tc := range allowed {
-		t.Run("allowed/"+tc.name, func(t *testing.T) {
-			v := rules.Evaluate(context.Background(), "cursor", "afterFileEdit", testFields(tc.payload), []config.Rule{rule})
-			if v != nil {
-				t.Errorf("expected no violation, got rule %q: %s", v.RuleName, v.Message)
-			}
-		})
+		t.Run(
+			"allowed/"+tc.name,
+			func(t *testing.T) {
+				v := rules.Evaluate(
+					context.Background(),
+					"cursor",
+					"afterFileEdit",
+					testFields(tc.payload),
+					[]config.Rule{rule},
+				)
+				if v != nil {
+					t.Errorf("expected no violation, got rule %q: %s", v.RuleName, v.Message)
+				}
+			},
+		)
 	}
 }
 
@@ -2190,24 +2791,32 @@ func TestCmdSegments(t *testing.T) {
 			want:    "git commit -m msg",
 		},
 		{
-			name:    "and-and chain",
-			payload: map[string]any{"tool_input": map[string]any{"command": "git status && git commit -m msg"}},
-			want:    "git status\ngit commit -m msg",
+			name: "and-and chain",
+			payload: map[string]any{
+				"tool_input": map[string]any{"command": "git status && git commit -m msg"},
+			},
+			want: "git status\ngit commit -m msg",
 		},
 		{
-			name:    "semicolon chain",
-			payload: map[string]any{"tool_input": map[string]any{"command": "cd /tmp; git commit -m msg"}},
-			want:    "cd /tmp\ngit commit -m msg",
+			name: "semicolon chain",
+			payload: map[string]any{
+				"tool_input": map[string]any{"command": "cd /tmp; git commit -m msg"},
+			},
+			want: "cd /tmp\ngit commit -m msg",
 		},
 		{
-			name:    "newline chain",
-			payload: map[string]any{"tool_input": map[string]any{"command": "git status\ngit push"}},
-			want:    "git status\ngit push",
+			name: "newline chain",
+			payload: map[string]any{
+				"tool_input": map[string]any{"command": "git status\ngit push"},
+			},
+			want: "git status\ngit push",
 		},
 		{
-			name:    "or-or chain",
-			payload: map[string]any{"tool_input": map[string]any{"command": "git push || git status"}},
-			want:    "git push\ngit status",
+			name: "or-or chain",
+			payload: map[string]any{
+				"tool_input": map[string]any{"command": "git push || git status"},
+			},
+			want: "git push\ngit status",
 		},
 		{
 			name: "quoted separators",
@@ -2228,9 +2837,11 @@ func TestCmdSegments(t *testing.T) {
 			want: `git commit -m "Clarify cause; preserve && and || text"`,
 		},
 		{
-			name:    "escaped separators",
-			payload: map[string]any{"tool_input": map[string]any{"command": `printf one\;two\&\&three\|\|four`}},
-			want:    `printf one\;two\&\&three\|\|four`,
+			name: "escaped separators",
+			payload: map[string]any{
+				"tool_input": map[string]any{"command": `printf one\;two\&\&three\|\|four`},
+			},
+			want: `printf one\;two\&\&three\|\|four`,
 		},
 		{
 			name:    "pipeline remains one segment",
@@ -2263,19 +2874,25 @@ func TestCmdSegments(t *testing.T) {
 			want: "printf '%s' 'first second'",
 		},
 		{
-			name:    "comment separators are ignored",
-			payload: map[string]any{"tool_input": map[string]any{"command": "git status # note; not a command"}},
-			want:    "git status",
+			name: "comment separators are ignored",
+			payload: map[string]any{
+				"tool_input": map[string]any{"command": "git status # note; not a command"},
+			},
+			want: "git status",
 		},
 		{
-			name:    "empty segments omitted",
-			payload: map[string]any{"tool_input": map[string]any{"command": "; git status ;; git push ;"}},
-			want:    "git status\ngit push",
+			name: "empty segments omitted",
+			payload: map[string]any{
+				"tool_input": map[string]any{"command": "; git status ;; git push ;"},
+			},
+			want: "git status\ngit push",
 		},
 		{
-			name:    "argument with keyword inside does not split",
-			payload: map[string]any{"tool_input": map[string]any{"command": `git log --grep="git commit"`}},
-			want:    `git log --grep="git commit"`,
+			name: "argument with keyword inside does not split",
+			payload: map[string]any{
+				"tool_input": map[string]any{"command": `git log --grep="git commit"`},
+			},
+			want: `git log --grep="git commit"`,
 		},
 		{
 			name:    "no command field returns empty",
@@ -2290,12 +2907,15 @@ func TestCmdSegments(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := rules.CmdSegments(testFields(tc.payload))
-			if got != tc.want {
-				t.Errorf("CmdSegments() = %q, want %q", got, tc.want)
-			}
-		})
+		t.Run(
+			tc.name,
+			func(t *testing.T) {
+				got := rules.CmdSegments(testFields(tc.payload))
+				if got != tc.want {
+					t.Errorf("CmdSegments() = %q, want %q", got, tc.want)
+				}
+			},
+		)
 	}
 }
 
@@ -2315,7 +2935,9 @@ func TestCmdComments(t *testing.T) {
 		{
 			name: "multiple comments",
 			payload: map[string]any{
-				"tool_input": map[string]any{"command": "echo ok # first\n# second\nbundle exec -- bin/arils"},
+				"tool_input": map[string]any{
+					"command": "echo ok # first\n# second\nbundle exec -- bin/arils",
+				},
 			},
 			want: "first\nsecond",
 		},
@@ -2339,12 +2961,15 @@ func TestCmdComments(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := testFields(tc.payload).CmdComments()
-			if got != tc.want {
-				t.Errorf("CmdComments() = %q, want %q", got, tc.want)
-			}
-		})
+		t.Run(
+			tc.name,
+			func(t *testing.T) {
+				got := testFields(tc.payload).CmdComments()
+				if got != tc.want {
+					t.Errorf("CmdComments() = %q, want %q", got, tc.want)
+				}
+			},
+		)
 	}
 }
 
@@ -2371,7 +2996,9 @@ func TestCmdDoubleHyphenProse(t *testing.T) {
 		{
 			name: "bare command token ignored",
 			payload: map[string]any{
-				"tool_input": map[string]any{"command": "echo this" + testDoubleHyphen() + "is-ugly"},
+				"tool_input": map[string]any{
+					"command": "echo this" + testDoubleHyphen() + "is-ugly",
+				},
 			},
 			want: "",
 		},
@@ -2383,19 +3010,24 @@ func TestCmdDoubleHyphenProse(t *testing.T) {
 			want: "",
 		},
 		{
-			name:    "cursor-style commit message",
-			payload: map[string]any{"command": "git commit -m \"this" + testDoubleHyphen() + "is-ugly\""},
-			want:    "this" + testDoubleHyphen() + "is-ugly",
+			name: "cursor-style commit message",
+			payload: map[string]any{
+				"command": "git commit -m \"this" + testDoubleHyphen() + "is-ugly\"",
+			},
+			want: "this" + testDoubleHyphen() + "is-ugly",
 		},
 	}
 
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := testFields(tc.payload).CmdDoubleHyphenProse()
-			if got != tc.want {
-				t.Errorf("CmdDoubleHyphenProse() = %q, want %q", got, tc.want)
-			}
-		})
+		t.Run(
+			tc.name,
+			func(t *testing.T) {
+				got := testFields(tc.payload).CmdDoubleHyphenProse()
+				if got != tc.want {
+					t.Errorf("CmdDoubleHyphenProse() = %q, want %q", got, tc.want)
+				}
+			},
+		)
 	}
 }
 
@@ -2422,7 +3054,11 @@ func TestCmdDoubleHyphenProse_ContextScoped(t *testing.T) {
 	}{
 		// Non-prose command contexts: a bare shell command is code, so nothing
 		// is scanned no matter how many double hyphens it carries.
-		{"hf cache cleanup assignment", `keep_gemmas="` + hf + " models" + dh + "nomic-ai" + dh + `nomic-embed-code"; echo done`, ""},
+		{
+			"hf cache cleanup assignment",
+			`keep_gemmas="` + hf + " models" + dh + "nomic-ai" + dh + `nomic-embed-code"; echo done`,
+			"",
+		},
 		{"hf bare ls", "ls models" + dh + "mlx-community" + dh + "gemma-4-31b-it-8bit", ""},
 		{"flags", "tool --version --output=result", ""},
 		{"option separator", "bundle exec -- bin/arils", ""},
@@ -2431,29 +3067,72 @@ func TestCmdDoubleHyphenProse_ContextScoped(t *testing.T) {
 		{"bare printf not redirected", "printf fixed" + dh + "but", ""},
 		{"echo into code file", `echo "block` + dh + `modifier" > styles.css`, ""},
 		{"commit message identifier only", `git commit -m "bump ` + hf + `"`, ""},
-		{"patch envelope exempt", "apply_patch <<'EOF'\n*** Begin Patch\nfix the bug" + dh + "it\n*** End Patch\nEOF", ""},
+		{
+			"patch envelope exempt",
+			"apply_patch <<'EOF'\n*** Begin Patch\nfix the bug" + dh + "it\n*** End Patch\nEOF",
+			"",
+		},
 
 		// Prose-bearing contexts with a genuine fused double hyphen: emitted.
-		{"commit message glued", `git commit -m "fix the bug` + dh + `it was null"`, "fix the bug" + dh + "it was null"},
-		{"commit message spaced", `git commit -m "cache is full ` + dh + ` delete it"`, "cache is full " + dh + " delete it"},
-		{"commit drops identifier keeps prose", `git commit -m "bump models` + dh + "a" + dh + "b but fix bug" + dh + `it"`, "bump but fix bug" + dh + "it"},
-		{"gh pr body short flags", `gh pr create -t "x" -b "this` + dh + `is sloppy"`, "this" + dh + "is sloppy"},
-		{"gh release notes", `gh release create v1 --notes "ship` + dh + `it now"`, "ship" + dh + "it now"},
-		{"echo into markdown", `echo "the bug` + dh + `it persists" > notes.md`, "the bug" + dh + "it persists"},
-		{"printf into text append", `printf "done` + dh + `and broken" >> log.txt`, "done" + dh + "and broken"},
+		{
+			"commit message glued",
+			`git commit -m "fix the bug` + dh + `it was null"`,
+			"fix the bug" + dh + "it was null",
+		},
+		{
+			"commit message spaced",
+			`git commit -m "cache is full ` + dh + ` delete it"`,
+			"cache is full " + dh + " delete it",
+		},
+		{
+			"commit drops identifier keeps prose",
+			`git commit -m "bump models` + dh + "a" + dh + "b but fix bug" + dh + `it"`,
+			"bump but fix bug" + dh + "it",
+		},
+		{
+			"gh pr body short flags",
+			`gh pr create -t "x" -b "this` + dh + `is sloppy"`,
+			"this" + dh + "is sloppy",
+		},
+		{
+			"gh release notes",
+			`gh release create v1 --notes "ship` + dh + `it now"`,
+			"ship" + dh + "it now",
+		},
+		{
+			"echo into markdown",
+			`echo "the bug` + dh + `it persists" > notes.md`,
+			"the bug" + dh + "it persists",
+		},
+		{
+			"printf into text append",
+			`printf "done` + dh + `and broken" >> log.txt`,
+			"done" + dh + "and broken",
+		},
 		{"tee into readme", `echo "ship` + dh + `it now" | tee README.md`, "ship" + dh + "it now"},
-		{"heredoc into markdown", "cat > notes.md <<EOF\nrefactor done" + dh + "it works\nEOF", "refactor done" + dh + "it works"},
-		{"bem in commit message flagged", `git commit -m "rename block` + dh + `modifier here"`, "rename block" + dh + "modifier here"},
+		{
+			"heredoc into markdown",
+			"cat > notes.md <<EOF\nrefactor done" + dh + "it works\nEOF",
+			"refactor done" + dh + "it works",
+		},
+		{
+			"bem in commit message flagged",
+			`git commit -m "rename block` + dh + `modifier here"`,
+			"rename block" + dh + "modifier here",
+		},
 	}
 
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			payload := map[string]any{"tool_input": map[string]any{"command": tc.command}}
-			got := testFields(payload).CmdDoubleHyphenProse()
-			if got != tc.want {
-				t.Errorf("CmdDoubleHyphenProse() = %q, want %q", got, tc.want)
-			}
-		})
+		t.Run(
+			tc.name,
+			func(t *testing.T) {
+				payload := map[string]any{"tool_input": map[string]any{"command": tc.command}}
+				got := testFields(payload).CmdDoubleHyphenProse()
+				if got != tc.want {
+					t.Errorf("CmdDoubleHyphenProse() = %q, want %q", got, tc.want)
+				}
+			},
+		)
 	}
 }
 
@@ -2501,14 +3180,20 @@ func TestCmdRedirections(t *testing.T) {
 		{
 			name: "heredoc script creation is ignored",
 			payload: map[string]any{
-				"tool_input": map[string]any{"command": "cat <<EOF " + stdoutToFile("script.sh") + "\n#!/usr/bin/env bash\ncmd " + quietStdout() + "\nEOF"},
+				"tool_input": map[string]any{
+					"command": "cat <<EOF " + stdoutToFile(
+						"script.sh",
+					) + "\n#!/usr/bin/env bash\ncmd " + quietStdout() + "\nEOF",
+				},
 			},
 			want: "",
 		},
 		{
 			name: "quoted redirect text is ignored",
 			payload: map[string]any{
-				"tool_input": map[string]any{"command": "printf '%s\\n' \"cmd " + quietStdout() + "\""},
+				"tool_input": map[string]any{
+					"command": "printf '%s\\n' \"cmd " + quietStdout() + "\"",
+				},
 			},
 			want: "",
 		},
@@ -2523,12 +3208,15 @@ func TestCmdRedirections(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := testFields(tc.payload).CmdRedirections()
-			if got != tc.want {
-				t.Errorf("CmdRedirections() = %q, want %q", got, tc.want)
-			}
-		})
+		t.Run(
+			tc.name,
+			func(t *testing.T) {
+				got := testFields(tc.payload).CmdRedirections()
+				if got != tc.want {
+					t.Errorf("CmdRedirections() = %q, want %q", got, tc.want)
+				}
+			},
+		)
 	}
 }
 
@@ -2654,8 +3342,10 @@ func TestEvaluate_CommandAndProjectConditions_SwiftBuildThroughMake(t *testing.T
 			system: "codex",
 			event:  "PreToolUse",
 			payload: map[string]any{
-				"cwd":        outside,
-				"tool_input": map[string]any{"command": "swift --package-path " + root + " build -c release"},
+				"cwd": outside,
+				"tool_input": map[string]any{
+					"command": "swift --package-path " + root + " build -c release",
+				},
 			},
 			want: true,
 		},
@@ -2712,12 +3402,21 @@ func TestEvaluate_CommandAndProjectConditions_SwiftBuildThroughMake(t *testing.T
 	}
 
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			v := rules.Evaluate(context.Background(), tc.system, tc.event, testFields(tc.payload), []config.Rule{rule})
-			if got := v != nil; got != tc.want {
-				t.Fatalf("blocked = %v, want %v; violation = %#v", got, tc.want, v)
-			}
-		})
+		t.Run(
+			tc.name,
+			func(t *testing.T) {
+				v := rules.Evaluate(
+					context.Background(),
+					tc.system,
+					tc.event,
+					testFields(tc.payload),
+					[]config.Rule{rule},
+				)
+				if got := v != nil; got != tc.want {
+					t.Fatalf("blocked = %v, want %v; violation = %#v", got, tc.want, v)
+				}
+			},
+		)
 	}
 }
 
@@ -2859,8 +3558,10 @@ func TestEvaluate_CommandAndProjectConditions_GoThroughMake(t *testing.T) {
 			system: "claude",
 			event:  "PreToolUse",
 			payload: map[string]any{
-				"cwd":        root,
-				"tool_input": map[string]any{"command": "cat <<'EOF' > Makefile\nbuild:\n\tgo build ./...\ntest:\n\tgo test ./...\nEOF"},
+				"cwd": root,
+				"tool_input": map[string]any{
+					"command": "cat <<'EOF' > Makefile\nbuild:\n\tgo build ./...\ntest:\n\tgo test ./...\nEOF",
+				},
 			},
 			want: false,
 		},
@@ -2869,8 +3570,10 @@ func TestEvaluate_CommandAndProjectConditions_GoThroughMake(t *testing.T) {
 			system: "claude",
 			event:  "PreToolUse",
 			payload: map[string]any{
-				"cwd":        root,
-				"tool_input": map[string]any{"command": "cat <<'EOF' > Makefile\nbuild:\n\tgo build ./...\nEOF\ngo test ./..."},
+				"cwd": root,
+				"tool_input": map[string]any{
+					"command": "cat <<'EOF' > Makefile\nbuild:\n\tgo build ./...\nEOF\ngo test ./...",
+				},
 			},
 			want: true,
 		},
@@ -2909,8 +3612,10 @@ func TestEvaluate_CommandAndProjectConditions_GoThroughMake(t *testing.T) {
 			system: "codex",
 			event:  "PreToolUse",
 			payload: map[string]any{
-				"cwd":        root,
-				"tool_input": map[string]any{"command": "go test ./internal/rules -run TestEvaluate_CommandAndProjectConditions_GoThroughMake"},
+				"cwd": root,
+				"tool_input": map[string]any{
+					"command": "go test ./internal/rules -run TestEvaluate_CommandAndProjectConditions_GoThroughMake",
+				},
 			},
 			want: false,
 		},
@@ -2947,12 +3652,21 @@ func TestEvaluate_CommandAndProjectConditions_GoThroughMake(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			v := rules.Evaluate(context.Background(), tc.system, tc.event, testFields(tc.payload), []config.Rule{rule})
-			if got := v != nil; got != tc.want {
-				t.Fatalf("blocked = %v, want %v; violation = %#v", got, tc.want, v)
-			}
-		})
+		t.Run(
+			tc.name,
+			func(t *testing.T) {
+				v := rules.Evaluate(
+					context.Background(),
+					tc.system,
+					tc.event,
+					testFields(tc.payload),
+					[]config.Rule{rule},
+				)
+				if got := v != nil; got != tc.want {
+					t.Fatalf("blocked = %v, want %v; violation = %#v", got, tc.want, v)
+				}
+			},
+		)
 	}
 }
 
@@ -2992,21 +3706,25 @@ func TestEvaluate_CommandAndProjectConditions_GoBuildThroughMake(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			v := rules.Evaluate(
-				context.Background(),
-				"codex",
-				"PreToolUse",
-				rules.FieldSet{CWD: tc.cwd, ToolInputCommand: tc.command},
-				[]config.Rule{rule},
-			)
-			if got := v != nil; got != tc.wantBlocked {
-				t.Fatalf("blocked = %v, want %v; violation = %#v", got, tc.wantBlocked, v)
-			}
-			if tc.wantBlocked && v.Message != rule.ViolationMessage {
-				t.Fatalf("violation message = %q, want %q", v.Message, rule.ViolationMessage)
-			}
-		})
+		t.Run(
+			tc.name,
+			func(t *testing.T) {
+				v := rules.Evaluate(
+					context.Background(),
+					"codex",
+					"PreToolUse",
+					rules.FieldSet{CWD: tc.cwd, ToolInputCommand: tc.command},
+					[]config.Rule{rule},
+				)
+				if got := v != nil; got != tc.wantBlocked {
+					t.Fatalf("blocked = %v, want %v; violation = %#v", got, tc.wantBlocked, v)
+				}
+
+				if tc.wantBlocked && v.Message != rule.ViolationMessage {
+					t.Fatalf("violation message = %q, want %q", v.Message, rule.ViolationMessage)
+				}
+			},
+		)
 	}
 }
 
@@ -3063,18 +3781,21 @@ func TestEvaluate_CommandSubcommand_LeadingGlobalFlagsDoNotDefeatPattern(t *test
 	}
 
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			v := rules.Evaluate(
-				context.Background(),
-				"codex",
-				"PreToolUse",
-				rules.FieldSet{CWD: t.TempDir(), ToolInputCommand: tc.command},
-				[]config.Rule{rule},
-			)
-			if got := v != nil; got != tc.wantBlocked {
-				t.Fatalf("blocked = %v, want %v; violation = %#v", got, tc.wantBlocked, v)
-			}
-		})
+		t.Run(
+			tc.name,
+			func(t *testing.T) {
+				v := rules.Evaluate(
+					context.Background(),
+					"codex",
+					"PreToolUse",
+					rules.FieldSet{CWD: t.TempDir(), ToolInputCommand: tc.command},
+					[]config.Rule{rule},
+				)
+				if got := v != nil; got != tc.wantBlocked {
+					t.Fatalf("blocked = %v, want %v; violation = %#v", got, tc.wantBlocked, v)
+				}
+			},
+		)
 	}
 }
 
@@ -3107,20 +3828,44 @@ func TestEvaluate_CommandWrapper_OptionsDoNotDefeatArgv0(t *testing.T) {
 		wantBlocked bool
 	}{
 		{name: "bare wrapper blocks", command: "time git commit -m x", wantBlocked: true},
-		{name: "time option before git blocks", command: "time -p git commit -m x", wantBlocked: true},
-		{name: "command option terminator before git blocks", command: "command -- git commit -m x", wantBlocked: true},
-		{name: "command path option before git blocks", command: "command -p git commit -m x", wantBlocked: true},
-		{name: "wrapper option before non-git command is allowed", command: "time -p ls -la", wantBlocked: false},
+		{
+			name:        "time option before git blocks",
+			command:     "time -p git commit -m x",
+			wantBlocked: true,
+		},
+		{
+			name:        "command option terminator before git blocks",
+			command:     "command -- git commit -m x",
+			wantBlocked: true,
+		},
+		{
+			name:        "command path option before git blocks",
+			command:     "command -p git commit -m x",
+			wantBlocked: true,
+		},
+		{
+			name:        "wrapper option before non-git command is allowed",
+			command:     "time -p ls -la",
+			wantBlocked: false,
+		},
 	}
 
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			v := rules.Evaluate(context.Background(), "codex", "PreToolUse",
-				rules.FieldSet{CWD: t.TempDir(), ToolInputCommand: tc.command}, []config.Rule{rule})
-			if got := v != nil; got != tc.wantBlocked {
-				t.Fatalf("blocked = %v, want %v; violation = %#v", got, tc.wantBlocked, v)
-			}
-		})
+		t.Run(
+			tc.name,
+			func(t *testing.T) {
+				v := rules.Evaluate(
+					context.Background(),
+					"codex",
+					"PreToolUse",
+					rules.FieldSet{CWD: t.TempDir(), ToolInputCommand: tc.command},
+					[]config.Rule{rule},
+				)
+				if got := v != nil; got != tc.wantBlocked {
+					t.Fatalf("blocked = %v, want %v; violation = %#v", got, tc.wantBlocked, v)
+				}
+			},
+		)
 	}
 }
 
@@ -3132,10 +3877,18 @@ func TestEvaluate_CommandAndProjectConditions_OrderIndependent(t *testing.T) {
 	rule := makeGoThroughMakeRule()
 	rule.Conditions[0], rule.Conditions[1] = rule.Conditions[1], rule.Conditions[0]
 
-	v := rules.Evaluate(context.Background(), "claude", "PreToolUse", rules.FieldSet{CWD: t.TempDir(), ToolInputCommand: "cd " + root + " && go test ./..."}, []config.Rule{rule})
+	v := rules.Evaluate(
+		context.Background(),
+		"claude",
+		"PreToolUse",
+		rules.FieldSet{CWD: t.TempDir(), ToolInputCommand: "cd " + root + " && go test ./..."},
+		[]config.Rule{rule},
+	)
 
 	if v == nil {
-		t.Fatal("expected project condition to use matched command cwd regardless of condition order")
+		t.Fatal(
+			"expected project condition to use matched command cwd regardless of condition order",
+		)
 	}
 }
 
@@ -3143,7 +3896,13 @@ func TestEvaluate_ProjectCondition_AllowsWhenProjectDoesNotSupportMake(t *testin
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "go.mod"), "module example.test/project\n")
 
-	v := rules.Evaluate(context.Background(), "claude", "PreToolUse", rules.FieldSet{CWD: root, ToolInputCommand: "go test ./..."}, []config.Rule{makeGoThroughMakeRule()})
+	v := rules.Evaluate(
+		context.Background(),
+		"claude",
+		"PreToolUse",
+		rules.FieldSet{CWD: root, ToolInputCommand: "go test ./..."},
+		[]config.Rule{makeGoThroughMakeRule()},
+	)
 
 	if v != nil {
 		t.Fatalf("expected allow without Makefile, got %s", v.Message)
@@ -3154,7 +3913,13 @@ func TestEvaluate_ProjectCondition_AllowsOutsideMarkedProject(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "Makefile"), "test:\n\tgo test ./...\n")
 
-	v := rules.Evaluate(context.Background(), "claude", "PreToolUse", rules.FieldSet{CWD: root, ToolInputCommand: "go test ./..."}, []config.Rule{makeGoThroughMakeRule()})
+	v := rules.Evaluate(
+		context.Background(),
+		"claude",
+		"PreToolUse",
+		rules.FieldSet{CWD: root, ToolInputCommand: "go test ./..."},
+		[]config.Rule{makeGoThroughMakeRule()},
+	)
 
 	if v != nil {
 		t.Fatalf("expected allow outside Go module, got %s", v.Message)
@@ -3169,8 +3934,10 @@ func makeDiffRule(t *testing.T, pattern string) config.Rule {
 	if err != nil {
 		t.Fatalf("NewCondition: %v", err)
 	}
+
 	cond.Kind = string(config.ConditionKindDiff)
 	cond.FieldPair = "tool_input.old_string,tool_input.new_string"
+
 	return config.Rule{
 		Name:             "block-additive",
 		Description:      "",
@@ -3199,6 +3966,7 @@ func TestEvaluateAll_DiffCondition_BlocksAdditive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseFieldPair: %v", err)
 	}
+
 	// We need the loadPath path to populate fieldPairs; substitute by going via TOML below.
 	_ = pair
 
@@ -3259,12 +4027,22 @@ pattern = '''internal/foo\.go'''
 		},
 	}
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := rules.EvaluateAll(context.Background(), "claude", "PreToolUse", tc.fields, cfg.Rules, nil)
-			if (len(got) > 0) != tc.blocked {
-				t.Fatalf("blocked=%v, got %d violations: %#v", tc.blocked, len(got), got)
-			}
-		})
+		t.Run(
+			tc.name,
+			func(t *testing.T) {
+				got := rules.EvaluateAll(
+					context.Background(),
+					"claude",
+					"PreToolUse",
+					tc.fields,
+					cfg.Rules,
+					nil,
+				)
+				if (len(got) > 0) != tc.blocked {
+					t.Fatalf("blocked=%v, got %d violations: %#v", tc.blocked, len(got), got)
+				}
+			},
+		)
 	}
 }
 
@@ -3291,23 +4069,49 @@ globs = ["*-baseline.txt", "*.golangci-lint-baseline.txt"]
 		command string
 		blocked bool
 	}{
-		{name: "redirect append", command: "echo entry >> .golangci-lint-baseline.txt", blocked: true},
-		{name: "tee append", command: "tee -a .golangci-lint-baseline.txt < extras.txt", blocked: true},
-		{name: "sed in-place", command: "sed -i 's/^/-/' .golangci-lint-baseline.txt", blocked: true},
-		{name: "unparseable bash -c sentinel", command: `bash -c "echo hi >> /tmp/log"`, blocked: true},
+		{
+			name:    "redirect append",
+			command: "echo entry >> .golangci-lint-baseline.txt",
+			blocked: true,
+		},
+		{
+			name:    "tee append",
+			command: "tee -a .golangci-lint-baseline.txt < extras.txt",
+			blocked: true,
+		},
+		{
+			name:    "sed in-place",
+			command: "sed -i 's/^/-/' .golangci-lint-baseline.txt",
+			blocked: true,
+		},
+		{
+			name:    "unparseable bash -c sentinel",
+			command: `bash -c "echo hi >> /tmp/log"`,
+			blocked: true,
+		},
 		{name: "read-only cat allowed", command: "cat README.md", blocked: false},
 	}
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			fields := rules.FieldSet{
-				CWD:              "/work",
-				ToolInputCommand: tc.command,
-			}
-			got := rules.EvaluateAll(context.Background(), "claude", "PreToolUse", fields, cfg.Rules, nil)
-			if (len(got) > 0) != tc.blocked {
-				t.Fatalf("blocked=%v, got %d violations: %#v", tc.blocked, len(got), got)
-			}
-		})
+		t.Run(
+			tc.name,
+			func(t *testing.T) {
+				fields := rules.FieldSet{
+					CWD:              "/work",
+					ToolInputCommand: tc.command,
+				}
+				got := rules.EvaluateAll(
+					context.Background(),
+					"claude",
+					"PreToolUse",
+					fields,
+					cfg.Rules,
+					nil,
+				)
+				if (len(got) > 0) != tc.blocked {
+					t.Fatalf("blocked=%v, got %d violations: %#v", tc.blocked, len(got), got)
+				}
+			},
+		)
 	}
 }
 
@@ -3353,18 +4157,29 @@ pattern = '''internal/foo\.go'''
 				if key == "LINT_BASELINE_REFRESH" {
 					return "1"
 				}
+
 				return ""
 			},
 			blocked: false,
 		},
 	}
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := rules.EvaluateAll(context.Background(), "claude", "PreToolUse", fields, cfg.Rules, tc.getenv)
-			if (len(got) > 0) != tc.blocked {
-				t.Fatalf("blocked=%v, got %d violations: %#v", tc.blocked, len(got), got)
-			}
-		})
+		t.Run(
+			tc.name,
+			func(t *testing.T) {
+				got := rules.EvaluateAll(
+					context.Background(),
+					"claude",
+					"PreToolUse",
+					fields,
+					cfg.Rules,
+					tc.getenv,
+				)
+				if (len(got) > 0) != tc.blocked {
+					t.Fatalf("blocked=%v, got %d violations: %#v", tc.blocked, len(got), got)
+				}
+			},
+		)
 	}
 }
 
@@ -3380,6 +4195,7 @@ func loadTOML(t *testing.T, body string) *config.Config {
 	if err != nil {
 		t.Fatalf("LoadExisting: %v", err)
 	}
+
 	return cfg
 }
 

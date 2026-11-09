@@ -154,17 +154,25 @@ func TestExtractWriteTargetsWithSpecs(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			targets := shellwriteconcern.ExtractWriteTargetsWithSpecs(test.command, "/repo", []config.ShellWriteSpec{test.spec})
-			if len(targets) != len(test.want) {
-				t.Fatalf("targets = %#v, want paths %v", targets, test.want)
-			}
-			for i, want := range test.want {
-				if targets[i].Path != want || targets[i].Reason != shellwriteconcern.ReasonOK {
-					t.Fatalf("target %d = %#v, want path %q", i, targets[i], want)
+		t.Run(
+			test.name,
+			func(t *testing.T) {
+				targets := shellwriteconcern.ExtractWriteTargetsWithSpecs(
+					test.command,
+					"/repo",
+					[]config.ShellWriteSpec{test.spec},
+				)
+				if len(targets) != len(test.want) {
+					t.Fatalf("targets = %#v, want paths %v", targets, test.want)
 				}
-			}
-		})
+
+				for i, want := range test.want {
+					if targets[i].Path != want || targets[i].Reason != shellwriteconcern.ReasonOK {
+						t.Fatalf("target %d = %#v, want path %q", i, targets[i], want)
+					}
+				}
+			},
+		)
 	}
 }
 
@@ -187,32 +195,59 @@ func TestExtractWriteTargetsWithSpecsWriterShapes(t *testing.T) {
 	moveName := "m" + "v"
 	linkName := "l" + "n"
 	specs := []config.ShellWriteSpec{
-		writeSpec([]string{removeName, makeDirectoryName, updateTimeName}, config.WriteTargetAllOperands),
+		writeSpec(
+			[]string{removeName, makeDirectoryName, updateTimeName},
+			config.WriteTargetAllOperands,
+		),
 		writeSpec([]string{copyName, moveName, linkName}, config.WriteTargetLastOperand),
 	}
+
 	tests := []struct {
 		command string
 		want    []string
 	}{
-		{command: removeName + " first.txt second.txt", want: []string{"/repo/first.txt", "/repo/second.txt"}},
-		{command: makeDirectoryName + " first second", want: []string{"/repo/first", "/repo/second"}},
-		{command: updateTimeName + " first.txt second.txt", want: []string{"/repo/first.txt", "/repo/second.txt"}},
-		{command: copyName + " source.txt destination.txt", want: []string{"/repo/destination.txt"}},
-		{command: moveName + " source.txt destination.txt", want: []string{"/repo/destination.txt"}},
+		{
+			command: removeName + " first.txt second.txt",
+			want:    []string{"/repo/first.txt", "/repo/second.txt"},
+		},
+		{
+			command: makeDirectoryName + " first second",
+			want:    []string{"/repo/first", "/repo/second"},
+		},
+		{
+			command: updateTimeName + " first.txt second.txt",
+			want:    []string{"/repo/first.txt", "/repo/second.txt"},
+		},
+		{
+			command: copyName + " source.txt destination.txt",
+			want:    []string{"/repo/destination.txt"},
+		},
+		{
+			command: moveName + " source.txt destination.txt",
+			want:    []string{"/repo/destination.txt"},
+		},
 		{command: linkName + " first.txt second.txt", want: []string{"/repo/second.txt"}},
 	}
 	for _, test := range tests {
-		t.Run(test.command, func(t *testing.T) {
-			targets := shellwriteconcern.ExtractWriteTargetsWithSpecs(test.command, "/repo", specs)
-			if len(targets) != len(test.want) {
-				t.Fatalf("targets = %#v, want %v", targets, test.want)
-			}
-			for i, want := range test.want {
-				if targets[i].Path != want {
-					t.Fatalf("target %d = %#v, want %q", i, targets[i], want)
+		t.Run(
+			test.command,
+			func(t *testing.T) {
+				targets := shellwriteconcern.ExtractWriteTargetsWithSpecs(
+					test.command,
+					"/repo",
+					specs,
+				)
+				if len(targets) != len(test.want) {
+					t.Fatalf("targets = %#v, want %v", targets, test.want)
 				}
-			}
-		})
+
+				for i, want := range test.want {
+					if targets[i].Path != want {
+						t.Fatalf("target %d = %#v, want %q", i, targets[i], want)
+					}
+				}
+			},
+		)
 	}
 }
 
@@ -236,7 +271,8 @@ func TestExtractWriteTargetsWithSpecsPreservesDistinctRedirectTarget(t *testing.
 		"/repo",
 		[]config.ShellWriteSpec{writeSpec([]string{commandName}, config.WriteTargetAllOperands)},
 	)
-	if len(targets) != 2 || targets[0].Path != "/repo/activity.log" || targets[1].Path != "/repo/generated.txt" {
+	if len(targets) != 2 || targets[0].Path != "/repo/activity.log" ||
+		targets[1].Path != "/repo/generated.txt" {
 		t.Fatalf("targets = %#v, want distinct redirect and declared targets", targets)
 	}
 }
@@ -269,18 +305,22 @@ func TestExtractWriteTargetsWithSpecsUnresolvedControlToken(t *testing.T) {
 	targets := shellwriteconcern.ExtractWriteTargetsWithSpecs(
 		`writer-all "$FLAG" note.txt`,
 		"/repo",
-		[]config.ShellWriteSpec{{
-			Argv0:               []string{"writer-all"},
-			TargetMode:          config.WriteTargetAllOperands,
-			SkipFlagsWithValues: []string{"--reference"},
-		}},
+		[]config.ShellWriteSpec{
+			{
+				Argv0:               []string{"writer-all"},
+				TargetMode:          config.WriteTargetAllOperands,
+				SkipFlagsWithValues: []string{"--reference"},
+			},
+		},
 	)
 	if len(targets) != 2 {
 		t.Fatalf("targets = %#v, want unresolved sentinel and note.txt", targets)
 	}
+
 	if targets[0].Reason != shellwriteconcern.ReasonUnparsedCommandShape || targets[0].Path != "" {
 		t.Fatalf("unresolved target = %#v, want unparsed sentinel", targets[0])
 	}
+
 	if targets[1].Reason != shellwriteconcern.ReasonOK || targets[1].Path != "/repo/note.txt" {
 		t.Fatalf("resolved target = %#v, want /repo/note.txt", targets[1])
 	}

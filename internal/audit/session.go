@@ -125,15 +125,31 @@ type NormalizedEntry struct {
 func emptyNormalizedEntry() NormalizedEntry {
 	return NormalizedEntry{
 		Event: Event{
-			EventID: "", SchemaVersion: 0, Time: "", Level: "", Message: "",
-			System: "", SessionID: "", TurnID: "", EventName: "", ToolUseID: "",
-			ToolName: "", Operation: Operation{
-				CWD: "", EffectiveCWD: "", Command: "", FilePath: "",
+			EventID:       "",
+			SchemaVersion: 0,
+			Time:          "",
+			Level:         "",
+			Message:       "",
+			System:        "",
+			SessionID:     "",
+			TurnID:        "",
+			EventName:     "",
+			ToolUseID:     "",
+			ToolName:      "",
+			Operation: Operation{
+				CWD:          "",
+				EffectiveCWD: "",
+				Command:      "",
+				FilePath:     "",
 			},
 			Decision: Decision{
-				Kind: "", CanBlock: false, RulesChecked: nil, RulesMatched: nil,
+				Kind:         "",
+				CanBlock:     false,
+				RulesChecked: nil,
+				RulesMatched: nil,
 			},
-			Violations: nil, RawPayloadHash: "",
+			Violations:     nil,
+			RawPayloadHash: "",
 		},
 		Fingerprint: "",
 	}
@@ -168,18 +184,26 @@ type Violation struct {
 
 // NewEventLoggerWithOptions constructs an [EventLogger] with explicit queue
 // tuning. Zero-valued options select production defaults.
-func NewEventLoggerWithOptions(ctx context.Context, cfg *config.Config, log *slog.Logger, options LoggerOptions) (*EventLogger, error) {
+func NewEventLoggerWithOptions(
+	ctx context.Context,
+	cfg *config.Config,
+	log *slog.Logger,
+	options LoggerOptions,
+) (*EventLogger, error) {
 	if log == nil {
 		log = slog.Default()
 	}
+
 	level := ""
 	if cfg != nil {
 		level = cfg.AuditLevel()
 	}
+
 	queueLimit := options.QueueLimit
 	if queueLimit <= 0 {
 		queueLimit = cfg.AuditQueueLimit()
 	}
+
 	el := new(EventLogger)
 	workerContext, workerCancel := context.WithCancel(context.WithoutCancel(ctx))
 	el.workerCancel = workerCancel
@@ -191,14 +215,17 @@ func NewEventLoggerWithOptions(ctx context.Context, cfg *config.Config, log *slo
 	if el.batchMaxItems <= 0 {
 		el.batchMaxItems = 64
 	}
+
 	el.batchMaxBytes = options.BatchMaxBytes
 	if el.batchMaxBytes <= 0 {
 		el.batchMaxBytes = 1024 * 1024
 	}
+
 	el.queueMaxBytes = options.QueueMaxBytes
 	if el.queueMaxBytes <= 0 {
 		el.queueMaxBytes = 16 * 1024 * 1024
 	}
+
 	el.log = log
 	el.sharedDB = options.SharedDB
 	el.cond = sync.NewCond(&el.mu)
@@ -208,17 +235,20 @@ func NewEventLoggerWithOptions(ctx context.Context, cfg *config.Config, log *slo
 		workerCancel()
 		return nil, fmt.Errorf("create audit deduplication cache: %w", err)
 	}
+
 	el.dedup = dedup
 
 	if cfg != nil && !cfg.AuditEnabled() {
 		el.enabled = false
 	}
+
 	if el.enabled {
 		if err := el.configureOutputs(ctx, cfg); err != nil {
 			workerCancel()
 			return nil, err
 		}
 	}
+
 	if el.writer == nil {
 		el.enabled = false
 	}
@@ -228,14 +258,20 @@ func NewEventLoggerWithOptions(ctx context.Context, cfg *config.Config, log *slo
 		go func() {
 			defer func() {
 				if recovered := recover(); recovered != nil {
-					el.log.ErrorContext(ctx, "audit worker panic recovered", slog.Any("err", recovered))
+					el.log.ErrorContext(
+						ctx,
+						"audit worker panic recovered",
+						slog.Any("err", recovered),
+					)
 				}
+
 				el.wg.Done()
 			}()
 			// Accepted asynchronous events belong to the logger until Close drains them.
 			el.worker(workerContext)
 		}()
 	}
+
 	return el, nil
 }
 
@@ -250,6 +286,7 @@ func (el *EventLogger) configureOutputs(ctx context.Context, cfg *config.Config)
 	if cfg != nil {
 		path = cfg.AuditSQLitePath()
 	}
+
 	database := el.sharedDB
 	ownsDB := false
 	if database == nil {
@@ -258,9 +295,12 @@ func (el *EventLogger) configureOutputs(ctx context.Context, cfg *config.Config)
 		if err != nil {
 			return storageError("open audit writer", err)
 		}
+
 		ownsDB = true
 	}
+
 	el.writer = &sqliteWriter{db: database, ownsDB: ownsDB}
+
 	return nil
 }
 
@@ -271,26 +311,32 @@ func (el *EventLogger) Log(system, sessionID, eventName, level, msg string, attr
 	if el == nil || !el.enabled || !el.shouldLog(level) {
 		return
 	}
+
 	entry := el.Normalize(system, sessionID, eventName, level, msg, attrs)
 	encoded, err := json.Marshal(entry.Event)
 	if err != nil || len(encoded) > el.batchMaxBytes {
 		el.recordDrop(system, sessionID, eventName, msg)
 		return
 	}
+
 	el.mu.Lock()
 	if el.stopping {
 		el.mu.Unlock()
 		return
 	}
+
 	if len(el.queue) >= el.limit || len(encoded) > el.queueMaxBytes-el.queuedBytes {
 		el.mu.Unlock()
 		el.recordDrop(system, sessionID, eventName, msg)
+
 		return
 	}
+
 	if el.seenFingerprint(entry.Fingerprint) {
 		el.mu.Unlock()
 		return
 	}
+
 	el.rememberFingerprint(entry.Fingerprint)
 	el.queue = append(el.queue, eventWrite{event: entry.Event, bytes: len(encoded)})
 	el.queuedBytes += len(encoded)
@@ -312,7 +358,9 @@ func (el *EventLogger) LogDurable(
 	if el == nil || !el.enabled || !el.shouldLog(level) {
 		return nil
 	}
+
 	entry := el.Normalize(system, sessionID, eventName, level, msg, attrs)
+
 	return el.LogNormalizedDurable(ctx, entry)
 }
 
@@ -328,7 +376,9 @@ func (el *EventLogger) Normalize(
 	if el == nil {
 		return emptyNormalizedEntry()
 	}
+
 	normalizer := Normalizer{minLevel: el.minLevel, enabled: el.enabled, rawHash: el.rawHash}
+
 	return normalizer.Normalize(system, sessionID, eventName, level, msg, attrs)
 }
 
@@ -341,31 +391,38 @@ func (el *EventLogger) LogNormalizedDurable(
 	if el == nil || !el.enabled {
 		return nil
 	}
+
 	encoded, err := json.Marshal(entry.Event)
 	if err != nil {
 		return storageError("encode audit event", err)
 	}
+
 	if len(encoded) > el.batchMaxBytes {
 		return fmt.Errorf("audit event exceeds batch byte limit %d", el.batchMaxBytes)
 	}
+
 	el.mu.Lock()
 	if el.stopping {
 		el.mu.Unlock()
 		return fmt.Errorf("audit logger is stopping")
 	}
+
 	if el.seenFingerprint(entry.Fingerprint) {
 		el.mu.Unlock()
 		return nil
 	}
+
 	el.wg.Add(1)
 	el.mu.Unlock()
 	defer el.wg.Done()
 	if err := WriteEvents(ctx, el.writer.db, []Event{entry.Event}); err != nil {
 		return err
 	}
+
 	el.mu.Lock()
 	el.rememberFingerprint(entry.Fingerprint)
 	el.mu.Unlock()
+
 	return nil
 }
 
@@ -383,19 +440,28 @@ func (el *EventLogger) recordDrop(system, sessionID, eventName, msg string) {
 		el.mu.Unlock()
 		return
 	}
+
 	el.lastDrop = now
 	queueDepth := len(el.queue)
 	queueLimit := el.limit
 	el.mu.Unlock()
 
-	el.log.Warn("audit queue full; dropping event",
-		"system", system,
-		"session_id", sessionID,
-		"event", eventName,
-		"msg", msg,
-		"queue_depth", queueDepth,
-		"queue_limit", queueLimit,
-		"dropped", dropped,
+	el.log.Warn(
+		"audit queue full; dropping event",
+		"system",
+		system,
+		"session_id",
+		sessionID,
+		"event",
+		eventName,
+		"msg",
+		msg,
+		"queue_depth",
+		queueDepth,
+		"queue_limit",
+		queueLimit,
+		"dropped",
+		dropped,
 	)
 }
 
@@ -411,14 +477,17 @@ func (el *EventLogger) CloseContext(ctx context.Context) error {
 	if el == nil {
 		return nil
 	}
+
 	stopCancellation := context.AfterFunc(ctx, el.workerCancel)
 	defer stopCancellation()
 	el.mu.Lock()
 	if el.stopping {
 		el.mu.Unlock()
 		<-el.closeDone
+
 		return el.closeErr
 	}
+
 	el.stopping = true
 	el.cond.Broadcast()
 	el.mu.Unlock()
@@ -431,8 +500,10 @@ func (el *EventLogger) CloseContext(ctx context.Context) error {
 	if el.writer != nil {
 		el.closeErr = el.writer.Close()
 	}
+
 	el.closeErr = errors.Join(el.closeErr, ctx.Err())
 	close(el.closeDone)
+
 	return el.closeErr
 }
 
@@ -452,22 +523,27 @@ func (el *EventLogger) worker(ctx context.Context) {
 		for len(el.queue) == 0 && !el.stopping {
 			el.cond.Wait()
 		}
+
 		if len(el.queue) == 0 && el.stopping {
 			el.mu.Unlock()
 			return
 		}
+
 		count := 0
 		size := 0
+
 		events := make([]Event, 0, el.batchMaxItems)
 		for count < len(el.queue) && count < el.batchMaxItems {
 			next := el.queue[count]
 			if size+next.bytes > el.batchMaxBytes {
 				break
 			}
+
 			events = append(events, next.event)
 			size += next.bytes
 			count++
 		}
+
 		clear(el.queue[:count])
 		el.queue = el.queue[count:]
 		el.queuedBytes -= size
@@ -524,14 +600,18 @@ func normalizeEvent(system, sessionID, eventName, level, msg string, attrs Attrs
 	if event.System == "" {
 		event.System = "unknown"
 	}
+
 	if event.SessionID == "" {
 		event.SessionID = "_no-session"
 	}
+
 	if event.EventName == "" {
 		event.EventName = "_unknown"
 	}
+
 	event.Decision.CanBlock = event.Decision.Kind == "block"
 	event.Violations = violationsFromAttrs(event.Decision.RulesMatched, event.Decision.Kind, attrs)
+
 	return event
 }
 
@@ -556,15 +636,30 @@ func violationsFromAttrs(rules []string, decision string, attrs Attrs) []Violati
 	if len(rules) == 0 {
 		return nil
 	}
+
 	mode := "blocking"
 	if decision == "audit_only" {
 		mode = "audit_only"
 	}
+
 	message := stringAttr(attrs, "violation_message", "")
+
 	out := make([]Violation, 0, len(rules))
 	for _, rule := range rules {
-		out = append(out, Violation{Rule: rule, Mode: mode, FieldPath: "", FilePath: "", Start: 0, End: 0, Message: message})
+		out = append(
+			out,
+			Violation{
+				Rule:      rule,
+				Mode:      mode,
+				FieldPath: "",
+				FilePath:  "",
+				Start:     0,
+				End:       0,
+				Message:   message,
+			},
+		)
 	}
+
 	return out
 }
 
@@ -574,8 +669,10 @@ func dedupFingerprint(event Event, attrs Attrs) string {
 		if key == "time" {
 			continue
 		}
+
 		stable[key] = value
 	}
+
 	stable["system"] = NewStringValue(event.System)
 	stable["session_id"] = NewStringValue(event.SessionID)
 	stable["event"] = NewStringValue(event.EventName)
@@ -586,9 +683,11 @@ func dedupFingerprint(event Event, attrs Attrs) string {
 	for key := range stable {
 		keys = append(keys, key)
 	}
+
 	sort.Strings(keys)
 
 	h := sha256.New()
+
 	for _, key := range keys {
 		_, _ = h.Write([]byte(key))
 		_, _ = h.Write([]byte{'='})
@@ -596,6 +695,7 @@ func dedupFingerprint(event Event, attrs Attrs) string {
 		_, _ = h.Write(bytes)
 		_, _ = h.Write([]byte{0})
 	}
+
 	return hex.EncodeToString(h.Sum(nil))
 }
 
@@ -620,11 +720,13 @@ func stringAttr(attrs Attrs, key, fallback string) string {
 	if attrs == nil {
 		return fallback
 	}
+
 	if value, ok := attrs[key]; ok {
 		if v := value.String(); v != "" {
 			return v
 		}
 	}
+
 	return fallback
 }
 
@@ -634,6 +736,7 @@ func firstStringAttr(attrs Attrs, keys ...string) string {
 			return v
 		}
 	}
+
 	return ""
 }
 
@@ -641,10 +744,12 @@ func stringSliceAttr(attrs Attrs, key string) []string {
 	if attrs == nil {
 		return nil
 	}
+
 	value, ok := attrs[key]
 	if !ok {
 		return nil
 	}
+
 	return value.Strings()
 }
 
@@ -660,6 +765,7 @@ func AttrsFromSlog(attrs []slog.Attr) Attrs {
 	for _, a := range attrs {
 		flattenAttr("", a, out)
 	}
+
 	return out
 }
 
@@ -668,6 +774,7 @@ func flattenAttr(prefix string, attr slog.Attr, out Attrs) {
 	if prefix != "" {
 		key = prefix + "." + key
 	}
+
 	value := attr.Value.Resolve()
 	switch value.Kind() {
 	case slog.KindGroup:

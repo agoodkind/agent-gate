@@ -66,7 +66,9 @@ func runSetupWithDependencies(
 	flags := flag.NewFlagSet("agent-gate setup", flag.ContinueOnError)
 	flags.SetOutput(setupFlagOutput(args, stdout, stderr))
 	flags.Usage = func() {
-		fmt.Fprintln(flags.Output(), `Usage: agent-gate setup [--bin-path PATH]
+		fmt.Fprintln(
+			flags.Output(),
+			`Usage: agent-gate setup [--bin-path PATH]
        agent-gate setup --non-interactive --providers LIST --audit-profile PROFILE --auto-update MODE [--bin-path PATH] [--json]
 
 Flags:
@@ -75,11 +77,17 @@ Flags:
   --audit-profile    Select full or minimal
   --auto-update      Select check, apply, or off
   --bin-path         Use the installed agent-gate binary at PATH
-  --json             Print machine-readable JSON lines`)
+  --json             Print machine-readable JSON lines`,
+		)
 	}
 	flags.BoolVar(&values.nonInteractive, "non-interactive", false, "run setup without prompts")
 	flags.StringVar(&values.providerNames, "providers", "", "comma-separated providers")
-	flags.StringVar(&values.auditProfile, "audit-profile", "", "audit storage profile: full or minimal")
+	flags.StringVar(
+		&values.auditProfile,
+		"audit-profile",
+		"",
+		"audit storage profile: full or minimal",
+	)
 	flags.StringVar(&values.autoUpdate, "auto-update", "", "update mode: check, apply, or off")
 	flags.StringVar(&values.binPath, "bin-path", "", "path to the installed agent-gate binary")
 	flags.BoolVar(&values.jsonOutput, "json", false, "print machine-readable JSON lines")
@@ -90,7 +98,12 @@ Flags:
 		return 2
 	}
 	if flags.NArg() != 0 {
-		return writeSetupFailure(stderr, values.jsonOutput, 2, fmt.Errorf("unexpected argument %q", flags.Arg(0)))
+		return writeSetupFailure(
+			stderr,
+			values.jsonOutput,
+			2,
+			fmt.Errorf("unexpected argument %q", flags.Arg(0)),
+		)
 	}
 	providersSet := flagWasSet(flags, "providers")
 	profileSet := flagWasSet(flags, "audit-profile")
@@ -99,7 +112,12 @@ Flags:
 	if values.binPath == "" {
 		values.binPath, err = dependencies.ResolveExecutable()
 		if err != nil {
-			return writeSetupFailure(stderr, values.jsonOutput, 2, fmt.Errorf("resolve running executable: %w", err))
+			return writeSetupFailure(
+				stderr,
+				values.jsonOutput,
+				2,
+				fmt.Errorf("resolve running executable: %w", err),
+			)
 		}
 	}
 	coordinatorDependencies := dependencies.Coordinator
@@ -142,7 +160,12 @@ Flags:
 		}
 		if !confirmed {
 			if _, err := fmt.Fprintln(stdout, "setup cancelled"); err != nil {
-				return writeSetupFailure(stderr, false, 1, fmt.Errorf("write cancellation: %w", err))
+				return writeSetupFailure(
+					stderr,
+					false,
+					1,
+					fmt.Errorf("write cancellation: %w", err),
+				)
 			}
 			return 0
 		}
@@ -167,14 +190,21 @@ func selectSetupOptions(
 	coordinatorDependencies setup.Dependencies,
 ) (setup.Options, Prompter, error) {
 	if values.nonInteractive {
-		options, err := selectNonInteractiveSetupOptions(values, providersSet, profileSet, autoUpdateSet)
+		options, err := selectNonInteractiveSetupOptions(
+			values,
+			providersSet,
+			profileSet,
+			autoUpdateSet,
+		)
 		return options, nil, err
 	}
 	if values.jsonOutput {
 		return setup.Options{}, nil, errors.New("--json requires --non-interactive")
 	}
 	if providersSet || profileSet || autoUpdateSet {
-		return setup.Options{}, nil, errors.New("--providers, --audit-profile, and --auto-update require --non-interactive")
+		return setup.Options{}, nil, errors.New(
+			"--providers, --audit-profile, and --auto-update require --non-interactive",
+		)
 	}
 	detectProviders := dependencies.DetectProviders
 	if detectProviders == nil {
@@ -212,7 +242,10 @@ func selectSetupOptions(
 		return setup.Options{}, nil, err
 	}
 	return setup.Options{
-		BinPath: values.binPath, Providers: providers, AuditProfile: profile, AutoUpdate: "",
+		BinPath:      values.binPath,
+		Providers:    providers,
+		AuditProfile: profile,
+		AutoUpdate:   "",
 	}, prompter, nil
 }
 
@@ -251,8 +284,10 @@ func selectNonInteractiveSetupOptions(
 		return setup.Options{}, err
 	}
 	return setup.Options{
-		BinPath: values.binPath, Providers: providers,
-		AuditProfile: config.AuditStorageProfile(values.auditProfile), AutoUpdate: values.autoUpdate,
+		BinPath:      values.binPath,
+		Providers:    providers,
+		AuditProfile: config.AuditStorageProfile(values.auditProfile),
+		AutoUpdate:   values.autoUpdate,
 	}, nil
 }
 
@@ -292,7 +327,9 @@ func setupFlagOutput(args []string, stdout io.Writer, stderr io.Writer) io.Write
 func writeSetupPreview(writer io.Writer, jsonOutput bool, plan *setup.Plan) error {
 	if jsonOutput {
 		output := setupPreviewOutput{
-			Phase: "preview", Providers: plan.Providers, EffectivePolicy: plan.EffectivePolicy,
+			Phase:           "preview",
+			Providers:       plan.Providers,
+			EffectivePolicy: plan.EffectivePolicy,
 		}
 		if err := json.NewEncoder(writer).Encode(output); err != nil {
 			wrappedErr := fmt.Errorf("encode setup preview: %w", err)
@@ -307,7 +344,10 @@ func writeSetupPreview(writer io.Writer, jsonOutput bool, plan *setup.Plan) erro
 
 func writeSetupComplete(writer io.Writer, jsonOutput bool, result setup.Result) error {
 	if jsonOutput {
-		if err := json.NewEncoder(writer).Encode(setupCompleteOutput{Phase: "complete", Result: result}); err != nil {
+		if err := json.NewEncoder(writer).Encode(setupCompleteOutput{
+			Phase:  "complete",
+			Result: result,
+		}); err != nil {
 			wrappedErr := fmt.Errorf("encode setup result: %w", err)
 			slog.Warn("setup result encoding failed", "err", wrappedErr)
 			return wrappedErr

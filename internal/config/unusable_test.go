@@ -15,6 +15,7 @@ func writeUnusableConfig(t *testing.T, body string) string {
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
+
 	return path
 }
 
@@ -58,34 +59,43 @@ func TestADecodeFailureStartsWithNothingRatherThanRefusing(t *testing.T) {
 		{"unparseable", unparseable},
 		{"wrong type for the schema", wrongType},
 	} {
-		t.Run(testCase.name, func(t *testing.T) {
-			path := writeUnusableConfig(t, testCase.body)
+		t.Run(
+			testCase.name,
+			func(t *testing.T) {
+				path := writeUnusableConfig(t, testCase.body)
 
-			// Strict load still refuses it, so install-time validation catches
-			// the mistake before it reaches a running daemon.
-			if _, err := config.LoadExisting(path); err == nil {
-				t.Fatal("strict load accepted a config that does not decode")
-			}
+				// Strict load still refuses it, so install-time validation catches
+				// the mistake before it reaches a running daemon.
+				if _, err := config.LoadExisting(path); err == nil {
+					t.Fatal("strict load accepted a config that does not decode")
+				}
 
-			cfg, err := config.LoadDegradedPath(path)
-			if err != nil {
-				t.Fatalf("degraded load refused to start: %v", err)
-			}
-			if !cfg.Unusable() {
-				t.Fatal("Unusable() = false, so nothing downstream knows enforcement is gone")
-			}
-			if len(cfg.Rules) != 0 {
-				t.Fatalf("rules = %d, want none; a partial decode must not reach enforcement",
-					len(cfg.Rules))
-			}
-			failures := cfg.Failures()
-			if len(failures) != 1 || failures[0].Kind != config.LoadFailureDocument {
-				t.Fatalf("failures = %v, want one document failure", failures)
-			}
-			if !strings.Contains(failures[0].Scope, "config.toml") {
-				t.Fatalf("failure scope = %q, want the config path", failures[0].Scope)
-			}
-		})
+				cfg, err := config.LoadDegradedPath(path)
+				if err != nil {
+					t.Fatalf("degraded load refused to start: %v", err)
+				}
+
+				if !cfg.Unusable() {
+					t.Fatal("Unusable() = false, so nothing downstream knows enforcement is gone")
+				}
+
+				if len(cfg.Rules) != 0 {
+					t.Fatalf(
+						"rules = %d, want none; a partial decode must not reach enforcement",
+						len(cfg.Rules),
+					)
+				}
+
+				failures := cfg.Failures()
+				if len(failures) != 1 || failures[0].Kind != config.LoadFailureDocument {
+					t.Fatalf("failures = %v, want one document failure", failures)
+				}
+
+				if !strings.Contains(failures[0].Scope, "config.toml") {
+					t.Fatalf("failure scope = %q, want the config path", failures[0].Scope)
+				}
+			},
+		)
 	}
 }
 
@@ -111,12 +121,15 @@ pattern = '''['''
 	if err != nil {
 		t.Fatalf("degraded load: %v", err)
 	}
+
 	if cfg.Unusable() {
 		t.Fatal("a file that decoded was reported unusable")
 	}
+
 	if !cfg.Degraded() {
 		t.Fatal("Degraded() = false after dropping a rule")
 	}
+
 	if len(cfg.Rules) != 1 {
 		t.Fatalf("rules = %d, want the one that compiles", len(cfg.Rules))
 	}
@@ -130,8 +143,12 @@ func TestAnAbsentConfigIsNotUnusable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("degraded load with no file: %v", err)
 	}
+
 	if cfg.Unusable() || cfg.Degraded() {
-		t.Fatalf("an absent config reported unusable=%v degraded=%v",
-			cfg.Unusable(), cfg.Degraded())
+		t.Fatalf(
+			"an absent config reported unusable=%v degraded=%v",
+			cfg.Unusable(),
+			cfg.Degraded(),
+		)
 	}
 }

@@ -32,7 +32,13 @@ type MatchResult struct {
 
 // EvalFieldMatches evaluates re against every field selected by selectors and
 // returns one MatchResult per match position found.
-func EvalFieldMatches(fields FieldAccessor, selectors []config.FieldSelectorSpec, re Matcher, diagnosticGroup int, limit int) []MatchResult {
+func EvalFieldMatches(
+	fields FieldAccessor,
+	selectors []config.FieldSelectorSpec,
+	re Matcher,
+	diagnosticGroup int,
+	limit int,
+) []MatchResult {
 	if limit <= 0 {
 		return nil
 	}
@@ -45,26 +51,39 @@ func EvalFieldMatches(fields FieldAccessor, selectors []config.FieldSelectorSpec
 	var matches []MatchResult
 	filePath := fields.FilePathValue()
 	remaining := limit
+
 	for _, selector := range selectors {
 		if remaining == 0 {
 			break
 		}
+
 		value := fields.String(selector.Selector)
 		if value == "" {
 			continue
 		}
-		re.ForEachStringGroupIndex(value, remaining, group, func(start int, end int) bool {
-			matches = append(matches, MatchResult{
-				FieldPath: selector.Path,
-				FilePath:  filePath,
-				Value:     value,
-				Start:     start,
-				End:       end,
-			})
-			remaining--
-			return remaining > 0
-		})
+
+		re.ForEachStringGroupIndex(
+			value,
+			remaining,
+			group,
+			func(start int, end int) bool {
+				matches = append(
+					matches,
+					MatchResult{
+						FieldPath: selector.Path,
+						FilePath:  filePath,
+						Value:     value,
+						Start:     start,
+						End:       end,
+					},
+				)
+				remaining--
+
+				return remaining > 0
+			},
+		)
 	}
+
 	return matches
 }
 
@@ -74,6 +93,7 @@ func EvalFieldMatches(fields FieldAccessor, selectors []config.FieldSelectorSpec
 //   - NotPattern is unset or does NOT match the extracted value.
 func ConditionMatch(fields FieldAccessor, c *config.Condition) bool {
 	var value string
+
 	for _, selector := range c.Selectors() {
 		v := fields.String(selector.Selector)
 		if v != "" {
@@ -81,11 +101,14 @@ func ConditionMatch(fields FieldAccessor, c *config.Condition) bool {
 			break
 		}
 	}
+
 	if c.CompiledPattern() != nil && !c.CompiledPattern().MatchString(value) {
 		return false
 	}
+
 	if c.CompiledNotPattern() != nil && c.CompiledNotPattern().MatchString(value) {
 		return false
 	}
+
 	return true
 }

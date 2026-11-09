@@ -39,7 +39,11 @@ func newBuildIdentity(
 	open func(string) (io.ReadCloser, error),
 ) *buildIdentity {
 	return &buildIdentity{
-		once: sync.Once{}, resolve: resolve, open: open, hash: "", err: nil,
+		once:    sync.Once{},
+		resolve: resolve,
+		open:    open,
+		hash:    "",
+		err:     nil,
 	}
 }
 
@@ -50,11 +54,13 @@ func (identity *buildIdentity) initialize() error {
 			identity.err = fmt.Errorf("resolve executable: %w", err)
 			return
 		}
+
 		reader, err := identity.open(path)
 		if err != nil {
 			identity.err = fmt.Errorf("open executable: %w", err)
 			return
 		}
+
 		digest := sha256.New()
 		_, copyErr := io.Copy(digest, reader)
 		closeErr := reader.Close()
@@ -62,12 +68,15 @@ func (identity *buildIdentity) initialize() error {
 			identity.err = fmt.Errorf("hash executable: %w", copyErr)
 			return
 		}
+
 		if closeErr != nil {
 			identity.err = fmt.Errorf("close executable after hashing: %w", closeErr)
 			return
 		}
+
 		identity.hash = hex.EncodeToString(digest.Sum(nil))[:12]
 	})
+
 	return identity.err
 }
 
@@ -75,6 +84,7 @@ func (identity *buildIdentity) value() string {
 	if err := identity.initialize(); err != nil {
 		return "unknown"
 	}
+
 	return identity.hash
 }
 

@@ -71,15 +71,24 @@ func (runtime *InferRuntime) collectRichTrace(
 	if collector == nil {
 		return
 	}
+
 	call := richTraceCall{
-		rule: rule, condition: condition, conditionIndex: conditionIndex,
-		input: input, contextWorkspace: contextWorkspace, contextSession: contextSession,
-		cacheKey: cacheKey, startedAt: startedAt, completedAt: completedAt, result: result,
+		rule:             rule,
+		condition:        condition,
+		conditionIndex:   conditionIndex,
+		input:            input,
+		contextWorkspace: contextWorkspace,
+		contextSession:   contextSession,
+		cacheKey:         cacheKey,
+		startedAt:        startedAt,
+		completedAt:      completedAt,
+		result:           result,
 	}
 	parentIndex := 0
 	if condition.ContextSource != "" {
 		parentIndex = collectRichContextTrace(collector, call)
 	}
+
 	collectRichInferenceTrace(collector, call, parentIndex)
 }
 
@@ -87,7 +96,8 @@ func collectRichContextTrace(collector *richTraceCollector, call richTraceCall) 
 	condition := call.condition
 	result := call.result
 	contextInput := marshalContextTraceJSON(contextLayerInput{
-		Workspace: call.contextWorkspace, Session: call.contextSession,
+		Workspace:       call.contextWorkspace,
+		Session:         call.contextSession,
 		TurnBudget:      condition.ContextTurnBudget,
 		MaxCharsPerTurn: condition.ContextMaxCharsPerTurn,
 		Endpoint:        condition.ContextEndpoint,
@@ -111,6 +121,7 @@ func collectRichContextTrace(collector *richTraceCollector, call richTraceCall) 
 		contextStatus = traceStatusError
 		contextOutput = json.RawMessage(`{}`)
 	}
+
 	contextLayer := newLayerTrace(
 		call.rule.Name,
 		call.conditionIndex,
@@ -132,6 +143,7 @@ func collectRichContextTrace(collector *richTraceCollector, call richTraceCall) 
 	contextLayer.ErrorCode = contextErrorCode
 	contextLayer.ErrorMessage = contextErrorMessage
 	collector.collect(contextLayer)
+
 	return collector.traceIndex(call.rule.Name, call.conditionIndex, "context")
 }
 
@@ -146,31 +158,39 @@ func collectRichInferenceTrace(
 	if len(contextJSON) == 0 {
 		contextJSON = json.RawMessage(`{}`)
 	}
+
 	inputJSON := marshalInferenceTraceJSON(inferenceLayerInput{
-		Prompt: condition.Prompt, Input: call.input,
-		OutputSchema: json.RawMessage(condition.OutputSchema), Context: contextJSON,
-		ConfiguredModel: condition.Model, GenerationOptions: generationOptions(condition),
-		ResponseField:  condition.ResponseJSONField,
-		ResponseEquals: condition.ResponseJSONEqualsValue().CanonicalString(),
-		BlockOn:        condition.BlockOn,
+		Prompt:            condition.Prompt,
+		Input:             call.input,
+		OutputSchema:      json.RawMessage(condition.OutputSchema),
+		Context:           contextJSON,
+		ConfiguredModel:   condition.Model,
+		GenerationOptions: generationOptions(condition),
+		ResponseField:     condition.ResponseJSONField,
+		ResponseEquals:    condition.ResponseJSONEqualsValue().CanonicalString(),
+		BlockOn:           condition.BlockOn,
 	})
 	outputJSON := append(json.RawMessage(nil), result.outputJSON...)
 	if len(outputJSON) == 0 {
 		outputJSON = json.RawMessage(`{}`)
 	}
+
 	inferenceStartedAt := call.startedAt
 	if condition.ContextSource != "" && !result.contextCompletedAt.IsZero() {
 		inferenceStartedAt = result.contextCompletedAt
 	}
+
 	statusValue := traceStatusComplete
 	outcome := "nonmatch"
 	if result.matched {
 		outcome = "match"
 	}
+
 	if result.errored {
 		statusValue = traceStatusError
 		outcome = ""
 	}
+
 	layer := newLayerTrace(call.rule.Name, call.conditionIndex, condition.LayerName, "inference")
 	layer.Status = statusValue
 	layer.Outcome = outcome
@@ -184,16 +204,17 @@ func collectRichInferenceTrace(
 	layer.OutputHash = traceJSONHash(outputJSON)
 	layer.ServiceName = "inference"
 	layer.VerifiedProvenance = verifiedInferenceProvenance(
-		condition, call.input, call.cacheKey, result,
+		condition,
+		call.input,
+		call.cacheKey,
+		result,
 	)
 	layer.CacheStatus = result.cacheStatus
 	layer.CacheKeyHash = layer.VerifiedProvenance.CacheKeyHash
 	layer.CacheEntryVersion = result.cacheEntryVersion
 	layer.CacheExpiresAt = result.cacheExpiresAt
 	layer.UpstreamMetadata = result.upstreamMetadata
-	layer.UpstreamMetadata.Raw = append(
-		json.RawMessage(nil), result.upstreamMetadata.Raw...,
-	)
+	layer.UpstreamMetadata.Raw = append(json.RawMessage(nil), result.upstreamMetadata.Raw...)
 	layer.ErrorCode = result.errorClass
 	layer.ErrorMessage = sanitizedTraceError(result.errorClass)
 	collector.collect(layer)
@@ -204,6 +225,7 @@ func marshalContextTraceJSON(value contextLayerInput) json.RawMessage {
 	if err != nil {
 		return json.RawMessage(`{}`)
 	}
+
 	return encoded
 }
 
@@ -212,6 +234,7 @@ func marshalInferenceTraceJSON(value inferenceLayerInput) json.RawMessage {
 	if err != nil {
 		return json.RawMessage(`{}`)
 	}
+
 	return encoded
 }
 

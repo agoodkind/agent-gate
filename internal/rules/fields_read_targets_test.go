@@ -12,8 +12,10 @@ var readTargetsTestTools = []string{"grep", "rg"}
 
 var readTargetsTestEnumerationSpecs = []config.EnumerationSpec{
 	{
-		Argv0: []string{"find"}, TargetMode: config.EnumerationTargetAllOperands, DefaultCWD: true,
-		Arguments: config.ArgumentSpec{OperandsBeforeOptions: true, UnknownOptions: "skip"},
+		Argv0:      []string{"find"},
+		TargetMode: config.EnumerationTargetAllOperands,
+		DefaultCWD: true,
+		Arguments:  config.ArgumentSpec{OperandsBeforeOptions: true, UnknownOptions: "skip"},
 	},
 }
 
@@ -30,18 +32,31 @@ func TestCmdReadTargetsField(t *testing.T) {
 		{"cd rebases bare rg target to cd dir", `cd /elsewhere && rg "x"`, "/elsewhere"},
 		{"cd to unresolvable var drops the target", `cd "$VAR" && grep -rn "x" .`, ""},
 		{"find piped to bare grep enumerates its dir", `find Tests | grep -iE "x"`, "/repo/Tests"},
-		{"find name piped to xargs grep targets cwd", `find . -name '*.swift' | xargs grep -l x`, "/repo"},
+		{
+			"find name piped to xargs grep targets cwd",
+			`find . -name '*.swift' | xargs grep -l x`,
+			"/repo",
+		},
 		{"unexpanded var dropped", `grep -n "x" "$dir/a.go"`, ""},
 	}
 
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			fields := FieldSet{ToolInputCommand: tc.command, CWD: "/repo"}
-			got := fields.CmdReadTargetsWithPolicy(readTargetsTestTools, nil, readTargetsTestEnumerationSpecs, false, nil)
-			if got != tc.want {
-				t.Fatalf("cmd_read_targets for %q = %q, want %q", tc.command, got, tc.want)
-			}
-		})
+		t.Run(
+			tc.name,
+			func(t *testing.T) {
+				fields := FieldSet{ToolInputCommand: tc.command, CWD: "/repo"}
+				got := fields.CmdReadTargetsWithPolicy(
+					readTargetsTestTools,
+					nil,
+					readTargetsTestEnumerationSpecs,
+					false,
+					nil,
+				)
+				if got != tc.want {
+					t.Fatalf("cmd_read_targets for %q = %q, want %q", tc.command, got, tc.want)
+				}
+			},
+		)
 	}
 }
 
@@ -53,6 +68,7 @@ func TestCmdReadTargetsRequiresDeclaredTools(t *testing.T) {
 	if got := fields.CmdReadTargets(nil, nil, nil); got != "" {
 		t.Fatalf("CmdReadTargets(nil, nil, nil) = %q, want empty", got)
 	}
+
 	if got := fields.String(config.FieldCmdReadTargets); got != "" {
 		t.Fatalf("generic cmd_read_targets selector = %q, want empty", got)
 	}

@@ -137,7 +137,11 @@ func printVersion(writer io.Writer) {
 }
 
 func main() {
-	slog.New(slog.NewJSONHandler(io.Discard, nil)).Info("agent-gate invocation", "argc", len(os.Args))
+	slog.New(slog.NewJSONHandler(io.Discard, nil)).Info(
+		"agent-gate invocation",
+		"argc",
+		len(os.Args),
+	)
 	// Hook panics are recovered in runHook so availability failures do not block.
 	defer func() {
 		if r := recover(); r != nil {
@@ -187,7 +191,8 @@ func runCLIWithHook(
 			return 2
 		}
 		return hookRunner(hookRoute{
-			ProviderHint: hook.SystemUnknown, ManagedRegistration: args[1],
+			ProviderHint:        hook.SystemUnknown,
+			ManagedRegistration: args[1],
 		})
 	case commandResponseHook:
 		return hookRunner(hookRoute{ProviderHint: hook.SystemResponse})
@@ -217,7 +222,9 @@ func runCLIWithHook(
 }
 
 func writeUsage(writer io.Writer) {
-	_, _ = io.WriteString(writer, `Usage: agent-gate [command]
+	_, _ = io.WriteString(
+		writer,
+		`Usage: agent-gate [command]
 
 Commands:
   audit          Inspect and maintain audit storage
@@ -239,7 +246,8 @@ Commands:
   version        Show build information
 
 Run without a command only from a hook integration.
-`)
+`,
+	)
 }
 
 func runDaemon(stderr io.Writer) int {
@@ -252,14 +260,24 @@ func runDaemon(stderr io.Writer) int {
 	}
 	for _, failure := range cfg.Failures() {
 		fmt.Fprintf(stderr, "agent-gate: daemon: config degraded: %s\n", failure)
-		log.Error("config degraded", "kind", failure.Kind,
-			"scope", failure.Scope, "err", failure.Reason)
+		log.Error(
+			"config degraded",
+			"kind",
+			failure.Kind,
+			"scope",
+			failure.Scope,
+			"err",
+			failure.Reason,
+		)
 	}
 	if cfg.Unusable() {
-		fmt.Fprintf(stderr,
+		fmt.Fprintf(
+			stderr,
 			"agent-gate: daemon: NO RULES ARE LOADED. Every call is allowed "+
 				"without enforcement until the config parses. Fix %s and the "+
-				"daemon reloads on save.\n", config.Path())
+				"daemon reloads on save.\n",
+			config.Path(),
+		)
 	}
 	telemCloser, telemErr := telemetry.Setup(telemetry.Options{
 		OTLPEndpoint:      cfg.Telemetry.OTLPEndpoint,
@@ -280,7 +298,12 @@ func runDaemon(stderr io.Writer) int {
 func connectDaemon(ctx context.Context) (*daemon.Client, error) {
 	socketPath := config.DaemonSocketPath()
 	if _, statErr := os.Stat(socketPath); statErr != nil {
-		slog.WarnContext(ctx, "daemon socket unavailable", slog.String("socket_path", socketPath), slog.Any("err", statErr))
+		slog.WarnContext(
+			ctx,
+			"daemon socket unavailable",
+			slog.String("socket_path", socketPath),
+			slog.Any("err", statErr),
+		)
 		return nil, fmt.Errorf("daemon socket unavailable at %s: %w", socketPath, statErr)
 	}
 	return daemon.Connect(ctx)
@@ -341,8 +364,7 @@ func runDaemonStatus() int {
 	_, _ = fmt.Fprintf(os.Stdout, "buildHash:        %s\n", resp.BuildHash)
 	_, _ = fmt.Fprintf(os.Stdout, "rules:            %d\n", resp.RulesLoaded)
 	if resp.ConfigError != "" {
-		_, _ = fmt.Fprintf(os.Stdout,
-			"enforcement:      ABSENT, every call is allowed\n")
+		_, _ = fmt.Fprintf(os.Stdout, "enforcement:      ABSENT, every call is allowed\n")
 		_, _ = fmt.Fprintf(os.Stdout, "                  %s\n", resp.ConfigError)
 	}
 	reportFailOpenHistory(os.Stdout)
@@ -366,13 +388,23 @@ func reportFailOpenHistory(out io.Writer) {
 	if summary.Truncated {
 		qualifier = "at least "
 	}
-	_, _ = fmt.Fprintf(out,
+	_, _ = fmt.Fprintf(
+		out,
 		"unevaluated:      1hr: %s%d, 24hr: %s%d, 7day: %s%d, 90day: %s%d calls allowed without enforcement\n",
-		qualifier, summary.LastHour, qualifier, summary.Last24Hours,
-		qualifier, summary.Last7Days, qualifier, summary.Last90Days)
+		qualifier,
+		summary.LastHour,
+		qualifier,
+		summary.Last24Hours,
+		qualifier,
+		summary.Last7Days,
+		qualifier,
+		summary.Last90Days,
+	)
 	if summary.Truncated {
-		_, _ = fmt.Fprintf(out,
-			"                  the record hit its size cap, so later calls went unrecorded\n")
+		_, _ = fmt.Fprintf(
+			out,
+			"                  the record hit its size cap, so later calls went unrecorded\n",
+		)
 	}
 	if summary.Count > 0 || summary.Truncated {
 		_, _ = fmt.Fprintf(out, "                  see %s\n", daemon.FailOpenRecordPath())
@@ -387,11 +419,7 @@ func runConfig(args []string) int {
 			return 1
 		}
 		if validationErrors := hook.ValidateConfig(cfg); len(validationErrors) > 0 {
-			fmt.Fprintf(
-				os.Stderr,
-				"agent-gate: config check failed: %v\n",
-				validationErrors[0],
-			)
+			fmt.Fprintf(os.Stderr, "agent-gate: config check failed: %v\n", validationErrors[0])
 			return 1
 		}
 		if err := daemon.ValidateRecordableRuleSet(cfg.Rules); err != nil {
@@ -408,7 +436,10 @@ func runConfig(args []string) int {
 	if len(args) == 2 && args[0] == "recover" {
 		return runConfigRecover(args[1])
 	}
-	fmt.Fprintln(os.Stderr, "usage: agent-gate config check | ensure-defaults [--auto-update check|apply|off] | recover <candidate-path>")
+	fmt.Fprintln(
+		os.Stderr,
+		"usage: agent-gate config check | ensure-defaults [--auto-update check|apply|off] | recover <candidate-path>",
+	)
 	return 2
 }
 
@@ -424,7 +455,11 @@ func runConfigRecover(candidatePath string) int {
 	}
 	if validationErrors := hook.ValidateConfig(plan.Config); len(validationErrors) > 0 {
 		_ = plan.Close()
-		fmt.Fprintf(os.Stderr, "agent-gate: config recover validation failed: %v\n", validationErrors[0])
+		fmt.Fprintf(
+			os.Stderr,
+			"agent-gate: config recover validation failed: %v\n",
+			validationErrors[0],
+		)
 		return 1
 	}
 	configPath, err := config.ApplyDefaults(plan)
@@ -490,7 +525,10 @@ func runUpdateCheck(args []string) int {
 		fmt.Fprintf(os.Stderr, "agent-gate: update check config load failed: %v\n", err)
 		return 1
 	}
-	result, err := selfupdate.Check(context.Background(), updateopts.Options(cfg, updateopts.Overrides{}))
+	result, err := selfupdate.Check(
+		context.Background(),
+		updateopts.Options(cfg, updateopts.Overrides{}),
+	)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent-gate: update check failed: %v\n", err)
 		return 1
@@ -520,7 +558,10 @@ func runUpdateApply(args []string) int {
 		fmt.Fprintf(os.Stderr, "agent-gate: update apply config load failed: %v\n", err)
 		return 1
 	}
-	result, err := selfupdate.Apply(context.Background(), updateopts.Options(cfg, updateopts.Overrides{DryRun: dryRun}))
+	result, err := selfupdate.Apply(
+		context.Background(),
+		updateopts.Options(cfg, updateopts.Overrides{DryRun: dryRun}),
+	)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent-gate: update apply failed: %v\n", err)
 		return 1
@@ -596,11 +637,19 @@ func restartManagedDaemon() (bool, error) {
 	}
 	process, err := os.FindProcess(int(status.Pid))
 	if err != nil {
-		slog.Warn("restart managed daemon process lookup failed", slog.Int64("pid", status.Pid), slog.Any("err", err))
+		slog.Warn(
+			"restart managed daemon process lookup failed",
+			slog.Int64("pid", status.Pid),
+			slog.Any("err", err),
+		)
 		return false, fmt.Errorf("find daemon process: %w", err)
 	}
 	if err := process.Signal(syscall.SIGTERM); err != nil {
-		slog.Warn("restart managed daemon signal failed", slog.Int64("pid", status.Pid), slog.Any("err", err))
+		slog.Warn(
+			"restart managed daemon signal failed",
+			slog.Int64("pid", status.Pid),
+			slog.Any("err", err),
+		)
 		return false, fmt.Errorf("signal daemon: %w", err)
 	}
 	deadline := time.Now().Add(15 * time.Second)
@@ -651,7 +700,10 @@ type kvJSONResult struct {
 func runKV(args []string) int {
 	args, jsonOut := stripJSONFlag(args)
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: agent-gate kv [--json] get|set|del|exists|ttl|pttl|expire|getdel namespace key ...")
+		fmt.Fprintln(
+			os.Stderr,
+			"usage: agent-gate kv [--json] get|set|del|exists|ttl|pttl|expire|getdel namespace key ...",
+		)
 		return 2
 	}
 
@@ -731,7 +783,10 @@ func runKVGet(client *daemon.Client, args []string, jsonOut bool) int {
 
 func runKVSet(client *daemon.Client, args []string, jsonOut bool) int {
 	if len(args) < 3 {
-		fmt.Fprintln(os.Stderr, "usage: agent-gate kv set namespace key value [NX|XX] [PX milliseconds]")
+		fmt.Fprintln(
+			os.Stderr,
+			"usage: agent-gate kv set namespace key value [NX|XX] [PX milliseconds]",
+		)
 		return 2
 	}
 	mode := ""
@@ -893,7 +948,10 @@ func runKVTTL(client *daemon.Client, args []string, jsonOut bool, precise bool) 
 
 func runKVList(client *daemon.Client, args []string, jsonOut bool) int {
 	if len(args) < 1 || len(args) > 4 {
-		fmt.Fprintln(os.Stderr, "usage: agent-gate kv list namespace [prefix] [limit] [with-values]")
+		fmt.Fprintln(
+			os.Stderr,
+			"usage: agent-gate kv list namespace [prefix] [limit] [with-values]",
+		)
 		return 2
 	}
 	prefix := ""
@@ -927,7 +985,10 @@ func runKVList(client *daemon.Client, args []string, jsonOut bool) int {
 		for _, entry := range resp.GetEntries() {
 			entries = append(entries, *jsonEntry(entry, includeValues))
 		}
-		return writeKVJSON(kvJSONResult{Command: "list", Entries: entries})
+		return writeKVJSON(kvJSONResult{
+			Command: "list",
+			Entries: entries,
+		})
 	}
 	for _, entry := range resp.GetEntries() {
 		if includeValues {
@@ -1104,26 +1165,45 @@ func microsToDollars(micros int64) float64 {
 
 func printCostReport(result evaluation.CostReportResult) {
 	_, _ = fmt.Fprintf(
-		os.Stdout, "source=%s since=%s until=%s window_days=%.2f\n",
-		result.Source, costWindowLabel(result.Since), costWindowLabel(result.Until), result.WindowDays,
+		os.Stdout,
+		"source=%s since=%s until=%s window_days=%.2f\n",
+		result.Source,
+		costWindowLabel(result.Since),
+		costWindowLabel(result.Until),
+		result.WindowDays,
 	)
 	if result.Note != "" {
 		_, _ = fmt.Fprintf(os.Stdout, "note=%s\n", result.Note)
 	}
 	_, _ = fmt.Fprintf(
-		os.Stdout, "%-32s  %-6s  %-13s  %-13s  %-13s  %-11s  %s\n",
-		"model", "calls", "prompt_tokens", "cached_tokens", "compl_tokens", "est_cost_$", "priced",
+		os.Stdout,
+		"%-32s  %-6s  %-13s  %-13s  %-13s  %-11s  %s\n",
+		"model",
+		"calls",
+		"prompt_tokens",
+		"cached_tokens",
+		"compl_tokens",
+		"est_cost_$",
+		"priced",
 	)
 	for _, model := range result.Models {
 		_, _ = fmt.Fprintf(
-			os.Stdout, "%-32s  %-6d  %-13d  %-13d  %-13d  %-11.6f  %v\n",
-			model.Model, model.Calls, model.PromptTokens, model.CachedTokens,
-			model.CompletionTokens, microsToDollars(model.EstimatedCostMicros), model.Priced,
+			os.Stdout,
+			"%-32s  %-6d  %-13d  %-13d  %-13d  %-11.6f  %v\n",
+			model.Model,
+			model.Calls,
+			model.PromptTokens,
+			model.CachedTokens,
+			model.CompletionTokens,
+			microsToDollars(model.EstimatedCostMicros),
+			model.Priced,
 		)
 	}
 	_, _ = fmt.Fprintf(
-		os.Stdout, "total_billed=$%.6f  projected_monthly=$%.4f\n",
-		microsToDollars(result.TotalBilledCostMicros), microsToDollars(result.ProjectedMonthlyMicros),
+		os.Stdout,
+		"total_billed=$%.6f  projected_monthly=$%.4f\n",
+		microsToDollars(result.TotalBilledCostMicros),
+		microsToDollars(result.ProjectedMonthlyMicros),
 	)
 	printCostCacheLines(result)
 	printCostDailyTable(result.Daily)
@@ -1136,8 +1216,11 @@ func printCostCacheLines(result evaluation.CostReportResult) {
 		_, _ = fmt.Fprintf(os.Stdout, "dedup_cache=no hit/miss decisions recorded\n")
 	} else {
 		_, _ = fmt.Fprintf(
-			os.Stdout, "dedup_cache=hits %d misses %d hit_rate %.1f%%\n",
-			cache.Hits, cache.Misses, cache.HitRate()*100,
+			os.Stdout,
+			"dedup_cache=hits %d misses %d hit_rate %.1f%%\n",
+			cache.Hits,
+			cache.Misses,
+			cache.HitRate()*100,
 		)
 	}
 	if result.CachedTokensAvailable {
@@ -1156,8 +1239,12 @@ func printCostDailyTable(daily []evaluation.DailyCost) {
 	_, _ = fmt.Fprintf(os.Stdout, "%-12s  %-32s  %-6s  %s\n", "day", "model", "calls", "est_cost_$")
 	for _, row := range daily {
 		_, _ = fmt.Fprintf(
-			os.Stdout, "%-12s  %-32s  %-6d  %.6f\n",
-			row.Day, row.Model, row.Calls, microsToDollars(row.EstimatedCostMicros),
+			os.Stdout,
+			"%-12s  %-32s  %-6d  %.6f\n",
+			row.Day,
+			row.Model,
+			row.Calls,
+			microsToDollars(row.EstimatedCostMicros),
 		)
 	}
 }
@@ -1169,7 +1256,15 @@ type sharedQueryFlags struct {
 	jsonOut bool
 }
 
-func registerSharedQueryFlags(fs *flag.FlagSet, shared *sharedQueryFlags, system *string, session *string, event *string, tool *string, limit *int) {
+func registerSharedQueryFlags(
+	fs *flag.FlagSet,
+	shared *sharedQueryFlags,
+	system *string,
+	session *string,
+	event *string,
+	tool *string,
+	limit *int,
+) {
 	fs.BoolVar(&shared.today, "today", false, "show events since local midnight")
 	fs.StringVar(&shared.since, "since", "", "show events since duration or RFC3339 time")
 	fs.StringVar(&shared.until, "until", "", "show events until duration or RFC3339 time")
@@ -1246,7 +1341,15 @@ func runDecisionQuery(args []string) int {
 	fs.SetOutput(os.Stderr)
 	var filter audit.QueryFilter
 	var shared sharedQueryFlags
-	registerSharedQueryFlags(fs, &shared, &filter.System, &filter.SessionID, &filter.EventName, &filter.ToolName, &filter.Limit)
+	registerSharedQueryFlags(
+		fs,
+		&shared,
+		&filter.System,
+		&filter.SessionID,
+		&filter.EventName,
+		&filter.ToolName,
+		&filter.Limit,
+	)
 	fs.StringVar(&filter.BucketID, "bucket", "", "filter by retained UTC bucket id")
 	fs.IntVar(&filter.Offset, "offset", 0, "rows to skip")
 	fs.StringVar(&filter.Decision, "decision", "", "filter by decision")
@@ -1287,12 +1390,25 @@ func runSeenQuery(args []string) int {
 	fs.SetOutput(os.Stderr)
 	var filter intake.QueryFilter
 	var shared sharedQueryFlags
-	registerSharedQueryFlags(fs, &shared, &filter.System, &filter.SessionID, &filter.EventName, &filter.ToolName, &filter.Limit)
+	registerSharedQueryFlags(
+		fs,
+		&shared,
+		&filter.System,
+		&filter.SessionID,
+		&filter.EventName,
+		&filter.ToolName,
+		&filter.Limit,
+	)
 	fs.StringVar(&filter.BucketID, "bucket", "", "filter by retained UTC bucket id")
 	fs.IntVar(&filter.Offset, "offset", 0, "rows to skip")
 	fs.StringVar(&filter.DeferredState, "state", "", "filter by deferred replay state")
 	fs.StringVar(&filter.EventID, "event-id", "", "filter by durable event id")
-	fs.BoolVar(&filter.IncludeNormalized, "include-normalized", false, "include normalized payload JSON")
+	fs.BoolVar(
+		&filter.IncludeNormalized,
+		"include-normalized",
+		false,
+		"include normalized payload JSON",
+	)
 	fs.BoolVar(&filter.IncludeEnv, "include-env", false, "include environment fingerprint")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -1379,7 +1495,10 @@ func parseEvaluationQueryFilterWithFlags(
 	return filter, shared.jsonOut, 0
 }
 
-func loadEvaluationQueryResult(command string, filter evaluation.QueryFilter) (evaluation.QueryResult, int) {
+func loadEvaluationQueryResult(command string, filter evaluation.QueryFilter) (
+	evaluation.QueryResult,
+	int,
+) {
 	cfg, err := config.Load()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent-gate %s: config load failed: %v\n", command, err)
@@ -1485,12 +1604,21 @@ func runExport(args []string) int {
 		return 2
 	}
 	encoder := json.NewEncoder(os.Stdout)
-	if err := evaluation.Walk(context.Background(), cfg, filter, func(record evaluation.QueryRecord) error {
-		if record.Detail.State != auditstorage.DetailStateAvailable {
-			return fmt.Errorf("evaluation %s/%s lacks complete detail", record.BucketID, record.EvaluationID)
-		}
-		return encoder.Encode(record)
-	}); err != nil {
+	if err := evaluation.Walk(
+		context.Background(),
+		cfg,
+		filter,
+		func(record evaluation.QueryRecord) error {
+			if record.Detail.State != auditstorage.DetailStateAvailable {
+				return fmt.Errorf(
+					"evaluation %s/%s lacks complete detail",
+					record.BucketID,
+					record.EvaluationID,
+				)
+			}
+			return encoder.Encode(record)
+		},
+	); err != nil {
 		fmt.Fprintf(os.Stderr, "agent-gate export evaluations: %v\n", err)
 		return 1
 	}
@@ -1506,7 +1634,19 @@ func parseQueryTime(s string) (time.Time, error) {
 
 func printEventTable(source string, events []audit.QueryRecord) {
 	_, _ = fmt.Fprintf(os.Stdout, "source=%s rows=%d\n", source, len(events))
-	_, _ = fmt.Fprintf(os.Stdout, "%-16s  %-25s  %-8s  %-12s  %-12s  %-9s  %-24s  %-12s  %s\n", "bucket", "time", "system", "decision", "event", "tool", "rules", "detail", "command")
+	_, _ = fmt.Fprintf(
+		os.Stdout,
+		"%-16s  %-25s  %-8s  %-12s  %-12s  %-9s  %-24s  %-12s  %s\n",
+		"bucket",
+		"time",
+		"system",
+		"decision",
+		"event",
+		"tool",
+		"rules",
+		"detail",
+		"command",
+	)
 	for _, event := range events {
 
 		rules := "-"
@@ -1518,7 +1658,8 @@ func printEventTable(source string, events []audit.QueryRecord) {
 			cmd = cmd[:77] + "..."
 		}
 		_, _ = fmt.Fprintf(
-			os.Stdout, "%-16s  %-25s  %-8s  %-12s  %-12s  %-9s  %-24s  %-12s  %s\n",
+			os.Stdout,
+			"%-16s  %-25s  %-8s  %-12s  %-12s  %-9s  %-24s  %-12s  %s\n",
 			event.BucketID,
 			event.Time,
 			event.System,
@@ -1537,7 +1678,19 @@ func printSeenTable(result intake.QueryResult) {
 	if result.Note != "" {
 		_, _ = fmt.Fprintf(os.Stdout, "note=%s\n", result.Note)
 	}
-	_, _ = fmt.Fprintf(os.Stdout, "%-16s  %-25s  %-8s  %-12s  %-12s  %-9s  %-10s  %-12s  %s\n", "bucket", "recorded_at", "system", "state", "event", "tool", "session", "detail", "command")
+	_, _ = fmt.Fprintf(
+		os.Stdout,
+		"%-16s  %-25s  %-8s  %-12s  %-12s  %-9s  %-10s  %-12s  %s\n",
+		"bucket",
+		"recorded_at",
+		"system",
+		"state",
+		"event",
+		"tool",
+		"session",
+		"detail",
+		"command",
+	)
 	for _, record := range result.Records {
 
 		cmd := record.Operation.Command
@@ -1545,7 +1698,8 @@ func printSeenTable(result intake.QueryResult) {
 			cmd = cmd[:77] + "..."
 		}
 		_, _ = fmt.Fprintf(
-			os.Stdout, "%-16s  %-25s  %-8s  %-12s  %-12s  %-9s  %-10s  %-12s  %s\n",
+			os.Stdout,
+			"%-16s  %-25s  %-8s  %-12s  %-12s  %-9s  %-10s  %-12s  %s\n",
 			record.BucketID,
 			record.RecordedAt,
 			record.System,
@@ -1626,7 +1780,14 @@ func runHookWithRuntime(systemHint hook.System, runtime hookRuntime) (exitCode i
 		if recovered := recover(); recovered != nil {
 			diagnostic := fmt.Sprintf("agent-gate: panic: %v", recovered)
 			response := hook.FailOpenResponse(systemHint, "", diagnostic, hook.FailOpenReasonPanic)
-			daemon.RecordFailOpen(string(hook.FailOpenReasonPanic), systemHint.String(), "", "", "", diagnostic)
+			daemon.RecordFailOpen(
+				string(hook.FailOpenReasonPanic),
+				systemHint.String(),
+				"",
+				"",
+				"",
+				diagnostic,
+			)
 			writeResponse(runtime.stdout, runtime.stderr, response)
 			exitCode = response.ExitCode
 		}
@@ -1636,7 +1797,14 @@ func runHookWithRuntime(systemHint hook.System, runtime hookRuntime) (exitCode i
 	if err != nil {
 		diagnostic := fmt.Sprintf("agent-gate: read stdin: %v", err)
 		response := hook.FailOpenResponse(systemHint, "", diagnostic, hook.FailOpenReasonStdinRead)
-		daemon.RecordFailOpen(string(hook.FailOpenReasonStdinRead), systemHint.String(), "", "", "", diagnostic)
+		daemon.RecordFailOpen(
+			string(hook.FailOpenReasonStdinRead),
+			systemHint.String(),
+			"",
+			"",
+			"",
+			diagnostic,
+		)
 		writeResponse(runtime.stdout, runtime.stderr, response)
 		return response.ExitCode
 	}
@@ -1664,8 +1832,20 @@ func runHookWithRuntime(systemHint hook.System, runtime hookRuntime) (exitCode i
 	client, err := runtime.connect(ctx)
 	if err != nil {
 		diagnostic := fmt.Sprintf("agent-gate: daemon unavailable: %v", err)
-		response := hook.FailOpenResponse(systemHint, "", diagnostic, hook.FailOpenReasonDaemonUnavailable)
-		daemon.RecordFailOpen(string(hook.FailOpenReasonDaemonUnavailable), systemHint.String(), "", "", "", diagnostic)
+		response := hook.FailOpenResponse(
+			systemHint,
+			"",
+			diagnostic,
+			hook.FailOpenReasonDaemonUnavailable,
+		)
+		daemon.RecordFailOpen(
+			string(hook.FailOpenReasonDaemonUnavailable),
+			systemHint.String(),
+			"",
+			"",
+			"",
+			diagnostic,
+		)
 		writeResponse(runtime.stdout, runtime.stderr, response)
 		return response.ExitCode
 	}
@@ -1673,25 +1853,46 @@ func runHookWithRuntime(systemHint hook.System, runtime hookRuntime) (exitCode i
 
 	cwd := invocationContext.WorkingDirectory.Value
 	referencedNames, err := client.ResolveHookEnvironment(
-		data, systemHint.String(), runtime.args, baseEnvironment, invocationContext,
+		data,
+		systemHint.String(),
+		runtime.args,
+		baseEnvironment,
+		invocationContext,
 	)
 	if err != nil {
 		diagnostic := fmt.Sprintf("agent-gate: daemon ResolveHookEnvironment failed: %v", err)
 		response := hook.FailOpenResponse(systemHint, "", diagnostic, hook.FailOpenReasonRPCFailed)
-		daemon.RecordFailOpen(string(hook.FailOpenReasonRPCFailed), systemHint.String(), "", "", "", diagnostic)
+		daemon.RecordFailOpen(
+			string(hook.FailOpenReasonRPCFailed),
+			systemHint.String(),
+			"",
+			"",
+			"",
+			diagnostic,
+		)
 		writeResponse(runtime.stdout, runtime.stderr, response)
 		return response.ExitCode
 	}
-	environment := hookEnvironmentFingerprint(
-		baseEnvironment, referencedNames, runtime.getenv,
-	)
+	environment := hookEnvironmentFingerprint(baseEnvironment, referencedNames, runtime.getenv)
 	resp, err := client.EvaluateHook(
-		data, systemHint.String(), cwd, runtime.args, environment, invocationContext,
+		data,
+		systemHint.String(),
+		cwd,
+		runtime.args,
+		environment,
+		invocationContext,
 	)
 	if err != nil {
 		diagnostic := fmt.Sprintf("agent-gate: daemon EvaluateHook failed: %v", err)
 		response := hook.FailOpenResponse(systemHint, "", diagnostic, hook.FailOpenReasonRPCFailed)
-		daemon.RecordFailOpen(string(hook.FailOpenReasonRPCFailed), systemHint.String(), "", "", "", diagnostic)
+		daemon.RecordFailOpen(
+			string(hook.FailOpenReasonRPCFailed),
+			systemHint.String(),
+			"",
+			"",
+			"",
+			diagnostic,
+		)
 		writeResponse(runtime.stdout, runtime.stderr, response)
 		return response.ExitCode
 	}

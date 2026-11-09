@@ -50,12 +50,15 @@ func (fields FieldSet) CmdReadTargetsWithPolicy(
 	recursiveGlobs bool,
 	resolver shelldecomp.FileResolver,
 ) string {
-	if len(searchTools) == 0 && len(readSpecs) == 0 && len(enumerationSpecs) == 0 && !recursiveGlobs {
+	if len(searchTools) == 0 && len(readSpecs) == 0 && len(enumerationSpecs) == 0 &&
+		!recursiveGlobs {
 		return ""
 	}
+
 	if !fields.hasShellCommandContext() {
 		return ""
 	}
+
 	command := fields.CommandValue()
 	if command == "" {
 		return ""
@@ -69,20 +72,33 @@ func (fields FieldSet) CmdReadTargetsWithPolicy(
 			if target.Remote || target.Path == "" {
 				continue
 			}
+
 			if _, duplicate := seen[target.Path]; duplicate {
 				continue
 			}
+
 			seen[target.Path] = struct{}{}
 			paths = append(paths, target.Path)
 		}
 	}
 
 	if len(searchTools) > 0 || len(enumerationSpecs) > 0 || recursiveGlobs {
-		collect(shellread.ExtractCodeSearchTargetsWithPolicy(command, baseCWD, searchTools, enumerationSpecs, recursiveGlobs, resolver))
+		collect(
+			shellread.ExtractCodeSearchTargetsWithPolicy(
+				command,
+				baseCWD,
+				searchTools,
+				enumerationSpecs,
+				recursiveGlobs,
+				resolver,
+			),
+		)
 	}
+
 	if len(readSpecs) > 0 {
 		collect(shellread.ExtractReadTargets(command, baseCWD, readSpecs))
 	}
+
 	return strings.Join(paths, "\n")
 }
 
@@ -106,14 +122,23 @@ func (fields FieldSet) ExecTargetsWithPolicy(
 	recursiveGlobs bool,
 	resolver shelldecomp.FileResolver,
 ) string {
-	if targets := fields.CmdReadTargetsWithPolicy(searchTools, readSpecs, enumerationSpecs, recursiveGlobs, resolver); targets != "" {
+	if targets := fields.CmdReadTargetsWithPolicy(
+		searchTools,
+		readSpecs,
+		enumerationSpecs,
+		recursiveGlobs,
+		resolver,
+	); targets != "" {
 		return targets
 	}
+
 	if path := fields.FilePathValue(); path != "" {
 		return path
 	}
+
 	if cwd := fields.effectiveCWD(); cwd != "" && cwd != shelldecomp.Unresolvable {
 		return cwd
 	}
+
 	return fields.BaseCWD()
 }

@@ -25,23 +25,34 @@ func TestExtractCodeSearchTargetsAwkInScriptRead(t *testing.T) {
 		want    []string
 	}{
 		{"getline literal", `awk '{ getline < "x.go" }' f`, []string{"/repo/f", "/repo/x.go"}},
-		{"getline with var", `awk '{ getline line < "y.go" }' f`, []string{"/repo/f", "/repo/y.go"}},
+		{
+			"getline with var",
+			`awk '{ getline line < "y.go" }' f`,
+			[]string{"/repo/f", "/repo/y.go"},
+		},
 		{"getline absolute", `awk '{ getline < "/abs/z.go" }' f`, []string{"/abs/z.go", "/repo/f"}},
 		{"getline variable target dropped", `awk '{ getline < v }' f`, []string{"/repo/f"}},
 		{"getline ARGV target dropped", `awk '{ getline < ARGV[1] }' f`, []string{"/repo/f"}},
-		{"print redirect is not a read", `awk 'BEGIN { print "x" > "o.txt" }' f`, []string{"/repo/f"}},
+		{
+			"print redirect is not a read",
+			`awk 'BEGIN { print "x" > "o.txt" }' f`,
+			[]string{"/repo/f"},
+		},
 	}
 
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := targetPaths(ExtractCodeSearchTargets(tc.command, cwd, awkTestTools, nil))
-			slices.Sort(got)
-			want := slices.Clone(tc.want)
-			slices.Sort(want)
-			if !slices.Equal(got, want) {
-				t.Fatalf("ExtractCodeSearchTargets(%q) = %v, want %v", tc.command, got, want)
-			}
-		})
+		t.Run(
+			tc.name,
+			func(t *testing.T) {
+				got := targetPaths(ExtractCodeSearchTargets(tc.command, cwd, awkTestTools, nil))
+				slices.Sort(got)
+				want := slices.Clone(tc.want)
+				slices.Sort(want)
+				if !slices.Equal(got, want) {
+					t.Fatalf("ExtractCodeSearchTargets(%q) = %v, want %v", tc.command, got, want)
+				}
+			},
+		)
 	}
 }
 

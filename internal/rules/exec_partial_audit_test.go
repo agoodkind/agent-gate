@@ -33,14 +33,17 @@ func (r *mixedTargetRunner) Run(
 ) (execconcern.RunResult, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
 	for _, argument := range command {
 		if r.failOn != "" && strings.Contains(argument, r.failOn) {
 			return execconcern.RunResult{ExitCode: 0, Stdout: ""}, errors.New("spawn failed")
 		}
+
 		if strings.Contains(argument, r.blockOn) {
 			return execconcern.RunResult{ExitCode: 1, Stdout: ""}, nil
 		}
 	}
+
 	return execconcern.RunResult{ExitCode: 0, Stdout: ""}, nil
 }
 
@@ -68,21 +71,26 @@ search_tools = ["grep"]
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
+
 	cfg, err := config.LoadExisting(path)
 	if err != nil {
 		t.Fatalf("LoadExisting: %v", err)
 	}
+
 	return cfg
 }
 
 func decisionFor(t *testing.T, decisions []rules.RuleDecision, name string) rules.RuleDecision {
 	t.Helper()
+
 	for _, decision := range decisions {
 		if decision.RuleName == name {
 			return decision
 		}
 	}
+
 	t.Fatalf("no decision recorded for %q", name)
+
 	return rules.RuleDecision{}
 }
 
@@ -97,6 +105,7 @@ func TestAuditRecordsAPartiallyProbedExpansion(t *testing.T) {
 	ctx := rules.WithExecRuntime(context.Background(), runtime)
 
 	directory := t.TempDir()
+
 	for _, name := range []string{"unreadable", "indexed"} {
 		if err := os.WriteFile(filepath.Join(directory, name), []byte("x"), 0o600); err != nil {
 			t.Fatalf("write %s: %v", name, err)
@@ -112,16 +121,25 @@ func TestAuditRecordsAPartiallyProbedExpansion(t *testing.T) {
 	}
 
 	evaluation := rules.EvaluateAllDetailed(
-		ctx, "claude", "PreToolUse", fields, cfg.Rules, nil, nil, "test",
+		ctx,
+		"claude",
+		"PreToolUse",
+		fields,
+		cfg.Rules,
+		nil,
+		nil,
+		"test",
 	)
 
 	if len(evaluation.Violations) == 0 {
 		t.Fatal("the classifiable target should still block")
 	}
+
 	decision := decisionFor(t, evaluation.Trace.Deterministic.CheckedRules, "search-guard")
 	if !decision.Matched {
 		t.Fatalf("decision = %+v, want matched", decision)
 	}
+
 	if !decision.PartialError {
 		t.Fatal("the audit decision claims full coverage of a partly probed expansion")
 	}
@@ -137,19 +155,25 @@ func TestAuditRecordsAPartiallyProbedExpansion(t *testing.T) {
 	if err := json.Unmarshal(evaluation.Trace.Deterministic.OutputJSON, &output); err != nil {
 		t.Fatalf("decode deterministic output: %v", err)
 	}
+
 	found := false
+
 	for _, rule := range output.Rules {
 		if rule.RuleName != "search-guard" {
 			continue
 		}
+
 		found = true
 		if !rule.PartialError {
 			t.Fatal("the serialized record omits the partial-failure flag")
 		}
 	}
+
 	if !found {
-		t.Fatalf("the serialized record has no entry for search-guard: %s",
-			evaluation.Trace.Deterministic.OutputJSON)
+		t.Fatalf(
+			"the serialized record has no entry for search-guard: %s",
+			evaluation.Trace.Deterministic.OutputJSON,
+		)
 	}
 }
 
@@ -162,6 +186,7 @@ func TestAuditOmitsThePartialFlagWhenEveryTargetWasProbed(t *testing.T) {
 	ctx := rules.WithExecRuntime(context.Background(), runtime)
 
 	directory := t.TempDir()
+
 	for _, name := range []string{"clean", "indexed"} {
 		if err := os.WriteFile(filepath.Join(directory, name), []byte("x"), 0o600); err != nil {
 			t.Fatalf("write %s: %v", name, err)
@@ -177,11 +202,19 @@ func TestAuditOmitsThePartialFlagWhenEveryTargetWasProbed(t *testing.T) {
 	}
 
 	evaluation := rules.EvaluateAllDetailed(
-		ctx, "claude", "PreToolUse", fields, cfg.Rules, nil, nil, "test",
+		ctx,
+		"claude",
+		"PreToolUse",
+		fields,
+		cfg.Rules,
+		nil,
+		nil,
+		"test",
 	)
 	if len(evaluation.Violations) == 0 {
 		t.Fatal("the blocking target should block")
 	}
+
 	decision := decisionFor(t, evaluation.Trace.Deterministic.CheckedRules, "search-guard")
 	if decision.PartialError {
 		t.Fatal("a fully probed expansion was recorded as partial")

@@ -13,6 +13,7 @@ func resolverFromVerdicts(verdicts map[int]evalVerdict, ran *[]int) evaluatorRes
 	for index, verdict := range verdicts {
 		outcomes[index] = evalOutcome{verdict: verdict, errored: false}
 	}
+
 	return resolverFromOutcomes(outcomes, ran)
 }
 
@@ -27,16 +28,31 @@ func resolverFromOutcomes(outcomes map[int]evalOutcome, ran *[]int) evaluatorRes
 		if !ok {
 			outcome = evalOutcome{verdict: verdictAllow, errored: false}
 		}
+
 		return outcome
 	}
 }
 
 func detEval(role string) config.RuleEval {
-	return config.RuleEval{Kind: config.EvalKindDeterministic, Role: role, Use: "", Fanout: "", Combine: "", OnError: ""}
+	return config.RuleEval{
+		Kind:    config.EvalKindDeterministic,
+		Role:    role,
+		Use:     "",
+		Fanout:  "",
+		Combine: "",
+		OnError: "",
+	}
 }
 
 func inferEval(role, combine string) config.RuleEval {
-	return config.RuleEval{Kind: config.EvalKindInfer, Role: role, Use: "local", Fanout: "", Combine: combine, OnError: ""}
+	return config.RuleEval{
+		Kind:    config.EvalKindInfer,
+		Role:    role,
+		Use:     "local",
+		Fanout:  "",
+		Combine: combine,
+		OnError: "",
+	}
 }
 
 // blocked builds a non-errored blocking outcome.
@@ -66,15 +82,21 @@ func TestRunEvalMatrixModes(t *testing.T) {
 		wantRan   []int
 	}{
 		{
-			name:      "llm verifies in parallel: deterministic decides",
-			evals:     []config.RuleEval{detEval(config.RoleEnforce), inferEval(config.RoleVerify, "")},
+			name: "llm verifies in parallel: deterministic decides",
+			evals: []config.RuleEval{
+				detEval(config.RoleEnforce),
+				inferEval(config.RoleVerify, ""),
+			},
 			verdicts:  map[int]evalVerdict{0: verdictBlock, 1: verdictAllow},
 			wantBlock: true,
 			wantRan:   []int{0, 1},
 		},
 		{
-			name:      "llm verifies in parallel: infer disagreement does not enforce",
-			evals:     []config.RuleEval{detEval(config.RoleEnforce), inferEval(config.RoleVerify, "")},
+			name: "llm verifies in parallel: infer disagreement does not enforce",
+			evals: []config.RuleEval{
+				detEval(config.RoleEnforce),
+				inferEval(config.RoleVerify, ""),
+			},
 			verdicts:  map[int]evalVerdict{0: verdictAllow, 1: verdictBlock},
 			wantBlock: false,
 			wantRan:   []int{0, 1},
@@ -87,45 +109,64 @@ func TestRunEvalMatrixModes(t *testing.T) {
 			wantRan:   []int{0},
 		},
 		{
-			name:      "deterministic verifies, llm blocks",
-			evals:     []config.RuleEval{detEval(config.RoleVerify), inferEval(config.RoleEnforce, "")},
+			name: "deterministic verifies, llm blocks",
+			evals: []config.RuleEval{
+				detEval(config.RoleVerify),
+				inferEval(config.RoleEnforce, ""),
+			},
 			verdicts:  map[int]evalVerdict{0: verdictBlock, 1: verdictAllow},
 			wantBlock: false,
 			wantRan:   []int{0, 1},
 		},
 		{
-			name:      "union: either enforcing blocks",
-			evals:     []config.RuleEval{detEval(config.RoleEnforce), inferEval(config.RoleEnforce, config.CombineUnion)},
+			name: "union: either enforcing blocks",
+			evals: []config.RuleEval{
+				detEval(config.RoleEnforce),
+				inferEval(config.RoleEnforce, config.CombineUnion),
+			},
 			verdicts:  map[int]evalVerdict{0: verdictAllow, 1: verdictBlock},
 			wantBlock: true,
 			wantRan:   []int{0, 1},
 		},
 		{
-			name:      "and: blocks only when all enforcing block",
-			evals:     []config.RuleEval{detEval(config.RoleEnforce), inferEval(config.RoleEnforce, config.CombineAnd)},
+			name: "and: blocks only when all enforcing block",
+			evals: []config.RuleEval{
+				detEval(config.RoleEnforce),
+				inferEval(config.RoleEnforce, config.CombineAnd),
+			},
 			verdicts:  map[int]evalVerdict{0: verdictBlock, 1: verdictAllow},
 			wantBlock: false,
 			wantRan:   []int{0, 1},
 		},
 		{
-			name:      "and: blocks when all enforcing block",
-			evals:     []config.RuleEval{detEval(config.RoleEnforce), inferEval(config.RoleEnforce, config.CombineAnd)},
+			name: "and: blocks when all enforcing block",
+			evals: []config.RuleEval{
+				detEval(config.RoleEnforce),
+				inferEval(config.RoleEnforce, config.CombineAnd),
+			},
 			verdicts:  map[int]evalVerdict{0: verdictBlock, 1: verdictBlock},
 			wantBlock: true,
 			wantRan:   []int{0, 1},
 		},
 	}
 	for _, testCase := range cases {
-		t.Run(testCase.name, func(t *testing.T) {
-			var ran []int
-			decision := runEvalMatrix(testCase.evals, resolverFromVerdicts(testCase.verdicts, &ran))
-			if decision.block != testCase.wantBlock {
-				t.Fatalf("block = %v, want %v", decision.block, testCase.wantBlock)
-			}
-			if !equalInts(ran, testCase.wantRan) {
-				t.Fatalf("resolved indices = %v, want %v", ran, testCase.wantRan)
-			}
-		})
+		t.Run(
+			testCase.name,
+			func(t *testing.T) {
+				var ran []int
+				decision := runEvalMatrix(
+					testCase.evals,
+					resolverFromVerdicts(testCase.verdicts, &ran),
+				)
+				if decision.block != testCase.wantBlock {
+					t.Fatalf("block = %v, want %v", decision.block, testCase.wantBlock)
+				}
+
+				if !equalInts(ran, testCase.wantRan) {
+					t.Fatalf("resolved indices = %v, want %v", ran, testCase.wantRan)
+				}
+			},
+		)
 	}
 }
 
@@ -143,6 +184,7 @@ func TestRunEvalMatrixJudgeAuthoritative(t *testing.T) {
 		detEval(config.RoleFallback),
 		inferEval(config.RoleVerify, ""),
 	}
+
 	cases := []struct {
 		name      string
 		outcomes  map[int]evalOutcome
@@ -170,16 +212,20 @@ func TestRunEvalMatrixJudgeAuthoritative(t *testing.T) {
 		},
 	}
 	for _, testCase := range cases {
-		t.Run(testCase.name, func(t *testing.T) {
-			var ran []int
-			decision := runEvalMatrix(evals, resolverFromOutcomes(testCase.outcomes, &ran))
-			if decision.block != testCase.wantBlock {
-				t.Fatalf("block = %v, want %v", decision.block, testCase.wantBlock)
-			}
-			if !equalInts(ran, []int{0, 1, 2}) {
-				t.Fatalf("resolved indices = %v, want [0 1 2]", ran)
-			}
-		})
+		t.Run(
+			testCase.name,
+			func(t *testing.T) {
+				var ran []int
+				decision := runEvalMatrix(evals, resolverFromOutcomes(testCase.outcomes, &ran))
+				if decision.block != testCase.wantBlock {
+					t.Fatalf("block = %v, want %v", decision.block, testCase.wantBlock)
+				}
+
+				if !equalInts(ran, []int{0, 1, 2}) {
+					t.Fatalf("resolved indices = %v, want [0 1 2]", ran)
+				}
+			},
+		)
 	}
 }
 
@@ -194,6 +240,7 @@ func TestRunEvalMatrixHardSafetyUnion(t *testing.T) {
 		detEval(config.RoleEnforce),
 		inferEval(config.RoleEnforce, config.CombineUnion),
 	}
+
 	cases := []struct {
 		name      string
 		outcomes  map[int]evalOutcome
@@ -221,16 +268,20 @@ func TestRunEvalMatrixHardSafetyUnion(t *testing.T) {
 		},
 	}
 	for _, testCase := range cases {
-		t.Run(testCase.name, func(t *testing.T) {
-			var ran []int
-			decision := runEvalMatrix(evals, resolverFromOutcomes(testCase.outcomes, &ran))
-			if decision.block != testCase.wantBlock {
-				t.Fatalf("block = %v, want %v", decision.block, testCase.wantBlock)
-			}
-			if !equalInts(ran, []int{0, 1}) {
-				t.Fatalf("resolved indices = %v, want [0 1]", ran)
-			}
-		})
+		t.Run(
+			testCase.name,
+			func(t *testing.T) {
+				var ran []int
+				decision := runEvalMatrix(evals, resolverFromOutcomes(testCase.outcomes, &ran))
+				if decision.block != testCase.wantBlock {
+					t.Fatalf("block = %v, want %v", decision.block, testCase.wantBlock)
+				}
+
+				if !equalInts(ran, []int{0, 1}) {
+					t.Fatalf("resolved indices = %v, want [0 1]", ran)
+				}
+			},
+		)
 	}
 }
 
@@ -240,6 +291,7 @@ func TestRunEvalMatrixHardSafetyUnion(t *testing.T) {
 // fallback role existed.
 func TestRunEvalMatrixAllEnforceErroredNoFallback(t *testing.T) {
 	evals := []config.RuleEval{inferEval(config.RoleEnforce, config.CombineUnion)}
+
 	cases := []struct {
 		name      string
 		outcome   evalOutcome
@@ -249,13 +301,19 @@ func TestRunEvalMatrixAllEnforceErroredNoFallback(t *testing.T) {
 		{name: "errored converts to allow", outcome: erroredAs(verdictAllow), wantBlock: false},
 	}
 	for _, testCase := range cases {
-		t.Run(testCase.name, func(t *testing.T) {
-			var ran []int
-			decision := runEvalMatrix(evals, resolverFromOutcomes(map[int]evalOutcome{0: testCase.outcome}, &ran))
-			if decision.block != testCase.wantBlock {
-				t.Fatalf("block = %v, want %v", decision.block, testCase.wantBlock)
-			}
-		})
+		t.Run(
+			testCase.name,
+			func(t *testing.T) {
+				var ran []int
+				decision := runEvalMatrix(
+					evals,
+					resolverFromOutcomes(map[int]evalOutcome{0: testCase.outcome}, &ran),
+				)
+				if decision.block != testCase.wantBlock {
+					t.Fatalf("block = %v, want %v", decision.block, testCase.wantBlock)
+				}
+			},
+		)
 	}
 }
 
@@ -285,6 +343,7 @@ func TestRunEvalMatrixPartialEnforceErrorSkipsFallback(t *testing.T) {
 	if decision.block {
 		t.Fatal("block = true, want false: a surviving enforce entry must decide, not the fallback")
 	}
+
 	if !equalInts(ran, []int{0, 1, 2}) {
 		t.Fatalf("resolved indices = %v, want [0 1 2]", ran)
 	}
@@ -294,10 +353,12 @@ func equalInts(a, b []int) bool {
 	if len(a) != len(b) {
 		return false
 	}
+
 	for i := range a {
 		if a[i] != b[i] {
 			return false
 		}
 	}
+
 	return true
 }

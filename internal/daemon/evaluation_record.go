@@ -18,10 +18,18 @@ import (
 type evaluationRecorder interface {
 	RecordCompleted(context.Context, evaluation.Record) error
 	CommitHotEvaluation(
-		context.Context, string, int64, bool, evaluation.Record, []audit.NormalizedEntry,
+		context.Context,
+		string,
+		int64,
+		bool,
+		evaluation.Record,
+		[]audit.NormalizedEntry,
 	) error
 	CommitDeferredEvaluation(
-		context.Context, intake.DeferredClaim, evaluation.Record, []audit.NormalizedEntry,
+		context.Context,
+		intake.DeferredClaim,
+		evaluation.Record,
+		[]audit.NormalizedEntry,
 	) error
 }
 
@@ -108,27 +116,40 @@ func buildHotEvaluationRecord(input hotEvaluationRecordInput) evaluation.Record 
 			layers = append(layers, richEvaluationLayer(i+1, input.Result.Trace.Layers[i]))
 		}
 	}
+
 	finalLayer := hotFinalLayer(len(layers), input.Result, disposition, input.CompletedAt)
 	layers = append(layers, finalLayer)
 	errorJSON := json.RawMessage(`{}`)
 	if input.SystemError != "" {
 		errorJSON = marshalEvaluationError(evaluationErrorJSON{
-			Code: input.SystemError, Message: input.ErrorMessage,
+			Code:    input.SystemError,
+			Message: input.ErrorMessage,
 		})
 	}
+
 	latency := input.CompletedAt.Sub(input.StartedAt)
 	latency = max(latency, 0)
+
 	return evaluation.Record{
 		Evaluation: evaluation.Evaluation{
-			EvaluationID: hotEvaluationID(input.ReceiptID),
-			ReceiptID:    input.ReceiptID, EventID: input.EventID,
-			Attempt: hotEvaluationAttempt, Mode: "hot", ConfigHash: input.ConfigHash,
-			EngineVersion: input.EngineVersion, EngineCommit: input.EngineCommit,
-			EngineBuildHash: input.EngineBuildHash, InputHash: evaluationHash(input.Intake.RawPayload),
-			StartedAt: input.StartedAt, CompletedAt: input.CompletedAt,
-			FinalVerdict: disposition.verdict, FinalSource: disposition.source,
-			EnforcementAction: disposition.enforcementAction, Enforced: disposition.enforced,
-			TotalLatencyUS: latency.Microseconds(), ErrorJSON: errorJSON,
+			EvaluationID:      hotEvaluationID(input.ReceiptID),
+			ReceiptID:         input.ReceiptID,
+			EventID:           input.EventID,
+			Attempt:           hotEvaluationAttempt,
+			Mode:              "hot",
+			ConfigHash:        input.ConfigHash,
+			EngineVersion:     input.EngineVersion,
+			EngineCommit:      input.EngineCommit,
+			EngineBuildHash:   input.EngineBuildHash,
+			InputHash:         evaluationHash(input.Intake.RawPayload),
+			StartedAt:         input.StartedAt,
+			CompletedAt:       input.CompletedAt,
+			FinalVerdict:      disposition.verdict,
+			FinalSource:       disposition.source,
+			EnforcementAction: disposition.enforcementAction,
+			Enforced:          disposition.enforced,
+			TotalLatencyUS:    latency.Microseconds(),
+			ErrorJSON:         errorJSON,
 		},
 		Layers: layers,
 		Labels: make([]evaluation.Label, 0),
@@ -137,43 +158,77 @@ func buildHotEvaluationRecord(input hotEvaluationRecordInput) evaluation.Record 
 
 func payloadValidationLayer(input hotEvaluationRecordInput) evaluation.Layer {
 	outputJSON := json.RawMessage(`{"valid":false}`)
+
 	return evaluation.Layer{
-		LayerIndex: 0, ParentLayerIndex: nil, Kind: "validation", Name: "payload-parse",
-		Status: "error", Outcome: "", Verdict: "", InputReference: "intake.raw_payload",
-		InputJSON: json.RawMessage(`{}`), InputHash: evaluationHash(input.Intake.RawPayload),
-		OutputHash: evaluationHash(outputJSON), OutputJSON: outputJSON,
-		MetadataJSON: json.RawMessage(`{"schema_version":1}`), StartedAt: input.StartedAt,
-		CompletedAt: input.CompletedAt,
-		LatencyUS:   max(input.CompletedAt.Sub(input.StartedAt), 0).Microseconds(),
-		ServiceName: "agent-gate", ServiceVersion: input.EngineVersion,
-		ModelName: "", ModelVersion: "", PromptHash: "", SchemaHash: "",
-		CacheStatus: "", CacheKeyHash: "", CacheEntryVersion: nil, CacheExpiresAt: nil,
-		ErrorCode: input.SystemError, ErrorMessage: input.ErrorMessage, RetryCount: 0,
+		LayerIndex:        0,
+		ParentLayerIndex:  nil,
+		Kind:              "validation",
+		Name:              "payload-parse",
+		Status:            "error",
+		Outcome:           "",
+		Verdict:           "",
+		InputReference:    "intake.raw_payload",
+		InputJSON:         json.RawMessage(`{}`),
+		InputHash:         evaluationHash(input.Intake.RawPayload),
+		OutputHash:        evaluationHash(outputJSON),
+		OutputJSON:        outputJSON,
+		MetadataJSON:      json.RawMessage(`{"schema_version":1}`),
+		StartedAt:         input.StartedAt,
+		CompletedAt:       input.CompletedAt,
+		LatencyUS:         max(input.CompletedAt.Sub(input.StartedAt), 0).Microseconds(),
+		ServiceName:       "agent-gate",
+		ServiceVersion:    input.EngineVersion,
+		ModelName:         "",
+		ModelVersion:      "",
+		PromptHash:        "",
+		SchemaHash:        "",
+		CacheStatus:       "",
+		CacheKeyHash:      "",
+		CacheEntryVersion: nil,
+		CacheExpiresAt:    nil,
+		ErrorCode:         input.SystemError,
+		ErrorMessage:      input.ErrorMessage,
+		RetryCount:        0,
 	}
 }
 
 func buildDeferredEvaluationRecord(input deferredEvaluationRecordInput) evaluation.Record {
 	trace := input.Event.Trace
 	layers := make([]evaluation.Layer, 0, len(trace.Layers)+2)
+
 	layers = append(layers, deterministicEvaluationLayer(trace.Deterministic))
 	for i := range trace.Layers {
 		layers = append(layers, richEvaluationLayer(i+1, trace.Layers[i]))
 	}
+
 	disposition := deferredFinalDisposition(input.Event)
-	layers = append(layers, deferredFinalLayer(len(layers), input.Event, disposition, input.CompletedAt))
+	layers = append(
+		layers,
+		deferredFinalLayer(len(layers), input.Event, disposition, input.CompletedAt),
+	)
 	latency := input.CompletedAt.Sub(input.StartedAt)
 	latency = max(latency, 0)
+
 	return evaluation.Record{
 		Evaluation: evaluation.Evaluation{
-			EvaluationID: evaluationID(input.ReceiptID, input.Mode, input.Attempt),
-			ReceiptID:    input.ReceiptID, EventID: input.EventID, Attempt: input.Attempt,
-			Mode: input.Mode, ConfigHash: input.ConfigHash, EngineVersion: input.EngineVersion,
-			EngineCommit: input.EngineCommit, EngineBuildHash: input.EngineBuildHash,
-			InputHash: evaluationHash(input.Intake.RawPayload), StartedAt: input.StartedAt,
-			CompletedAt: input.CompletedAt, FinalVerdict: disposition.verdict,
-			FinalSource: disposition.source, EnforcementAction: disposition.enforcementAction,
-			Enforced: disposition.enforced, TotalLatencyUS: latency.Microseconds(),
-			ErrorJSON: json.RawMessage(`{}`),
+			EvaluationID:      evaluationID(input.ReceiptID, input.Mode, input.Attempt),
+			ReceiptID:         input.ReceiptID,
+			EventID:           input.EventID,
+			Attempt:           input.Attempt,
+			Mode:              input.Mode,
+			ConfigHash:        input.ConfigHash,
+			EngineVersion:     input.EngineVersion,
+			EngineCommit:      input.EngineCommit,
+			EngineBuildHash:   input.EngineBuildHash,
+			InputHash:         evaluationHash(input.Intake.RawPayload),
+			StartedAt:         input.StartedAt,
+			CompletedAt:       input.CompletedAt,
+			FinalVerdict:      disposition.verdict,
+			FinalSource:       disposition.source,
+			EnforcementAction: disposition.enforcementAction,
+			Enforced:          disposition.enforced,
+			TotalLatencyUS:    latency.Microseconds(),
+			ErrorJSON:         json.RawMessage(`{}`),
 		},
 		Layers: layers,
 		Labels: make([]evaluation.Label, 0),
@@ -189,6 +244,7 @@ func evaluationID(receiptID int64, mode string, attempt int) string {
 	writeEvaluationHashPart(hash, strconv.FormatInt(receiptID, 10))
 	writeEvaluationHashPart(hash, mode)
 	writeEvaluationHashPart(hash, strconv.Itoa(attempt))
+
 	return "eval_" + hex.EncodeToString(hash.Sum(nil))
 }
 
@@ -214,12 +270,15 @@ func verdictFromOutcome(status string, outcome string) string {
 	if status != "complete" {
 		return ""
 	}
+
 	if outcome == "match" {
 		return "block"
 	}
+
 	if outcome == "nonmatch" {
 		return "allow"
 	}
+
 	return ""
 }
 
@@ -232,9 +291,11 @@ func verdictFromFinalDisposition(verdict string) string {
 	if verdict == "allow" || verdict == "block" {
 		return verdict
 	}
+
 	if verdict == "audit" {
 		return "block"
 	}
+
 	return ""
 }
 
@@ -242,27 +303,49 @@ func deterministicEvaluationLayer(trace rules.DeterministicTrace) evaluation.Lay
 	latency := trace.CompletedAt.Sub(trace.StartedAt)
 	latency = max(latency, 0)
 	outcome := "nonmatch"
+
 	for _, decision := range trace.CheckedRules {
 		if decision.Matched {
 			outcome = "match"
 			break
 		}
 	}
+
 	metadata := marshalDeterministicMetadata(deterministicLayerMetadata{
-		SchemaVersion: 1, CheckedRules: trace.CheckedRules,
+		SchemaVersion: 1,
+		CheckedRules:  trace.CheckedRules,
 	})
+
 	return evaluation.Layer{
-		LayerIndex: 0, ParentLayerIndex: nil, Kind: "deterministic", Name: "rule-engine",
-		Status: "complete", Outcome: outcome, Verdict: verdictFromOutcome("complete", outcome),
-		InputReference: "intake.normalized_json",
-		InputJSON:      append(json.RawMessage(nil), trace.InputJSON...), InputHash: trace.InputHash,
-		OutputHash: trace.OutputHash, OutputJSON: append(json.RawMessage(nil), trace.OutputJSON...),
-		MetadataJSON: metadata, StartedAt: trace.StartedAt, CompletedAt: trace.CompletedAt,
-		LatencyUS: latency.Microseconds(), ServiceName: trace.ServiceName,
-		ServiceVersion: trace.ServiceVersion, ModelName: "", ModelVersion: "",
-		PromptHash: "", SchemaHash: "", CacheStatus: "", CacheKeyHash: "",
-		CacheEntryVersion: nil, CacheExpiresAt: nil, ErrorCode: "", ErrorMessage: "",
-		RetryCount: 0,
+		LayerIndex:        0,
+		ParentLayerIndex:  nil,
+		Kind:              "deterministic",
+		Name:              "rule-engine",
+		Status:            "complete",
+		Outcome:           outcome,
+		Verdict:           verdictFromOutcome("complete", outcome),
+		InputReference:    "intake.normalized_json",
+		InputJSON:         append(json.RawMessage(nil), trace.InputJSON...),
+		InputHash:         trace.InputHash,
+		OutputHash:        trace.OutputHash,
+		OutputJSON:        append(json.RawMessage(nil), trace.OutputJSON...),
+		MetadataJSON:      metadata,
+		StartedAt:         trace.StartedAt,
+		CompletedAt:       trace.CompletedAt,
+		LatencyUS:         latency.Microseconds(),
+		ServiceName:       trace.ServiceName,
+		ServiceVersion:    trace.ServiceVersion,
+		ModelName:         "",
+		ModelVersion:      "",
+		PromptHash:        "",
+		SchemaHash:        "",
+		CacheStatus:       "",
+		CacheKeyHash:      "",
+		CacheEntryVersion: nil,
+		CacheExpiresAt:    nil,
+		ErrorCode:         "",
+		ErrorMessage:      "",
+		RetryCount:        0,
 	}
 }
 
@@ -270,27 +353,45 @@ func richEvaluationLayer(layerIndex int, trace rules.LayerTrace) evaluation.Laye
 	latency := trace.CompletedAt.Sub(trace.StartedAt)
 	latency = max(latency, 0)
 	metadata := layerMetadataV2{
-		SchemaVersion: 2, RuleName: trace.RuleName, ConditionIndex: trace.ConditionIndex,
-		SkipReason: trace.SkipReason, VerifiedProvenance: trace.VerifiedProvenance,
-		UpstreamMetadata:  trace.UpstreamMetadata,
-		GenerationOptions: inferenceGenerationOptions(trace.InputJSON),
+		SchemaVersion:      2,
+		RuleName:           trace.RuleName,
+		ConditionIndex:     trace.ConditionIndex,
+		SkipReason:         trace.SkipReason,
+		VerifiedProvenance: trace.VerifiedProvenance,
+		UpstreamMetadata:   trace.UpstreamMetadata,
+		GenerationOptions:  inferenceGenerationOptions(trace.InputJSON),
 	}
+
 	return evaluation.Layer{
-		LayerIndex: layerIndex, ParentLayerIndex: cloneIntPointer(trace.ParentTraceIndex),
-		Kind: trace.Kind, Name: trace.LayerName, Status: trace.Status, Outcome: trace.Outcome,
-		Verdict:        verdictFromOutcome(trace.Status, trace.Outcome),
-		InputReference: trace.InputReference, InputJSON: append(json.RawMessage(nil), trace.InputJSON...),
-		InputHash: trace.InputHash, OutputHash: trace.OutputHash,
-		OutputJSON:   append(json.RawMessage(nil), trace.OutputJSON...),
-		MetadataJSON: marshalLayerMetadata(metadata), StartedAt: trace.StartedAt,
-		CompletedAt: trace.CompletedAt, LatencyUS: latency.Microseconds(),
-		ServiceName: trace.ServiceName, ServiceVersion: trace.ServiceVersion,
-		ModelName: trace.VerifiedProvenance.RequestedModel, ModelVersion: "",
-		PromptHash: trace.VerifiedProvenance.PromptSHA256,
-		SchemaHash: trace.VerifiedProvenance.SchemaSHA256, CacheStatus: trace.CacheStatus,
-		CacheKeyHash: trace.CacheKeyHash, CacheEntryVersion: cloneInt64Pointer(trace.CacheEntryVersion),
-		CacheExpiresAt: cloneTimePointer(trace.CacheExpiresAt), ErrorCode: trace.ErrorCode,
-		ErrorMessage: trace.ErrorMessage, RetryCount: trace.RetryCount,
+		LayerIndex:        layerIndex,
+		ParentLayerIndex:  cloneIntPointer(trace.ParentTraceIndex),
+		Kind:              trace.Kind,
+		Name:              trace.LayerName,
+		Status:            trace.Status,
+		Outcome:           trace.Outcome,
+		Verdict:           verdictFromOutcome(trace.Status, trace.Outcome),
+		InputReference:    trace.InputReference,
+		InputJSON:         append(json.RawMessage(nil), trace.InputJSON...),
+		InputHash:         trace.InputHash,
+		OutputHash:        trace.OutputHash,
+		OutputJSON:        append(json.RawMessage(nil), trace.OutputJSON...),
+		MetadataJSON:      marshalLayerMetadata(metadata),
+		StartedAt:         trace.StartedAt,
+		CompletedAt:       trace.CompletedAt,
+		LatencyUS:         latency.Microseconds(),
+		ServiceName:       trace.ServiceName,
+		ServiceVersion:    trace.ServiceVersion,
+		ModelName:         trace.VerifiedProvenance.RequestedModel,
+		ModelVersion:      "",
+		PromptHash:        trace.VerifiedProvenance.PromptSHA256,
+		SchemaHash:        trace.VerifiedProvenance.SchemaSHA256,
+		CacheStatus:       trace.CacheStatus,
+		CacheKeyHash:      trace.CacheKeyHash,
+		CacheEntryVersion: cloneInt64Pointer(trace.CacheEntryVersion),
+		CacheExpiresAt:    cloneTimePointer(trace.CacheExpiresAt),
+		ErrorCode:         trace.ErrorCode,
+		ErrorMessage:      trace.ErrorMessage,
+		RetryCount:        trace.RetryCount,
 	}
 }
 
@@ -302,24 +403,47 @@ func hotFinalLayer(
 ) evaluation.Layer {
 	parentIndex := lastAttemptedLayerIndex(result.Trace.Layers)
 	outputJSON := marshalFinalLayerOutput(finalLayerOutput{
-		Verdict: disposition.verdict, Source: disposition.source,
-		EnforcementAction: disposition.enforcementAction, Enforced: disposition.enforced,
+		Verdict:            disposition.verdict,
+		Source:             disposition.source,
+		EnforcementAction:  disposition.enforcementAction,
+		Enforced:           disposition.enforced,
 		BlockingRuleNames:  violationRuleNames(result.Deferred.BlockingViolations),
 		AuditOnlyRuleNames: violationRuleNames(result.Deferred.AuditOnlyViolations),
-		ExitCode:           result.ExitCode, StdoutHash: evaluationHash(result.Stdout),
-		StderrHash: evaluationHash(result.Stderr),
+		ExitCode:           result.ExitCode,
+		StdoutHash:         evaluationHash(result.Stdout),
+		StderrHash:         evaluationHash(result.Stderr),
 	})
+
 	return evaluation.Layer{
-		LayerIndex: layerIndex, ParentLayerIndex: &parentIndex, Kind: "final", Name: "hook-response",
-		Status: disposition.status, Outcome: "", Verdict: verdictFromFinalDisposition(disposition.verdict),
-		InputReference: "evaluation.layers",
-		InputJSON:      json.RawMessage(`{}`), InputHash: evaluationHash([]byte(`{}`)),
-		OutputHash: evaluationHash(outputJSON), OutputJSON: outputJSON,
-		MetadataJSON: json.RawMessage(`{"schema_version":1}`), StartedAt: completedAt,
-		CompletedAt: completedAt, LatencyUS: 0, ServiceName: "agent-gate",
-		ServiceVersion: "", ModelName: "", ModelVersion: "", PromptHash: "",
-		SchemaHash: "", CacheStatus: "", CacheKeyHash: "", CacheEntryVersion: nil,
-		CacheExpiresAt: nil, ErrorCode: "", ErrorMessage: "", RetryCount: 0,
+		LayerIndex:        layerIndex,
+		ParentLayerIndex:  &parentIndex,
+		Kind:              "final",
+		Name:              "hook-response",
+		Status:            disposition.status,
+		Outcome:           "",
+		Verdict:           verdictFromFinalDisposition(disposition.verdict),
+		InputReference:    "evaluation.layers",
+		InputJSON:         json.RawMessage(`{}`),
+		InputHash:         evaluationHash([]byte(`{}`)),
+		OutputHash:        evaluationHash(outputJSON),
+		OutputJSON:        outputJSON,
+		MetadataJSON:      json.RawMessage(`{"schema_version":1}`),
+		StartedAt:         completedAt,
+		CompletedAt:       completedAt,
+		LatencyUS:         0,
+		ServiceName:       "agent-gate",
+		ServiceVersion:    "",
+		ModelName:         "",
+		ModelVersion:      "",
+		PromptHash:        "",
+		SchemaHash:        "",
+		CacheStatus:       "",
+		CacheKeyHash:      "",
+		CacheEntryVersion: nil,
+		CacheExpiresAt:    nil,
+		ErrorCode:         "",
+		ErrorMessage:      "",
+		RetryCount:        0,
 	}
 }
 
@@ -331,23 +455,47 @@ func deferredFinalLayer(
 ) evaluation.Layer {
 	parentIndex := lastAttemptedLayerIndex(event.Trace.Layers)
 	outputJSON := marshalFinalLayerOutput(finalLayerOutput{
-		Verdict: disposition.verdict, Source: disposition.source,
-		EnforcementAction: disposition.enforcementAction, Enforced: disposition.enforced,
+		Verdict:            disposition.verdict,
+		Source:             disposition.source,
+		EnforcementAction:  disposition.enforcementAction,
+		Enforced:           disposition.enforced,
 		BlockingRuleNames:  violationRuleNames(event.BlockingViolations),
 		AuditOnlyRuleNames: violationRuleNames(event.AuditOnlyViolations),
-		ExitCode:           0, StdoutHash: evaluationHash(nil), StderrHash: evaluationHash(nil),
+		ExitCode:           0,
+		StdoutHash:         evaluationHash(nil),
+		StderrHash:         evaluationHash(nil),
 	})
+
 	return evaluation.Layer{
-		LayerIndex: layerIndex, ParentLayerIndex: &parentIndex, Kind: "final", Name: "audit-result",
-		Status: disposition.status, Outcome: "", Verdict: verdictFromFinalDisposition(disposition.verdict),
-		InputReference: "evaluation.layers",
-		InputJSON:      json.RawMessage(`{}`), InputHash: evaluationHash([]byte(`{}`)),
-		OutputHash: evaluationHash(outputJSON), OutputJSON: outputJSON,
-		MetadataJSON: json.RawMessage(`{"schema_version":1}`), StartedAt: completedAt,
-		CompletedAt: completedAt, LatencyUS: 0, ServiceName: "agent-gate",
-		ServiceVersion: "", ModelName: "", ModelVersion: "", PromptHash: "",
-		SchemaHash: "", CacheStatus: "", CacheKeyHash: "", CacheEntryVersion: nil,
-		CacheExpiresAt: nil, ErrorCode: "", ErrorMessage: "", RetryCount: 0,
+		LayerIndex:        layerIndex,
+		ParentLayerIndex:  &parentIndex,
+		Kind:              "final",
+		Name:              "audit-result",
+		Status:            disposition.status,
+		Outcome:           "",
+		Verdict:           verdictFromFinalDisposition(disposition.verdict),
+		InputReference:    "evaluation.layers",
+		InputJSON:         json.RawMessage(`{}`),
+		InputHash:         evaluationHash([]byte(`{}`)),
+		OutputHash:        evaluationHash(outputJSON),
+		OutputJSON:        outputJSON,
+		MetadataJSON:      json.RawMessage(`{"schema_version":1}`),
+		StartedAt:         completedAt,
+		CompletedAt:       completedAt,
+		LatencyUS:         0,
+		ServiceName:       "agent-gate",
+		ServiceVersion:    "",
+		ModelName:         "",
+		ModelVersion:      "",
+		PromptHash:        "",
+		SchemaHash:        "",
+		CacheStatus:       "",
+		CacheKeyHash:      "",
+		CacheEntryVersion: nil,
+		CacheExpiresAt:    nil,
+		ErrorCode:         "",
+		ErrorMessage:      "",
+		RetryCount:        0,
 	}
 }
 
@@ -356,57 +504,87 @@ func deferredFinalDisposition(event hook.DeferredAuditEvent) finalDisposition {
 	if hasAttemptedInference(event.Trace.Layers) {
 		source = "inference"
 	}
+
 	if len(event.BlockingViolations) > 0 || len(event.AuditOnlyViolations) > 0 {
 		return finalDisposition{
-			verdict: "audit", source: source, enforcementAction: "audit",
-			enforced: false, status: "complete",
+			verdict:           "audit",
+			source:            source,
+			enforcementAction: "audit",
+			enforced:          false,
+			status:            "complete",
 		}
 	}
+
 	return finalDisposition{
-		verdict: "allow", source: source, enforcementAction: "audit",
-		enforced: false, status: "complete",
+		verdict:           "allow",
+		source:            source,
+		enforcementAction: "audit",
+		enforced:          false,
+		status:            "complete",
 	}
 }
 
 func hotFinalDisposition(result hook.HotEvaluation, systemError string) finalDisposition {
 	if systemError == intakeParseFailed {
 		return finalDisposition{
-			verdict: "error", source: "input_validation", enforcementAction: "reject_invalid",
-			enforced: true, status: "error",
+			verdict:           "error",
+			source:            "input_validation",
+			enforcementAction: "reject_invalid",
+			enforced:          true,
+			status:            "error",
 		}
 	}
+
 	if systemError != "" {
 		return finalDisposition{
-			verdict: "error", source: "system_error", enforcementAction: "fail_open",
-			enforced: false, status: "error",
+			verdict:           "error",
+			source:            "system_error",
+			enforcementAction: "fail_open",
+			enforced:          false,
+			status:            "error",
 		}
 	}
+
 	source := "deterministic"
 	if hasAttemptedInference(result.Trace.Layers) {
 		source = "inference"
 	}
-	if len(result.Deferred.BlockingViolations) > 0 && result.Deferred.Decision == hook.ResponseDecisionBlock {
+
+	if len(result.Deferred.BlockingViolations) > 0 &&
+		result.Deferred.Decision == hook.ResponseDecisionBlock {
 		enforcementAction := "deny"
 		if hook.LookupCapability(
-			result.Deferred.System, result.Deferred.EventName,
+			result.Deferred.System,
+			result.Deferred.EventName,
 		) == hook.CapabilitySubstitute {
 			enforcementAction = "substitute"
 		}
+
 		return finalDisposition{
-			verdict: "block", source: source, enforcementAction: enforcementAction,
-			enforced: hook.CanBlock(result.Deferred.System, result.Deferred.EventName),
-			status:   "complete",
+			verdict:           "block",
+			source:            source,
+			enforcementAction: enforcementAction,
+			enforced:          hook.CanBlock(result.Deferred.System, result.Deferred.EventName),
+			status:            "complete",
 		}
 	}
+
 	if len(result.Deferred.AuditOnlyViolations) > 0 {
 		return finalDisposition{
-			verdict: "audit", source: "provider_capability", enforcementAction: "audit",
-			enforced: false, status: "complete",
+			verdict:           "audit",
+			source:            "provider_capability",
+			enforcementAction: "audit",
+			enforced:          false,
+			status:            "complete",
 		}
 	}
+
 	return finalDisposition{
-		verdict: "allow", source: source, enforcementAction: "allow",
-		enforced: false, status: "complete",
+		verdict:           "allow",
+		source:            source,
+		enforcementAction: "allow",
+		enforced:          false,
+		status:            "complete",
 	}
 }
 
@@ -416,29 +594,35 @@ func hasAttemptedInference(layers []rules.LayerTrace) bool {
 			return true
 		}
 	}
+
 	return false
 }
 
 func lastAttemptedLayerIndex(layers []rules.LayerTrace) int {
 	lastIndex := 0
+
 	for i := range layers {
 		if layers[i].Status != "skipped" {
 			lastIndex = i + 1
 		}
 	}
+
 	return lastIndex
 }
 
 func violationRuleNames(violations []rules.Violation) []string {
 	names := make([]string, 0, len(violations))
 	seen := make(map[string]bool)
+
 	for _, violation := range violations {
 		if seen[violation.RuleName] {
 			continue
 		}
+
 		seen[violation.RuleName] = true
 		names = append(names, violation.RuleName)
 	}
+
 	return names
 }
 
@@ -449,6 +633,7 @@ func inferenceGenerationOptions(inputJSON json.RawMessage) json.RawMessage {
 	if json.Unmarshal(inputJSON, &input) != nil || len(input.GenerationOptions) == 0 {
 		return nil
 	}
+
 	return append(json.RawMessage(nil), input.GenerationOptions...)
 }
 
@@ -457,6 +642,7 @@ func marshalLayerMetadata(value layerMetadataV2) json.RawMessage {
 	if err != nil {
 		return json.RawMessage(`{}`)
 	}
+
 	return encoded
 }
 
@@ -465,6 +651,7 @@ func marshalFinalLayerOutput(value finalLayerOutput) json.RawMessage {
 	if err != nil {
 		return json.RawMessage(`{}`)
 	}
+
 	return encoded
 }
 
@@ -473,6 +660,7 @@ func marshalEvaluationError(value evaluationErrorJSON) json.RawMessage {
 	if err != nil {
 		return json.RawMessage(`{}`)
 	}
+
 	return encoded
 }
 
@@ -481,6 +669,7 @@ func marshalDeterministicMetadata(value deterministicLayerMetadata) json.RawMess
 	if err != nil {
 		return json.RawMessage(`{}`)
 	}
+
 	return encoded
 }
 
@@ -488,7 +677,9 @@ func cloneIntPointer(value *int) *int {
 	if value == nil {
 		return nil
 	}
+
 	cloned := *value
+
 	return &cloned
 }
 
@@ -496,7 +687,9 @@ func cloneInt64Pointer(value *int64) *int64 {
 	if value == nil {
 		return nil
 	}
+
 	cloned := *value
+
 	return &cloned
 }
 
@@ -504,6 +697,8 @@ func cloneTimePointer(value *time.Time) *time.Time {
 	if value == nil {
 		return nil
 	}
+
 	cloned := *value
+
 	return &cloned
 }

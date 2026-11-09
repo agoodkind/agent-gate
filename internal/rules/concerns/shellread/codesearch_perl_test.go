@@ -23,21 +23,28 @@ func TestExtractCodeSearchTargetsPerlOperandRead(t *testing.T) {
 		want    []string
 	}{
 		{"dash-ne reads operand", `perl -ne 'print' x.go`, []string{"/repo/x.go"}},
-		{"dash-pe reads operand", `perl -pe 's/a/b/' a.go b.go`, []string{"/repo/a.go", "/repo/b.go"}},
+		{
+			"dash-pe reads operand",
+			`perl -pe 's/a/b/' a.go b.go`,
+			[]string{"/repo/a.go", "/repo/b.go"},
+		},
 		{"clustered -lne reads operand", `perl -lne 'print' y.go`, []string{"/repo/y.go"}},
 		{"dash-e without loop reads nothing", `perl -e 'print' z.go`, nil},
 	}
 
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := targetPaths(ExtractCodeSearchTargets(tc.command, cwd, perlTestTools, nil))
-			slices.Sort(got)
-			want := slices.Clone(tc.want)
-			slices.Sort(want)
-			if !slices.Equal(got, want) {
-				t.Fatalf("ExtractCodeSearchTargets(%q) = %v, want %v", tc.command, got, want)
-			}
-		})
+		t.Run(
+			tc.name,
+			func(t *testing.T) {
+				got := targetPaths(ExtractCodeSearchTargets(tc.command, cwd, perlTestTools, nil))
+				slices.Sort(got)
+				want := slices.Clone(tc.want)
+				slices.Sort(want)
+				if !slices.Equal(got, want) {
+					t.Fatalf("ExtractCodeSearchTargets(%q) = %v, want %v", tc.command, got, want)
+				}
+			},
+		)
 	}
 }
 
@@ -59,15 +66,18 @@ func TestExtractCodeSearchTargetsPerlInScriptRead(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := targetPaths(ExtractCodeSearchTargets(tc.command, cwd, perlTestTools, nil))
-			slices.Sort(got)
-			want := slices.Clone(tc.want)
-			slices.Sort(want)
-			if !slices.Equal(got, want) {
-				t.Fatalf("ExtractCodeSearchTargets(%q) = %v, want %v", tc.command, got, want)
-			}
-		})
+		t.Run(
+			tc.name,
+			func(t *testing.T) {
+				got := targetPaths(ExtractCodeSearchTargets(tc.command, cwd, perlTestTools, nil))
+				slices.Sort(got)
+				want := slices.Clone(tc.want)
+				slices.Sort(want)
+				if !slices.Equal(got, want) {
+					t.Fatalf("ExtractCodeSearchTargets(%q) = %v, want %v", tc.command, got, want)
+				}
+			},
+		)
 	}
 }
 
@@ -83,7 +93,10 @@ func TestExtractCodeSearchTargetsPerlToolGate(t *testing.T) {
 	if !slices.Equal(withPerl, []string{"/repo/x.go"}) {
 		t.Fatalf("with perl tool = %v, want [/repo/x.go]", withPerl)
 	}
-	withoutPerl := targetPaths(ExtractCodeSearchTargets(operandCmd, cwd, []string{"grep", "rg"}, nil))
+
+	withoutPerl := targetPaths(
+		ExtractCodeSearchTargets(operandCmd, cwd, []string{"grep", "rg"}, nil),
+	)
 	if len(withoutPerl) != 0 {
 		t.Fatalf("without perl tool = %v, want none", withoutPerl)
 	}
@@ -94,7 +107,10 @@ func TestExtractCodeSearchTargetsPerlToolGate(t *testing.T) {
 	if !slices.Equal(withPerlOpen, []string{"/repo/y.go"}) {
 		t.Fatalf("with perl tool (open) = %v, want [/repo/y.go]", withPerlOpen)
 	}
-	withoutPerlOpen := targetPaths(ExtractCodeSearchTargets(openCmd, cwd, []string{"grep", "rg"}, nil))
+
+	withoutPerlOpen := targetPaths(
+		ExtractCodeSearchTargets(openCmd, cwd, []string{"grep", "rg"}, nil),
+	)
 	if len(withoutPerlOpen) != 0 {
 		t.Fatalf("without perl tool (open) = %v, want none", withoutPerlOpen)
 	}

@@ -17,6 +17,7 @@ func TestInferSingleflightClassifiesFollowerContextErrors(t *testing.T) {
 			context: func() (context.Context, context.CancelFunc) {
 				ctx, cancel := context.WithCancel(context.Background())
 				cancel()
+
 				return ctx, cancel
 			},
 			errorClass: "canceled",
@@ -30,21 +31,28 @@ func TestInferSingleflightClassifiesFollowerContextErrors(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			runtime := NewInferRuntimeWithCache(nil, nil)
-			t.Cleanup(runtime.Close)
-			runtime.inflight["same"] = &inferFlight{done: make(chan struct{})}
-			ctx, cancel := test.context()
-			defer cancel()
+		t.Run(
+			test.name,
+			func(t *testing.T) {
+				runtime := NewInferRuntimeWithCache(nil, nil)
+				t.Cleanup(runtime.Close)
+				runtime.inflight["same"] = &inferFlight{done: make(chan struct{})}
+				ctx, cancel := test.context()
+				defer cancel()
 
-			result := runtime.singleflight(ctx, "same", func() inferResult {
-				t.Fatal("follower ran leader function")
-				return emptyInferResult()
-			})
+				result := runtime.singleflight(
+					ctx,
+					"same",
+					func() inferResult {
+						t.Fatal("follower ran leader function")
+						return emptyInferResult()
+					},
+				)
 
-			if result.errorClass != test.errorClass {
-				t.Fatalf("error class = %q, want %q", result.errorClass, test.errorClass)
-			}
-		})
+				if result.errorClass != test.errorClass {
+					t.Fatalf("error class = %q, want %q", result.errorClass, test.errorClass)
+				}
+			},
+		)
 	}
 }

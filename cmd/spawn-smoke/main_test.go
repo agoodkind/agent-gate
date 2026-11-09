@@ -24,6 +24,10 @@ func TestIsolatedXDGRoutesOffProduction(t *testing.T) {
 
 	auditDB := agconfig.DefaultAuditSQLitePath()
 	if !strings.HasPrefix(auditDB, filepath.Join(home, "state")) {
-		t.Fatalf("audit DB %q is not under isolated state dir %q", auditDB, filepath.Join(home, "state"))
+		t.Fatalf(
+			"audit DB %q is not under isolated state dir %q",
+			auditDB,
+			filepath.Join(home, "state"),
+		)
 	}
 }

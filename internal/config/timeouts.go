@@ -31,9 +31,13 @@ var HookEvaluateTimeoutFromFile = sync.OnceValue(func() time.Duration {
 			} `toml:"performance"`
 		}
 		if decodeErr := toml.Unmarshal(sourceBytes, &probe); decodeErr == nil {
-			milliseconds = positiveOr(probe.Performance.Timeouts.HookEvaluateMS, DefaultHookEvaluateMs)
+			milliseconds = positiveOr(
+				probe.Performance.Timeouts.HookEvaluateMS,
+				DefaultHookEvaluateMs,
+			)
 		}
 	}
+
 	return time.Duration(milliseconds) * time.Millisecond
 })
 
@@ -74,16 +78,23 @@ func positiveOr(value int, fallback int) int {
 	if value > 0 {
 		return value
 	}
+
 	return fallback
 }
 
 func (c *Config) timeouts() TimeoutPerformance {
 	if c == nil {
 		return TimeoutPerformance{
-			HookEvaluateMS: 0, ExecDefaultMS: 0, ExecMaxMS: 0, ExecBackgroundMS: 0,
-			ExecMaxRetryCount: 0, InferDefaultMS: 0, InferMaxMS: 0,
+			HookEvaluateMS:    0,
+			ExecDefaultMS:     0,
+			ExecMaxMS:         0,
+			ExecBackgroundMS:  0,
+			ExecMaxRetryCount: 0,
+			InferDefaultMS:    0,
+			InferMaxMS:        0,
 		}
 	}
+
 	return c.Performance.Timeouts
 }
 
@@ -154,26 +165,34 @@ func validateTimeouts(timeouts TimeoutPerformance) error {
 	if execMax >= hookEvaluate {
 		return fmt.Errorf(
 			"performance.timeouts.exec_max_ms %d must stay under hook_evaluate_ms %d",
-			execMax, hookEvaluate,
+			execMax,
+			hookEvaluate,
 		)
 	}
+
 	if inferMax >= hookEvaluate {
 		return fmt.Errorf(
 			"performance.timeouts.infer_max_ms %d must stay under hook_evaluate_ms %d",
-			inferMax, hookEvaluate,
+			inferMax,
+			hookEvaluate,
 		)
 	}
+
 	if execDefault > execMax {
 		return fmt.Errorf(
 			"performance.timeouts.exec_default_ms %d exceeds exec_max_ms %d",
-			execDefault, execMax,
+			execDefault,
+			execMax,
 		)
 	}
+
 	if inferDefault > inferMax {
 		return fmt.Errorf(
 			"performance.timeouts.infer_default_ms %d exceeds infer_max_ms %d",
-			inferDefault, inferMax,
+			inferDefault,
+			inferMax,
 		)
 	}
+
 	return nil
 }

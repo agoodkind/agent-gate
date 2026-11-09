@@ -25,40 +25,117 @@ func TestStoreListFiltersJoinedEvaluations(t *testing.T) {
 		filter evaluation.QueryFilter
 		wantID string
 	}{
-		{name: "evaluation id", filter: evaluation.QueryFilter{EvaluationID: first.Evaluation.EvaluationID}, wantID: first.Evaluation.EvaluationID},
-		{name: "event id", filter: evaluation.QueryFilter{EventID: first.Evaluation.EventID}, wantID: first.Evaluation.EvaluationID},
-		{name: "receipt id", filter: evaluation.QueryFilter{ReceiptID: first.Evaluation.ReceiptID}, wantID: first.Evaluation.EvaluationID},
-		{name: "mode", filter: evaluation.QueryFilter{Mode: "deferred"}, wantID: second.Evaluation.EvaluationID},
-		{name: "since", filter: evaluation.QueryFilter{Since: second.Evaluation.CompletedAt.Add(-time.Second)}, wantID: second.Evaluation.EvaluationID},
-		{name: "until", filter: evaluation.QueryFilter{Until: first.Evaluation.CompletedAt.Add(time.Second)}, wantID: first.Evaluation.EvaluationID},
-		{name: "system", filter: evaluation.QueryFilter{System: "codex"}, wantID: first.Evaluation.EvaluationID},
-		{name: "session", filter: evaluation.QueryFilter{SessionID: "session-2"}, wantID: second.Evaluation.EvaluationID},
-		{name: "event", filter: evaluation.QueryFilter{EventName: "PostToolUse"}, wantID: second.Evaluation.EvaluationID},
-		{name: "tool", filter: evaluation.QueryFilter{ToolName: "Bash"}, wantID: second.Evaluation.EvaluationID},
-		{name: "rule", filter: evaluation.QueryFilter{RuleName: "review-rule"}, wantID: first.Evaluation.EvaluationID},
-		{name: "static rule", filter: evaluation.QueryFilter{RuleName: "static-rule"}, wantID: first.Evaluation.EvaluationID},
-		{name: "layer name", filter: evaluation.QueryFilter{LayerName: "review-layer"}, wantID: first.Evaluation.EvaluationID},
-		{name: "layer kind", filter: evaluation.QueryFilter{LayerKind: "inference"}, wantID: first.Evaluation.EvaluationID},
-		{name: "layer outcome", filter: evaluation.QueryFilter{LayerOutcome: "match"}, wantID: first.Evaluation.EvaluationID},
-		{name: "model", filter: evaluation.QueryFilter{ModelName: "gpt-test"}, wantID: first.Evaluation.EvaluationID},
-		{name: "final verdict", filter: evaluation.QueryFilter{FinalVerdict: "allow"}, wantID: second.Evaluation.EvaluationID},
+		{
+			name:   "evaluation id",
+			filter: evaluation.QueryFilter{EvaluationID: first.Evaluation.EvaluationID},
+			wantID: first.Evaluation.EvaluationID,
+		},
+		{
+			name:   "event id",
+			filter: evaluation.QueryFilter{EventID: first.Evaluation.EventID},
+			wantID: first.Evaluation.EvaluationID,
+		},
+		{
+			name:   "receipt id",
+			filter: evaluation.QueryFilter{ReceiptID: first.Evaluation.ReceiptID},
+			wantID: first.Evaluation.EvaluationID,
+		},
+		{
+			name:   "mode",
+			filter: evaluation.QueryFilter{Mode: "deferred"},
+			wantID: second.Evaluation.EvaluationID,
+		},
+		{
+			name:   "since",
+			filter: evaluation.QueryFilter{Since: second.Evaluation.CompletedAt.Add(-time.Second)},
+			wantID: second.Evaluation.EvaluationID,
+		},
+		{
+			name:   "until",
+			filter: evaluation.QueryFilter{Until: first.Evaluation.CompletedAt.Add(time.Second)},
+			wantID: first.Evaluation.EvaluationID,
+		},
+		{
+			name:   "system",
+			filter: evaluation.QueryFilter{System: "codex"},
+			wantID: first.Evaluation.EvaluationID,
+		},
+		{
+			name:   "session",
+			filter: evaluation.QueryFilter{SessionID: "session-2"},
+			wantID: second.Evaluation.EvaluationID,
+		},
+		{
+			name:   "event",
+			filter: evaluation.QueryFilter{EventName: "PostToolUse"},
+			wantID: second.Evaluation.EvaluationID,
+		},
+		{
+			name:   "tool",
+			filter: evaluation.QueryFilter{ToolName: "Bash"},
+			wantID: second.Evaluation.EvaluationID,
+		},
+		{
+			name:   "rule",
+			filter: evaluation.QueryFilter{RuleName: "review-rule"},
+			wantID: first.Evaluation.EvaluationID,
+		},
+		{
+			name:   "static rule",
+			filter: evaluation.QueryFilter{RuleName: "static-rule"},
+			wantID: first.Evaluation.EvaluationID,
+		},
+		{
+			name:   "layer name",
+			filter: evaluation.QueryFilter{LayerName: "review-layer"},
+			wantID: first.Evaluation.EvaluationID,
+		},
+		{
+			name:   "layer kind",
+			filter: evaluation.QueryFilter{LayerKind: "inference"},
+			wantID: first.Evaluation.EvaluationID,
+		},
+		{
+			name:   "layer outcome",
+			filter: evaluation.QueryFilter{LayerOutcome: "match"},
+			wantID: first.Evaluation.EvaluationID,
+		},
+		{
+			name:   "model",
+			filter: evaluation.QueryFilter{ModelName: "gpt-test"},
+			wantID: first.Evaluation.EvaluationID,
+		},
+		{
+			name:   "final verdict",
+			filter: evaluation.QueryFilter{FinalVerdict: "allow"},
+			wantID: second.Evaluation.EvaluationID,
+		},
 	}
 	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			records, err := store.List(ctx, test.filter)
-			if err != nil {
-				t.Fatalf("List: %v", err)
-			}
-			if len(records) != 1 || records[0].EvaluationID != test.wantID {
-				t.Fatalf("records = %+v, want only %q", records, test.wantID)
-			}
-		})
+		t.Run(
+			test.name,
+			func(t *testing.T) {
+				records, err := store.List(ctx, test.filter)
+				if err != nil {
+					t.Fatalf("List: %v", err)
+				}
+
+				if len(records) != 1 || records[0].EvaluationID != test.wantID {
+					t.Fatalf("records = %+v, want only %q", records, test.wantID)
+				}
+			},
+		)
 	}
 
-	result, err := evaluation.Query(ctx, fixtureConfig(t, path), evaluation.QueryFilter{Limit: 1, Offset: 1})
+	result, err := evaluation.Query(
+		ctx,
+		fixtureConfig(t, path),
+		evaluation.QueryFilter{Limit: 1, Offset: 1},
+	)
 	if err != nil {
 		t.Fatalf("Query pagination: %v", err)
 	}
+
 	if len(result.Records) != 1 || result.Records[0].EvaluationID != first.Evaluation.EvaluationID {
 		t.Fatalf("paginated records = %+v, want %q", result.Records, first.Evaluation.EvaluationID)
 	}
@@ -67,42 +144,57 @@ func TestStoreListFiltersJoinedEvaluations(t *testing.T) {
 func TestStoreListReturnsOrderedSafeTrainingExport(t *testing.T) {
 	store, _, _, first, _ := newEvaluationQueryFixture(t)
 
-	records, err := store.List(context.Background(), evaluation.QueryFilter{
-		EvaluationID: first.Evaluation.EvaluationID,
-	})
+	records, err := store.List(
+		context.Background(),
+		evaluation.QueryFilter{
+			EvaluationID: first.Evaluation.EvaluationID,
+		},
+	)
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
+
 	if len(records) != 1 {
 		t.Fatalf("records = %d, want 1", len(records))
 	}
+
 	record := records[0]
 	if record.System != "codex" || record.SessionID != "session-1" ||
 		record.EventName != "PreToolUse" || record.ToolName != "exec_command" {
 		t.Fatalf("joined intake metadata = %+v", record)
 	}
+
 	if len(record.Layers) != 2 || record.Layers[0].LayerIndex != 0 ||
 		record.Layers[1].LayerIndex != 1 || record.Layers[1].ParentLayerIndex == nil ||
 		*record.Layers[1].ParentLayerIndex != 0 {
 		t.Fatalf("ordered layers = %+v", record.Layers)
 	}
+
 	if len(record.Labels) != 2 || record.Labels[0].Namespace != "alpha" ||
 		record.Labels[1].Namespace != "zeta" {
 		t.Fatalf("ordered labels = %+v", record.Labels)
 	}
+
 	encoded, err := json.Marshal(record)
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
 	}
+
 	text := string(encoded)
+
 	for _, prohibited := range []string{
-		"input_json", "selected input secret", "error_message", "backend secret",
-		"rationale", "authorization",
+		"input_json",
+		"selected input secret",
+		"error_message",
+		"backend secret",
+		"rationale",
+		"authorization",
 	} {
 		if strings.Contains(strings.ToLower(text), strings.ToLower(prohibited)) {
 			t.Fatalf("training export contains prohibited %q: %s", prohibited, text)
 		}
 	}
+
 	for _, required := range []string{
 		`"verified_provenance":{"requested_model":"gpt-test","reported_prompt_hash_status":"absent","reported_schema_hash_status":"absent"}`,
 		`"upstream_metadata":{"source":"inference_reply","trust":"untrusted","status":"present","raw":{"prompt_tokens":"0","output_normalized":true,"normalization_kind":"bare_enum_object","raw_output_sha256":"sha256:raw","upstream_response_id":"response-1"}}`,
@@ -111,9 +203,11 @@ func TestStoreListReturnsOrderedSafeTrainingExport(t *testing.T) {
 			t.Fatalf("training export missing %s: %s", required, text)
 		}
 	}
+
 	if strings.Contains(text, "completion_tokens") {
 		t.Fatalf("absent optional token field was invented: %s", text)
 	}
+
 	var layerMetadata struct {
 		VerifiedProvenance map[string]json.RawMessage `json:"verified_provenance"`
 		UpstreamMetadata   struct {
@@ -123,12 +217,17 @@ func TestStoreListReturnsOrderedSafeTrainingExport(t *testing.T) {
 	if err := json.Unmarshal(record.Layers[1].Metadata, &layerMetadata); err != nil {
 		t.Fatalf("Unmarshal layer metadata: %v", err)
 	}
+
 	for _, claim := range []string{
-		"output_normalized", "normalization_kind", "raw_output_sha256", "upstream_response_id",
+		"output_normalized",
+		"normalization_kind",
+		"raw_output_sha256",
+		"upstream_response_id",
 	} {
 		if _, exists := layerMetadata.UpstreamMetadata.Raw[claim]; !exists {
 			t.Fatalf("untrusted upstream envelope is missing %q", claim)
 		}
+
 		if _, promoted := layerMetadata.VerifiedProvenance[claim]; promoted {
 			t.Fatalf("untrusted claim %q was promoted to verified provenance", claim)
 		}
@@ -138,23 +237,29 @@ func TestStoreListReturnsOrderedSafeTrainingExport(t *testing.T) {
 func TestExportEvaluationsFiltersBeforeCheckingDetail(t *testing.T) {
 	_, database, path, first, second := newEvaluationQueryFixture(t)
 	deleteEvaluationDetail(t, database, first.Evaluation.EvaluationID)
-	if _, err := database.Exec(readEvaluationSQLFixture(t, "omit_evaluation_content.sql"), first.Evaluation.EvaluationID); err != nil {
+	if _, err := database.Exec(
+		readEvaluationSQLFixture(t, "omit_evaluation_content.sql"),
+		first.Evaluation.EvaluationID,
+	); err != nil {
 		t.Fatalf("mark evaluation detail expired: %v", err)
 	}
 
-	filtered, err := evaluation.Query(t.Context(), fixtureConfig(t, path), evaluation.QueryFilter{
-		System: "claude",
-		Limit:  1,
-	})
+	filtered, err := evaluation.Query(
+		t.Context(),
+		fixtureConfig(t, path),
+		evaluation.QueryFilter{
+			System: "claude",
+			Limit:  1,
+		},
+	)
 	if err != nil {
 		t.Fatalf("Query filtered export: %v", err)
 	}
+
 	if filtered.Completeness.IncompleteCount != 0 {
-		t.Fatalf(
-			"filtered incomplete count = %d, want 0",
-			filtered.Completeness.IncompleteCount,
-		)
+		t.Fatalf("filtered incomplete count = %d, want 0", filtered.Completeness.IncompleteCount)
 	}
+
 	if filtered.Completeness.EarliestCompleteDetailAt == nil ||
 		!filtered.Completeness.EarliestCompleteDetailAt.Equal(second.Evaluation.CompletedAt) {
 		t.Fatalf(
@@ -164,20 +269,28 @@ func TestExportEvaluationsFiltersBeforeCheckingDetail(t *testing.T) {
 		)
 	}
 
-	paginated, err := evaluation.Query(t.Context(), fixtureConfig(t, path), evaluation.QueryFilter{Limit: 1})
+	paginated, err := evaluation.Query(
+		t.Context(),
+		fixtureConfig(t, path),
+		evaluation.QueryFilter{Limit: 1},
+	)
 	if err != nil {
 		t.Fatalf("Query paginated export: %v", err)
 	}
+
 	if len(paginated.Records) != 1 ||
 		paginated.Records[0].EvaluationID != second.Evaluation.EvaluationID {
-		t.Fatalf("paginated records = %+v, want only %q", paginated.Records, second.Evaluation.EvaluationID)
-	}
-	if paginated.Completeness.IncompleteCount != 1 {
 		t.Fatalf(
-			"paginated incomplete count = %d, want 1",
-			paginated.Completeness.IncompleteCount,
+			"paginated records = %+v, want only %q",
+			paginated.Records,
+			second.Evaluation.EvaluationID,
 		)
 	}
+
+	if paginated.Completeness.IncompleteCount != 1 {
+		t.Fatalf("paginated incomplete count = %d, want 1", paginated.Completeness.IncompleteCount)
+	}
+
 	if paginated.Completeness.EarliestCompleteDetailAt == nil ||
 		!paginated.Completeness.EarliestCompleteDetailAt.Equal(second.Evaluation.CompletedAt) {
 		t.Fatalf(
@@ -190,7 +303,10 @@ func TestExportEvaluationsFiltersBeforeCheckingDetail(t *testing.T) {
 
 func deleteEvaluationDetail(t *testing.T, database *sql.DB, evaluationID string) {
 	t.Helper()
-	if _, err := database.Exec(readEvaluationSQLFixture(t, "clear_evaluation_error.sql"), evaluationID); err != nil {
+	if _, err := database.Exec(
+		readEvaluationSQLFixture(t, "clear_evaluation_error.sql"),
+		evaluationID,
+	); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -199,23 +315,35 @@ func TestStoreListCorrelatesLayerScopedFilters(t *testing.T) {
 	store, _, _, first, _ := newEvaluationQueryFixture(t)
 	ctx := context.Background()
 
-	disagreement, err := store.List(ctx, evaluation.QueryFilter{
-		RuleName: "static-rule", ModelName: "gpt-test",
-	})
+	disagreement, err := store.List(
+		ctx,
+		evaluation.QueryFilter{
+			RuleName:  "static-rule",
+			ModelName: "gpt-test",
+		},
+	)
 	if err != nil {
 		t.Fatalf("List disagreement: %v", err)
 	}
+
 	if len(disagreement) != 0 {
 		t.Fatalf("cross-layer disagreement returned %+v", disagreement)
 	}
 
-	correlated, err := store.List(ctx, evaluation.QueryFilter{
-		RuleName: "review-rule", LayerName: "review-layer", LayerKind: "inference",
-		LayerOutcome: "match", ModelName: "gpt-test",
-	})
+	correlated, err := store.List(
+		ctx,
+		evaluation.QueryFilter{
+			RuleName:     "review-rule",
+			LayerName:    "review-layer",
+			LayerKind:    "inference",
+			LayerOutcome: "match",
+			ModelName:    "gpt-test",
+		},
+	)
 	if err != nil {
 		t.Fatalf("List correlated: %v", err)
 	}
+
 	if len(correlated) != 1 || correlated[0].EvaluationID != first.Evaluation.EvaluationID {
 		t.Fatalf("correlated records = %+v, want %q", correlated, first.Evaluation.EvaluationID)
 	}
@@ -230,7 +358,10 @@ func TestStoreListRejectsMissingAndCorruptChildRows(t *testing.T) {
 			name: "missing final layer",
 			mutate: func(t *testing.T, database *sql.DB, evaluationID string) {
 				t.Helper()
-				if _, err := database.Exec(`delete from gate_evaluation_layers where evaluation_id = ? and layer_index = 1`, evaluationID); err != nil {
+				if _, err := database.Exec(
+					`delete from gate_evaluation_layers where evaluation_id = ? and layer_index = 1`,
+					evaluationID,
+				); err != nil {
 					t.Fatalf("delete final layer: %v", err)
 				}
 			},
@@ -239,7 +370,10 @@ func TestStoreListRejectsMissingAndCorruptChildRows(t *testing.T) {
 			name: "missing label",
 			mutate: func(t *testing.T, database *sql.DB, evaluationID string) {
 				t.Helper()
-				if _, err := database.Exec(`delete from gate_evaluation_labels where evaluation_id = ? and namespace = 'zeta'`, evaluationID); err != nil {
+				if _, err := database.Exec(
+					`delete from gate_evaluation_labels where evaluation_id = ? and namespace = 'zeta'`,
+					evaluationID,
+				); err != nil {
 					t.Fatalf("delete label: %v", err)
 				}
 			},
@@ -248,7 +382,10 @@ func TestStoreListRejectsMissingAndCorruptChildRows(t *testing.T) {
 			name: "corrupt metadata",
 			mutate: func(t *testing.T, database *sql.DB, evaluationID string) {
 				t.Helper()
-				if _, err := database.Exec(readEvaluationSQLFixture(t, "corrupt_layer_metadata.sql"), evaluationID); err != nil {
+				if _, err := database.Exec(
+					readEvaluationSQLFixture(t, "corrupt_layer_metadata.sql"),
+					evaluationID,
+				); err != nil {
 					t.Fatalf("corrupt metadata: %v", err)
 				}
 			},
@@ -257,7 +394,10 @@ func TestStoreListRejectsMissingAndCorruptChildRows(t *testing.T) {
 			name: "invalid outcome semantics",
 			mutate: func(t *testing.T, database *sql.DB, evaluationID string) {
 				t.Helper()
-				if _, err := database.Exec(`update gate_evaluation_layers set status = 'error', outcome = 'match' where evaluation_id = ? and layer_index = 1`, evaluationID); err != nil {
+				if _, err := database.Exec(
+					`update gate_evaluation_layers set status = 'error', outcome = 'match' where evaluation_id = ? and layer_index = 1`,
+					evaluationID,
+				); err != nil {
 					t.Fatalf("corrupt outcome semantics: %v", err)
 				}
 			},
@@ -266,35 +406,50 @@ func TestStoreListRejectsMissingAndCorruptChildRows(t *testing.T) {
 			name: "mismatched output hash",
 			mutate: func(t *testing.T, database *sql.DB, evaluationID string) {
 				t.Helper()
-				if _, err := database.Exec(readEvaluationSQLFixture(t, "corrupt_layer_output.sql"), evaluationID); err != nil {
+				if _, err := database.Exec(
+					readEvaluationSQLFixture(t, "corrupt_layer_output.sql"),
+					evaluationID,
+				); err != nil {
 					t.Fatalf("corrupt output JSON: %v", err)
 				}
 			},
 		},
 	}
 	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			store, database, _, first, _ := newEvaluationQueryFixture(t)
-			test.mutate(t, database, first.Evaluation.EvaluationID)
-			_, err := store.List(context.Background(), evaluation.QueryFilter{
-				EvaluationID: first.Evaluation.EvaluationID,
-			})
-			if err == nil {
-				t.Fatal("List accepted incomplete or corrupt child rows")
-			}
-		})
+		t.Run(
+			test.name,
+			func(t *testing.T) {
+				store, database, _, first, _ := newEvaluationQueryFixture(t)
+				test.mutate(t, database, first.Evaluation.EvaluationID)
+				_, err := store.List(
+					context.Background(),
+					evaluation.QueryFilter{
+						EvaluationID: first.Evaluation.EvaluationID,
+					},
+				)
+				if err == nil {
+					t.Fatal("List accepted incomplete or corrupt child rows")
+				}
+			},
+		)
 	}
 }
 
 func TestStoreListRejectsUnknownV2MetadataAfterRead(t *testing.T) {
 	store, database, _, first, _ := newEvaluationQueryFixture(t)
-	if _, err := database.Exec(readEvaluationSQLFixture(t, "unknown_layer_metadata.sql"), first.Evaluation.EvaluationID); err != nil {
+	if _, err := database.Exec(
+		readEvaluationSQLFixture(t, "unknown_layer_metadata.sql"),
+		first.Evaluation.EvaluationID,
+	); err != nil {
 		t.Fatalf("corrupt v2 metadata: %v", err)
 	}
 
-	_, err := store.List(context.Background(), evaluation.QueryFilter{
-		EvaluationID: first.Evaluation.EvaluationID,
-	})
+	_, err := store.List(
+		context.Background(),
+		evaluation.QueryFilter{
+			EvaluationID: first.Evaluation.EvaluationID,
+		},
+	)
 	if err == nil {
 		t.Fatal("List accepted unknown v2 metadata field")
 	}
@@ -310,25 +465,42 @@ func newEvaluationQueryFixture(
 	if err != nil {
 		t.Fatalf("OpenSQLite: %v", err)
 	}
+
 	t.Cleanup(func() {
 		if err := intakeStore.Handle().Close(); err != nil {
 			t.Fatalf("Close: %v", err)
 		}
 	})
-	firstReceipt, err := intakeStore.Append(ctx, intake.Record{
-		EventID: "evt-query-1", RecordedAt: time.Date(2026, 7, 11, 1, 0, 0, 0, time.UTC),
-		System: "codex", SessionID: "session-1", EventName: "PreToolUse",
-		ToolName: "exec_command", RawPayload: []byte(`{"secret":"raw"}`),
-		NormalizedJSON: json.RawMessage(`{"command":"make check"}`),
-	})
+	firstReceipt, err := intakeStore.Append(
+		ctx,
+		intake.Record{
+			EventID:        "evt-query-1",
+			RecordedAt:     time.Date(2026, 7, 11, 1, 0, 0, 0, time.UTC),
+			System:         "codex",
+			SessionID:      "session-1",
+			EventName:      "PreToolUse",
+			ToolName:       "exec_command",
+			RawPayload:     []byte(`{"secret":"raw"}`),
+			NormalizedJSON: json.RawMessage(`{"command":"make check"}`),
+		},
+	)
 	if err != nil {
 		t.Fatalf("Append first: %v", err)
 	}
-	secondReceipt, err := intakeStore.Append(ctx, intake.Record{
-		EventID: "evt-query-2", RecordedAt: time.Date(2026, 7, 11, 2, 0, 0, 0, time.UTC),
-		System: "claude", SessionID: "session-2", EventName: "PostToolUse",
-		ToolName: "Bash", RawPayload: []byte(`{}`), NormalizedJSON: json.RawMessage(`{}`),
-	})
+
+	secondReceipt, err := intakeStore.Append(
+		ctx,
+		intake.Record{
+			EventID:        "evt-query-2",
+			RecordedAt:     time.Date(2026, 7, 11, 2, 0, 0, 0, time.UTC),
+			System:         "claude",
+			SessionID:      "session-2",
+			EventName:      "PostToolUse",
+			ToolName:       "Bash",
+			RawPayload:     []byte(`{}`),
+			NormalizedJSON: json.RawMessage(`{}`),
+		},
+	)
 	if err != nil {
 		t.Fatalf("Append second: %v", err)
 	}
@@ -339,17 +511,22 @@ func newEvaluationQueryFixture(
 	first.Evaluation.CompletedAt = time.Date(2026, 7, 11, 1, 0, 1, 0, time.UTC)
 	first.Layers[0].Name = "static-layer"
 	first.Layers[0].Outcome = "nonmatch"
-	first.Layers[0].MetadataJSON = json.RawMessage(`{
+	first.Layers[0].MetadataJSON = json.RawMessage(
+		`{
 		"schema_version":1,
 		"checked_rules":[{"rule_name":"static-rule","status":"complete","matched":false}]
-	}`)
+	}`,
+	)
 	first.Layers[1].Kind = "inference"
 	first.Layers[1].Name = "review-layer"
 	first.Layers[1].Status = "complete"
 	first.Layers[1].Outcome = "match"
 	first.Layers[1].ModelName = "gpt-test"
-	first.Layers[1].InputJSON = json.RawMessage(`{"input":"selected input secret","authorization":"backend secret"}`)
-	first.Layers[1].MetadataJSON = json.RawMessage(`{
+	first.Layers[1].InputJSON = json.RawMessage(
+		`{"input":"selected input secret","authorization":"backend secret"}`,
+	)
+	first.Layers[1].MetadataJSON = json.RawMessage(
+		`{
 		"schema_version":2,
 		"rule_name":"review-rule",
 		"verified_provenance":{
@@ -358,11 +535,26 @@ func newEvaluationQueryFixture(
 			"reported_schema_hash_status":"absent"
 		},
 		"upstream_metadata":{"source":"inference_reply","trust":"untrusted","status":"present","raw":{"promptTokens":"0","outputNormalized":true,"normalizationKind":"bare_enum_object","rawOutputSha256":"sha256:raw","upstreamResponseId":"response-1"}}
-	}`)
+	}`,
+	)
 	first.Layers[1].ErrorMessage = "backend secret"
 	first.Labels = []evaluation.Label{
-		{Namespace: "zeta", LabelVersion: 1, Verdict: "block", Source: "human", Rationale: "authorization", CreatedAt: first.Evaluation.CompletedAt},
-		{Namespace: "alpha", LabelVersion: 2, Verdict: "block", Source: "human", Rationale: "authorization", CreatedAt: first.Evaluation.CompletedAt},
+		{
+			Namespace:    "zeta",
+			LabelVersion: 1,
+			Verdict:      "block",
+			Source:       "human",
+			Rationale:    "authorization",
+			CreatedAt:    first.Evaluation.CompletedAt,
+		},
+		{
+			Namespace:    "alpha",
+			LabelVersion: 2,
+			Verdict:      "block",
+			Source:       "human",
+			Rationale:    "authorization",
+			CreatedAt:    first.Evaluation.CompletedAt,
+		},
 	}
 
 	second := completeRecord(secondReceipt)
@@ -376,16 +568,19 @@ func newEvaluationQueryFixture(
 	second.Labels = nil
 
 	store := intakeStore.Evaluations()
+
 	for _, record := range []evaluation.Record{first, second} {
 		if err := store.RecordCompleted(ctx, record); err != nil {
 			t.Fatalf("RecordCompleted %s: %v", record.Evaluation.EvaluationID, err)
 		}
 	}
+
 	return store, intakeStore.Handle(), path, first, second
 }
 
 func TestQueryRejectsInvalidLimitAndOffset(t *testing.T) {
 	store, _, _, _, _ := newEvaluationQueryFixture(t)
+
 	for _, filter := range []evaluation.QueryFilter{
 		{Limit: evaluation.MaxQueryLimit + 1},
 		{Offset: -1},

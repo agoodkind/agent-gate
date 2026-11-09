@@ -35,11 +35,23 @@ func TestExtractCodeSearchTargetsRecursiveEnumeration(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := targetPaths(ExtractCodeSearchTargetsWithPolicy(tc.command, cwd, enumTestTools, policy.EnumerationSpecs, policy.RecursiveGlobs, nil))
-			if !slices.Equal(got, tc.want) {
-				t.Fatalf("ExtractCodeSearchTargets(%q) = %v, want %v", tc.command, got, tc.want)
-			}
-		})
+		t.Run(
+			tc.name,
+			func(t *testing.T) {
+				got := targetPaths(
+					ExtractCodeSearchTargetsWithPolicy(
+						tc.command,
+						cwd,
+						enumTestTools,
+						policy.EnumerationSpecs,
+						policy.RecursiveGlobs,
+						nil,
+					),
+				)
+				if !slices.Equal(got, tc.want) {
+					t.Fatalf("ExtractCodeSearchTargets(%q) = %v, want %v", tc.command, got, tc.want)
+				}
+			},
+		)
 	}
 }

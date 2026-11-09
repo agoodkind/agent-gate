@@ -20,25 +20,37 @@ func TestQueryHandlesMissingAndEmptyIntakeHistory(t *testing.T) {
 	missingPath := filepath.Join(t.TempDir(), "missing.db")
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
-	missingResult, err := intake.Query(context.Background(), queryConfig(missingPath), intake.QueryFilter{})
+	missingResult, err := intake.Query(
+		context.Background(),
+		queryConfig(missingPath),
+		intake.QueryFilter{},
+	)
 	if err != nil {
 		t.Fatalf("Query missing sqlite: %v", err)
 	}
+
 	if len(missingResult.Records) != 0 {
 		t.Fatalf("missing sqlite records = %d, want 0", len(missingResult.Records))
 	}
+
 	if !strings.Contains(missingResult.Note, "no durable seen-event history") {
 		t.Fatalf("missing sqlite note = %q, want friendly empty note", missingResult.Note)
 	}
 
 	_, emptyPath := newQueryTestStore(t)
-	emptyResult, err := intake.Query(context.Background(), queryConfig(emptyPath), intake.QueryFilter{})
+	emptyResult, err := intake.Query(
+		context.Background(),
+		queryConfig(emptyPath),
+		intake.QueryFilter{},
+	)
 	if err != nil {
 		t.Fatalf("Query empty sqlite: %v", err)
 	}
+
 	if len(emptyResult.Records) != 0 {
 		t.Fatalf("empty sqlite records = %d, want 0", len(emptyResult.Records))
 	}
+
 	if !strings.Contains(emptyResult.Note, "no durable seen-event history") {
 		t.Fatalf("empty sqlite note = %q, want friendly empty note", emptyResult.Note)
 	}
@@ -47,27 +59,55 @@ func TestQueryHandlesMissingAndEmptyIntakeHistory(t *testing.T) {
 func TestQueryFiltersRangesAcrossRetainedHistory(t *testing.T) {
 	store, path := newQueryTestStore(t)
 	firstRecordedAt := time.Date(2026, 5, 9, 19, 30, 0, 0, time.UTC)
-	appendQueryRecord(t, store, "evt_first", firstRecordedAt, "claude", "session-1", "PreToolUse", "Bash")
-	appendQueryRecord(t, store, "evt_second", firstRecordedAt.Add(time.Minute), "codex", "session-2", "PostToolUse", "Shell")
+	appendQueryRecord(
+		t,
+		store,
+		"evt_first",
+		firstRecordedAt,
+		"claude",
+		"session-1",
+		"PreToolUse",
+		"Bash",
+	)
+	appendQueryRecord(
+		t,
+		store,
+		"evt_second",
+		firstRecordedAt.Add(time.Minute),
+		"codex",
+		"session-2",
+		"PostToolUse",
+		"Shell",
+	)
 
-	preRange, err := intake.Query(context.Background(), queryConfig(path), intake.QueryFilter{
-		Since: firstRecordedAt.Add(-2 * time.Hour),
-		Until: firstRecordedAt.Add(-time.Minute),
-	})
+	preRange, err := intake.Query(
+		context.Background(),
+		queryConfig(path),
+		intake.QueryFilter{
+			Since: firstRecordedAt.Add(-2 * time.Hour),
+			Until: firstRecordedAt.Add(-time.Minute),
+		},
+	)
 	if err != nil {
 		t.Fatalf("Query pre-range: %v", err)
 	}
+
 	if len(preRange.Records) != 0 {
 		t.Fatalf("pre-range records = %d, want 0", len(preRange.Records))
 	}
 
-	spanningRange, err := intake.Query(context.Background(), queryConfig(path), intake.QueryFilter{
-		Since: firstRecordedAt.Add(-2 * time.Hour),
-		Until: firstRecordedAt.Add(2 * time.Hour),
-	})
+	spanningRange, err := intake.Query(
+		context.Background(),
+		queryConfig(path),
+		intake.QueryFilter{
+			Since: firstRecordedAt.Add(-2 * time.Hour),
+			Until: firstRecordedAt.Add(2 * time.Hour),
+		},
+	)
 	if err != nil {
 		t.Fatalf("Query spanning range: %v", err)
 	}
+
 	if len(spanningRange.Records) != 2 {
 		t.Fatalf("spanning range records = %d, want 2", len(spanningRange.Records))
 	}
@@ -76,24 +116,66 @@ func TestQueryFiltersRangesAcrossRetainedHistory(t *testing.T) {
 func TestQueryFiltersSeenEventsAndRendersDeferredStates(t *testing.T) {
 	store, path := newQueryTestStore(t)
 	baseTime := time.Date(2026, 5, 9, 20, 0, 0, 0, time.UTC)
-	noneID := appendQueryRecord(t, store, "evt_none", baseTime, "claude", "session-1", "PreToolUse", "Bash")
-	pendingID := appendQueryRecord(t, store, "evt_pending", baseTime.Add(time.Minute), "codex", "session-2", "PostToolUse", "Shell")
-	completeID := appendQueryRecord(t, store, "evt_complete", baseTime.Add(2*time.Minute), "gemini", "session-3", "BeforeTool", "WriteFile")
+	noneID := appendQueryRecord(
+		t,
+		store,
+		"evt_none",
+		baseTime,
+		"claude",
+		"session-1",
+		"PreToolUse",
+		"Bash",
+	)
+	pendingID := appendQueryRecord(
+		t,
+		store,
+		"evt_pending",
+		baseTime.Add(time.Minute),
+		"codex",
+		"session-2",
+		"PostToolUse",
+		"Shell",
+	)
+	completeID := appendQueryRecord(
+		t,
+		store,
+		"evt_complete",
+		baseTime.Add(2*time.Minute),
+		"gemini",
+		"session-3",
+		"BeforeTool",
+		"WriteFile",
+	)
 	pendingRecord, err := store.Get(context.Background(), pendingID)
 	if err != nil {
 		t.Fatalf("Get pending receipt: %v", err)
 	}
+
 	completeRecord, err := store.Get(context.Background(), completeID)
 	if err != nil {
 		t.Fatalf("Get complete receipt: %v", err)
 	}
-	if err := store.MarkDeferredPending(context.Background(), pendingID, pendingRecord.ReceiptID); err != nil {
+
+	if err := store.MarkDeferredPending(
+		context.Background(),
+		pendingID,
+		pendingRecord.ReceiptID,
+	); err != nil {
 		t.Fatalf("MarkDeferredPending: %v", err)
 	}
-	if err := store.MarkDeferredPending(context.Background(), completeID, completeRecord.ReceiptID); err != nil {
+
+	if err := store.MarkDeferredPending(
+		context.Background(),
+		completeID,
+		completeRecord.ReceiptID,
+	); err != nil {
 		t.Fatalf("MarkDeferredPending complete row: %v", err)
 	}
-	if err := store.MarkDeferredComplete(context.Background(), completeRecord.ReceiptID); err != nil {
+
+	if err := store.MarkDeferredComplete(
+		context.Background(),
+		completeRecord.ReceiptID,
+	); err != nil {
 		t.Fatalf("MarkDeferredComplete: %v", err)
 	}
 
@@ -102,29 +184,54 @@ func TestQueryFiltersSeenEventsAndRendersDeferredStates(t *testing.T) {
 	assertQueryEventIDs(t, path, intake.QueryFilter{EventName: "BeforeTool"}, completeID)
 	assertQueryEventIDs(t, path, intake.QueryFilter{ToolName: "Shell"}, pendingID)
 	assertQueryEventIDs(t, path, intake.QueryFilter{EventID: noneID}, noneID)
-	assertQueryEventIDs(t, path, intake.QueryFilter{DeferredState: string(intake.DeferredStateNone)}, noneID)
-	assertQueryEventIDs(t, path, intake.QueryFilter{DeferredState: string(intake.DeferredStatePending)}, pendingID)
-	assertQueryEventIDs(t, path, intake.QueryFilter{DeferredState: string(intake.DeferredStateComplete)}, completeID)
-	assertQueryEventIDs(t, path, intake.QueryFilter{
-		Since: baseTime.Add(30 * time.Second),
-		Until: baseTime.Add(90 * time.Second),
-	}, pendingID)
+	assertQueryEventIDs(
+		t,
+		path,
+		intake.QueryFilter{DeferredState: string(intake.DeferredStateNone)},
+		noneID,
+	)
+	assertQueryEventIDs(
+		t,
+		path,
+		intake.QueryFilter{DeferredState: string(intake.DeferredStatePending)},
+		pendingID,
+	)
+	assertQueryEventIDs(
+		t,
+		path,
+		intake.QueryFilter{DeferredState: string(intake.DeferredStateComplete)},
+		completeID,
+	)
+	assertQueryEventIDs(
+		t,
+		path,
+		intake.QueryFilter{
+			Since: baseTime.Add(30 * time.Second),
+			Until: baseTime.Add(90 * time.Second),
+		},
+		pendingID,
+	)
 	assertQueryEventIDs(t, path, intake.QueryFilter{Limit: 1}, completeID)
 
 	allRecords, err := intake.Query(context.Background(), queryConfig(path), intake.QueryFilter{})
 	if err != nil {
 		t.Fatalf("Query all records: %v", err)
 	}
+
 	statesByEventID := make(map[string]intake.DeferredState)
+
 	for _, record := range allRecords.Records {
 		statesByEventID[record.EventID] = record.Deferred.State
 	}
+
 	if statesByEventID[noneID] != intake.DeferredStateNone {
 		t.Fatalf("state for %s = %q, want none", noneID, statesByEventID[noneID])
 	}
+
 	if statesByEventID[pendingID] != intake.DeferredStatePending {
 		t.Fatalf("state for %s = %q, want pending", pendingID, statesByEventID[pendingID])
 	}
+
 	if statesByEventID[completeID] != intake.DeferredStateComplete {
 		t.Fatalf("state for %s = %q, want complete", completeID, statesByEventID[completeID])
 	}
@@ -132,62 +239,84 @@ func TestQueryFiltersSeenEventsAndRendersDeferredStates(t *testing.T) {
 
 func TestQueryIncludesNormalizedAndEnvJSONOnlyWhenRequested(t *testing.T) {
 	store, path := newQueryTestStore(t)
-	appendResult, err := store.Append(context.Background(), intake.Record{
-		EventID:    "evt_json",
-		RecordedAt: time.Date(2026, 5, 9, 21, 0, 0, 0, time.UTC),
-		System:     "claude",
-		SessionID:  "session-json",
-		EventName:  "PreToolUse",
-		ToolName:   "Bash",
-		RawPayload: []byte(`{"secret":"raw"}`),
-		NormalizedJSON: []byte(`{
+	appendResult, err := store.Append(
+		context.Background(),
+		intake.Record{
+			EventID:    "evt_json",
+			RecordedAt: time.Date(2026, 5, 9, 21, 0, 0, 0, time.UTC),
+			System:     "claude",
+			SessionID:  "session-json",
+			EventName:  "PreToolUse",
+			ToolName:   "Bash",
+			RawPayload: []byte(`{"secret":"raw"}`),
+			NormalizedJSON: []byte(
+				`{
 			"hook_event_name": "PreToolUse",
 			"tool_name": "Bash"
-		}`),
-		EnvFingerprint: map[string]string{
-			"AI_AGENT": "claude",
+		}`,
+			),
+			EnvFingerprint: map[string]string{
+				"AI_AGENT": "claude",
+			},
 		},
-	})
+	)
 	if err != nil {
 		t.Fatalf("Append: %v", err)
 	}
 
-	withoutJSON, err := intake.Query(context.Background(), queryConfig(path), intake.QueryFilter{EventID: appendResult.EventID})
+	withoutJSON, err := intake.Query(
+		context.Background(),
+		queryConfig(path),
+		intake.QueryFilter{EventID: appendResult.EventID},
+	)
 	if err != nil {
 		t.Fatalf("Query without JSON: %v", err)
 	}
+
 	encodedWithout, err := json.Marshal(withoutJSON.Records[0])
 	if err != nil {
 		t.Fatalf("Marshal without JSON: %v", err)
 	}
-	if strings.Contains(string(encodedWithout), "normalized_json") || strings.Contains(string(encodedWithout), "env_fingerprint") {
+
+	if strings.Contains(string(encodedWithout), "normalized_json") ||
+		strings.Contains(string(encodedWithout), "env_fingerprint") {
 		t.Fatalf("unexpected JSON fields without flags: %s", string(encodedWithout))
 	}
+
 	if strings.Contains(string(encodedWithout), "secret") {
 		t.Fatalf("raw payload leaked in query JSON: %s", string(encodedWithout))
 	}
 
-	withJSON, err := intake.Query(context.Background(), queryConfig(path), intake.QueryFilter{
-		EventID:           appendResult.EventID,
-		IncludeNormalized: true,
-		IncludeEnv:        true,
-	})
+	withJSON, err := intake.Query(
+		context.Background(),
+		queryConfig(path),
+		intake.QueryFilter{
+			EventID:           appendResult.EventID,
+			IncludeNormalized: true,
+			IncludeEnv:        true,
+		},
+	)
 	if err != nil {
 		t.Fatalf("Query with JSON: %v", err)
 	}
+
 	encodedWith, err := json.Marshal(withJSON.Records[0])
 	if err != nil {
 		t.Fatalf("Marshal with JSON: %v", err)
 	}
+
 	if !strings.Contains(string(encodedWith), "normalized_json") {
 		t.Fatalf("normalized_json missing with flag: %s", string(encodedWith))
 	}
+
 	if !strings.Contains(string(encodedWith), "env_fingerprint") {
 		t.Fatalf("env_fingerprint missing with flag: %s", string(encodedWith))
 	}
+
 	if strings.Contains(string(encodedWith), "secret") {
 		t.Fatalf("raw payload leaked in query JSON: %s", string(encodedWith))
 	}
+
 	if withJSON.Records[0].Detail.State != auditstorage.DetailStateAvailable {
 		t.Fatalf("detail state = %q, want available", withJSON.Records[0].Detail.State)
 	}
@@ -195,38 +324,50 @@ func TestQueryIncludesNormalizedAndEnvJSONOnlyWhenRequested(t *testing.T) {
 
 func appendDetailStateRecord(t *testing.T, store *intake.Store, eventID string) string {
 	t.Helper()
-	result, err := store.Append(t.Context(), intake.Record{
-		EventID: eventID, RecordedAt: time.Now().UTC(), System: "codex",
-		SessionID: "session-detail", EventName: "PreToolUse",
-		RawPayload:         []byte(`{"wire":true}`),
-		NormalizedJSON:     json.RawMessage(`{"normalized":true}`),
-		ClassificationJSON: json.RawMessage(`{"provider":"codex"}`),
-		EnvFingerprint:     map[string]string{"AI_AGENT": "codex"},
-	})
+	result, err := store.Append(
+		t.Context(),
+		intake.Record{
+			EventID:            eventID,
+			RecordedAt:         time.Now().UTC(),
+			System:             "codex",
+			SessionID:          "session-detail",
+			EventName:          "PreToolUse",
+			RawPayload:         []byte(`{"wire":true}`),
+			NormalizedJSON:     json.RawMessage(`{"normalized":true}`),
+			ClassificationJSON: json.RawMessage(`{"provider":"codex"}`),
+			EnvFingerprint:     map[string]string{"AI_AGENT": "codex"},
+		},
+	)
 	if err != nil {
 		t.Fatalf("Append %s: %v", eventID, err)
 	}
+
 	return result.EventID
 }
 
 func TestQueryIncludesClassification(t *testing.T) {
 	store, path := newQueryTestStore(t)
-	classification := json.RawMessage(`{
+	classification := json.RawMessage(
+		`{
 		"input":{"provider_hint":"unknown"},
 		"resolved_provider":"cursor",
 		"confidence":"high",
 		"evidence":[{"source":"payload","result":"match"}],
 		"result":"resolved"
-	}`)
-	appendResult, err := store.Append(context.Background(), intake.Record{
-		EventID:            "evt_classification",
-		System:             "cursor",
-		SessionID:          "session-classification",
-		EventName:          "preToolUse",
-		RawPayload:         []byte(`{"conversation_id":"session-classification"}`),
-		NormalizedJSON:     []byte(`{"conversation_id":"session-classification"}`),
-		ClassificationJSON: classification,
-	})
+	}`,
+	)
+	appendResult, err := store.Append(
+		context.Background(),
+		intake.Record{
+			EventID:            "evt_classification",
+			System:             "cursor",
+			SessionID:          "session-classification",
+			EventName:          "preToolUse",
+			RawPayload:         []byte(`{"conversation_id":"session-classification"}`),
+			NormalizedJSON:     []byte(`{"conversation_id":"session-classification"}`),
+			ClassificationJSON: classification,
+		},
+	)
 	if err != nil {
 		t.Fatalf("Append: %v", err)
 	}
@@ -239,12 +380,15 @@ func TestQueryIncludesClassification(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Query: %v", err)
 	}
+
 	if len(result.Records) != 1 {
 		t.Fatalf("records = %d, want 1", len(result.Records))
 	}
+
 	if !json.Valid(result.Records[0].Classification) {
 		t.Fatalf("classification is invalid JSON: %s", result.Records[0].Classification)
 	}
+
 	if string(result.Records[0].Classification) != string(mustCompactJSON(t, classification)) {
 		t.Fatalf(
 			"classification = %s, want %s",
@@ -260,6 +404,7 @@ func mustCompactJSON(t *testing.T, value json.RawMessage) json.RawMessage {
 	if err := json.Compact(&compacted, value); err != nil {
 		t.Fatalf("compact JSON: %v", err)
 	}
+
 	return json.RawMessage(compacted.String())
 }
 
@@ -284,41 +429,75 @@ func newQueryTestStore(t *testing.T) (*intake.Store, string) {
 			t.Fatalf("Close: %v", err)
 		}
 	})
+
 	return store, path
 }
 
-func appendQueryRecord(t *testing.T, store *intake.Store, eventID string, recordedAt time.Time, system string, sessionID string, eventName string, toolName string) string {
+func appendQueryRecord(
+	t *testing.T,
+	store *intake.Store,
+	eventID string,
+	recordedAt time.Time,
+	system string,
+	sessionID string,
+	eventName string,
+	toolName string,
+) string {
 	t.Helper()
-	appendResult, err := store.Append(context.Background(), intake.Record{
-		EventID:    eventID,
-		RecordedAt: recordedAt,
-		System:     system,
-		SessionID:  sessionID,
-		EventName:  eventName,
-		ToolName:   toolName,
-		RawPayload: []byte(`{"event":"test"}`),
-		NormalizedJSON: []byte(`{
+	appendResult, err := store.Append(
+		context.Background(),
+		intake.Record{
+			EventID:    eventID,
+			RecordedAt: recordedAt,
+			System:     system,
+			SessionID:  sessionID,
+			EventName:  eventName,
+			ToolName:   toolName,
+			RawPayload: []byte(`{"event":"test"}`),
+			NormalizedJSON: []byte(
+				`{
 			"hook_event_name": "test"
-		}`),
-	})
+		}`,
+			),
+		},
+	)
 	if err != nil {
 		t.Fatalf("Append %s: %v", eventID, err)
 	}
+
 	return appendResult.EventID
 }
 
-func assertQueryEventIDs(t *testing.T, path string, filter intake.QueryFilter, wantEventIDs ...string) {
+func assertQueryEventIDs(
+	t *testing.T,
+	path string,
+	filter intake.QueryFilter,
+	wantEventIDs ...string,
+) {
 	t.Helper()
 	result, err := intake.Query(context.Background(), queryConfig(path), filter)
 	if err != nil {
 		t.Fatalf("Query %#v: %v", filter, err)
 	}
+
 	if len(result.Records) != len(wantEventIDs) {
-		t.Fatalf("records = %d, want %d for filter %#v", len(result.Records), len(wantEventIDs), filter)
+		t.Fatalf(
+			"records = %d, want %d for filter %#v",
+			len(result.Records),
+			len(wantEventIDs),
+			filter,
+		)
 	}
+
 	for i, wantEventID := range wantEventIDs {
 		if result.Records[i].EventID != wantEventID {
-			t.Fatalf("record[%d].EventID = %q, want %q for filter %#v", i, result.Records[i].EventID, wantEventID, filter)
+			t.Fatalf(
+				"record[%d].EventID = %q, want %q for filter %#v",
+				i,
+				result.Records[i].EventID,
+				wantEventID,
+				filter,
+			)
 		}
 	}
 }

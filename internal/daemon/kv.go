@@ -23,13 +23,16 @@ func (s *Server) KVGet(
 	if err := validatePublicKVNamespace(req.GetNamespace()); err != nil {
 		return nil, err
 	}
+
 	entry, found, err := s.hotKV.Get(req.GetNamespace(), req.GetKey())
 	if err != nil {
 		return nil, kvStatusError(err)
 	}
+
 	if !found {
 		return &daemonpb.KVGetResponse{Found: false, Entry: nil}, nil
 	}
+
 	return &daemonpb.KVGetResponse{Found: true, Entry: daemonKVEntry(entry)}, nil
 }
 
@@ -41,14 +44,17 @@ func (s *Server) KVSet(
 	if err := validatePublicKVNamespace(req.GetNamespace()); err != nil {
 		return nil, err
 	}
+
 	mode, err := parseKVSetMode(req.GetMode())
 	if err != nil {
 		return nil, err
 	}
+
 	ttlMs := req.GetTtlMs()
 	if ttlMs < 0 {
 		return nil, status.Error(codes.InvalidArgument, "ttl_ms must be non-negative")
 	}
+
 	entry, stored, err := s.hotKV.Set(
 		req.GetNamespace(),
 		req.GetKey(),
@@ -61,9 +67,11 @@ func (s *Server) KVSet(
 	if err != nil {
 		return nil, kvStatusError(err)
 	}
+
 	if !stored {
 		return &daemonpb.KVSetResponse{Stored: false, Entry: nil}, nil
 	}
+
 	return &daemonpb.KVSetResponse{Stored: true, Entry: daemonKVEntry(entry)}, nil
 }
 
@@ -75,10 +83,12 @@ func (s *Server) KVDelete(
 	if err := validatePublicKVNamespace(req.GetNamespace()); err != nil {
 		return nil, err
 	}
+
 	deleted, err := s.hotKV.Delete(req.GetNamespace(), req.GetKey())
 	if err != nil {
 		return nil, kvStatusError(err)
 	}
+
 	return &daemonpb.KVDeleteResponse{Deleted: deleted}, nil
 }
 
@@ -90,10 +100,12 @@ func (s *Server) KVExists(
 	if err := validatePublicKVNamespace(req.GetNamespace()); err != nil {
 		return nil, err
 	}
+
 	exists, err := s.hotKV.Exists(req.GetNamespace(), req.GetKey())
 	if err != nil {
 		return nil, kvStatusError(err)
 	}
+
 	return &daemonpb.KVExistsResponse{Exists: exists}, nil
 }
 
@@ -105,10 +117,12 @@ func (s *Server) KVTTL(
 	if err := validatePublicKVNamespace(req.GetNamespace()); err != nil {
 		return nil, err
 	}
+
 	ttl, err := hotKVTTL(s.hotKV, req.GetNamespace(), req.GetKey(), false)
 	if err != nil {
 		return nil, err
 	}
+
 	return &daemonpb.KVTTLResponse{Ttl: ttl}, nil
 }
 
@@ -120,10 +134,12 @@ func (s *Server) KVPTTL(
 	if err := validatePublicKVNamespace(req.GetNamespace()); err != nil {
 		return nil, err
 	}
+
 	ttl, err := hotKVTTL(s.hotKV, req.GetNamespace(), req.GetKey(), true)
 	if err != nil {
 		return nil, err
 	}
+
 	return &daemonpb.KVPTTLResponse{Pttl: ttl}, nil
 }
 
@@ -135,10 +151,12 @@ func (s *Server) KVExpire(
 	if err := validatePublicKVNamespace(req.GetNamespace()); err != nil {
 		return nil, err
 	}
+
 	ttlMs := req.GetTtlMs()
 	if ttlMs < 0 {
 		return nil, status.Error(codes.InvalidArgument, "ttl_ms must be non-negative")
 	}
+
 	updated, err := s.hotKV.Expire(
 		req.GetNamespace(),
 		req.GetKey(),
@@ -147,6 +165,7 @@ func (s *Server) KVExpire(
 	if err != nil {
 		return nil, kvStatusError(err)
 	}
+
 	return &daemonpb.KVExpireResponse{Updated: updated}, nil
 }
 
@@ -158,13 +177,16 @@ func (s *Server) KVGetDelete(
 	if err := validatePublicKVNamespace(req.GetNamespace()); err != nil {
 		return nil, err
 	}
+
 	entry, found, err := s.hotKV.GetDelete(req.GetNamespace(), req.GetKey())
 	if err != nil {
 		return nil, kvStatusError(err)
 	}
+
 	if !found {
 		return &daemonpb.KVGetDeleteResponse{Found: false, Entry: nil}, nil
 	}
+
 	return &daemonpb.KVGetDeleteResponse{Found: true, Entry: daemonKVEntry(entry)}, nil
 }
 
@@ -176,9 +198,11 @@ func (s *Server) KVList(
 	if err := validatePublicKVNamespace(req.GetNamespace()); err != nil {
 		return nil, err
 	}
+
 	if req.GetLimit() < 0 {
 		return nil, status.Error(codes.InvalidArgument, "limit must be non-negative")
 	}
+
 	var out []*daemonpb.KVEntry
 	entries, err := s.hotKV.ListBounded(
 		req.GetNamespace(),
@@ -189,15 +213,18 @@ func (s *Server) KVList(
 		func(metadata hotkv.Entry, valueBytes int) (int64, error) {
 			entry := daemonKVEntry(metadata)
 			out = append(out, entry)
+
 			return kvEntryWireSize(entry, valueBytes), nil
 		},
 	)
 	if err != nil {
 		return nil, kvStatusError(err)
 	}
+
 	for index, entry := range entries {
 		out[index].Value = entry.Value
 	}
+
 	return &daemonpb.KVListResponse{Entries: out}, nil
 }
 
@@ -205,6 +232,7 @@ func validatePublicKVNamespace(namespace string) error {
 	if !hotkv.IsInternalNamespace(namespace) {
 		return nil
 	}
+
 	return status.Error(
 		codes.PermissionDenied,
 		"internal namespace is not available through public KV RPCs",
@@ -220,11 +248,7 @@ func parseKVSetMode(mode string) (hotkv.SetMode, error) {
 	case string(hotkv.SetModeXX):
 		return hotkv.SetModeXX, nil
 	default:
-		return hotkv.SetModeAny, status.Errorf(
-			codes.InvalidArgument,
-			"unknown set mode %q",
-			mode,
-		)
+		return hotkv.SetModeAny, status.Errorf(codes.InvalidArgument, "unknown set mode %q", mode)
 	}
 }
 
@@ -234,7 +258,9 @@ func kvStatusError(err error) error {
 		return nil
 	case errors.Is(err, hotkv.ErrInvalidNamespace), errors.Is(err, hotkv.ErrInvalidKey):
 		return status.Error(codes.InvalidArgument, err.Error())
-	case errors.Is(err, hotkv.ErrValueTooLarge), errors.Is(err, hotkv.ErrCapacity), errors.Is(err, hotkv.ErrReadOverflow):
+	case errors.Is(err, hotkv.ErrValueTooLarge),
+		errors.Is(err, hotkv.ErrCapacity),
+		errors.Is(err, hotkv.ErrReadOverflow):
 		return status.Error(codes.ResourceExhausted, err.Error())
 	default:
 		return status.Error(codes.Internal, err.Error())
@@ -251,15 +277,19 @@ func hotKVTTL(
 	if err != nil {
 		return 0, kvStatusError(err)
 	}
+
 	if !found {
 		return -2, nil
 	}
+
 	if !expiring {
 		return -1, nil
 	}
+
 	if precise {
 		return ttl.Milliseconds(), nil
 	}
+
 	return ttl.Milliseconds() / 1000, nil
 }
 
@@ -275,6 +305,7 @@ func daemonKVEntry(entry hotkv.Entry) *daemonpb.KVEntry {
 			pttlMs = ttl.Milliseconds()
 		}
 	}
+
 	return &daemonpb.KVEntry{
 		Namespace:       entry.Namespace,
 		Key:             entry.Key,
@@ -293,6 +324,7 @@ func kvEntryWireSize(metadata *daemonpb.KVEntry, valueBytes int) int64 {
 	if valueBytes > 0 {
 		size += protowire.SizeTag(3) + protowire.SizeBytes(valueBytes)
 	}
+
 	return int64(protowire.SizeTag(1) + protowire.SizeBytes(size))
 }
 
@@ -300,5 +332,6 @@ func unixNanoOrZero(value time.Time) int64 {
 	if value.IsZero() {
 		return 0
 	}
+
 	return value.UnixNano()
 }

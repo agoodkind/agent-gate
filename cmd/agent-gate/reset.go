@@ -28,7 +28,14 @@ type resetDependencies struct {
 }
 
 func defaultResetDependencies() resetDependencies {
-	return resetDependencies{resolveExecutable: os.Executable, prepareReset: installer.PrepareReset, applyReset: installer.ApplyReset, install: defaultInstallDependencies(), prepareHooks: installer.PrepareHookRemoval, applyHooks: installer.ApplyHookInstallation}
+	return resetDependencies{
+		resolveExecutable: os.Executable,
+		prepareReset:      installer.PrepareReset,
+		applyReset:        installer.ApplyReset,
+		install:           defaultInstallDependencies(),
+		prepareHooks:      installer.PrepareHookRemoval,
+		applyHooks:        installer.ApplyHookInstallation,
+	}
 }
 
 func runReset(args []string, stdout io.Writer, stderr io.Writer) int {
@@ -92,7 +99,10 @@ func runResetWithDependencies(
 	if !resetNeedsServiceReinstall(targets) {
 		return 0
 	}
-	code := runInstallWithDependencies([]string{"service", "--bin-path", path}, dependencies.install)
+	code := runInstallWithDependencies(
+		[]string{"service", "--bin-path", path},
+		dependencies.install,
+	)
 	if code != 0 {
 		fmt.Fprintln(stderr, "agent-gate reset: reinstall failed; selected data removed")
 	}
@@ -127,14 +137,26 @@ func resetOptions(
 		return installer.ResetOptions{}, err
 	}
 	return installer.ResetOptions{
-		ExecutablePath: path, Service: installer.ServiceOptions{BinPath: path, Stdout: stdout},
-		StateDir: config.DefaultStateDir(), CacheDir: config.DefaultCacheDir(), RuntimeDir: config.RuntimeDir(), ConfigDir: config.DefaultConfigDir(), Audit: cfg.AuditCatalogOptions(), Targets: targets,
+		ExecutablePath: path,
+		Service:        installer.ServiceOptions{BinPath: path, Stdout: stdout},
+		StateDir:       config.DefaultStateDir(),
+		CacheDir:       config.DefaultCacheDir(),
+		RuntimeDir:     config.RuntimeDir(),
+		ConfigDir:      config.DefaultConfigDir(),
+		Audit:          cfg.AuditCatalogOptions(),
+		Targets:        targets,
 		PreservedPaths: resetPreservedPaths(home, targets),
 	}, nil
 }
 
 func resetPreservedPaths(home string, targets []installer.ResetTarget) []string {
-	paths := []string{filepath.Join(home, ".claude", "settings.json"), filepath.Join(home, ".codex", "config.toml"), filepath.Join(home, ".cursor", "hooks.json"), filepath.Join(home, ".gemini", "settings.json"), filepath.Join(home, ".copilot", "hooks", "agent-gate.json")}
+	paths := []string{
+		filepath.Join(home, ".claude", "settings.json"),
+		filepath.Join(home, ".codex", "config.toml"),
+		filepath.Join(home, ".cursor", "hooks.json"),
+		filepath.Join(home, ".gemini", "settings.json"),
+		filepath.Join(home, ".copilot", "hooks", "agent-gate.json"),
+	}
 	if !slices.Contains(targets, installer.ResetTargetConfig) {
 		paths = append(paths, config.DefaultConfigDir())
 	}
@@ -146,7 +168,10 @@ func applyHookReset(stdout io.Writer, stderr io.Writer, dependencies resetDepend
 	if err != nil {
 		return reportResetError(stderr, "remove hooks", err)
 	}
-	hooks, err := dependencies.prepareHooks(installer.HooksOptions{HomeDir: home, Stdout: stdout})
+	hooks, err := dependencies.prepareHooks(installer.HooksOptions{
+		HomeDir: home,
+		Stdout:  stdout,
+	})
 	if err != nil {
 		return reportResetError(stderr, "remove hooks", err)
 	}
@@ -199,10 +224,17 @@ func parseResetCommand(args []string) ([]installer.ResetTarget, bool, string, er
 
 func writeResetHelp(writer io.Writer, target string) {
 	if target != "" {
-		fmt.Fprintf(writer, "Usage: agent-gate reset %s [--apply]\n\n%s\n\nWithout --apply, nothing is changed.\n", target, resetTargetDescription(target))
+		fmt.Fprintf(
+			writer,
+			"Usage: agent-gate reset %s [--apply]\n\n%s\n\nWithout --apply, nothing is changed.\n",
+			target,
+			resetTargetDescription(target),
+		)
 		return
 	}
-	_, _ = io.WriteString(writer, `Usage: agent-gate reset [target] [--apply]
+	_, _ = io.WriteString(
+		writer,
+		`Usage: agent-gate reset [target] [--apply]
 
 Without --apply, nothing is changed.
 
@@ -221,7 +253,8 @@ The default reset keeps configuration and provider hooks.
 "agent-gate reset config --apply" deletes only Agent Gate configuration.
 "agent-gate reset hooks --apply" removes only Agent Gate hook registrations.
 Use "agent-gate reset --apply" to reset every target.
-`)
+`,
+	)
 }
 
 func resetTargetDescription(target string) string {

@@ -44,40 +44,50 @@ func collectHookInvocationContext(
 	cwd, err := getwd()
 	if err != nil {
 		invocation.WorkingDirectory = unreadableValue("working_directory")
-		invocation.CollectionIssues = append(invocation.CollectionIssues,
-			collectionIssue("working_directory", err))
-	} else {
-		invocation.WorkingDirectory = observedValue(
-			cwd, "working_directory", "operating_system",
+		invocation.CollectionIssues = append(
+			invocation.CollectionIssues,
+			collectionIssue("working_directory", err),
 		)
+	} else {
+		invocation.WorkingDirectory = observedValue(cwd, "working_directory", "operating_system")
 	}
 
 	executablePath, err := executable()
 	if err != nil {
 		invocation.Executable = unreadableProcess("executable")
-		invocation.CollectionIssues = append(invocation.CollectionIssues,
-			collectionIssue("executable", err))
+		invocation.CollectionIssues = append(
+			invocation.CollectionIssues,
+			collectionIssue("executable", err),
+		)
 	} else {
 		invocation.Executable = observedProcess(
-			filepath.Base(executablePath), executablePath, "executable",
+			filepath.Base(executablePath),
+			executablePath,
+			"executable",
 		)
 	}
 
 	parent, ancestors, err := processes()
 	if err != nil {
 		invocation.ParentProcess = unreadableProcess("parent_process")
-		invocation.CollectionIssues = append(invocation.CollectionIssues,
-			collectionIssue("process_ancestry", err))
+		invocation.CollectionIssues = append(
+			invocation.CollectionIssues,
+			collectionIssue("process_ancestry", err),
+		)
 	} else {
 		invocation.ParentProcess = parent
 		invocation.Ancestors = ancestors
 	}
 
 	if len(invocation.Environment) == 0 {
-		invocation.CollectionIssues = append(invocation.CollectionIssues, hook.CollectionIssue{
-			Source: "environment", Status: hook.SignalStatusMissing,
-			Detail: "no classification environment signals observed",
-		})
+		invocation.CollectionIssues = append(
+			invocation.CollectionIssues,
+			hook.CollectionIssue{
+				Source: "environment",
+				Status: hook.SignalStatusMissing,
+				Detail: "no classification environment signals observed",
+			},
+		)
 	}
 	return invocation
 }
@@ -85,7 +95,9 @@ func collectHookInvocationContext(
 func observedArgument(argv []string, index int, source string) hook.ObservedValue {
 	if index >= len(argv) || argv[index] == "" {
 		return hook.ObservedValue{
-			Source: source, Provenance: "literal_argv", Status: hook.SignalStatusMissing,
+			Source:     source,
+			Provenance: "literal_argv",
+			Status:     hook.SignalStatusMissing,
 		}
 	}
 	return observedValue(argv[index], source, "literal_argv")
@@ -105,8 +117,9 @@ func observedArguments(argv []string, start int, source string) []hook.ObservedV
 func observedManagedRegistration(provider string) hook.ObservedValue {
 	if provider == "" {
 		return hook.ObservedValue{
-			Source: "managed_registration", Provenance: "hook_tag",
-			Status: hook.SignalStatusMissing,
+			Source:     "managed_registration",
+			Provenance: "hook_tag",
+			Status:     hook.SignalStatusMissing,
 		}
 	}
 	return observedValue(provider, "managed_registration", "hook_tag")
@@ -114,33 +127,44 @@ func observedManagedRegistration(provider string) hook.ObservedValue {
 
 func observedValue(value string, source string, provenance string) hook.ObservedValue {
 	return hook.ObservedValue{
-		Value: value, Source: source, Provenance: provenance,
-		Status: hook.SignalStatusObserved,
+		Value:      value,
+		Source:     source,
+		Provenance: provenance,
+		Status:     hook.SignalStatusObserved,
 	}
 }
 
 func unreadableValue(source string) hook.ObservedValue {
 	return hook.ObservedValue{
-		Source: source, Provenance: "operating_system", Status: hook.SignalStatusUnreadable,
+		Source:     source,
+		Provenance: "operating_system",
+		Status:     hook.SignalStatusUnreadable,
 	}
 }
 
 func observedProcess(name string, path string, source string) hook.ProcessEvidence {
 	return hook.ProcessEvidence{
-		Name: name, ExecutablePath: path, Source: source,
-		Provenance: "operating_system", Status: hook.SignalStatusObserved,
+		Name:           name,
+		ExecutablePath: path,
+		Source:         source,
+		Provenance:     "operating_system",
+		Status:         hook.SignalStatusObserved,
 	}
 }
 
 func unreadableProcess(source string) hook.ProcessEvidence {
 	return hook.ProcessEvidence{
-		Source: source, Provenance: "operating_system", Status: hook.SignalStatusUnreadable,
+		Source:     source,
+		Provenance: "operating_system",
+		Status:     hook.SignalStatusUnreadable,
 	}
 }
 
 func collectionIssue(source string, err error) hook.CollectionIssue {
 	return hook.CollectionIssue{
-		Source: source, Status: hook.SignalStatusUnreadable, Detail: err.Error(),
+		Source: source,
+		Status: hook.SignalStatusUnreadable,
+		Detail: err.Error(),
 	}
 }
 
@@ -155,11 +179,17 @@ func environmentEvidence(environment map[string]string) []hook.EnvironmentEviden
 	slices.Sort(names)
 	evidence := make([]hook.EnvironmentEvidence, 0, len(names))
 	for _, name := range names {
-		evidence = append(evidence, hook.EnvironmentEvidence{
-			Name: name, Value: environment[name], Category: "provider_environment",
-			Source: "environment", Provenance: "inherited_environment",
-			Status: hook.SignalStatusObserved,
-		})
+		evidence = append(
+			evidence,
+			hook.EnvironmentEvidence{
+				Name:       name,
+				Value:      environment[name],
+				Category:   "provider_environment",
+				Source:     "environment",
+				Provenance: "inherited_environment",
+				Status:     hook.SignalStatusObserved,
+			},
+		)
 	}
 	return evidence
 }
@@ -182,13 +212,16 @@ func collectProcessEvidence() (hook.ProcessEvidence, []hook.ProcessEvidence, err
 		if len(chain) == 0 {
 			source = "parent_process"
 		}
-		chain = append(chain, observedProcess(
-			filepath.Base(entry.executablePath), entry.executablePath, source,
-		))
+		chain = append(
+			chain,
+			observedProcess(filepath.Base(entry.executablePath), entry.executablePath, source),
+		)
 		processID = entry.parentID
 	}
 	if len(chain) == 0 {
-		return hook.ProcessEvidence{}, nil, errors.New("parent process was not present in the process table")
+		return hook.ProcessEvidence{}, nil, errors.New(
+			"parent process was not present in the process table",
+		)
 	}
 	return chain[0], chain[1:], nil
 }
@@ -217,7 +250,8 @@ func readProcessTable() (map[int]processTableEntry, error) {
 			continue
 		}
 		table[processID] = processTableEntry{
-			parentID: parentID, executablePath: strings.Join(fields[2:], " "),
+			parentID:       parentID,
+			executablePath: strings.Join(fields[2:], " "),
 		}
 	}
 	return table, nil

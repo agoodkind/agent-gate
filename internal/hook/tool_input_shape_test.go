@@ -26,6 +26,7 @@ func TestToolInputAcceptsBothShapes(t *testing.T) {
 	if err := json.Unmarshal(object, &fromObject); err != nil {
 		t.Fatalf("object shape: %v", err)
 	}
+
 	if err := json.Unmarshal(encoded, &fromString); err != nil {
 		t.Fatalf("string shape: %v", err)
 	}
@@ -33,10 +34,15 @@ func TestToolInputAcceptsBothShapes(t *testing.T) {
 	if fromObject.Command != command {
 		t.Fatalf("object Command = %q, want %q", fromObject.Command, command)
 	}
+
 	if fromString.Command != fromObject.Command {
-		t.Fatalf("string Command = %q, want the same as the object form %q",
-			fromString.Command, fromObject.Command)
+		t.Fatalf(
+			"string Command = %q, want the same as the object form %q",
+			fromString.Command,
+			fromObject.Command,
+		)
 	}
+
 	if fromString.FilePath != fromObject.FilePath {
 		t.Fatalf("string FilePath = %q, want %q", fromString.FilePath, fromObject.FilePath)
 	}
@@ -58,15 +64,19 @@ func TestToolInputShapeEdgeCases(t *testing.T) {
 		{"string holding an empty object", `"{}"`},
 	}
 	for _, testCase := range cases {
-		t.Run(testCase.name, func(t *testing.T) {
-			var input ClaudeToolInput
-			if err := json.Unmarshal([]byte(testCase.raw), &input); err != nil {
-				t.Fatalf("unmarshal %s rejected the payload: %v", testCase.raw, err)
-			}
-			if input.Command != "" {
-				t.Fatalf("Command = %q, want empty", input.Command)
-			}
-		})
+		t.Run(
+			testCase.name,
+			func(t *testing.T) {
+				var input ClaudeToolInput
+				if err := json.Unmarshal([]byte(testCase.raw), &input); err != nil {
+					t.Fatalf("unmarshal %s rejected the payload: %v", testCase.raw, err)
+				}
+
+				if input.Command != "" {
+					t.Fatalf("Command = %q, want empty", input.Command)
+				}
+			},
+		)
 	}
 }
 

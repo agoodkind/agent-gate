@@ -35,6 +35,7 @@ func compile(t *testing.T, pattern string) *intregex.Regexp {
 	if err != nil {
 		t.Fatalf("compile %q: %v", pattern, err)
 	}
+
 	return re
 }
 
@@ -46,13 +47,21 @@ func TestEvalDiffMatches_NewOnlyBlocks(t *testing.T) {
 			config.FieldToolInputNewString: "bad content added",
 		},
 	}
-	got := diffconcern.EvalDiffMatches(fields, newPair(), re, 0, concernlimit.MaxCollectedMatchesPerEvaluation)
+	got := diffconcern.EvalDiffMatches(
+		fields,
+		newPair(),
+		re,
+		0,
+		concernlimit.MaxCollectedMatchesPerEvaluation,
+	)
 	if len(got) != 1 {
 		t.Fatalf("expected 1 additive match, got %d: %#v", len(got), got)
 	}
+
 	if got[0].Value != "bad content added" {
 		t.Errorf("Value = %q, want %q", got[0].Value, "bad content added")
 	}
+
 	if matched := got[0].Value[got[0].Start:got[0].End]; matched != "bad" {
 		t.Errorf("matched text = %q, want %q", matched, "bad")
 	}
@@ -66,7 +75,13 @@ func TestEvalDiffMatches_PresentInBothAllows(t *testing.T) {
 			config.FieldToolInputNewString: "bad here too",
 		},
 	}
-	got := diffconcern.EvalDiffMatches(fields, newPair(), re, 0, concernlimit.MaxCollectedMatchesPerEvaluation)
+	got := diffconcern.EvalDiffMatches(
+		fields,
+		newPair(),
+		re,
+		0,
+		concernlimit.MaxCollectedMatchesPerEvaluation,
+	)
 	if len(got) != 0 {
 		t.Fatalf("expected 0 matches when text appears in both, got %d: %#v", len(got), got)
 	}
@@ -80,7 +95,13 @@ func TestEvalDiffMatches_PresentInOldOnlyAllows(t *testing.T) {
 			config.FieldToolInputNewString: "clean",
 		},
 	}
-	got := diffconcern.EvalDiffMatches(fields, newPair(), re, 0, concernlimit.MaxCollectedMatchesPerEvaluation)
+	got := diffconcern.EvalDiffMatches(
+		fields,
+		newPair(),
+		re,
+		0,
+		concernlimit.MaxCollectedMatchesPerEvaluation,
+	)
 	if len(got) != 0 {
 		t.Fatalf("expected 0 matches on deletion-only edit, got %d: %#v", len(got), got)
 	}
@@ -94,7 +115,13 @@ func TestEvalDiffMatches_PresentInNeitherAllows(t *testing.T) {
 			config.FieldToolInputNewString: "still clean",
 		},
 	}
-	got := diffconcern.EvalDiffMatches(fields, newPair(), re, 0, concernlimit.MaxCollectedMatchesPerEvaluation)
+	got := diffconcern.EvalDiffMatches(
+		fields,
+		newPair(),
+		re,
+		0,
+		concernlimit.MaxCollectedMatchesPerEvaluation,
+	)
 	if len(got) != 0 {
 		t.Fatalf("expected 0 matches when pattern is in neither, got %d", len(got))
 	}
@@ -108,7 +135,13 @@ func TestEvalDiffMatches_EmptyOldNonEmptyNewBlocks(t *testing.T) {
 			config.FieldToolInputNewString: "this is bad",
 		},
 	}
-	got := diffconcern.EvalDiffMatches(fields, newPair(), re, 0, concernlimit.MaxCollectedMatchesPerEvaluation)
+	got := diffconcern.EvalDiffMatches(
+		fields,
+		newPair(),
+		re,
+		0,
+		concernlimit.MaxCollectedMatchesPerEvaluation,
+	)
 	if len(got) != 1 {
 		t.Fatalf("expected 1 match when old is empty but pattern in new, got %d", len(got))
 	}
@@ -130,11 +163,18 @@ func TestEvalDiffMatches_BatchEditsOneAdditive(t *testing.T) {
 			config.FieldEditsNewString: "edit one bad-1\nedit two bad-2",
 		},
 	}
-	got := diffconcern.EvalDiffMatches(fields, pair, re, 0, concernlimit.MaxCollectedMatchesPerEvaluation)
+	got := diffconcern.EvalDiffMatches(
+		fields,
+		pair,
+		re,
+		0,
+		concernlimit.MaxCollectedMatchesPerEvaluation,
+	)
 	// Only "bad-2" is additive; "bad-1" is in both views and is filtered.
 	if len(got) != 1 {
 		t.Fatalf("expected 1 additive match in batch, got %d: %#v", len(got), got)
 	}
+
 	if matched := got[0].Value[got[0].Start:got[0].End]; matched != "bad-2" {
 		t.Errorf("matched text = %q, want bad-2", matched)
 	}
@@ -142,7 +182,13 @@ func TestEvalDiffMatches_BatchEditsOneAdditive(t *testing.T) {
 
 func TestEvalDiffMatches_NilPatternReturnsNil(t *testing.T) {
 	fields := &testFields{values: map[config.FieldSelector]string{}}
-	if got := diffconcern.EvalDiffMatches(fields, newPair(), nil, 0, concernlimit.MaxCollectedMatchesPerEvaluation); got != nil {
+	if got := diffconcern.EvalDiffMatches(
+		fields,
+		newPair(),
+		nil,
+		0,
+		concernlimit.MaxCollectedMatchesPerEvaluation,
+	); got != nil {
 		t.Fatalf("expected nil, got %#v", got)
 	}
 }
@@ -151,10 +197,12 @@ func TestEvalDiffMatches_CapsCollectedAdditiveMatches(t *testing.T) {
 	re := compile(t, `bad-\d+`)
 
 	var newBuilder strings.Builder
+
 	for i := range concernlimit.MaxCollectedMatchesPerEvaluation + 32 {
 		if i > 0 {
 			newBuilder.WriteByte(' ')
 		}
+
 		newBuilder.WriteString("bad-")
 		newBuilder.WriteString(strconv.Itoa(i))
 	}
@@ -166,9 +214,19 @@ func TestEvalDiffMatches_CapsCollectedAdditiveMatches(t *testing.T) {
 		},
 	}
 
-	got := diffconcern.EvalDiffMatches(fields, newPair(), re, 0, concernlimit.MaxCollectedMatchesPerEvaluation)
+	got := diffconcern.EvalDiffMatches(
+		fields,
+		newPair(),
+		re,
+		0,
+		concernlimit.MaxCollectedMatchesPerEvaluation,
+	)
 	if len(got) != concernlimit.MaxCollectedMatchesPerEvaluation {
-		t.Fatalf("expected %d additive matches, got %d", concernlimit.MaxCollectedMatchesPerEvaluation, len(got))
+		t.Fatalf(
+			"expected %d additive matches, got %d",
+			concernlimit.MaxCollectedMatchesPerEvaluation,
+			len(got),
+		)
 	}
 
 	lastWant := "bad-" + strconv.Itoa(concernlimit.MaxCollectedMatchesPerEvaluation-1)
@@ -182,12 +240,15 @@ func TestEvalDiffMatches_ExcludesExistingTextNearEndOfOldScan(t *testing.T) {
 	re := compile(t, `bad-\d+`)
 
 	var oldBuilder strings.Builder
+
 	for i := range concernlimit.MaxCollectedMatchesPerEvaluation + 32 {
 		if i > 0 {
 			oldBuilder.WriteByte(' ')
 		}
+
 		oldBuilder.WriteString("bad-9000")
 	}
+
 	oldBuilder.WriteString(" bad-5")
 
 	fields := &testFields{
@@ -197,7 +258,13 @@ func TestEvalDiffMatches_ExcludesExistingTextNearEndOfOldScan(t *testing.T) {
 		},
 	}
 
-	got := diffconcern.EvalDiffMatches(fields, newPair(), re, 0, concernlimit.MaxCollectedMatchesPerEvaluation)
+	got := diffconcern.EvalDiffMatches(
+		fields,
+		newPair(),
+		re,
+		0,
+		concernlimit.MaxCollectedMatchesPerEvaluation,
+	)
 	if len(got) != 1 {
 		t.Fatalf("expected 1 additive match after old-side filtering, got %d: %#v", len(got), got)
 	}

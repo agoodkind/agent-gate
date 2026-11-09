@@ -21,6 +21,7 @@ func firstPath(targets []shellread.ReadTarget) string {
 	if len(targets) == 0 {
 		return ""
 	}
+
 	return targets[0].Path
 }
 
@@ -35,19 +36,28 @@ func TestRefPathOperandResolvesTheFileNotTheRevision(t *testing.T) {
 		want    string
 	}{
 		{"show at a ref", "git show HEAD:go.mod", "/repo/go.mod"},
-		{"show at a sha", "git show 1a2b3c4:internal/config/config.go", "/repo/internal/config/config.go"},
+		{
+			"show at a sha",
+			"git show 1a2b3c4:internal/config/config.go",
+			"/repo/internal/config/config.go",
+		},
 		{"show at a branch", "git show origin/main:README.md", "/repo/README.md"},
 		{"cat-file at a ref", "git cat-file -p HEAD:go.sum", "/repo/go.sum"},
 	}
 	for _, testCase := range cases {
-		t.Run(testCase.name, func(t *testing.T) {
-			targets := shellread.ExtractReadTargets(
-				testCase.command, "/repo", []config.ShellReadSpec{gitShowSpec(true)},
-			)
-			if got := firstPath(targets); got != testCase.want {
-				t.Fatalf("path = %q, want %q", got, testCase.want)
-			}
-		})
+		t.Run(
+			testCase.name,
+			func(t *testing.T) {
+				targets := shellread.ExtractReadTargets(
+					testCase.command,
+					"/repo",
+					[]config.ShellReadSpec{gitShowSpec(true)},
+				)
+				if got := firstPath(targets); got != testCase.want {
+					t.Fatalf("path = %q, want %q", got, testCase.want)
+				}
+			},
+		)
 	}
 }
 
@@ -62,20 +72,35 @@ func TestRefPathOperandLeavesOrdinaryOperandsAlone(t *testing.T) {
 		want    string
 	}{
 		{"plain relative path", "git show notes.md", gitShowSpec(true), "/repo/notes.md"},
-		{"absolute path with a colon", "git show /repo/od:d.txt", gitShowSpec(true), "/repo/od:d.txt"},
+		{
+			"absolute path with a colon",
+			"git show /repo/od:d.txt",
+			gitShowSpec(true),
+			"/repo/od:d.txt",
+		},
 		{"explicit relative path", "git show ./od:d.txt", gitShowSpec(true), "/repo/od:d.txt"},
 		{"trailing colon", "git show HEAD:", gitShowSpec(true), "/repo/HEAD:"},
 		{"leading colon", "git show :staged.txt", gitShowSpec(true), "/repo/:staged.txt"},
-		{"spec does not declare the shape", "git show HEAD:go.mod", gitShowSpec(false), "/repo/HEAD:go.mod"},
+		{
+			"spec does not declare the shape",
+			"git show HEAD:go.mod",
+			gitShowSpec(false),
+			"/repo/HEAD:go.mod",
+		},
 	}
 	for _, testCase := range cases {
-		t.Run(testCase.name, func(t *testing.T) {
-			targets := shellread.ExtractReadTargets(
-				testCase.command, "/repo", []config.ShellReadSpec{testCase.spec},
-			)
-			if got := firstPath(targets); got != testCase.want {
-				t.Fatalf("path = %q, want %q", got, testCase.want)
-			}
-		})
+		t.Run(
+			testCase.name,
+			func(t *testing.T) {
+				targets := shellread.ExtractReadTargets(
+					testCase.command,
+					"/repo",
+					[]config.ShellReadSpec{testCase.spec},
+				)
+				if got := firstPath(targets); got != testCase.want {
+					t.Fatalf("path = %q, want %q", got, testCase.want)
+				}
+			},
+		)
 	}
 }

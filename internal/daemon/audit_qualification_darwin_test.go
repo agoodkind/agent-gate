@@ -68,7 +68,10 @@ type qualificationIntake struct {
 	metrics *qualificationRecorder
 }
 
-func (store qualificationIntake) Append(ctx context.Context, record intake.Record) (intake.AppendResult, error) {
+func (store qualificationIntake) Append(
+	ctx context.Context,
+	record intake.Record,
+) (intake.AppendResult, error) {
 	started := time.Now()
 	result, err := store.intakeStore.Append(ctx, record)
 	if err == nil {
@@ -79,7 +82,12 @@ func (store qualificationIntake) Append(ctx context.Context, record intake.Recor
 	return result, err
 }
 
-func (recorder *qualificationRecorder) CommitDeferredEvaluation(ctx context.Context, claim intake.DeferredClaim, record evaluation.Record, entries []audit.NormalizedEntry) error {
+func (recorder *qualificationRecorder) CommitDeferredEvaluation(
+	ctx context.Context,
+	claim intake.DeferredClaim,
+	record evaluation.Record,
+	entries []audit.NormalizedEntry,
+) error {
 	err := recorder.evaluationRecorder.CommitDeferredEvaluation(ctx, claim, record, entries)
 	recorder.mu.Lock()
 	defer recorder.mu.Unlock()
@@ -99,7 +107,15 @@ func BenchmarkAuditQualification(b *testing.B) {
 	if b.N != 1 {
 		b.Fatal("qualification requires -benchtime=1x and one process per repetition")
 	}
-	result := qualificationResult{Source: os.Getenv("QUALIFICATION_SOURCE"), FixtureDigest: auditTraceDigest, Scenario: os.Getenv("QUALIFICATION_SCENARIO"), History: os.Getenv("QUALIFICATION_HISTORY"), Repetition: os.Getenv("QUALIFICATION_REPETITION"), Files: make(map[string]int64), Failures: []string{}}
+	result := qualificationResult{
+		Source:        os.Getenv("QUALIFICATION_SOURCE"),
+		FixtureDigest: auditTraceDigest,
+		Scenario:      os.Getenv("QUALIFICATION_SCENARIO"),
+		History:       os.Getenv("QUALIFICATION_HISTORY"),
+		Repetition:    os.Getenv("QUALIFICATION_REPETITION"),
+		Files:         make(map[string]int64),
+		Failures:      []string{},
+	}
 	if result.Source == "" || os.Getenv("QUALIFICATION_OUTPUT") == "" {
 		b.Fatal("qualification source and output are required")
 	}
@@ -119,7 +135,12 @@ func BenchmarkAuditQualification(b *testing.B) {
 	cfg := auditTraceConfig(b, startAuditTraceInferenceServer(b, fake))
 	server, start := newQualificationServer(b, cfg)
 	if result.History == "seven" {
-		result.SeededReceipts = qualificationSeedHistory(b, server, cfg, result.Scenario == "backlog")
+		result.SeededReceipts = qualificationSeedHistory(
+			b,
+			server,
+			cfg,
+			result.Scenario == "backlog",
+		)
 	}
 	if result.Scenario != "backlog" {
 		start()
@@ -130,7 +151,11 @@ func BenchmarkAuditQualification(b *testing.B) {
 		b.Fatal("qualification requires real intake")
 	}
 	counter := qualificationCommitCounter(b, store.Handle())
-	metrics := &qualificationRecorder{evaluationRecorder: snapshot.evaluationRecorder, starts: make(map[int64]time.Time), retries: make(map[int64]int)}
+	metrics := &qualificationRecorder{
+		evaluationRecorder: snapshot.evaluationRecorder,
+		starts:             make(map[int64]time.Time),
+		retries:            make(map[int64]int),
+	}
 	qualificationAttach(server, metrics)
 	begin, err := processusage.Read()
 	if err != nil {
@@ -152,7 +177,10 @@ func BenchmarkAuditQualification(b *testing.B) {
 		}
 		callStarted := time.Now()
 		response, callError := server.EvaluateHook(ctx, request)
-		result.RequestLatencyNS = append(result.RequestLatencyNS, time.Since(callStarted).Nanoseconds())
+		result.RequestLatencyNS = append(
+			result.RequestLatencyNS,
+			time.Since(callStarted).Nanoseconds(),
+		)
 		cancel()
 		if callError != nil {
 			result.Failures = append(result.Failures, callError.Error())
@@ -163,7 +191,10 @@ func BenchmarkAuditQualification(b *testing.B) {
 		if result.Scenario == "status" && (index+1)%100 == 0 {
 			statusStarted := time.Now()
 			qualificationStatus(b, server, cfg)
-			result.StatusLatencyNS = append(result.StatusLatencyNS, time.Since(statusStarted).Nanoseconds())
+			result.StatusLatencyNS = append(
+				result.StatusLatencyNS,
+				time.Since(statusStarted).Nanoseconds(),
+			)
 		}
 		if result.Scenario == "steady" {
 			time.Sleep(10 * time.Millisecond)
@@ -192,10 +223,16 @@ func BenchmarkAuditQualification(b *testing.B) {
 	result.Failures = append(result.Failures, metrics.failures...)
 	metrics.mu.Unlock()
 	if fake.callCount() != auditTraceDeferredRequests {
-		result.Failures = append(result.Failures, fmt.Sprintf("inference calls=%d want=%d", fake.callCount(), auditTraceDeferredRequests))
+		result.Failures = append(
+			result.Failures,
+			fmt.Sprintf("inference calls=%d want=%d", fake.callCount(), auditTraceDeferredRequests),
+		)
 	}
 	if result.CompletedTraceReceipts != len(requests) {
-		result.Failures = append(result.Failures, fmt.Sprintf("completed trace=%d want=%d", result.CompletedTraceReceipts, len(requests)))
+		result.Failures = append(
+			result.Failures,
+			fmt.Sprintf("completed trace=%d want=%d", result.CompletedTraceReceipts, len(requests)),
+		)
 	}
 	files, err := filepath.Glob(filepath.Join(filepath.Dir(cfg.AuditSQLitePath()), "*.db*"))
 	if err != nil {
@@ -212,7 +249,11 @@ func BenchmarkAuditQualification(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	if err := os.WriteFile(os.Getenv("QUALIFICATION_OUTPUT"), append(body, '\n'), 0o600); err != nil {
+	if err := os.WriteFile(
+		os.Getenv("QUALIFICATION_OUTPUT"),
+		append(body, '\n'),
+		0o600,
+	); err != nil {
 		b.Fatal(err)
 	}
 	if len(result.Failures) != 0 {
@@ -222,7 +263,12 @@ func BenchmarkAuditQualification(b *testing.B) {
 	b.ReportMetric(float64(result.DiskBytes)/float64(len(requests)), "disk-bytes/event")
 }
 
-func qualificationSample(begin processusage.Snapshot, started time.Time, done <-chan struct{}, output chan<- []qualificationInterval) {
+func qualificationSample(
+	begin processusage.Snapshot,
+	started time.Time,
+	done <-chan struct{},
+	output chan<- []qualificationInterval,
+) {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 	var intervals []qualificationInterval
@@ -238,7 +284,14 @@ func qualificationSample(begin processusage.Snapshot, started time.Time, done <-
 			if err != nil {
 				continue
 			}
-			intervals = append(intervals, qualificationInterval{ElapsedNS: now.Sub(previousTime).Nanoseconds(), CPUNS: next.CPUNanoseconds - previous.CPUNanoseconds, DiskBytes: next.DiskBytesWritten - previous.DiskBytesWritten})
+			intervals = append(
+				intervals,
+				qualificationInterval{
+					ElapsedNS: now.Sub(previousTime).Nanoseconds(),
+					CPUNS:     next.CPUNanoseconds - previous.CPUNanoseconds,
+					DiskBytes: next.DiskBytesWritten - previous.DiskBytesWritten,
+				},
+			)
 			previous, previousTime = next, now
 		}
 	}
@@ -247,18 +300,48 @@ func qualificationSample(begin processusage.Snapshot, started time.Time, done <-
 func qualificationSeedRecords(b testing.TB, store *intake.Store, day int, pending bool) {
 	b.Helper()
 	for index := range qualificationSeedsPerWindow {
-		request := auditTraceRequest(uint64(index+1), "performance-allow", auditTraceInputSizes[index%len(auditTraceInputSizes)])
-		record := intake.Record{EventID: fmt.Sprintf("seed-%d-%d", day, index), RecordedAt: time.Now().Add(-time.Duration(day) * 24 * time.Hour), System: "codex", SessionID: "seed", EventName: "PreToolUse", RawPayload: request.RawJson, NormalizedJSON: request.RawJson, EnvFingerprint: request.EnvFingerprint}
+		request := auditTraceRequest(
+			uint64(index+1),
+			"performance-allow",
+			auditTraceInputSizes[index%len(auditTraceInputSizes)],
+		)
+		record := intake.Record{
+			EventID:        fmt.Sprintf("seed-%d-%d", day, index),
+			RecordedAt:     time.Now().Add(-time.Duration(day) * 24 * time.Hour),
+			System:         "codex",
+			SessionID:      "seed",
+			EventName:      "PreToolUse",
+			RawPayload:     request.RawJson,
+			NormalizedJSON: request.RawJson,
+			EnvFingerprint: request.EnvFingerprint,
+		}
 		appended, err := store.Append(context.Background(), record)
 		if err != nil {
 			b.Fatal(err)
 		}
-		completed := evaluation.Record{Evaluation: evaluation.Evaluation{EvaluationID: "hot-" + record.EventID, ReceiptID: appended.ReceiptID, EventID: appended.EventID, Attempt: 1, Mode: "hot", StartedAt: record.RecordedAt, CompletedAt: record.RecordedAt, FinalVerdict: "allow", FinalSource: "deterministic", EnforcementAction: "allow"}}
+		completed := evaluation.Record{
+			Evaluation: evaluation.Evaluation{
+				EvaluationID:      "hot-" + record.EventID,
+				ReceiptID:         appended.ReceiptID,
+				EventID:           appended.EventID,
+				Attempt:           1,
+				Mode:              "hot",
+				StartedAt:         record.RecordedAt,
+				CompletedAt:       record.RecordedAt,
+				FinalVerdict:      "allow",
+				FinalSource:       "deterministic",
+				EnforcementAction: "allow",
+			},
+		}
 		if err := store.Evaluations().RecordCompleted(context.Background(), completed); err != nil {
 			b.Fatal(err)
 		}
 		if pending {
-			err = store.MarkDeferredPending(context.Background(), appended.EventID, appended.ReceiptID)
+			err = store.MarkDeferredPending(
+				context.Background(),
+				appended.EventID,
+				appended.ReceiptID,
+			)
 		} else {
 			err = store.MarkDeferredComplete(context.Background(), appended.ReceiptID)
 		}
