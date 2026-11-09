@@ -1,4 +1,4 @@
-# golangci-lint: generated_at=2026-11-09T03:25:51Z
+# golangci-lint: generated_at=2026-11-09T12:46:56Z
 api/inferencepb/inference_contract_test.go:94:2: missing whitespace below this line (after-block) (wsl_v5)	# golangci-lint:first_added=2026-11-09T03:25:51Z last_seen=2026-11-09T03:25:51Z
 api/inferencepb/inference_contract_test.go:75:2: missing whitespace above this line (invalid statement above range) (wsl_v5)	# golangci-lint:first_added=2026-11-08T23:35:32Z last_seen=2026-11-09T03:25:51Z
 api/inferencepb/inference_contract_test.go:95:2: missing whitespace above this line (too many statements above range) (wsl_v5)	# golangci-lint:first_added=2026-11-08T23:35:32Z last_seen=2026-11-09T03:25:51Z
