@@ -52,13 +52,13 @@ func (writer *DiagnosticWriter) findArchives() ([]diagnosticArchive, error) {
 	archives := make([]diagnosticArchive, 0)
 
 	for _, entry := range entries {
-		at, owned, err := diagnosticArchiveDate(entry)
+		archiveTime, owned, err := diagnosticArchiveDate(entry)
 		if err != nil {
 			return nil, err
 		}
 
 		if owned {
-			archives = append(archives, diagnosticArchive{entry.Name(), at})
+			archives = append(archives, diagnosticArchive{entry.Name(), archiveTime})
 		}
 	}
 

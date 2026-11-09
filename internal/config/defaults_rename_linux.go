@@ -11,11 +11,7 @@ import (
 )
 
 func openDefaultsIdentityHandle(path string, _ bool) (*os.File, error) {
-	fileDescriptor, err := unix.Open(
-		path,
-		unix.O_PATH|unix.O_CLOEXEC|unix.O_NOFOLLOW,
-		0,
-	)
+	fileDescriptor, err := unix.Open(path, unix.O_PATH|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 	if err != nil {
 		wrappedErr := fmt.Errorf("open config identity handle: %w", err)
 		slog.Warn("open config identity handle failed", "err", wrappedErr)
@@ -42,7 +38,9 @@ func captureDefaultsBirthTimeAt(
 	}
 	if stat.Mask&unix.STATX_BTIME == 0 {
 		return defaultsBirthTime{
-			seconds: 0, nanoseconds: 0, available: false,
+			seconds:     0,
+			nanoseconds: 0,
+			available:   false,
 		}, nil
 	}
 	return defaultsBirthTime{

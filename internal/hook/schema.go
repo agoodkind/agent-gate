@@ -1,12 +1,15 @@
 package hook
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
 
 	"goodkind.io/agent-gate/internal/config"
 )
+
+var errUnknownConditionKind = errors.New("unknown kind")
 
 // EventSchema is the set of valid dot-path field names for a single event.
 // Virtual fields are handled separately and are always considered valid; they
@@ -712,18 +715,19 @@ func collectRuleFieldPaths(r *config.Rule) []string {
 func validateConditionKinds(r *config.Rule) []error {
 	var errs []error
 
-	for j := range r.Conditions {
-		if isKnownConditionKind(r.Conditions[j].Kind) {
+	for conditionIndex := range r.Conditions {
+		if isKnownConditionKind(r.Conditions[conditionIndex].Kind) {
 			continue
 		}
 
 		errs = append(
 			errs,
 			fmt.Errorf(
-				"rule %q: condition %d has unknown kind %q",
+				"rule %q: condition %d has %w %q",
 				r.Name,
-				j,
-				r.Conditions[j].Kind,
+				conditionIndex,
+				errUnknownConditionKind,
+				r.Conditions[conditionIndex].Kind,
 			),
 		)
 	}
@@ -762,7 +766,7 @@ func applicableEventPairs(r *config.Rule) []schemaEventPair {
 				r.ClaudeEvents,
 			)+len(r.CursorEvents)+len(r.CodexEvents)+len(r.CopilotEvents)+len(r.GeminiEvents),
 	)
-	for _, ev := range r.Events {
+	for _, event := range r.Events {
 		for _, system := range []string{
 			"claude",
 			"cursor",
@@ -775,7 +779,7 @@ func applicableEventPairs(r *config.Rule) []schemaEventPair {
 				continue
 			}
 
-			applicable = append(applicable, schemaEventPair{system, ev})
+			applicable = append(applicable, schemaEventPair{system, event})
 		}
 	}
 

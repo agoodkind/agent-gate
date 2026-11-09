@@ -29,13 +29,16 @@ type PendingCursor struct {
 }
 
 // BeginPending captures the receipt ceiling without retaining a transaction.
-func (s *Store) BeginPending(ctx context.Context, at time.Time) (PendingCursor, error) {
+func (s *Store) BeginPending(
+	ctx context.Context,
+	eligibilityTime time.Time,
+) (PendingCursor, error) {
 	var maximum int64
 	err := s.db.QueryRowContext(ctx, pendingMaximumSQL).Scan(&maximum)
 
 	return PendingCursor{
 		MaximumReceiptID: maximum,
-		EligibilityTime:  at,
+		EligibilityTime:  eligibilityTime,
 		RetryTimes:       false,
 		AfterTime:        "",
 		AfterReceiptID:   0,

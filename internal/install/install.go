@@ -787,13 +787,13 @@ func marshalJSONCommandPlaceholders(
 			)
 		}
 
-		for i, childValue := range arrayValue {
+		for childIndex, childValue := range arrayValue {
 			replacedChild, err := marshalJSONCommandPlaceholders(childValue, binPath)
 			if err != nil {
 				return nil, err
 			}
 
-			arrayValue[i] = replacedChild
+			arrayValue[childIndex] = replacedChild
 		}
 
 		output, err := json.Marshal(arrayValue)
@@ -1133,6 +1133,7 @@ func writeFileAtomic(targetPath string, content []byte) error {
 	}()
 	if err := tempFile.Chmod(privateFileMode); err != nil {
 		_ = tempFile.Close()
+
 		return logInstallError(
 			"chmod install temp file failed",
 			fmt.Errorf("chmod temp file for %s: %w", targetPath, err),
@@ -1142,6 +1143,7 @@ func writeFileAtomic(targetPath string, content []byte) error {
 
 	if _, err := tempFile.Write(content); err != nil {
 		_ = tempFile.Close()
+
 		return logInstallError(
 			"write install temp file failed",
 			fmt.Errorf("write temp file for %s: %w", targetPath, err),

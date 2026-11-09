@@ -79,13 +79,13 @@ func (memo *batchInferenceMemo) verdictFor(
 		return nil, false
 	}
 
-	group, ok := memo.groups[point]
-	if !ok {
+	group, found := memo.groups[point]
+	if !found {
 		return nil, false
 	}
 
-	decision, ok := group.decisions[ruleName]
-	if !ok {
+	decision, found := group.decisions[ruleName]
+	if !found {
 		return nil, false
 	}
 
@@ -230,6 +230,7 @@ func (runtime *InferRuntime) fetchJudgeTranscript(
 			"endpoint",
 			settings.endpoint,
 		)
+
 		return "", contextUnavailable
 	}
 
@@ -258,6 +259,7 @@ func (runtime *InferRuntime) fetchJudgeTranscript(
 			"err_class",
 			errClass,
 		)
+
 		return "", contextUnavailable
 	}
 
@@ -502,7 +504,8 @@ func buildBatchPrompt(participants []batchParticipant) string {
 	builder.WriteString("You are a security guard reviewing one tool call. ")
 	builder.WriteString("Judge the tool call independently against each rule below. ")
 	builder.WriteString(
-		`Return a JSON object {"block":["<rule_id>",...]} listing only the rule_id values you decide to block, and an empty list when nothing should be blocked. `,
+		`Return a JSON object {"block":["<rule_id>",...]} listing only the rule_id values you decide to block, ` +
+			`and an empty list when nothing should be blocked. `,
 	)
 	builder.WriteString("Use the exact rule_id values given.\n\nRules:\n")
 

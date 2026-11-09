@@ -299,6 +299,7 @@ func queryAuditRows(
 			slog.Int("arg_count", len(args)),
 			slog.Any("err", err),
 		)
+
 		return nil, fmt.Errorf("query audit rows: %w", err)
 	}
 
@@ -315,6 +316,7 @@ func sqliteViolations(ctx context.Context, db *sql.DB, eventID string) ([]Violat
 			slog.String("event_id", eventID),
 			slog.Any("err", err),
 		)
+
 		return nil, fmt.Errorf("query audit violations: %w", err)
 	}
 
@@ -322,15 +324,15 @@ func sqliteViolations(ctx context.Context, db *sql.DB, eventID string) ([]Violat
 	var out []Violation
 
 	for rows.Next() {
-		var v Violation
+		var violation Violation
 		if err := rows.Scan(
-			&v.Rule,
-			&v.Mode,
-			&v.FieldPath,
-			&v.FilePath,
-			&v.Start,
-			&v.End,
-			&v.Message,
+			&violation.Rule,
+			&violation.Mode,
+			&violation.FieldPath,
+			&violation.FilePath,
+			&violation.Start,
+			&violation.End,
+			&violation.Message,
 		); err != nil {
 			log.WarnContext(
 				ctx,
@@ -338,10 +340,11 @@ func sqliteViolations(ctx context.Context, db *sql.DB, eventID string) ([]Violat
 				slog.String("event_id", eventID),
 				slog.Any("err", err),
 			)
+
 			return nil, fmt.Errorf("scan audit violation row: %w", err)
 		}
 
-		out = append(out, v)
+		out = append(out, violation)
 	}
 
 	if err := rows.Err(); err != nil {
@@ -351,6 +354,7 @@ func sqliteViolations(ctx context.Context, db *sql.DB, eventID string) ([]Violat
 			slog.String("event_id", eventID),
 			slog.Any("err", err),
 		)
+
 		return nil, fmt.Errorf("iterate audit violations: %w", err)
 	}
 

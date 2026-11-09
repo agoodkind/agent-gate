@@ -207,13 +207,13 @@ func execConditionGateMatch(
 	cacheEnabled := execConditionCacheEnabled(rule, c, cacheScope)
 
 	if cacheEnabled {
-		if v, ok := runtime.cacheLookup(ctx, cacheNamespace, cacheKey); ok {
-			v = sanitizeTemporalExecVerdict(rule, c, v)
+		if cachedVerdict, ok := runtime.cacheLookup(ctx, cacheNamespace, cacheKey); ok {
+			cachedVerdict = sanitizeTemporalExecVerdict(rule, c, cachedVerdict)
 			if memo != nil {
-				memo.record(c, rule.Name, v)
+				memo.record(c, rule.Name, cachedVerdict)
 			}
 
-			return v.Block
+			return cachedVerdict.Block
 		}
 	}
 
@@ -1038,6 +1038,7 @@ func (r *ExecRuntime) cacheLookup(
 	entry, found, err := r.cache.Get(cacheNamespace, cacheKey)
 	if err != nil {
 		r.log.WarnContext(ctx, "exec validator hot cache get failed", "err", err)
+
 		return execconcern.Verdict{
 			Block:        false,
 			Message:      "",

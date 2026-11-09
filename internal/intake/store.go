@@ -319,13 +319,20 @@ func (s *Store) MarkDeferredComplete(ctx context.Context, receiptID int64) error
 		ctx,
 		"",
 		receiptID,
-		func(tx *sql.Tx, eventID string) error {
-			_, err := tx.ExecContext(ctx, storeSQL3, receiptID, eventID, DeferredStateComplete, now)
+		func(transaction *sql.Tx, eventID string) error {
+			_, err := transaction.ExecContext(
+				ctx,
+				storeSQL3,
+				receiptID,
+				eventID,
+				DeferredStateComplete,
+				now,
+			)
 			if err != nil {
 				return wrapLoggedError(ctx, s.log, "mark intake deferred complete", err)
 			}
 
-			return s.clearTerminalInput(ctx, tx, eventID)
+			return s.clearTerminalInput(ctx, transaction, eventID)
 		},
 	)
 }

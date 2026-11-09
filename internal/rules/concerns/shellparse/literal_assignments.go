@@ -250,13 +250,13 @@ func readLiteralAssignment(
 	counts map[string]int,
 	unsafeNames map[string]bool,
 ) (int, bool) {
-	name, valueStart, ok := readLiteralAssignmentName(command, index)
-	if !ok {
+	name, valueStart, parsed := readLiteralAssignmentName(command, index)
+	if !parsed {
 		return index, false
 	}
 
-	value, nextIndex, ok := readLiteralAssignmentValue(command, valueStart)
-	if !ok {
+	value, nextIndex, parsed := readLiteralAssignmentValue(command, valueStart)
+	if !parsed {
 		return index, false
 	}
 
