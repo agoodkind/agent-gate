@@ -15,8 +15,10 @@ func openDefaultsIdentityHandle(path string, _ bool) (*os.File, error) {
 	if err != nil {
 		wrappedErr := fmt.Errorf("open config identity handle: %w", err)
 		slog.Warn("open config identity handle failed", "err", wrappedErr)
+
 		return nil, wrappedErr
 	}
+
 	return os.NewFile(uintptr(fileDescriptor), path), nil
 }
 
@@ -25,17 +27,14 @@ func captureDefaultsBirthTimeAt(
 	path string,
 ) (defaultsBirthTime, error) {
 	var stat unix.Statx_t
-	if err := unix.Statx(
-		directoryDescriptor,
-		path,
-		unix.AT_SYMLINK_NOFOLLOW,
-		unix.STATX_BTIME,
-		&stat,
-	); err != nil {
+	err := unix.Statx(directoryDescriptor, path, unix.AT_SYMLINK_NOFOLLOW, unix.STATX_BTIME, &stat)
+	if err != nil {
 		wrappedErr := fmt.Errorf("inspect config birth time: %w", err)
 		slog.Warn("inspect config birth time failed", "err", wrappedErr)
+
 		return defaultsBirthTime{}, wrappedErr
 	}
+
 	if stat.Mask&unix.STATX_BTIME == 0 {
 		return defaultsBirthTime{
 			seconds:     0,
@@ -43,6 +42,7 @@ func captureDefaultsBirthTimeAt(
 			available:   false,
 		}, nil
 	}
+
 	return defaultsBirthTime{
 		seconds:     stat.Btime.Sec,
 		nanoseconds: int64(stat.Btime.Nsec),
@@ -51,31 +51,37 @@ func captureDefaultsBirthTimeAt(
 }
 
 func exchangeDefaultsNames(directoryDescriptor int, first string, second string) error {
-	if err := unix.Renameat2(
+	err := unix.Renameat2(
 		directoryDescriptor,
 		first,
 		directoryDescriptor,
 		second,
 		unix.RENAME_EXCHANGE,
-	); err != nil {
+	)
+	if err != nil {
 		wrappedErr := fmt.Errorf("exchange config entries: %w", err)
 		slog.Warn("exchange config entries failed", "err", wrappedErr)
+
 		return wrappedErr
 	}
+
 	return nil
 }
 
 func renameDefaultsNoReplace(directoryDescriptor int, source string, target string) error {
-	if err := unix.Renameat2(
+	err := unix.Renameat2(
 		directoryDescriptor,
 		source,
 		directoryDescriptor,
 		target,
 		unix.RENAME_NOREPLACE,
-	); err != nil {
+	)
+	if err != nil {
 		wrappedErr := fmt.Errorf("install new config entry: %w", err)
 		slog.Warn("install new config entry failed", "err", wrappedErr)
+
 		return wrappedErr
 	}
+
 	return nil
 }

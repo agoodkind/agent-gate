@@ -1,4 +1,8 @@
-# golangci-lint: generated_at=2026-11-09T12:46:56Z
+# golangci-lint: generated_at=2026-11-09T15:24:45Z
+internal/install/process_identity_linux.go:12:29: do not define dynamic errors, use wrapped static errors instead: "errors.New(\"refuse system process identity\")" (err113)	# golangci-lint:first_added=2026-11-09T15:24:45Z last_seen=2026-11-09T15:24:45Z
+internal/install/process_identity_linux.go:23:29: do not define dynamic errors, use wrapped static errors instead: "errors.New(\"invalid kernel process stat\")" (err113)	# golangci-lint:first_added=2026-11-09T15:24:45Z last_seen=2026-11-09T15:24:45Z
+internal/install/process_identity_linux.go:27:19: Magic number: 20, in <condition> detected (mnd)	# golangci-lint:first_added=2026-11-09T15:24:45Z last_seen=2026-11-09T15:24:45Z
+internal/install/process_identity_linux.go:28:29: do not define dynamic errors, use wrapped static errors instead: "errors.New(\"incomplete kernel process stat\")" (err113)	# golangci-lint:first_added=2026-11-09T15:24:45Z last_seen=2026-11-09T15:24:45Z
 api/inferencepb/inference_contract_test.go:94:2: missing whitespace below this line (after-block) (wsl_v5)	# golangci-lint:first_added=2026-11-09T03:25:51Z last_seen=2026-11-09T03:25:51Z
 api/inferencepb/inference_contract_test.go:75:2: missing whitespace above this line (invalid statement above range) (wsl_v5)	# golangci-lint:first_added=2026-11-08T23:35:32Z last_seen=2026-11-09T03:25:51Z
 api/inferencepb/inference_contract_test.go:95:2: missing whitespace above this line (too many statements above range) (wsl_v5)	# golangci-lint:first_added=2026-11-08T23:35:32Z last_seen=2026-11-09T03:25:51Z
