@@ -30,6 +30,7 @@ type controlledAcceptListener struct {
 
 func newControlledAcceptListener() *controlledAcceptListener {
 	connection, peer := net.Pipe()
+
 	return &controlledAcceptListener{
 		addrEntered:     make(chan struct{}),
 		allowAddr:       make(chan struct{}),
@@ -50,9 +51,12 @@ func (listener *controlledAcceptListener) Accept() (net.Conn, error) {
 	if listener.acceptCalls.Add(1) == 1 {
 		close(listener.acceptEntered)
 		<-listener.release
+
 		return listener.connection, nil
 	}
+
 	<-listener.closed
+
 	return nil, net.ErrClosed
 }
 
@@ -64,12 +68,14 @@ func (listener *controlledAcceptListener) Close() error {
 		_ = listener.connection.Close()
 		_ = listener.peer.Close()
 	})
+
 	return nil
 }
 
 func (listener *controlledAcceptListener) Addr() net.Addr {
 	listener.addrEnteredOnce.Do(func() { close(listener.addrEntered) })
 	<-listener.allowAddr
+
 	return controlledAddr("controlled")
 }
 
@@ -83,15 +89,18 @@ func TestDaemonListenerCreatesSocketPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MkdirTemp: %v", err)
 	}
+
 	defer func() { _ = os.RemoveAll(dir) }()
 	socketPath := filepath.Join(dir, "daemon.sock")
 	lis, err := daemonListener(t.Context(), socketPath)
 	if err != nil {
 		t.Fatalf("daemonListener: %v", err)
 	}
+
 	if err := lis.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
+
 	if _, err := os.Stat(socketPath); err != nil && !os.IsNotExist(err) {
 		t.Fatalf("stat socket path: %v", err)
 	}
@@ -112,6 +121,7 @@ func TestAuditSchedulerStartsAfterServeAcceptLoop(t *testing.T) {
 		t.Fatal("audit scheduler started before Serve reached Accept")
 	default:
 	}
+
 	listener.allowAddrOnce.Do(func() { close(listener.allowAddr) })
 	<-listener.acceptEntered
 	select {
@@ -119,6 +129,7 @@ func TestAuditSchedulerStartsAfterServeAcceptLoop(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("audit scheduler did not start after Serve entered Accept")
 	}
+
 	server.Stop()
 	if err := <-serveDone; err != nil && !errors.Is(err, grpc.ErrServerStopped) {
 		t.Fatalf("serveAfterReadiness: %v", err)
@@ -141,6 +152,7 @@ func TestFatalFirstAcceptReportsAcceptLoopEntry(t *testing.T) {
 		if !errors.Is(err, errFatalAccept) {
 			t.Fatalf("iteration %d: Serve error = %v", i, err)
 		}
+
 		if !ready.Load() {
 			t.Fatalf("iteration %d: readiness not reported after first Accept entry", i)
 		}
@@ -155,9 +167,11 @@ func TestServeFailureBeforeAcceptDoesNotReportReady(t *testing.T) {
 	if err := serveAfterReadiness(server, listener, func() { ready.Store(true) }); err != nil {
 		t.Fatalf("stopped Serve returned %v", err)
 	}
+
 	if ready.Load() {
 		t.Fatal("readiness reported before Accept")
 	}
+
 	select {
 	case <-listener.acceptEntered:
 		t.Fatal("stopped Serve entered Accept")
@@ -181,8 +195,10 @@ func (listener *temporaryThenBlockingListener) Accept() (net.Conn, error) {
 	if listener.calls.Add(1) == 1 {
 		return nil, temporaryAcceptError{}
 	}
+
 	close(listener.second)
 	<-listener.closed
+
 	return nil, net.ErrClosed
 }
 
@@ -192,6 +208,7 @@ func (listener *temporaryThenBlockingListener) Close() error {
 	default:
 		close(listener.closed)
 	}
+
 	return nil
 }
 
@@ -213,12 +230,14 @@ func TestReadinessPreservesTemporaryAcceptRetry(t *testing.T) {
 		if !ready.Load() {
 			t.Fatal("readiness not reported after temporary Accept entered")
 		}
+
 		server.Stop()
 	case err := <-done:
 		t.Fatalf("Serve exited after temporary accept error: %v", err)
 	case <-time.After(time.Second):
 		t.Fatal("Serve did not retry temporary accept error")
 	}
+
 	if err := <-done; err != nil && !errors.Is(err, grpc.ErrServerStopped) {
 		t.Fatalf("serveAfterReadiness: %v", err)
 	}

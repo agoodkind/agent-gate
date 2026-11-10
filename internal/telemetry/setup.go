@@ -27,6 +27,7 @@ func Setup(opts Options) (io.Closer, error) {
 	if opts.SlowOpThresholdMs > 0 {
 		trace.SlowOpThreshold = time.Duration(opts.SlowOpThresholdMs) * time.Millisecond
 	}
+
 	traceCloser, err := trace.Setup(trace.Options{
 		ServiceName: "agent-gate",
 		Endpoint:    opts.OTLPEndpoint,
@@ -64,5 +65,6 @@ func (c *telemetryCloser) Close() error {
 	if mpErr != nil || traceErr != nil {
 		return fmt.Errorf("telemetry close: meter=%w trace=%w", mpErr, traceErr)
 	}
+
 	return nil
 }

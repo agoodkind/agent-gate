@@ -9,6 +9,7 @@ func (s *Server) lockLifecycle() {
 		if transition == nil {
 			return
 		}
+
 		s.lifecycleMu.Unlock()
 		<-transition
 	}
@@ -36,9 +37,11 @@ func (s *Server) close() {
 	if s.cancel != nil {
 		s.cancel()
 	}
+
 	if s.auditCancel != nil {
 		s.auditCancel()
 	}
+
 	s.cfgMu.Unlock()
 	s.auditWG.Wait()
 	s.lockLifecycle()
@@ -55,13 +58,16 @@ func (s *Server) close() {
 	if s.configWatcher != nil {
 		_ = s.configWatcher.Close()
 	}
+
 	if updateCancel != nil {
 		updateCancel()
 	}
+
 	s.deferredProcessor.Close()
 	snapshot.close(context.Background(), s.log)
 	if s.hotKV != nil {
 		s.hotKV.Close()
 	}
+
 	s.log.InfoContext(context.Background(), "daemon closed")
 }

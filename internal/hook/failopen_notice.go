@@ -12,11 +12,13 @@ func FailOpenNoticeText(reason FailOpenReason, diagnostic string) string {
 	if reason == "" {
 		return ""
 	}
+
 	notice := "agent-gate did not evaluate this call, so no rule was enforced on it (" +
 		string(reason) + ")."
 	if diagnostic != "" {
 		notice += " " + diagnostic
 	}
+
 	return notice
 }
 
@@ -36,10 +38,12 @@ func claudeFailOpenStdout(reason FailOpenReason, diagnostic string) []byte {
 	if notice == "" {
 		return ClaudeAllow()
 	}
+
 	encoded, err := json.Marshal(claudeFailOpenPayload{SystemMessage: notice})
 	if err != nil {
 		return ClaudeAllow()
 	}
+
 	return append(encoded, '\n')
 }
 
@@ -54,5 +58,6 @@ func failOpenStderr(reason FailOpenReason, diagnostic string) []byte {
 	if notice == "" {
 		return nil
 	}
+
 	return fmt.Appendf(nil, "%s\n", notice)
 }

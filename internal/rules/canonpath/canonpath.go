@@ -31,15 +31,18 @@ func Resolve(cwd string, path string) Result {
 	if path == "" {
 		return Result{Raw: "", Canonical: "", IsCanonical: false}
 	}
+
 	abs := path
 	if !filepath.IsAbs(abs) {
 		abs = filepath.Join(cwd, abs)
 	}
+
 	abs = filepath.Clean(abs)
 	resolved, err := filepath.EvalSymlinks(abs)
 	if err != nil {
 		return Result{Raw: abs, Canonical: abs, IsCanonical: false}
 	}
+
 	return Result{Raw: abs, Canonical: resolved, IsCanonical: true}
 }
 
@@ -77,6 +80,7 @@ func (c *Cache) Resolve(cwd string, path string) Result {
 	if c == nil || c.ttl <= 0 {
 		return Resolve(cwd, path)
 	}
+
 	key := cwd + "\x00" + path
 	now := c.now()
 
@@ -86,6 +90,7 @@ func (c *Cache) Resolve(cwd string, path string) Result {
 		c.mu.Unlock()
 		return entry.result
 	}
+
 	c.mu.Unlock()
 
 	result := Resolve(cwd, path)
@@ -93,5 +98,6 @@ func (c *Cache) Resolve(cwd string, path string) Result {
 	c.mu.Lock()
 	c.entries[key] = cacheEntry{result: result, expireAt: now.Add(c.ttl)}
 	c.mu.Unlock()
+
 	return result
 }

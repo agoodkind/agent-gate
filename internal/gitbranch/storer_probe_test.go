@@ -19,28 +19,33 @@ func TestStorerBypassesExtensionCheck(t *testing.T) {
 	if p == "" {
 		t.Skip("PROBE_PATH not set")
 	}
+
 	gitDir := filepath.Join(p, ".git")
 	storer := filesystem.NewStorage(osfs.New(gitDir), cache.NewObjectLRUDefault())
 	head, err := storer.Reference(plumbing.HEAD)
 	if err != nil {
 		t.Fatalf("read HEAD via storer: %v", err)
 	}
+
 	t.Logf("HEAD type=%v target=%q", head.Type(), head.Target())
 	branch := ""
 	if head.Type() == plumbing.SymbolicReference && head.Target().IsBranch() {
 		branch = head.Target().Short()
 	}
+
 	t.Logf("resolved current branch = %q", branch)
 
 	refs, err := storer.IterReferences()
 	if err != nil {
 		t.Fatalf("iter refs: %v", err)
 	}
+
 	count := 0
 	_ = refs.ForEach(func(r *plumbing.Reference) error {
 		if r.Name().IsBranch() {
 			count++
 		}
+
 		return nil
 	})
 	refs.Close()

@@ -19,6 +19,7 @@ func TestBuildIdentityReadsOnceAndSurvivesReplacement(t *testing.T) {
 	if err := os.WriteFile(path, original, 0o700); err != nil {
 		t.Fatal(err)
 	}
+
 	var reads atomic.Int64
 	identity := newBuildIdentity(
 		func() (string, error) { return path, nil },
@@ -30,12 +31,15 @@ func TestBuildIdentityReadsOnceAndSurvivesReplacement(t *testing.T) {
 	if err := identity.initialize(); err != nil {
 		t.Fatal(err)
 	}
+
 	digest := sha256.Sum256(original)
 	want := hex.EncodeToString(digest[:])[:12]
 	if err := os.WriteFile(path, []byte("replacement"), 0o700); err != nil {
 		t.Fatal(err)
 	}
+
 	var workers sync.WaitGroup
+
 	for range 32 {
 		workers.Go(func() {
 			if got := identity.value(); got != want {
@@ -43,6 +47,7 @@ func TestBuildIdentityReadsOnceAndSurvivesReplacement(t *testing.T) {
 			}
 		})
 	}
+
 	workers.Wait()
 	if got := reads.Load(); got != 1 {
 		t.Fatalf("executable reads = %d, want 1", got)
@@ -57,6 +62,7 @@ func TestBuildIdentityCachesReadFailureWithoutPublishingPartialHash(t *testing.T
 		func() (string, error) { return "agent-gate", nil },
 		func(string) (io.ReadCloser, error) {
 			reads.Add(1)
+
 			return &errorAfterReader{
 				reader: strings.NewReader("partial executable"),
 				err:    wantErr,
@@ -68,15 +74,19 @@ func TestBuildIdentityCachesReadFailureWithoutPublishingPartialHash(t *testing.T
 	if err := identity.initialize(); !errors.Is(err, wantErr) {
 		t.Fatalf("initialize error = %v, want %v", err, wantErr)
 	}
+
 	if got := identity.value(); got != "unknown" {
 		t.Fatalf("hash = %q, want unknown", got)
 	}
+
 	if err := identity.initialize(); !errors.Is(err, wantErr) {
 		t.Fatalf("second initialize error = %v, want %v", err, wantErr)
 	}
+
 	if got := reads.Load(); got != 1 {
 		t.Fatalf("executable reads = %d, want 1", got)
 	}
+
 	if got := closes.Load(); got != 1 {
 		t.Fatalf("executable closes = %d, want 1", got)
 	}
@@ -93,9 +103,11 @@ func (reader *errorAfterReader) Read(buffer []byte) (int, error) {
 	if err == nil {
 		return count, nil
 	}
+
 	if errors.Is(err, io.EOF) {
 		return 0, reader.err
 	}
+
 	return 0, err
 }
 

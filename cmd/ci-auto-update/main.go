@@ -363,6 +363,7 @@ func fetchGitHubReleases(
 			"status",
 			response.StatusCode,
 		)
+
 		return nil, fmt.Errorf("query GitHub releases: HTTP %d", response.StatusCode)
 	}
 
@@ -447,6 +448,7 @@ func (check *updateCheck) installOldRelease(ctx context.Context, release githubR
 			"status",
 			response.StatusCode,
 		)
+
 		return fmt.Errorf("download old release: HTTP %d", response.StatusCode)
 	}
 
@@ -468,6 +470,7 @@ func (check *updateCheck) installOldRelease(ctx context.Context, release githubR
 			"want",
 			release.TagName,
 		)
+
 		return fmt.Errorf("installed version is %q, expected %q", version, release.TagName)
 	}
 
@@ -585,6 +588,7 @@ func (check *updateCheck) startDaemon(ctx context.Context) error {
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("create daemon log: %w", err)
 	}
 
@@ -742,6 +746,7 @@ func binaryVersion(ctx context.Context, binary string) (string, error) {
 	command.Stderr = &stderr
 	if err := command.Run(); err != nil {
 		slog.WarnContext(ctx, "ci.auto_update.version_failed", "binary", binary, "err", err)
+
 		return "", fmt.Errorf(
 			"run %s --version: %w: %s",
 			binary,

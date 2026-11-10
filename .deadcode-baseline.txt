@@ -1,26 +1,28 @@
-# deadcode: generated_at=2026-07-16T15:43:09Z
-internal/config/config.go:265:6: unreachable func: NewCondition	# deadcode:first_added=2026-05-05T04:09:36Z last_seen=2026-07-16T15:43:09Z
-internal/config/config.go:436:6: unreachable func: NewSimpleRule	# deadcode:first_added=2026-05-05T04:09:36Z last_seen=2026-07-16T15:43:09Z
-internal/config/xdg.go:108:6: unreachable func: ProfilesConfigPath	# deadcode:first_added=2026-05-05T04:09:36Z last_seen=2026-07-16T15:43:09Z
+# deadcode: generated_at=2026-11-10T08:44:04Z
+internal/config/config.go:270:6: unreachable func: NewCondition	# deadcode:first_added=2026-05-05T04:09:36Z last_seen=2026-11-10T08:44:04Z
+internal/config/config.go:492:6: unreachable func: NewSimpleRule	# deadcode:first_added=2026-05-05T04:09:36Z last_seen=2026-11-10T08:44:04Z
+internal/config/xdg.go:97:6: unreachable func: ProfilesConfigPath	# deadcode:first_added=2026-05-05T04:09:36Z last_seen=2026-11-10T08:44:04Z
+internal/hook/claude.go:84:6: unreachable func: ClaudeBlock	# deadcode:first_added=2026-05-05T04:09:36Z last_seen=2026-11-10T08:44:04Z
+internal/hook/codex.go:67:6: unreachable func: CodexBlock	# deadcode:first_added=2026-05-05T04:09:36Z last_seen=2026-11-10T08:44:04Z
+internal/hook/cursor.go:95:6: unreachable func: CursorBlock	# deadcode:first_added=2026-05-05T04:09:36Z last_seen=2026-11-10T08:44:04Z
+internal/hook/gemini.go:50:6: unreachable func: GeminiBlock	# deadcode:first_added=2026-05-05T04:09:36Z last_seen=2026-11-10T08:44:04Z
+internal/hook/types.go:102:19: unreachable func: Decision.String	# deadcode:first_added=2026-05-05T04:09:36Z last_seen=2026-11-10T08:44:04Z
+internal/install/registration.go:48:6: unreachable func: ReadManagedLifecycleCommand	# deadcode:first_added=2026-08-13T12:13:36Z last_seen=2026-11-10T08:44:04Z
+internal/regex/limits.go:266:6: unreachable func: pcre2MatchError	# deadcode:first_added=2026-05-05T04:09:36Z last_seen=2026-11-10T08:44:04Z
+internal/regex/limits.go:288:6: unreachable func: matchWithLimits	# deadcode:first_added=2026-05-05T04:09:36Z last_seen=2026-11-10T08:44:04Z
+internal/rules/concerns/shellwrite/concern.go:40:6: unreachable func: EvalShellWriteMatches	# deadcode:first_added=2026-11-10T08:08:48Z last_seen=2026-11-10T08:44:04Z
+internal/rules/concerns/shellwrite/parse.go:77:6: unreachable func: ExtractWriteTargets	# deadcode:first_added=2026-11-10T08:08:48Z last_seen=2026-11-10T08:44:04Z
+internal/rules/engine.go:42:6: unreachable func: Evaluate	# deadcode:first_added=2026-05-05T04:09:36Z last_seen=2026-11-10T08:44:04Z
+internal/rules/fields.go:298:6: unreachable func: CmdSegments	# deadcode:first_added=2026-05-05T04:09:36Z last_seen=2026-11-10T08:44:04Z
+pipeline/memo.go:25:6: unreachable func: NewEventCache	# deadcode:first_added=2026-05-08T20:52:00Z last_seen=2026-11-10T08:44:04Z
+pipeline/memo.go:30:22: unreachable func: EventCache.For	# deadcode:first_added=2026-05-08T20:52:00Z last_seen=2026-11-10T08:44:04Z
+pipeline/memo.go:35:22: unreachable func: EventCache.Get	# deadcode:first_added=2026-05-08T20:52:00Z last_seen=2026-11-10T08:44:04Z
+pipeline/memo.go:41:22: unreachable func: EventCache.Put	# deadcode:first_added=2026-05-08T20:52:00Z last_seen=2026-11-10T08:44:04Z
+pipeline/sentinel.go:42:6: unreachable func: NewMeteringSentinel	# deadcode:first_added=2026-05-08T20:52:00Z last_seen=2026-11-10T08:44:04Z
+pipeline/sentinel.go:59:28: unreachable func: MeteringSentinel.Probe	# deadcode:first_added=2026-05-08T20:52:00Z last_seen=2026-11-10T08:44:04Z
+pipeline/sentinel.go:79:6: unreachable func: classifyError	# deadcode:first_added=2026-05-08T20:52:00Z last_seen=2026-11-10T08:44:04Z
 internal/auditmaintenance/size.go:21:6: unreachable func: MeasureDatabaseSize	# deadcode:first_added=2026-08-12T15:37:39Z last_seen=2026-08-12T15:37:39Z
-internal/hook/claude.go:81:6: unreachable func: ClaudeBlock	# deadcode:first_added=2026-05-05T04:09:36Z last_seen=2026-07-16T15:43:09Z
-internal/hook/codex.go:65:6: unreachable func: CodexBlock	# deadcode:first_added=2026-05-05T04:09:36Z last_seen=2026-07-16T15:43:09Z
-internal/hook/cursor.go:88:6: unreachable func: CursorBlock	# deadcode:first_added=2026-05-05T04:09:36Z last_seen=2026-07-16T15:43:09Z
 internal/hook/detect.go:45:6: unreachable func: Detect	# deadcode:first_added=2026-05-05T04:09:36Z last_seen=2026-07-16T15:43:09Z
-internal/hook/gemini.go:50:6: unreachable func: GeminiBlock	# deadcode:first_added=2026-05-05T04:09:36Z last_seen=2026-07-16T15:43:09Z
-internal/hook/types.go:95:19: unreachable func: Decision.String	# deadcode:first_added=2026-05-05T04:09:36Z last_seen=2026-07-16T15:43:09Z
-internal/regex/limits.go:263:6: unreachable func: pcre2MatchError	# deadcode:first_added=2026-05-05T04:09:36Z last_seen=2026-07-16T15:43:09Z
-internal/regex/limits.go:281:6: unreachable func: matchWithLimits	# deadcode:first_added=2026-05-05T04:09:36Z last_seen=2026-07-16T15:43:09Z
-internal/rules/engine.go:42:6: unreachable func: Evaluate	# deadcode:first_added=2026-05-05T04:09:36Z last_seen=2026-07-16T15:43:09Z
-internal/rules/fields.go:277:6: unreachable func: CmdSegments	# deadcode:first_added=2026-05-05T04:09:36Z last_seen=2026-07-16T15:43:09Z
-pipeline/memo.go:25:6: unreachable func: NewEventCache	# deadcode:first_added=2026-05-08T20:52:00Z last_seen=2026-07-16T15:43:09Z
-pipeline/memo.go:30:22: unreachable func: EventCache.For	# deadcode:first_added=2026-05-08T20:52:00Z last_seen=2026-07-16T15:43:09Z
-pipeline/memo.go:35:22: unreachable func: EventCache.Get	# deadcode:first_added=2026-05-08T20:52:00Z last_seen=2026-07-16T15:43:09Z
-pipeline/memo.go:41:22: unreachable func: EventCache.Put	# deadcode:first_added=2026-05-08T20:52:00Z last_seen=2026-07-16T15:43:09Z
-pipeline/sentinel.go:42:6: unreachable func: NewMeteringSentinel	# deadcode:first_added=2026-05-08T20:52:00Z last_seen=2026-07-16T15:43:09Z
-pipeline/sentinel.go:58:28: unreachable func: MeteringSentinel.Probe	# deadcode:first_added=2026-05-08T20:52:00Z last_seen=2026-07-16T15:43:09Z
-pipeline/sentinel.go:74:6: unreachable func: classifyError	# deadcode:first_added=2026-05-08T20:52:00Z last_seen=2026-07-16T15:43:09Z
 internal/version/version.go:38:6: unreachable func: Attrs	# deadcode:first_added=2026-05-05T04:09:36Z last_seen=2026-05-08T20:52:00Z
 internal/telemetry/setup.go:13:2: could not import goodkind.io/gklog/trace (invalid package name: "")	# deadcode:first_added=2026-05-08T20:52:00Z last_seen=2026-05-08T20:52:00Z
 internal/telemetry/setup.go:13:2: no required module provides package goodkind.io/gklog/trace; to add it:	# deadcode:first_added=2026-05-08T20:52:00Z last_seen=2026-05-08T20:52:00Z
-internal/install/registration.go:45:6: unreachable func: ReadManagedLifecycleCommand	# deadcode:first_added=2026-08-13T12:13:36Z last_seen=2026-08-13T12:13:36Z

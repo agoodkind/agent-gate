@@ -28,5 +28,6 @@ func (p ResponsePayload) Fields() rules.FieldSet {
 	fields.HookEventName = p.HookEventName
 	fields.SessionID = p.Session
 	fields.AssistantMessage = p.AssistantOutput
+
 	return fields
 }

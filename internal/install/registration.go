@@ -225,6 +225,7 @@ func readLifecycleGroups(
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("read %s lifecycle registration: %w", provider, err)
 	}
 
@@ -241,6 +242,7 @@ func readLifecycleGroups(
 				"err",
 				err,
 			)
+
 			return nil, fmt.Errorf("parse %s lifecycle registration: %w", provider, err)
 		}
 
@@ -259,6 +261,7 @@ func readLifecycleGroups(
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("parse %s lifecycle registration: %w", provider, err)
 	}
 
@@ -284,6 +287,7 @@ func readLifecycleGroups(
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("parse %s lifecycle event %s: %w", provider, eventName, err)
 	}
 

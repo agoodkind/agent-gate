@@ -48,6 +48,7 @@ func TestBuildJudgeInputEffectiveCwdDiffers(t *testing.T) {
 	if !strings.Contains(out, "/repo") {
 		t.Fatalf("output missing session cwd /repo:\n%s", out)
 	}
+
 	if !strings.Contains(out, "/repo/sub") {
 		t.Fatalf("output missing effective cwd /repo/sub:\n%s", out)
 	}
@@ -70,15 +71,19 @@ func TestBuildJudgeInputWriteCall(t *testing.T) {
 	if !strings.Contains(out, "/repo/foo.go") {
 		t.Fatalf("output missing write target path:\n%s", out)
 	}
+
 	if !strings.Contains(out, "writes:") {
 		t.Fatalf("output missing structural write target:\n%s", out)
 	}
+
 	if strings.Contains(out, "cmd:") {
 		t.Fatalf("write call should not be shell-parsed (found cmd: section):\n%s", out)
 	}
+
 	if strings.Contains(out, unparseableCommandMarker) {
 		t.Fatalf("write call should not attempt a shell parse:\n%s", out)
 	}
+
 	if strings.Contains(out, strings.Repeat("A", 200)) {
 		t.Fatalf("write content was not bounded to a snippet:\n%s", out)
 	}
@@ -99,9 +104,11 @@ func TestBuildJudgeInputEmptyTranscript(t *testing.T) {
 	if strings.Contains(out, "recent conversation") {
 		t.Fatalf("empty transcript should drop the conversation panel:\n%s", out)
 	}
+
 	if !strings.Contains(out, "ls") {
 		t.Fatalf("output missing verbatim command ls:\n%s", out)
 	}
+
 	if !strings.Contains(out, "/repo") {
 		t.Fatalf("output missing chat working directory:\n%s", out)
 	}

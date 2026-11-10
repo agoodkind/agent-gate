@@ -27,6 +27,7 @@ func buildJudgeInput(fields FieldSet, transcriptTail string, facts []judgeContex
 	if !factsIncludeCheckoutStatus(facts) {
 		renderWorkingDirectories(&builder, fields)
 	}
+
 	renderResolvedFacts(&builder, facts)
 	renderConversationPanel(&builder, transcriptTail)
 	renderToolPanel(&builder, fields)
@@ -44,6 +45,7 @@ func factsIncludeCheckoutStatus(facts []judgeContextFact) bool {
 			return true
 		}
 	}
+
 	return false
 }
 
@@ -55,12 +57,15 @@ func renderResolvedFacts(builder *strings.Builder, facts []judgeContextFact) {
 	if len(facts) == 0 {
 		return
 	}
+
 	builder.WriteString("\nresolved facts:\n")
+
 	for _, fact := range facts {
 		value := strings.TrimSpace(fact.Value)
 		if value == "" {
 			value = "(none)"
 		}
+
 		builder.WriteString("  " + fact.Label + ": " + strings.ReplaceAll(value, "\n", ", ") + "\n")
 	}
 }
@@ -75,6 +80,7 @@ func renderWorkingDirectories(builder *strings.Builder, fields FieldSet) {
 	if chatCwd != "" {
 		builder.WriteString("chat working directory: " + chatCwd + "\n")
 	}
+
 	effectiveCwd := strings.TrimSpace(fields.effectiveCWD())
 	if effectiveCwd != "" && effectiveCwd != chatCwd {
 		builder.WriteString("tool-call directory: " + effectiveCwd + "\n")
@@ -89,6 +95,7 @@ func renderConversationPanel(builder *strings.Builder, transcriptTail string) {
 	if tail == "" {
 		return
 	}
+
 	builder.WriteString("\nrecent conversation:\n" + tail + "\n")
 }
 
@@ -133,6 +140,7 @@ func renderWriteCall(builder *strings.Builder, fields FieldSet, filePath string)
 	if snippet != "" {
 		builder.WriteString("content (truncated): " + snippet + "\n")
 	}
+
 	builder.WriteString("\nstructure:\nwrites: " + filePath + "\n")
 }
 
@@ -152,5 +160,6 @@ func judgeWriteContentSnippet(fields FieldSet) string {
 			return renderSnippet(candidate)
 		}
 	}
+
 	return ""
 }

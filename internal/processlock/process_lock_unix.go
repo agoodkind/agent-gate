@@ -30,13 +30,16 @@ func Acquire(runtimeDirectory string) (*Lock, error) {
 	if err != nil {
 		return nil, reportProcessLockError("open daemon process lock", err)
 	}
+
 	if err := unix.Flock(int(file.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
 		_ = file.Close()
 		if errors.Is(err, unix.EWOULDBLOCK) || errors.Is(err, unix.EAGAIN) {
 			return nil, ErrBusy
 		}
+
 		return nil, reportProcessLockError("acquire daemon process lock", err)
 	}
+
 	return &Lock{file: file}, nil
 }
 
@@ -46,19 +49,24 @@ func (lock *Lock) Release() error {
 	if lock == nil || lock.file == nil {
 		return nil
 	}
+
 	if err := unix.Flock(int(lock.file.Fd()), unix.LOCK_UN); err != nil {
 		_ = lock.file.Close()
 		return reportProcessLockError("release daemon process lock", err)
 	}
+
 	if err := lock.file.Close(); err != nil {
 		return reportProcessLockError("close daemon process lock", err)
 	}
+
 	lock.file = nil
+
 	return nil
 }
 
 func reportProcessLockError(action string, err error) error {
 	result := fmt.Errorf("%s: %w", action, err)
 	slog.Warn(action, "err", result)
+
 	return result
 }

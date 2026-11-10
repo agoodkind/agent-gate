@@ -27,8 +27,10 @@ func DefaultConfigDir() string {
 		if err != nil {
 			home = os.Getenv("HOME")
 		}
+
 		base = filepath.Join(home, ".config")
 	}
+
 	return filepath.Join(base, appName)
 }
 
@@ -53,8 +55,10 @@ func DefaultStateDir() string {
 		if err != nil {
 			home = os.Getenv("HOME")
 		}
+
 		base = filepath.Join(home, ".local", "state")
 	}
+
 	return filepath.Join(base, appName)
 }
 
@@ -71,8 +75,10 @@ func DefaultCacheDir() string {
 		if err != nil {
 			home = os.Getenv("HOME")
 		}
+
 		base = filepath.Join(home, ".cache")
 	}
+
 	return filepath.Join(base, appName)
 }
 
@@ -103,9 +109,11 @@ func RuntimeDir() string {
 	if base := os.Getenv("XDG_RUNTIME_DIR"); base != "" {
 		return filepath.Join(base, appName)
 	}
+
 	if base := os.Getenv("TMPDIR"); base != "" {
 		return filepath.Join(base, appName)
 	}
+
 	return filepath.Join("/tmp", appName)
 }
 
@@ -123,5 +131,6 @@ func EnsureRuntimeDir() error {
 		log.Error("create runtime dir failed", "dir", dir, "err", err)
 		return fmt.Errorf("failed to create runtime dir %s: %w", dir, err)
 	}
+
 	return nil
 }

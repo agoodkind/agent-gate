@@ -17,12 +17,14 @@ func TestSetConcurrentWithConfigure(t *testing.T) {
 	go func() {
 		defer workers.Done()
 		<-start
+
 		for i := 0; i < 1000; i++ {
 			entry, stored, err := store.Set("test", "key", []byte("1234"), hotkv.SetOptions{})
 			if err != nil || !stored || string(entry.Value) != "1234" {
 				t.Errorf("Set: stored=%v value=%q err=%v", stored, entry.Value, err)
 				return
 			}
+
 			entry, found, err := store.Get("test", "key")
 			if err != nil || !found || string(entry.Value) != "1234" {
 				t.Errorf("Get: found=%v value=%q err=%v", found, entry.Value, err)
@@ -33,6 +35,7 @@ func TestSetConcurrentWithConfigure(t *testing.T) {
 	go func() {
 		defer workers.Done()
 		<-start
+
 		for i := 0; i < 1000; i++ {
 			store.Configure(hotkv.Options{MaxValueBytes: 4})
 			store.Configure(hotkv.Options{MaxValueBytes: 8})
@@ -45,6 +48,7 @@ func TestSetConcurrentWithConfigure(t *testing.T) {
 	if stored || !errors.Is(err, hotkv.ErrValueTooLarge) {
 		t.Fatalf("Set after limit reduction: stored=%v err=%v", stored, err)
 	}
+
 	entry, found, err := store.Get("test", "key")
 	if err != nil || !found || string(entry.Value) != "1234" {
 		t.Fatalf("Get after limit reduction: found=%v value=%q err=%v", found, entry.Value, err)

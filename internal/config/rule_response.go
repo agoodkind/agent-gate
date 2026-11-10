@@ -89,6 +89,7 @@ func resolveRuleOutput(log *slog.Logger, r *Rule, configDirectory string) error 
 				"err",
 				err,
 			)
+
 			return fmt.Errorf("read output_file %q: %w", r.OutputFile, err)
 		}
 

@@ -50,7 +50,9 @@ func hasCursorEvent(p DetectionPayload) bool {
 	if name == "" {
 		return false
 	}
+
 	r, _ := utf8.DecodeRuneInString(name)
+
 	return unicode.IsLower(r)
 }
 
@@ -70,6 +72,7 @@ func hasGeminiEvent(p DetectionPayload) bool {
 		GeminiNotification:
 		return false
 	}
+
 	return false
 }
 

@@ -22,6 +22,7 @@ func validateDisableProviders(ruleName string, providers []string) error {
 			)
 		}
 	}
+
 	return nil
 }
 

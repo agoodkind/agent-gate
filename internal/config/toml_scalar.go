@@ -33,6 +33,7 @@ func NewBoolScalar(value bool) TOMLScalarValue {
 	var out TOMLScalarValue
 	out.kind = TOMLScalarBool
 	out.boolValue = value
+
 	return out
 }
 
@@ -41,6 +42,7 @@ func NewStringScalar(value string) TOMLScalarValue {
 	var out TOMLScalarValue
 	out.kind = TOMLScalarString
 	out.stringValue = value
+
 	return out
 }
 
@@ -49,6 +51,7 @@ func NewIntScalar(value int64) TOMLScalarValue {
 	var out TOMLScalarValue
 	out.kind = TOMLScalarInt
 	out.intValue = value
+
 	return out
 }
 
@@ -57,6 +60,7 @@ func NewFloatScalar(value float64) TOMLScalarValue {
 	var out TOMLScalarValue
 	out.kind = TOMLScalarFloat
 	out.floatValue = value
+
 	return out
 }
 
@@ -99,6 +103,7 @@ func (v TOMLScalarValue) CanonicalString() string {
 		if v.boolValue {
 			return "true"
 		}
+
 		return "false"
 	case TOMLScalarString:
 		return fmt.Sprintf("%q", v.stringValue)

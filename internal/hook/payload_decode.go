@@ -17,6 +17,7 @@ func decodePayload[T Event](rawBytes []byte, dst *T) error {
 		slog.Warn("decode hook payload failed", slog.Any("err", err))
 		return fmt.Errorf("decode hook payload: %w", err)
 	}
+
 	return nil
 }
 
@@ -70,6 +71,7 @@ func (p VSCodePayload) Fields() rules.FieldSet {
 	fields.ToolInputNewString = strings.Join(p.ToolInput.NormalizedNewStrings(), "\n")
 	fields.EditsOldString = p.ToolInput.NormalizedOldStrings()
 	fields.EditsNewString = p.ToolInput.NormalizedNewStrings()
+
 	return fields
 }
 
@@ -89,11 +91,13 @@ func (p CopilotPayload) Fields() rules.FieldSet {
 	if fields.LastAssistantMessage == "" {
 		fields.LastAssistantMessage = p.LastAssistant
 	}
+
 	if p.TransformedPrompt != "" {
 		fields.Prompt = p.TransformedPrompt
 	} else if p.Prompt != "" {
 		fields.Prompt = p.Prompt
 	}
+
 	return fields
 }
 
@@ -105,6 +109,7 @@ func ParseHookPayload(system System, rawBytes []byte) (Payload, error) {
 	if err != nil {
 		return Payload{}, err
 	}
+
 	switch system {
 	case SystemCursor:
 		event, err := parseCursorPayload(eventName, rawBytes)
@@ -121,20 +126,24 @@ func ParseHookPayload(system System, rawBytes []byte) (Payload, error) {
 	case SystemVSCode:
 		var event VSCodePayload
 		err := decodePayload(rawBytes, &event)
+
 		return Payload{System: system, Event: event}, err
 	case SystemCopilot:
 		var event CopilotPayload
 		err := decodePayload(rawBytes, &event)
+
 		return Payload{System: system, Event: enrichCopilotPayload(event)}, err
 	case SystemResponse:
 		var event ResponsePayload
 		err := decodePayload(rawBytes, &event)
+
 		return Payload{System: system, Event: event}, err
 	case SystemUnknown:
 		fallthrough
 	default:
 		var event UnknownPayload
 		err := decodePayload(rawBytes, &event)
+
 		return Payload{System: system, Event: event}, err
 	}
 }
@@ -147,6 +156,7 @@ func eventNameFromBytes(rawBytes []byte) (string, error) {
 		slog.Warn("decode event name failed", slog.Any("err", err))
 		return "", fmt.Errorf("decode event name: %w", err)
 	}
+
 	return envelope.HookEventName, nil
 }
 
@@ -238,6 +248,7 @@ func parseClaudePayload(eventName string, rawBytes []byte) (Event, error) {
 	if decode, ok := claudeDecoders[ClaudeEvent(eventName)]; ok {
 		return decode(rawBytes)
 	}
+
 	return decodeJSONPayload[UnknownPayload](rawBytes)
 }
 
@@ -324,12 +335,16 @@ func enrichCopilotPayload(payload CopilotPayload) CopilotPayload {
 	if payload.EventName() != string(ClaudeStop) {
 		return payload
 	}
+
 	if payload.AssistantMessage != "" || payload.LastAssistant != "" || payload.Text != "" {
 		return payload
 	}
+
 	if payload.TranscriptPath == "" {
 		return payload
 	}
+
 	payload.LastAssistant = lastCopilotAssistantMessage(payload.TranscriptPath)
+
 	return payload
 }

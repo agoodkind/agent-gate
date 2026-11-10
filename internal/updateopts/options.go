@@ -27,6 +27,7 @@ func Options(cfg *config.Config, overrides Overrides) selfupdate.Options {
 	if cfg != nil {
 		allowPrerelease = cfg.UpdateAllowPrerelease()
 	}
+
 	return selfupdate.Options{
 		Config: selfupdate.Config{
 			Repo:             updateRepo(cfg),
@@ -56,6 +57,7 @@ func updateRepo(cfg *config.Config) string {
 	if cfg == nil {
 		return config.DefaultUpdateRepo
 	}
+
 	return cfg.UpdateRepo()
 }
 
@@ -63,5 +65,6 @@ func updateInterval(cfg *config.Config) time.Duration {
 	if cfg == nil {
 		return 24 * time.Hour
 	}
+
 	return cfg.UpdateInterval()
 }

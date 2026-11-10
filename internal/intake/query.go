@@ -244,6 +244,7 @@ func intakeQuerySelect(filter QueryFilter) string {
 		"{{normalized}}",
 		strconv.FormatBool(filter.IncludeNormalized),
 	)
+
 	return strings.ReplaceAll(query, "{{environment}}", strconv.FormatBool(filter.IncludeEnv))
 }
 

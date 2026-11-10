@@ -20,6 +20,7 @@ var loadCommonWriteSpecs = sync.OnceValues(func() ([]ShellWriteSpec, error) {
 		slog.Error("invalid common command descriptions", "err", err)
 		return nil, fmt.Errorf("decode common command descriptions: %w", err)
 	}
+
 	for index, spec := range document.WriteSpecs {
 		arguments := spec.ArgumentDescription()
 		if err := ValidateArgumentSpec(&arguments); err != nil {
@@ -27,6 +28,7 @@ var loadCommonWriteSpecs = sync.OnceValues(func() ([]ShellWriteSpec, error) {
 			return nil, fmt.Errorf("common command description %d: %w", index, err)
 		}
 	}
+
 	return document.WriteSpecs, nil
 })
 

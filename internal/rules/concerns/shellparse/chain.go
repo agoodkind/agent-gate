@@ -16,6 +16,7 @@ func SplitCommandChain(command string) []string {
 		if segment != "" {
 			segments = append(segments, segment)
 		}
+
 		current.Reset()
 	}
 
@@ -26,35 +27,44 @@ func SplitCommandChain(command string) []string {
 			escaped = false
 			continue
 		}
+
 		if character == '\\' && quote != '\'' {
 			current.WriteRune(character)
 			escaped = true
 			continue
 		}
+
 		if quote != 0 {
 			current.WriteRune(character)
 			if character == quote {
 				quote = 0
 			}
+
 			continue
 		}
+
 		if character == '\'' || character == '"' {
 			current.WriteRune(character)
 			quote = character
 			continue
 		}
+
 		if index+1 < len(runes) && isLogicalSeparator(character, runes[index+1]) {
 			flush()
 			index++
 			continue
 		}
+
 		if character == ';' || character == '\n' {
 			flush()
 			continue
 		}
+
 		current.WriteRune(character)
 	}
+
 	flush()
+
 	return segments
 }
 

@@ -31,12 +31,14 @@ func (handle *BucketHandle) Close() error {
 	if handle == nil {
 		return nil
 	}
+
 	handle.once.Do(func() {
 		handle.closeError = handle.Database.Close()
 		if handle.release != nil {
 			handle.closeError = errors.Join(handle.closeError, handle.release())
 		}
 	})
+
 	return handle.closeError
 }
 
@@ -45,10 +47,13 @@ func (set *ReadSet) Close() error {
 	if set == nil {
 		return nil
 	}
+
 	var result error
+
 	for _, handle := range set.Handles {
 		result = errors.Join(result, handle.Close())
 	}
+
 	return result
 }
 
@@ -56,6 +61,7 @@ func (catalog *Catalog) coordinate(ctx context.Context) (*flock.Flock, error) {
 	if err := os.MkdirAll(filepath.Dir(catalog.options.CoordinationPath), 0o700); err != nil {
 		return nil, storageError("create coordination directory", err)
 	}
+
 	lock := flock.New(catalog.options.CoordinationPath)
 	locked, err := lock.TryLockContext(ctx, 10*time.Millisecond)
 	if err != nil || !locked {
@@ -63,8 +69,10 @@ func (catalog *Catalog) coordinate(ctx context.Context) (*flock.Flock, error) {
 		if err == nil {
 			err = ctx.Err()
 		}
+
 		return nil, storageError("lock audit catalog", err)
 	}
+
 	return lock, nil
 }
 
@@ -83,7 +91,9 @@ func (catalog *Catalog) pin(path string) (func() error, error) {
 		if err == nil {
 			err = errors.New("bucket is being removed")
 		}
+
 		return nil, storageError("lock bucket "+path, err)
 	}
+
 	return lock.Close, nil
 }

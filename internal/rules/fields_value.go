@@ -21,11 +21,14 @@ func (fields FieldSet) Value(selector config.FieldSelector) (string, bool) {
 		if fields.LoopCount == nil {
 			return "", false
 		}
+
 		return strconv.Itoa(*fields.LoopCount), true
 	}
+
 	if accessor, ok := fieldStringAccessors[selector]; ok {
 		value := accessor(fields)
 		return value, value != ""
 	}
+
 	return "", false
 }

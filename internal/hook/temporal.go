@@ -15,14 +15,17 @@ func UserPrompt(payload Payload) (string, bool) {
 		if event.EventName() != "userPromptTransformed" {
 			return "", false
 		}
+
 		prompt = event.Prompt
 	case GeminiBeforeAgentPayload:
 		prompt = event.Prompt
 	default:
 		return "", false
 	}
+
 	if prompt == "" {
 		return "", false
 	}
+
 	return prompt, true
 }

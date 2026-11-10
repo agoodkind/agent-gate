@@ -11,5 +11,6 @@ func truncate(s string) string {
 	if len(s) <= snippetMaxLen {
 		return s
 	}
+
 	return s[:snippetMaxLen-len(ellipsis)] + ellipsis
 }

@@ -77,6 +77,7 @@ func TestWriteEventsCommitsBatchOnceAndDeduplicatesChildren(t *testing.T) {
 		raw.(*auditstorage.SQLiteConnection).RegisterCommitHook(
 			func() int { commits.Add(1); return 0 },
 		)
+
 		return nil
 	}); err != nil {
 		t.Fatal(err)
