@@ -103,5 +103,6 @@ func (d Decision) String() string {
 	if d == DecisionBlock {
 		return "block"
 	}
+
 	return "allow"
 }

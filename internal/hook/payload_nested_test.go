@@ -38,9 +38,11 @@ func TestTextOrObjectSearchableText_SkipsImageData(t *testing.T) {
 	if !strings.Contains(got, "visible result") {
 		t.Fatalf("SearchableText() missing text content: %q", got)
 	}
+
 	if !strings.Contains(got, "image/png") {
 		t.Fatalf("SearchableText() missing image metadata: %q", got)
 	}
+
 	if strings.Contains(got, imageData) {
 		t.Fatalf("SearchableText() included image data")
 	}

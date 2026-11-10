@@ -626,6 +626,7 @@ func (catalog *Catalog) prune(
 				resultErr,
 				catalog.saveBatchCleanup(ctx, policy, now, message, result.Deferred),
 			)
+
 			return
 		}
 

@@ -21,6 +21,7 @@ func TestEventCacheGetPutRoundtrip(t *testing.T) {
 	if !ok {
 		t.Fatalf("Get after Put should return ok=true")
 	}
+
 	if !bytes.Equal(got, value) {
 		t.Fatalf("Get returned %q, want %q", got, value)
 	}

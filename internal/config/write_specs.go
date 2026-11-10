@@ -54,6 +54,7 @@ func validateShellWriteSpecConfig(ruleName string, index int, condition *Conditi
 				"err",
 				err,
 			)
+
 			return fmt.Errorf(
 				"rule %q condition %d write_specs %d: %w",
 				ruleName,

@@ -24,17 +24,22 @@ func (fields FieldSet) CmdWriteTargetsWithSpecs(specs []config.ShellWriteSpec) s
 	if !fields.hasShellCommandContext() {
 		return ""
 	}
+
 	command := fields.CommandValue()
 	if command == "" {
 		return ""
 	}
+
 	targets := shellwrite.ExtractWriteTargetsWithSpecs(command, fields.BaseCWD(), specs)
+
 	paths := make([]string, 0, len(targets))
 	for _, target := range targets {
 		if target.Reason != shellwrite.ReasonOK || target.Path == "" {
 			continue
 		}
+
 		paths = append(paths, target.Path)
 	}
+
 	return strings.Join(paths, "\n")
 }

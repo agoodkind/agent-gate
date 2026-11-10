@@ -28,6 +28,7 @@ func (fields FieldSet) PatchWriteTargets() string {
 	if body == "" {
 		body = fields.ToolInputContent
 	}
+
 	if !strings.Contains(body, "*** Begin Patch") {
 		return ""
 	}
@@ -35,17 +36,21 @@ func (fields FieldSet) PatchWriteTargets() string {
 	base := fields.BaseCWD()
 	paths := make([]string, 0)
 	seen := make(map[string]struct{})
+
 	for line := range strings.SplitSeq(body, "\n") {
 		trimmed := strings.TrimSpace(line)
+
 		for _, directive := range patchFileDirectives {
 			rest, found := strings.CutPrefix(trimmed, directive)
 			if !found {
 				continue
 			}
+
 			target := strings.TrimSpace(rest)
 			if target == "" {
 				continue
 			}
+
 			if !filepath.IsAbs(target) {
 				if base == "" {
 					// Without a working directory a relative target cannot be
@@ -53,6 +58,7 @@ func (fields FieldSet) PatchWriteTargets() string {
 					// rule might then match or clear. Drop it instead.
 					continue
 				}
+
 				target = filepath.Join(base, target)
 			} else {
 				// An absolute directive can still carry .. segments, and
@@ -62,12 +68,15 @@ func (fields FieldSet) PatchWriteTargets() string {
 				// makes the duplicate check see two spellings of one file as one.
 				target = filepath.Clean(target)
 			}
+
 			if _, duplicate := seen[target]; duplicate {
 				continue
 			}
+
 			seen[target] = struct{}{}
 			paths = append(paths, target)
 		}
 	}
+
 	return strings.Join(paths, "\n")
 }

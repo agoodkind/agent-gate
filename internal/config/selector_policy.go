@@ -116,6 +116,7 @@ func ValidateSelectorPolicies(
 				"err",
 				err,
 			)
+
 			return fmt.Errorf("rule %q condition %d prose_policy: %w", ruleName, index, err)
 		}
 	}
@@ -131,6 +132,7 @@ func ValidateSelectorPolicies(
 				"err",
 				err,
 			)
+
 			return fmt.Errorf("rule %q condition %d redirection_policy: %w", ruleName, index, err)
 		}
 	}

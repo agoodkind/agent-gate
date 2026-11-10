@@ -128,6 +128,7 @@ func CodexBlockText(eventName, text string) []byte {
 	if err != nil {
 		return []byte("{}\n")
 	}
+
 	return append(bytes, '\n')
 }
 
@@ -147,10 +148,12 @@ func renderCodexResponse(request ResponseRequest) Response {
 			ExitCode: 0,
 		}
 	}
+
 	capability := LookupResponseCapability(SystemCodex, request.EventName)
 	if request.ContextText == "" && request.MutationText == "" {
 		return Response{Stdout: CodexAllow(), Stderr: nil, ExitCode: 0}
 	}
+
 	output := &CodexHookSpecificOutput{
 		HookEventName:            request.EventName,
 		PermissionDecision:       "",
@@ -162,6 +165,7 @@ func renderCodexResponse(request ResponseRequest) Response {
 	if capability.Supports(ResponseCapabilityInject) {
 		output.AdditionalContext = request.ContextText
 	}
+
 	if capability.Supports(ResponseCapabilityToolInputMutation) && request.MutationText != "" {
 		mutation, ok := validStructuredMutation(request.MutationText)
 		if ok {
@@ -169,9 +173,11 @@ func renderCodexResponse(request ResponseRequest) Response {
 			output.PermissionDecision = "allow"
 		}
 	}
+
 	if output.AdditionalContext == "" && len(output.UpdatedInput) == 0 {
 		return Response{Stdout: CodexAllow(), Stderr: nil, ExitCode: 0}
 	}
+
 	encoded, err := json.Marshal(codexResponse{
 		Continue:           nil,
 		StopReason:         "",
@@ -184,5 +190,6 @@ func renderCodexResponse(request ResponseRequest) Response {
 	if err != nil {
 		return Response{Stdout: CodexAllow(), Stderr: nil, ExitCode: 0}
 	}
+
 	return Response{Stdout: append(encoded, '\n'), Stderr: nil, ExitCode: 0}
 }

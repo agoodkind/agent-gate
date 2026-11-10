@@ -124,5 +124,6 @@ func LookupCapability(system System, event string) Capability {
 	if c, ok := capabilityTable[capabilityKey{system, event}]; ok {
 		return c
 	}
+
 	return CapabilityObserve
 }

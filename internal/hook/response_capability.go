@@ -76,11 +76,14 @@ func responseMutationTarget(capability ResponseCapability) (string, bool) {
 	if capability.Supports(ResponseCapabilityPromptMutation) {
 		return "prompt", false
 	}
+
 	if capability.Supports(ResponseCapabilityToolInputMutation) {
 		return "tool_input", true
 	}
+
 	if capability.Supports(ResponseCapabilityToolOutputMutation) {
 		return "tool_output", true
 	}
+
 	return "", false
 }

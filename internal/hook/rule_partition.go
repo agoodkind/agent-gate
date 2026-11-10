@@ -9,14 +9,17 @@ func PartitionRules(cfg *config.Config) ([]config.Rule, []config.Rule) {
 	}
 
 	syncRules := make([]config.Rule, 0, len(cfg.Rules))
+
 	deferredRules := make([]config.Rule, 0, len(cfg.Rules))
 	for _, rule := range cfg.Rules {
 		if isAuditRule(rule) {
 			deferredRules = append(deferredRules, rule)
 			continue
 		}
+
 		syncRules = append(syncRules, rule)
 	}
+
 	return syncRules, deferredRules
 }
 
@@ -32,13 +35,16 @@ func cloneConfigWithRules(cfg *config.Config, rules []config.Rule) *config.Confi
 		if len(rules) == 0 {
 			return nil
 		}
+
 		var cloned config.Config
 		cloned.Rules = append([]config.Rule(nil), rules...)
+
 		return &cloned
 	}
 
 	cloned := *cfg
 	cloned.Rules = append([]config.Rule(nil), rules...)
+
 	return &cloned
 }
 
@@ -54,19 +60,23 @@ func ruleHasInference(rule config.Rule) bool {
 			return true
 		}
 	}
+
 	return false
 }
 
 func partitionInferenceRules(ruleSet []config.Rule) ([]config.Rule, []config.Rule) {
 	deterministicRules := make([]config.Rule, 0, len(ruleSet))
+
 	inferenceRules := make([]config.Rule, 0, len(ruleSet))
 	for _, rule := range ruleSet {
 		if ruleHasInference(rule) {
 			inferenceRules = append(inferenceRules, rule)
 			continue
 		}
+
 		deterministicRules = append(deterministicRules, rule)
 	}
+
 	return deterministicRules, inferenceRules
 }
 

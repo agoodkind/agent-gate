@@ -14,19 +14,23 @@ func NormalizeCopilotPayload(raw []byte, eventHint string) ([]byte, error) {
 	if eventHint == "" {
 		return raw, nil
 	}
+
 	var payload map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		slog.Warn("decode Copilot payload failed", "err", err)
 		return nil, fmt.Errorf("decode Copilot payload: %w", err)
 	}
+
 	if _, ok := payload["hook_event_name"]; !ok {
 		event, err := json.Marshal(eventHint)
 		if err != nil {
 			slog.Warn("encode Copilot event hint failed", "err", err)
 			return nil, fmt.Errorf("encode Copilot event hint: %w", err)
 		}
+
 		payload["hook_event_name"] = event
 	}
+
 	copyCopilotField(payload, "sessionId", "session_id")
 	copyCopilotField(payload, "transcriptPath", "transcript_path")
 	copyCopilotField(payload, "toolName", "tool_name")
@@ -43,6 +47,7 @@ func NormalizeCopilotPayload(raw []byte, eventHint string) ([]byte, error) {
 		slog.Warn("encode normalized Copilot payload failed", "err", err)
 		return nil, fmt.Errorf("encode normalized Copilot payload: %w", err)
 	}
+
 	return normalized, nil
 }
 
@@ -50,6 +55,7 @@ func copyCopilotField(payload map[string]json.RawMessage, source string, target 
 	if _, exists := payload[target]; exists {
 		return
 	}
+
 	if value, ok := payload[source]; ok {
 		payload[target] = value
 	}

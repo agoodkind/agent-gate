@@ -12,22 +12,28 @@ func NewOnly(newIndexes [][2]int, oldStrings []string, newText string) [][2]int 
 	if len(newIndexes) == 0 {
 		return nil
 	}
+
 	if len(oldStrings) == 0 {
 		out := make([][2]int, len(newIndexes))
 		copy(out, newIndexes)
+
 		return out
 	}
+
 	oldSet := make(map[string]struct{}, len(oldStrings))
 	for _, s := range oldStrings {
 		oldSet[s] = struct{}{}
 	}
+
 	out := make([][2]int, 0, len(newIndexes))
 	for _, idx := range newIndexes {
 		text := newText[idx[0]:idx[1]]
 		if _, present := oldSet[text]; present {
 			continue
 		}
+
 		out = append(out, idx)
 	}
+
 	return out
 }

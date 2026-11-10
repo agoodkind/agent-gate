@@ -17,5 +17,6 @@ func wrapError(operation string, err error) error {
 	if err == nil {
 		return nil
 	}
+
 	return &operationError{Operation: operation, Cause: err}
 }

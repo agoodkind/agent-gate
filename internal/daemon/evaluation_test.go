@@ -16,6 +16,7 @@ func evaluateHotWithEventIDForTest(
 	eventID string,
 ) hook.HotEvaluation {
 	classification := hook.Classify(rawJSON, system, nil, nil)
+
 	return hook.EvaluateClassifiedHotWithEventID(
 		ctx,
 		hook.EvaluationInput{

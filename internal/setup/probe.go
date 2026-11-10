@@ -113,6 +113,7 @@ func verifyInstalledHookWithExecutor(
 			"err",
 			err,
 		)
+
 		return ProbeResult{}, fmt.Errorf("%s: read installed lifecycle command: %w", provider, err)
 	}
 
@@ -171,6 +172,7 @@ func executeLifecycleProbe(
 			"exit_code",
 			0,
 		)
+
 		return 0, output, nil
 	}
 
@@ -186,6 +188,7 @@ func executeLifecycleProbe(
 			"err",
 			err,
 		)
+
 		return exitError.ExitCode(), output, fmt.Errorf("run installed lifecycle command: %w", err)
 	}
 
@@ -366,6 +369,7 @@ func readDurableEvaluation(
 				"err",
 				err,
 			)
+
 			return false, fmt.Errorf("%s: query durable evaluation: %w", provider, err)
 		}
 

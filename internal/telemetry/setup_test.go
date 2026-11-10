@@ -11,9 +11,11 @@ func TestSetupEmptyOptionsReturnsCloser(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Setup with empty options returned error: %v", err)
 	}
+
 	if closer == nil {
 		t.Fatal("Setup with empty options returned nil closer")
 	}
+
 	if closeErr := closer.Close(); closeErr != nil {
 		t.Fatalf("Close returned error: %v", closeErr)
 	}
@@ -32,8 +34,10 @@ func TestSetupWithEndpointDoesNotPanic(t *testing.T) {
 		t.Logf("Setup with endpoint returned error (expected when unreachable): %v", err)
 		return
 	}
+
 	if closer == nil {
 		t.Fatal("Setup with endpoint returned nil closer")
 	}
+
 	_ = closer.Close()
 }

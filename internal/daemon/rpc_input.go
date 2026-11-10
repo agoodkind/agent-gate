@@ -11,8 +11,10 @@ func ReadHookInput(reader io.Reader) ([]byte, error) {
 	if err != nil {
 		return nil, wrapServerError("read hook input", err)
 	}
+
 	if len(data) > RPCMaxMessageBytes {
 		return nil, fmt.Errorf("hook input exceeds %d-byte RPC message limit", RPCMaxMessageBytes)
 	}
+
 	return data, nil
 }

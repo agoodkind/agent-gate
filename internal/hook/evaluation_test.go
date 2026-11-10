@@ -42,12 +42,15 @@ func evaluateHotWithEventID(
 	eventID string,
 ) hook.HotEvaluation {
 	environment := make(map[string]string)
+
 	for _, key := range evaluationEnvironmentKeys {
 		if value := getenv(key); value != "" {
 			environment[key] = value
 		}
 	}
+
 	classification := hook.Classify(rawJSON, hint, nil, environment)
+
 	return hook.EvaluateClassifiedHotWithEventID(
 		ctx,
 		hook.EvaluationInput{

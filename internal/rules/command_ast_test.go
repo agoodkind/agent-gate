@@ -14,9 +14,11 @@ func TestRenderCommandASTPlainRead(t *testing.T) {
 	if !strings.Contains(rendered, "cat") {
 		t.Fatalf("rendered output missing argv0 cat: %q", rendered)
 	}
+
 	if !strings.Contains(rendered, "go.mod") {
 		t.Fatalf("rendered output missing read target go.mod: %q", rendered)
 	}
+
 	if strings.Contains(rendered, "writes:") {
 		t.Fatalf("rendered output should have no write section: %q", rendered)
 	}
@@ -30,6 +32,7 @@ func TestRenderCommandASTPipe(t *testing.T) {
 	if !strings.Contains(rendered, "grep") {
 		t.Fatalf("rendered output missing argv0 grep: %q", rendered)
 	}
+
 	if !strings.Contains(rendered, "head") {
 		t.Fatalf("rendered output missing argv0 head: %q", rendered)
 	}
@@ -44,6 +47,7 @@ func TestRenderCommandASTRedirectWrite(t *testing.T) {
 	if !strings.Contains(rendered, "writes:") {
 		t.Fatalf("rendered output missing writes section: %q", rendered)
 	}
+
 	if !strings.Contains(rendered, "README.md") {
 		t.Fatalf("rendered output missing write target README.md: %q", rendered)
 	}
@@ -59,9 +63,11 @@ func TestRenderCommandASTEmbeddedRegion(t *testing.T) {
 	if !strings.Contains(rendered, "embedded[shell]") {
 		t.Fatalf("rendered output missing embedded shell region: %q", rendered)
 	}
+
 	if !strings.Contains(rendered, "cat") {
 		t.Fatalf("rendered output missing inner argv0 cat: %q", rendered)
 	}
+
 	if !strings.Contains(rendered, "secret.txt") {
 		t.Fatalf("rendered output missing inner read target secret.txt: %q", rendered)
 	}
@@ -76,6 +82,7 @@ func TestRenderCommandASTHeredocEmbeddedRegion(t *testing.T) {
 	if !strings.Contains(rendered, "embedded[shell]") {
 		t.Fatalf("rendered output missing embedded shell region: %q", rendered)
 	}
+
 	if !strings.Contains(rendered, "secret.txt") {
 		t.Fatalf("rendered output missing heredoc inner content secret.txt: %q", rendered)
 	}
@@ -93,6 +100,7 @@ func TestRenderCommandASTCwdSuffix(t *testing.T) {
 	if !strings.Contains(rendered, "[cwd: /work/sub]") {
 		t.Fatalf("rendered output missing post-cd cwd suffix: %q", rendered)
 	}
+
 	if !strings.Contains(rendered, "/work/sub/x") {
 		t.Fatalf("rendered output missing cd-resolved read target: %q", rendered)
 	}

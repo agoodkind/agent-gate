@@ -199,6 +199,7 @@ func TestIntakeWalkStillReportsMissingSelectedIdentity(t *testing.T) {
 					readEvaluationSQLFixture(t, "delete_selected_intake.sql"),
 					"pending-000",
 				)
+
 				return err
 			}
 

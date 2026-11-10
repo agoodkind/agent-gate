@@ -89,6 +89,7 @@ func GeminiBlockText(eventName, text string) []byte {
 	if err != nil {
 		return []byte("{}\n")
 	}
+
 	return append(bytes, '\n')
 }
 
@@ -106,5 +107,6 @@ func renderGeminiResponse(request ResponseRequest) Response {
 			ExitCode: 0,
 		}
 	}
+
 	return Response{Stdout: GeminiAllow(), Stderr: nil, ExitCode: 0}
 }

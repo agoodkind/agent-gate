@@ -41,6 +41,7 @@ func (m *execEventMemo) lookup(c *config.Condition) (execconcern.Verdict, bool) 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	v, ok := m.verdicts[c]
+
 	return v, ok
 }
 
@@ -51,12 +52,15 @@ func (m *execEventMemo) record(c *config.Condition, ruleName string, v execconce
 	if v.Block && v.Message != "" {
 		m.overrides[ruleName] = v.Message
 	}
+
 	if v.Block {
 		m.outputs[ruleName] = v.Output
 	}
+
 	if v.Errored {
 		m.errors[ruleName] = true
 	}
+
 	// Tracked apart from errors, which drives the errored no-op response. A
 	// partial failure decided nothing and must not change enforcement; it only
 	// says the expansion behind this verdict was not fully probed.
@@ -69,12 +73,14 @@ func (m *execEventMemo) outputFor(ruleName string) (string, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	output, ok := m.outputs[ruleName]
+
 	return output, ok
 }
 
 func (m *execEventMemo) erroredFor(ruleName string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
 	return m.errors[ruleName]
 }
 
@@ -88,8 +94,10 @@ func (m *execEventMemo) partialRuleNames() map[string]bool {
 	if len(m.partial) == 0 {
 		return nil
 	}
+
 	names := make(map[string]bool, len(m.partial))
 	maps.Copy(names, m.partial)
+
 	return names
 }
 
@@ -97,5 +105,6 @@ func (m *execEventMemo) overrideFor(ruleName string) (string, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	msg, ok := m.overrides[ruleName]
+
 	return msg, ok
 }

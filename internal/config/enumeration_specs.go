@@ -64,6 +64,7 @@ func ValidateEnumerationSpecs(ruleName string, index int, specs []EnumerationSpe
 				"error",
 				err,
 			)
+
 			return fmt.Errorf(
 				"rule %q condition %d enumeration_specs %d: %w",
 				ruleName,
@@ -109,6 +110,7 @@ func ValidateEnumerationSpecs(ruleName string, index int, specs []EnumerationSpe
 					"error",
 					err,
 				)
+
 				return fmt.Errorf(
 					"rule %q condition %d enumeration_specs %d consumer_wrappers %d: %w",
 					ruleName,

@@ -18,6 +18,7 @@ func (r *ExecRuntime) SetBackgroundTimeout(timeout time.Duration) {
 	if r == nil || timeout <= 0 {
 		return
 	}
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.backgroundTimeoutValue = timeout
@@ -35,10 +36,12 @@ func (r *ExecRuntime) backgroundTimeout() time.Duration {
 	if r == nil {
 		return config.DefaultExecBackgroundMs * time.Millisecond
 	}
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.backgroundTimeoutValue <= 0 {
 		return config.DefaultExecBackgroundMs * time.Millisecond
 	}
+
 	return r.backgroundTimeoutValue
 }

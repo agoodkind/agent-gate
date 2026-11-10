@@ -43,6 +43,7 @@ func (c *Config) Failures() []LoadFailure {
 	if c == nil {
 		return nil
 	}
+
 	return c.loadFailures
 }
 

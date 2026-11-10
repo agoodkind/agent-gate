@@ -27,12 +27,15 @@ pattern = '''['''
 	if err == nil {
 		t.Fatal("a config whose every rule failed was accepted")
 	}
+
 	if !strings.Contains(err.Error(), "none compiled") {
 		t.Fatalf("error = %v, want it to say no rule compiled", err)
 	}
+
 	if strings.Contains(err.Error(), "exec_max_ms") {
 		t.Fatalf("error = %v, want the rule's own reason, not the settings block", err)
 	}
+
 	if !strings.Contains(err.Error(), "only-rule") {
 		t.Fatalf("error = %v, want it to name the rule that failed", err)
 	}

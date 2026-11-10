@@ -188,6 +188,7 @@ var systemdResetProgram = regexp.MustCompile(`(?:^|[ ;])path=([^;]+?) ;`)
 
 func launchdAbsent(output []byte, err error) bool {
 	var exitError *exec.ExitError
+
 	return errors.As(err, &exitError) && exitError.ExitCode() == 113 &&
 		strings.Contains(string(output), "Could not find service")
 }

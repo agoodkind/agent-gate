@@ -43,5 +43,6 @@ func (o *Orchestrator) Run(ctx context.Context, in Input) ([]Result, error) {
 			o.Scheduler.Observe(profile.Name, results[slot].Elapsed, err)
 		}
 	}
+
 	return results, nil
 }

@@ -33,6 +33,7 @@ var canonicalProviders = [...]Provider{
 func AllProviders() []Provider {
 	providers := make([]Provider, len(canonicalProviders))
 	copy(providers, canonicalProviders[:])
+
 	return providers
 }
 
@@ -41,17 +42,22 @@ func ParseProviders(value string) ([]Provider, error) {
 	if value == "" {
 		return []Provider{}, nil
 	}
+
 	requested := make(map[Provider]bool, len(canonicalProviders))
+
 	for name := range strings.SplitSeq(value, ",") {
 		provider := Provider(strings.TrimSpace(name))
 		if !isKnownProvider(provider) {
 			return nil, fmt.Errorf("unknown provider %q", name)
 		}
+
 		if requested[provider] {
 			return nil, fmt.Errorf("duplicate provider %q", provider)
 		}
+
 		requested[provider] = true
 	}
+
 	return providersFromSet(requested), nil
 }
 
@@ -59,26 +65,32 @@ func selectedProviders(selection []Provider) ([]Provider, error) {
 	if selection == nil {
 		return AllProviders(), nil
 	}
+
 	requested := make(map[Provider]bool, len(selection))
 	for _, provider := range selection {
 		if !isKnownProvider(provider) {
 			return nil, fmt.Errorf("unknown provider %q", provider)
 		}
+
 		if requested[provider] {
 			return nil, fmt.Errorf("duplicate provider %q", provider)
 		}
+
 		requested[provider] = true
 	}
+
 	return providersFromSet(requested), nil
 }
 
 func providersFromSet(requested map[Provider]bool) []Provider {
 	providers := make([]Provider, 0, len(requested))
+
 	for _, provider := range canonicalProviders {
 		if requested[provider] {
 			providers = append(providers, provider)
 		}
 	}
+
 	return providers
 }
 

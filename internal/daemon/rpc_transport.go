@@ -14,5 +14,6 @@ func (s *Server) GRPCServer(options ...grpc.ServerOption) *grpc.Server {
 	options = append(options, grpc.MaxRecvMsgSize(RPCMaxMessageBytes))
 	server := grpc.NewServer(options...)
 	daemonpb.RegisterAgentGateDServer(server, s)
+
 	return server
 }

@@ -16,24 +16,29 @@ func TestAuditSchedulerWaitsForUsableReloadAndStartsOnce(t *testing.T) {
 	if auditSchedulerAllocated(server) || clockReads.Load() != 0 {
 		t.Fatal("unusable startup allocated an audit scheduler")
 	}
+
 	reloadAuditTestConfig(t, server, config.DefaultAuditSQLitePath(), "24h", 7)
 	select {
 	case <-server.auditStarted:
 	case <-time.After(time.Second):
 		t.Fatal("valid reload did not start the requested audit scheduler")
 	}
+
 	for range 3 {
 		server.StartAuditScheduler(t.Context())
 		reloadAuditTestConfig(t, server, config.DefaultAuditSQLitePath(), "24h", 7)
 	}
+
 	if _, err := server.EvaluateHook(t.Context(), replayRequest()); err != nil {
 		t.Fatal(err)
 	}
+
 	select {
 	case ticks <- time.Now():
 	case <-time.After(time.Second):
 		t.Fatal("audit scheduler stopped after reload returned")
 	}
+
 	waitRuntimeCondition(t, func() bool { return completedReplayCount(t, server) == 1 })
 	assertRuntimeReceipts(t, server, 1)
 	server.Close()
@@ -51,6 +56,7 @@ func TestAuditReloadPreservesTransportReadinessBoundary(t *testing.T) {
 	if auditSchedulerAllocated(server) {
 		t.Fatal("reload started audit scheduling before transport readiness")
 	}
+
 	clockReads.Store(0)
 	server.StartAuditScheduler(t.Context())
 	select {
@@ -58,6 +64,7 @@ func TestAuditReloadPreservesTransportReadinessBoundary(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("readiness did not start the valid audit scheduler")
 	}
+
 	if got := clockReads.Load(); got != 1 {
 		t.Fatalf("initial scheduler clock reads = %d, want 1", got)
 	}
@@ -72,6 +79,7 @@ func unusableSchedulerServer(t *testing.T) (*Server, chan time.Time, *atomic.Int
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	clockReads := &atomic.Int64{}
 	now := func() time.Time {
 		clockReads.Add(1)
@@ -81,14 +89,17 @@ func unusableSchedulerServer(t *testing.T) (*Server, chan time.Time, *atomic.Int
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	t.Cleanup(server.Close)
 	ticks := make(chan time.Time)
 	server.auditTicks = ticks
+
 	return server, ticks, clockReads
 }
 
 func auditSchedulerAllocated(server *Server) bool {
 	server.cfgMu.RLock()
 	defer server.cfgMu.RUnlock()
+
 	return server.auditCancel != nil
 }

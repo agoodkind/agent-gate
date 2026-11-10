@@ -46,6 +46,7 @@ func (p UnknownPayload) Fields() rules.FieldSet {
 	fields.SessionID = p.Session
 	fields.ConversationID = p.Conversation
 	fields.CWD = p.WorkingDir
+
 	return fields
 }
 
@@ -55,6 +56,7 @@ func (p Payload) EventName() string {
 	if p.Event == nil {
 		return ""
 	}
+
 	return p.Event.EventName()
 }
 
@@ -64,6 +66,7 @@ func (p Payload) SessionID() string {
 	if p.Event == nil {
 		return ""
 	}
+
 	return p.Event.SessionID()
 }
 
@@ -73,6 +76,7 @@ func (p Payload) CWD() string {
 	if p.Event == nil {
 		return ""
 	}
+
 	return p.Event.CWD()
 }
 
@@ -83,5 +87,6 @@ func (p Payload) Fields() rules.FieldSet {
 		var empty rules.FieldSet
 		return empty
 	}
+
 	return p.Event.Fields()
 }

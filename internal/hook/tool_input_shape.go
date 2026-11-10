@@ -28,10 +28,12 @@ func (input *ClaudeToolInput) UnmarshalJSON(data []byte) error {
 		if err := json.Unmarshal(trimmed, &encoded); err != nil {
 			return fmt.Errorf("decode tool_input string: %w", err)
 		}
+
 		inner := bytes.TrimSpace([]byte(encoded))
 		if len(inner) == 0 || bytes.Equal(inner, []byte("null")) {
 			return nil
 		}
+
 		// A tool_input string that is not itself JSON carries no fields to read.
 		// Accept it rather than rejecting the call, because a payload shape this
 		// decoder does not model must not decide policy: rules simply see empty
@@ -39,11 +41,14 @@ func (input *ClaudeToolInput) UnmarshalJSON(data []byte) error {
 		if inner[0] != '{' {
 			return nil
 		}
+
 		var alias claudeToolInputAlias
 		if err := json.Unmarshal(inner, &alias); err != nil {
 			return fmt.Errorf("decode tool_input string body: %w", err)
 		}
+
 		*input = ClaudeToolInput(alias)
+
 		return nil
 	}
 
@@ -51,6 +56,8 @@ func (input *ClaudeToolInput) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(trimmed, &alias); err != nil {
 		return fmt.Errorf("decode tool_input object: %w", err)
 	}
+
 	*input = ClaudeToolInput(alias)
+
 	return nil
 }
