@@ -17,7 +17,7 @@ require (
 	go.opentelemetry.io/otel/metric v1.47.0
 	go.opentelemetry.io/otel/sdk v1.47.0
 	go.opentelemetry.io/otel/sdk/metric v1.47.0
-	golang.org/x/sys v0.49.0
+	golang.org/x/sys v0.50.0
 	goodkind.io/clyde v0.0.0-20261106163806-6e7f4af1d630
 	goodkind.io/gklog v0.4.6-0.20261028143852-27ab6bc7fa9f
 	goodkind.io/gksyntax v0.1.1-0.20261028154122-2b63552ac7fe
