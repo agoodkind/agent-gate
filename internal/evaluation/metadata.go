@@ -15,12 +15,9 @@ import (
 )
 
 const (
-	// maxUpstreamLayerMetadataJSONBytes bounds schema version 2 metadata, which
-	// stores untrusted content from an inference reply.
+	// Schema version 2 includes untrusted content from inference replies.
 	maxUpstreamLayerMetadataJSONBytes = 16 * 1024
-	// maxLocalLayerMetadataJSONBytes bounds metadata that the daemon produces.
-	// Rule-engine metadata has one entry per configured rule, and a record over
-	// the bound makes the daemon discard the verdict and allow the call.
+	// Rule-engine metadata includes one entry per configured rule.
 	maxLocalLayerMetadataJSONBytes = 8 * 1024 * 1024
 	maxLayerMetadataStringBytes    = 1024
 )
