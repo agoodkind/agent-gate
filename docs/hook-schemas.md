@@ -353,6 +353,8 @@ The typed payload fields above can be combined with daemon-computed selectors:
 - `cmd_comments` and `cmd_double_hyphen_prose` isolate prose-like command text.
 - `cmd_redirections` exposes direct output redirections.
 - `cmd_write_targets` exposes parsed local write targets.
+- `patch_write_targets` exposes file targets from patch envelopes.
+- `authored_command_text` keeps added patch lines and command text outside patch envelopes.
 - `credential_read_targets` exposes native read paths, shell and interpreter
   read targets, explicit Git diff and show sources, copy and archive sources,
   container commands, and reads in supplied script content. It also inspects
