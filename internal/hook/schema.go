@@ -56,6 +56,7 @@ var virtualFields = []string{
 	"cmd_redirections",
 	"cmd_write_targets",
 	"patch_write_targets",
+	"authored_command_text",
 	"credential_read_targets",
 	"last_user_message",
 	"last_response_output",

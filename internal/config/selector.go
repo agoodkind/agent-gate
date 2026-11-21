@@ -57,6 +57,7 @@ const (
 	// body rather than in a path field, so a rule keyed on tool_input.file_path
 	// cannot see them and every path-based write rule is blind to those writes.
 	FieldPatchWriteTargets
+	FieldAuthoredCommandText
 	// FieldExecTargets selects code-search read targets when available, then
 	// file path, then effective cwd. It is intended for exec validator cache keys.
 	FieldExecTargets
@@ -261,6 +262,7 @@ var fieldSelectorByPath = map[string]FieldSelector{
 	"credential_read_targets":      FieldCredentialReadTargets,
 	"cmd_write_targets":            FieldCmdWriteTargets,
 	"patch_write_targets":          FieldPatchWriteTargets,
+	"authored_command_text":        FieldAuthoredCommandText,
 	"exec_targets":                 FieldExecTargets,
 	"permission_mode":              FieldPermissionMode,
 	"agent_id":                     FieldAgentID,

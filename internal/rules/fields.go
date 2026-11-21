@@ -150,6 +150,7 @@ var fieldStringAccessors = map[config.FieldSelector]func(FieldSet) string{
 	config.FieldCredentialReadTargets: func(f FieldSet) string { return f.CredentialReadTargets() },
 	config.FieldCmdWriteTargets:       func(f FieldSet) string { return f.CmdWriteTargets() },
 	config.FieldPatchWriteTargets:     func(f FieldSet) string { return f.PatchWriteTargets() },
+	config.FieldAuthoredCommandText:   func(f FieldSet) string { return f.AuthoredCommandText() },
 	config.FieldExecTargets: func(f FieldSet) string {
 		return f.ExecTargets(nil, nil, nil)
 	},
